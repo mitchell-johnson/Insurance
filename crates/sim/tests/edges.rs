@@ -572,6 +572,139 @@ fn cancelling_a_policy_nobody_paid_for_leaves_nothing_to_refund() {
     }
 }
 
+/// Purpose: a life whose cover has a future insurability option can add cover without
+/// underwriting after one of the product's events: within the days allowed after the event,
+/// below the option's age, up to the product's share of the cover the life started with and
+/// its money limit, as many times as the product allows and once for any one event. The new
+/// layer starts today on the terms the life already had, loading included, and the rest of
+/// the billed period is charged for it. Everything outside those limits is refused with
+/// nothing written, and the same request sent twice adds one layer.
+/// Why it matters: the option is cover given with no evidence of health, priced into every
+/// policy that carries it. Used late, used twice for one wedding, used past its age or its
+/// count, or written at standard rates for a life that was loaded, it is risk the insurer
+/// never priced and the reinsurer never agreed to take automatically.
+#[test]
+fn an_insurability_option_adds_cover_without_evidence_inside_the_products_limits() {
+    use ic_core::command::OptionExercise;
+    let mut c = cluster(1);
+    let id = standard(&mut c, 1);
+    let ask = |policy: &PolicyId, reference: &str, cover: &str, life: &str, event: &str, on: NaiveDate, amount: i64| {
+        Command::ExerciseOption(Box::new(OptionExercise {
+            policy: policy.clone(),
+            cover: cover.to_string(),
+            life: LifeId(life.to_string()),
+            event: event.to_string(),
+            event_date: on,
+            sum_insured_minor: amount,
+            evidence: "vault/certificate-1".to_string(),
+            reference: reference.to_string(),
+        }))
+    };
+    let wedding = d(2027, 11, 5);
+    let send = |c: &mut Cluster, command: Command| c.submit(0, "policy-servicing", command);
+    let layers = |c: &Cluster, id: &PolicyId| c.state(0).policies[id].covers["life"].layers.len();
+
+    // Each limit, with nothing written.
+    assert_eq!(
+        code(send(&mut c, ask(&id, "opt 1", "life", "life-1", "marriage", wedding, 100_000_00))),
+        "invalid_option"
+    );
+    assert_eq!(
+        code(send(&mut c, ask(&id, "opt-1", "life", "life-1", "marriage", wedding, 0))),
+        "invalid_option"
+    );
+    assert_eq!(
+        code(send(&mut c, ask(&id, "opt-1", "trauma", "life-1", "marriage", wedding, 100_000_00))),
+        "no_option"
+    );
+    assert_eq!(
+        code(send(&mut c, ask(&id, "opt-1", "life", "life-1", "graduation", wedding, 100_000_00))),
+        "event_not_covered"
+    );
+    assert_eq!(
+        code(send(&mut c, ask(&id, "opt-1", "life", "life-1", "marriage", d(2027, 11, 16), 100_000_00))),
+        "option_window"
+    );
+    assert_eq!(
+        code(send(&mut c, ask(&id, "opt-1", "life", "life-1", "marriage", d(2027, 8, 16), 100_000_00))),
+        "option_window"
+    );
+    assert_eq!(
+        code(send(&mut c, ask(&id, "opt-1", "life", "life-9", "marriage", wedding, 100_000_00))),
+        "unknown_life"
+    );
+    // A quarter of the NZD 500,000 the life started with, and not a cent more.
+    assert_eq!(
+        code(send(&mut c, ask(&id, "opt-1", "life", "life-1", "marriage", wedding, 125_000_01))),
+        "option_limit"
+    );
+    assert_eq!(layers(&c, &id), 1);
+    assert!(c.state(0).policies[&id].option_uses.is_empty());
+
+    let owed = outstanding(&c, &id);
+    send(&mut c, ask(&id, "opt-1", "life", "life-1", "marriage", wedding, 100_000_00)).unwrap();
+    assert_eq!(layers(&c, &id), 2);
+    let added = c.state(0).policies[&id].covers["life"].layers[1].clone();
+    assert_eq!((added.sum_insured_minor, added.start, added.loadings.len()), (100_000_00, start(), 0));
+    assert!(outstanding(&c, &id) > owed, "the rest of the billed month is charged for the new cover");
+    assert!(events(&c).iter().any(|e| matches!(
+        e,
+        Event::InsurabilityOptionExercised { event, layer: 2, sum_insured_minor: 100_000_00, uses: 1, reference, .. }
+            if event == "marriage" && reference == "opt-1"
+    )));
+    // The same request again adds nothing; the reference or the wedding used for something else is refused.
+    send(&mut c, ask(&id, "opt-1", "life", "life-1", "marriage", wedding, 100_000_00)).unwrap();
+    assert_eq!(layers(&c, &id), 2);
+    assert_eq!(
+        code(send(&mut c, ask(&id, "opt-1", "life", "life-1", "marriage", wedding, 50_000_00))),
+        "duplicate_option"
+    );
+    assert_eq!(
+        code(send(&mut c, ask(&id, "opt-2", "life", "life-1", "marriage", wedding, 50_000_00))),
+        "option_used"
+    );
+
+    // Three uses and no more. The measure stays the cover the life started with.
+    send(&mut c, ask(&id, "opt-2", "life", "life-1", "birth_or_adoption", d(2027, 10, 1), 125_000_00)).unwrap();
+    send(&mut c, ask(&id, "opt-3", "life", "life-1", "mortgage", d(2027, 11, 15), 50_000_00)).unwrap();
+    assert_eq!(
+        code(send(&mut c, ask(&id, "opt-4", "life", "life-1", "marriage", d(2027, 11, 6), 10_000_00))),
+        "options_exhausted"
+    );
+    assert_eq!(layers(&c, &id), 4);
+    assert_eq!(c.state(0).policies[&id].option_uses.len(), 3);
+
+    // Past the option's age it is gone.
+    let older = term_life(2, start(), d(1970, 1, 1), Sex::Male, false, 500_000_00, None, Frequency::Monthly, None);
+    let older_id = older.policy.clone();
+    c.submit(0, "new-business", issue_command(older)).unwrap();
+    assert_eq!(
+        code(send(&mut c, ask(&older_id, "opt-1", "life", "life-1", "marriage", wedding, 50_000_00))),
+        "option_age"
+    );
+
+    // A life accepted with a loading gets the new cover with the same loading.
+    let loaded = term_life(
+        3,
+        start(),
+        d(1990, 3, 10),
+        Sex::Female,
+        false,
+        500_000_00,
+        None,
+        Frequency::Monthly,
+        Some("0.5"),
+    );
+    let loaded_id = loaded.policy.clone();
+    c.submit(0, "new-business", issue_command(loaded)).unwrap();
+    send(&mut c, ask(&loaded_id, "opt-1", "life", "life-1", "marriage", wedding, 50_000_00)).unwrap();
+    let life = &c.state(0).policies[&loaded_id].covers["life"];
+    assert_eq!(life.layers[1].loadings, life.layers[0].loadings);
+    assert_eq!(life.layers[1].loadings.len(), 1);
+    days(&mut c, 2);
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+}
+
 fn levied_product(c: &mut Cluster) {
     let source = include_str!("../../../products/term_life.star")
         .replace("code = \"term-life\"", "code = \"term-life-levied\"")

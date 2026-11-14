@@ -250,6 +250,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         refunds_raised: BTreeMap::new(),
         payouts: BTreeMap::new(),
         loan: None,
+        option_uses: BTreeMap::new(),
         member_accounts: BTreeSet::new(),
         member_standing: BTreeMap::new(),
         interests: BTreeMap::new(),

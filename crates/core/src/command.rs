@@ -162,6 +162,24 @@ pub struct UnderwrittenLayer {
     pub start: Option<NaiveDate>,
 }
 
+/// A life uses its cover's insurability option: more cover on the terms it
+/// already has, with no underwriting, after an event the product names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OptionExercise {
+    pub policy: PolicyId,
+    pub cover: String,
+    pub life: LifeId,
+    /// One of the product's events for the option.
+    pub event: String,
+    pub event_date: NaiveDate,
+    pub sum_insured_minor: i64,
+    /// Where the proof of the event is kept (the marriage or birth
+    /// certificate, the loan documents). The sender has checked it.
+    pub evidence: String,
+    /// The request's own reference. The same one again adds nothing.
+    pub reference: String,
+}
+
 /// A cover a life does not hold, added to a retail policy after issue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AddedCover {
@@ -392,6 +410,8 @@ pub enum Command {
     /// the terms underwriting decided. The rest of a period already billed
     /// is billed as an adjustment, due today.
     AddUnderwrittenLayer(Box<UnderwrittenLayer>),
+    /// A life uses its cover's future insurability option.
+    ExerciseOption(Box<OptionExercise>),
     /// Give a life a cover from the product's menu that it does not hold.
     AddCover(Box<AddedCover>),
     /// Move a life's cover to another of the excess levels the cover offers.
@@ -653,7 +673,7 @@ impl Command {
             | Command::AvoidPolicy { .. }
             | Command::VaryForNonDisclosure { .. } => &["underwriting"],
             Command::ReduceCover(_) => &["policy-servicing"],
-            Command::AddCover(_) => &["underwriting", "policy-servicing"],
+            Command::AddCover(_) | Command::ExerciseOption(_) => &["underwriting", "policy-servicing"],
             Command::ChangeExcess(_) => &["policy-servicing"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::Claims(command) => command.allowed_callers(),
@@ -708,6 +728,7 @@ impl Command {
             Command::EndExcessLayer { .. } => "end_excess_layer",
             Command::AddUnderwrittenLayer(_) => "add_underwritten_layer",
             Command::AddCover(_) => "add_cover",
+            Command::ExerciseOption(_) => "exercise_option",
             Command::ChangeExcess(_) => "change_excess",
             Command::AlterUnderwrittenTerms(_) => "alter_underwritten_terms",
             Command::ApproveReinstatement(_) => "approve_reinstatement",

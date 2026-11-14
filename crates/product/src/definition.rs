@@ -216,6 +216,31 @@ pub struct CoverDefinition {
     /// joint: it is a single cover on each life.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub joint_first_event: bool,
+    /// The right to more of this cover without evidence of health after an
+    /// event in the life's own life. Absent: the cover has no such option.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub insurability_option: Option<InsurabilityOption>,
+}
+
+/// A future insurability option on a lump sum cover: after one of the named
+/// events the life may add cover on the terms it already has, without
+/// underwriting, inside these limits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InsurabilityOption {
+    /// The events that give the right: `marriage`, `birth_or_adoption`, ...
+    pub events: Vec<String>,
+    /// The most one exercise adds, as a share of the cover the life had at
+    /// the start, in percent.
+    pub max_percent_of_original: DecStr,
+    /// And in money.
+    pub max_increase_minor: i64,
+    /// How many times a life may use the option on this cover.
+    pub max_uses: u32,
+    /// Days after the event within which it must be used.
+    pub within_days: u32,
+    /// The life must be younger than this when it is used.
+    pub to_age: u32,
 }
 
 /// One excess level on a cover's menu.

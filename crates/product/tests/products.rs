@@ -172,7 +172,23 @@ fn bad_products_are_rejected() {
 /// fee, a discount over 100%) that would otherwise surface as wrong premiums in production.
 #[test]
 fn each_product_rule_refuses_the_file_that_breaks_it() {
-    let cases: [(&str, &str, &str); 13] = [
+    let cases: [(&str, &str, &str); 17] = [
+        ("max_uses = 3,", "max_uses = 0,", "an insurability option is on a lump sum cover"),
+        (
+            "events = [\"marriage\", \"birth_or_adoption\", \"mortgage\"]",
+            "events = [\"marriage\", \"marriage\"]",
+            "names its events once each",
+        ),
+        (
+            "earning(),",
+            "earning(), policy_loans(max_percent_of_value = \"0\", rate_code = \"loan-rate\"),",
+            "policy loans are for a share of the value",
+        ),
+        (
+            "earning(),",
+            "earning(), policy_loans(max_percent_of_value = \"50\", rate_code = \"\"),",
+            "at a named rate",
+        ),
         (
             "reinstatement_evidence_free_days = 60",
             "reinstatement_evidence_free_days = 181",

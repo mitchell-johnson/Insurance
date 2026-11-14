@@ -485,6 +485,20 @@ pub enum Event {
         life: LifeId,
         amount_minor: i64,
     },
+    /// A life used its cover's insurability option. The layer it wrote is
+    /// announced by `LayerAdded` as any increase is.
+    InsurabilityOptionExercised {
+        policy: PolicyId,
+        cover: String,
+        life: LifeId,
+        event: String,
+        event_date: NaiveDate,
+        layer: u32,
+        sum_insured_minor: i64,
+        /// How many times the life has now used the option on this cover.
+        uses: u32,
+        reference: String,
+    },
     /// Money was lent to the owner against the policy and raised to benefit
     /// payable under the reference.
     PolicyLoanDrawn {

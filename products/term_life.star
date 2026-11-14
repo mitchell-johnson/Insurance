@@ -20,6 +20,16 @@ PRODUCT = product(
             expiry_age = 100,
             min_sum_insured = dollars(50000),
             max_sum_insured = dollars(5000000),
+            # More cover without evidence of health after a life event.
+            # Placeholder limits, not terms anyone has approved.
+            insurability_option = insurability_option(
+                events = ["marriage", "birth_or_adoption", "mortgage"],
+                max_percent_of_original = "25",
+                max_increase = dollars(200000),
+                max_uses = 3,
+                within_days = 90,
+                to_age = 55,
+            ),
         ),
         cover(
             code = "trauma",
