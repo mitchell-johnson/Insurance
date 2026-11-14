@@ -36,6 +36,7 @@ pub fn rules() -> Rules {
         DecisionKind::RecoveryStatus,
         DecisionKind::WriteOff,
         DecisionKind::FuneralAdvance,
+        DecisionKind::AdmitBuiltIn,
     ];
     Rules {
         version: 1,
@@ -242,6 +243,13 @@ pub fn facts(cover_type: &str) -> CoverFacts {
         benefit_while_imprisoned: Default::default(),
         shared_counter: None,
         premium_waiver: None,
+        benefit_months: None,
+        benefit_to: None,
+        mental_health_months: None,
+        claim_indexation: false,
+        health_limits: vec![],
+        event_cap_minor: None,
+        built_in: vec![],
     }
 }
 

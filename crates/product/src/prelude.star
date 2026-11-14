@@ -250,8 +250,9 @@ def cooling_off(days):
     return {"kind": "cooling_off", "days": days}
 
 def product(code, name, version, effective_from, line, currency, statutory_fund, covers, features,
-            rounding = "half_even"):
+            rounding = "half_even", event_cap = None):
     return {
+        "event_cap_minor": event_cap,
         "code": code,
         "name": name,
         "version": version,

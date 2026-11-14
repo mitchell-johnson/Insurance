@@ -611,7 +611,7 @@ pub(crate) fn issue(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
             }) = d.terms_for(&c.code)
             {
                 covers.push(CoverSpec {
-                    excess_option: None,
+                    excess_option: c.option.clone(),
                     code: c.code.clone(),
                     life: Some(f.life.clone()),
                     sum_insured_minor: revised_sum_insured_minor.unwrap_or(c.sum_insured_minor),
@@ -671,7 +671,10 @@ pub(crate) fn issue(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
 
 /// Interim accidental death cover, asked for the moment the proposal opens.
 pub(crate) fn interim(cfg: &Config, p: &mut Proposal, cx: &mut Cx) {
-    let Some(settings) = &cfg.settings.interim else { return };
+    // A product with its own interim cover uses it; others use the general one.
+    let Some(settings) = cfg.settings.interim_by_product.get(&p.product_code).or(cfg.settings.interim.as_ref()) else {
+        return;
+    };
     let policy = ic_core::PolicyId::from(format!("{}-interim", p.policy).as_str());
     let lives = p.lives.values();
     let command = IssuePolicy {

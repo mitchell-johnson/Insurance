@@ -283,6 +283,12 @@ pub struct Rules {
     /// no-declaration rate).
     #[serde(default)]
     pub no_declaration_rate_bp: u32,
+    /// The consumer price index change, in basis points, that raises a
+    /// benefit in payment at a claim anniversary where the cover carries
+    /// claim indexation. Set each year from the published index; the rate
+    /// in force on the anniversary is the one applied.
+    #[serde(default)]
+    pub claim_index_bp: u32,
     /// How often a person paid a benefit is asked to prove they are alive.
     /// Zero: never.
     #[serde(default)]
@@ -417,6 +423,14 @@ fn tag_under(tag: &str, ancestor: &str) -> bool {
 }
 
 impl Rules {
+    /// The cause code is tagged in the category: any of its tags has it as
+    /// the top segment.
+    pub fn cause_in(&self, cause: Option<&str>, category: &str) -> bool {
+        cause
+            .and_then(|c| self.cause_codes.get(c))
+            .is_some_and(|tags| tags.iter().any(|t| t.split('.').next() == Some(category)))
+    }
+
     pub fn content_hash(&self) -> String {
         hash_of("ic.claims.rules.v1", self)
     }

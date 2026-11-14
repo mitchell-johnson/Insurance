@@ -89,6 +89,19 @@ pub enum Request {
     FuneralAdvance {
         amount_minor: i64,
     },
+    /// Admit a benefit built into the cover, such as a terminal illness
+    /// early payment or a counselling reimbursement, within its own limit
+    /// and only where its feature was chosen. An early payment is taken off
+    /// the cover; the other kinds are paid on top of it.
+    AdmitBuiltIn {
+        code: String,
+        amount_minor: i64,
+        /// The built-in benefit is the whole claim: it is admitted and the
+        /// claim closes once it is paid. Otherwise the claim stays open for
+        /// its main benefit.
+        #[serde(default)]
+        settles: bool,
+    },
     /// Overturn the insurer's own admission. The benefit stops from the
     /// decision date and what was paid is recorded as an overpayment, held.
     ReverseAdmission {
@@ -138,6 +151,7 @@ impl Request {
             Request::Decline => DecisionKind::Decline,
             Request::Withdraw => DecisionKind::Withdraw,
             Request::FuneralAdvance { .. } => DecisionKind::FuneralAdvance,
+            Request::AdmitBuiltIn { .. } => DecisionKind::AdmitBuiltIn,
             Request::ReverseAdmission { .. } => DecisionKind::ReverseAdmission,
             Request::ExGratia { .. } => DecisionKind::ExGratia,
             Request::EndBenefit { .. } => DecisionKind::EndBenefit,

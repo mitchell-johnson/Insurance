@@ -817,6 +817,31 @@ impl ClaimsState {
                 }
             }
             Due::Waiver => self.waiver_day(cx, claim),
+            Due::Indexation => {
+                let bp = i64::from(self.rules.claim_index_bp);
+                let running = claim.status == Status::InPayment;
+                if let Some(s) = claim.schedule.as_mut().filter(|s| running && s.indexed && s.ended.is_none() && on < s.end) {
+                    // The rate in force on the anniversary, on the benefit as it then stands.
+                    let monthly = s.monthly_on(on) * (10_000 + bp) / 10_000;
+                    let before = s.clone();
+                    s.index_steps.insert(on, monthly);
+                    // A period from the anniversary already paid at the old
+                    // benefit is owed the difference, with the next payment.
+                    let (_, short) = crate::book::replay(&before, s);
+                    s.arrears_minor += short;
+                    let next = plus_months(on, 12);
+                    let end = s.end;
+                    if next < end {
+                        claim.due.insert((next, Due::Indexation));
+                    }
+                    cx.notify(
+                        "benefit_indexed",
+                        &claim.id,
+                        &[("monthly_minor", monthly.to_string()), ("from", on.to_string()), ("index_bp", bp.to_string())],
+                    );
+                    note(claim, cx, None, format!("benefit_indexed:{on}"));
+                }
+            }
             Due::ExpectedEnd => {
                 if claim.status == Status::InPayment {
                     open_task(claim, cx, "senior-review/duration", TaskKind::SeniorReview, None);

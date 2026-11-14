@@ -256,6 +256,7 @@ impl World {
                     cover_type: cover_type.to_string(),
                     life: LifeId::from(*life),
                     sum_insured_minor: *sum,
+                    option: None,
                 })
                 .collect(),
             legacy_received_on: None,

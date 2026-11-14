@@ -7,6 +7,7 @@ mod decisions;
 mod intake;
 mod investigate;
 mod offsets;
+mod options;
 mod reversal;
 mod views;
 mod world;

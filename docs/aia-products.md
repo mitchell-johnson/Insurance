@@ -83,12 +83,8 @@ Every AIA wording is at `https://documents.aia.co.nz/<slug>/`. Versions current 
 
 ## Not built yet, and who owns it
 
-- **Claims (`ic-claims`):**
-  - Enforce the benefit period and to-age an income option sets (`benefit_months`, `benefit_to_age`).
-  - Pay built-in benefits within their limits, and only where their feature is chosen.
-  - Apply lifetime limits (`per_lifetime_minor`) and the Interim Cover cap of $500,000 across benefits for one event.
-  - Apply the mental health two-year limit and claim indexation.
-  - The core already passes the chosen waiting period and excess in the claim facts.
+- **Claims (`ic-claims`):** built on 14 November (docs/claims.md, "What the chosen option sets"): the benefit period and to-age, built-in benefits within their limits and only where their feature is chosen, product lifetime limits, a per-event cap, the mental health limit in all and claim indexation. What is left is the core's part below.
+- **The core, for claims:** done (14 Nov). `cover_facts` fills `benefit_months`, `benefit_to` (the first day the life is the option's `benefit_to_age`), `mental_health_months` (24 where the option has `mental-health-limit`; the period is a constant in `crates/core/src/claims.rs`, since the products name the feature and not the months), `claim_indexation`, `health_limits`, `event_cap_minor` (a product now declares `event_cap`, and `aia-interim` declares $500,000) and `built_in`. Test: `crates/sim/tests/aia.rs::the_claim_facts_carry_the_terms_of_the_option_chosen_and_the_products_limits`. A cover with no option does not send its own `benefit_months` (the monthly benefit's own period, as on `aia-interim` accidental income and `income-protection`): claims asked for the option's only.
 - **Underwriting (`ic-underwriting`):**
   - Apply the occupation tests: TPD entry to 55 for most occupations and 60 for professional ones, income to 70 only for accepted occupations, and occupation class as a required rating factor for TPD, income, SAIC and business continuity.
   - Apply Family Protection's 15-year minimum for a term to an age.

@@ -128,6 +128,23 @@ pub(crate) fn moving(state: &CoreState, policy: &Policy) -> Result<ic_claims::Mo
     state.claims.moving(&policy.id.to_string()).map_err(|e| Reject::new(&e.code, e.message))
 }
 
+/// How many months in all an income benefit is paid for mental health
+/// causes where the chosen option carries the limit: the two years of the
+/// AIA Living wording. The products name the feature, not the period.
+const MENTAL_HEALTH_LIMIT_MONTHS: u32 = 24;
+
+/// The first day a life is the given age: the birthday, or 1 March for a
+/// life born on 29 February in a year without one, as age is counted
+/// everywhere else.
+fn birthday_at(born: NaiveDate, age: u32) -> Option<NaiveDate> {
+    let day = born.checked_add_months(chrono::Months::new(age.checked_mul(12)?))?;
+    if ic_product::schedule::age_on(born, day) < age {
+        day.succ_opt()
+    } else {
+        Some(day)
+    }
+}
+
 fn status_code(status: PolicyStatus) -> String {
     serde_json::to_value(status)
         .ok()
@@ -253,6 +270,28 @@ pub fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&s
     if let Some(days) = chosen.as_ref().and_then(|o| o.terms.waiting_days) {
         facts.waiting_days = days;
     }
+    // What else the chosen option sets for a claim: how long an income
+    // benefit runs, and the limits and indexation its features switch on.
+    if let Some(option) = &chosen {
+        facts.benefit_months = option.terms.benefit_months;
+        let born = record.and_then(|r| r.factors.as_of(on)).and_then(|f| f.date_of_birth);
+        facts.benefit_to = option.terms.benefit_to_age.zip(born).and_then(|(age, born)| birthday_at(born, age));
+        facts.mental_health_months = option.has_feature("mental-health-limit").then_some(MENTAL_HEALTH_LIMIT_MONTHS);
+        facts.claim_indexation = option.has_feature("claim-indexation");
+    }
+    if let Some(ic_product::Benefit::HealthSchedule { limits }) = product.and_then(|pr| pr.cover(cover)).map(|def| &def.benefit) {
+        facts.health_limits = limits
+            .iter()
+            .map(|l| ic_claims::port::HealthLimit {
+                category: l.category.clone(),
+                per_event_minor: l.per_event_minor,
+                per_year_minor: l.per_year_minor,
+                per_lifetime_minor: l.per_lifetime_minor,
+                excess_minor: Some(l.excess_minor),
+            })
+            .collect();
+    }
+    facts.event_cap_minor = product.and_then(|pr| pr.event_cap_minor);
     let mut sum_insured: i64 = at_event.iter().map(|l| l.sum_insured_minor).sum();
     if product.is_some_and(|pr| pr.pays_step_applied_after_event()) {
         // The wording pays an indexation step applied after the event.
@@ -312,6 +351,23 @@ pub fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&s
     exclusions.dedup();
     facts.exclusions = exclusions;
     facts.sum_insured_minor = sum_insured;
+    // The benefits built into the cover, each with its limit against the
+    // sum insured on the event date and whether the chosen option has it.
+    if let Some(def) = product.and_then(|pr| pr.cover(cover)) {
+        facts.built_in = def
+            .built_in
+            .iter()
+            .map(|b| ic_claims::port::BuiltIn {
+                code: b.code.clone(),
+                kind: serde_json::to_value(b.kind)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_default(),
+                limit_minor: b.limit_minor(sum_insured),
+                applies: b.applies(chosen.as_ref()),
+            })
+            .collect();
+    }
     facts.in_force = covered && c.start <= on && policy_live && !matches!(standing, Some("suspended" | "lapsed"));
     // Whoever holds an assignment standing on the event date is paid first.
     let standing_interests = crate::interest::ranked(p, on).into_iter().map(|i| ic_claims::port::Interest {
@@ -1756,5 +1812,28 @@ mod tests {
             e,
             Event::PolicyLoanWrittenOff { amount_minor: 2_000_00, cause, .. } if cause == "terminated_on_claim"
         )));
+    }
+    /// Purpose: the first day a life is a given age is its birthday, and for a life born on
+    /// 29 February it is the first day age counts it as that old, in a leap year or not; the
+    /// day before, the life is still a year younger.
+    /// Why it matters: an income benefit to age 65 stops on this day. A day early takes a
+    /// day's benefit from every claimant who reaches the age on claim; a date that disagrees
+    /// with how age is counted for premiums would have the two halves of the system
+    /// disagree about how old someone is.
+    #[test]
+    fn the_day_a_benefit_to_an_age_ends_is_the_first_day_at_that_age() {
+        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+        assert_eq!(birthday_at(d(1987, 6, 1), 65), Some(d(2052, 6, 1)));
+        for (born, age) in [(d(1988, 2, 29), 65), (d(1988, 2, 29), 64), (d(1990, 12, 31), 70)] {
+            let day = birthday_at(born, age).unwrap();
+            assert_eq!(ic_product::schedule::age_on(born, day), age, "{born} at {age}");
+            assert_eq!(
+                ic_product::schedule::age_on(born, day.pred_opt().unwrap()),
+                age - 1,
+                "{born} the day before {age}"
+            );
+        }
+        assert_eq!(birthday_at(d(1988, 2, 29), 64), Some(d(2052, 2, 29)));
+        assert_eq!(birthday_at(d(1987, 6, 1), u32::MAX), None, "an age no calendar reaches is no date");
     }
 }

@@ -14,7 +14,7 @@ use crate::model::{
     TaskKind, TimerKind,
 };
 use crate::port::{CoverFacts, Instruction, Reject, Termination};
-use crate::state::{note, open_task, plus_days, ClaimsState, Cx};
+use crate::state::{note, open_task, plus_days, plus_months, ClaimsState, Cx};
 use crate::StaffId;
 
 /// What a request comes to once it has been checked against the claim.
@@ -87,8 +87,68 @@ impl ClaimsState {
         others
             .filter(|c| c.id != claim.id && !c.claim_type.periodic() && c.status != Status::Reversed)
             .filter(|c| (c.cover == claim.cover && (c.life == claim.life || joint(c))) || (c.life == claim.life && facts.reduced_by.contains(&c.cover)))
-            .map(|c| c.admitted_minor)
+            .map(|c| c.admitted_minor - Self::on_top(c, facts))
             .sum()
+    }
+
+    /// What a claim admitted under built-in benefits paid on top of the
+    /// cover: everything but early payments.
+    fn on_top(claim: &Claim, facts: &CoverFacts) -> i64 {
+        claim
+            .built_in
+            .iter()
+            .filter(|(code, _)| !facts.built_in.iter().any(|b| &b.code == *code && b.reduces_cover()))
+            .map(|(_, a)| a)
+            .sum()
+    }
+
+    /// What is left of the policy's cap for one event, where it has one:
+    /// the cap less what every other claim on the policy for the same life
+    /// and event date has admitted, less what this claim already has.
+    fn event_room(&self, claim: &Claim, facts: &CoverFacts) -> Option<i64> {
+        let cap = facts.event_cap_minor?;
+        let others: i64 = self
+            .by_policy
+            .get(&claim.policy)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.claims.get(id))
+            .filter(|c| c.id != claim.id && c.life == claim.life && c.event_date == claim.event_date && c.status != Status::Reversed)
+            .map(|c| c.admitted_minor)
+            .sum();
+        Some(cap - others - claim.admitted_minor)
+    }
+
+    /// Days of income benefit already paid for a mental health cause on
+    /// this cover for this life, on other claims.
+    fn mental_health_days(&self, claim: &Claim) -> i64 {
+        self.by_policy
+            .get(&claim.policy)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.claims.get(id))
+            .filter(|c| c.id != claim.id && c.cover == claim.cover && c.life == claim.life && c.status != Status::Reversed)
+            .filter(|c| self.rules.cause_in(c.cause_code.as_deref(), "mental"))
+            .filter_map(|c| c.schedule.as_ref())
+            .flat_map(|s| s.periods.iter().filter(|(_, p)| !p.returned).map(|(start, p)| (p.end - *start).num_days()))
+            .sum()
+    }
+
+    /// Check the cover for a decision that pays from it: checked, in force
+    /// for a member, and with a cause recorded.
+    fn covered(claim: &Claim) -> Result<&CoverFacts, Reject> {
+        let Some(check) = claim.cover_check.as_ref() else {
+            return refuse("cover_not_checked", "record the cover check before deciding");
+        };
+        let facts = &check.facts;
+        let member = facts.life_on_policy || claim.task(TaskKind::MembershipEvidence).any(|t| t.outcome.as_deref() == Some("confirmed"));
+        if !facts.in_force || !member {
+            return refuse("cover_not_confirmed", "cover was not in force for this life on the event date");
+        }
+        if claim.cause_code.is_none() {
+            return refuse("cause_required", "record the cause of claim before admitting");
+        }
+        Ok(facts)
     }
 
     /// Check a request against the claim as it stands. Changes nothing.
@@ -121,17 +181,7 @@ impl ClaimsState {
                 if claim.has_open_task(TaskKind::NonDisclosureReview) {
                     return refuse("awaiting_non_disclosure_review", "a non-disclosure review is open on this claim");
                 }
-                let Some(check) = claim.cover_check.as_ref() else {
-                    return refuse("cover_not_checked", "record the cover check before deciding");
-                };
-                let facts = &check.facts;
-                let member = facts.life_on_policy || claim.task(TaskKind::MembershipEvidence).any(|t| t.outcome.as_deref() == Some("confirmed"));
-                if !facts.in_force || !member {
-                    return refuse("cover_not_confirmed", "cover was not in force for this life on the event date");
-                }
-                if claim.cause_code.is_none() {
-                    return refuse("cause_required", "record the cause of claim before admitting");
-                }
+                let facts = Self::covered(claim)?;
                 let (exclusions, _) = self.rules.exclusion_check(&facts.exclusions, &facts.cover_type, claim.cause_code.as_deref());
                 match (exclusions, exclusion_override) {
                     (Match::Applies, None) => return refuse("exclusion_applies", "an exclusion on the cover matches the cause of claim"),
@@ -169,14 +219,39 @@ impl ClaimsState {
                         if !sound {
                             return refuse("invalid_schedule", "the benefit terms do not fit the cover");
                         }
+                        // The option the life chose sets the longest benefit period and the age it stops at.
+                        let by_period = facts.benefit_months.map(|m| plus_months(p.first_period, m));
+                        if [by_period, facts.benefit_to].into_iter().flatten().any(|latest| p.end > latest) {
+                            return refuse("beyond_benefit_period", "the benefit runs past the period or the age the chosen option pays to");
+                        }
+                        let mental = self.rules.cause_in(claim.cause_code.as_deref(), "mental");
+                        if let Some(months) = facts.mental_health_months.filter(|_| mental) {
+                            // A limit in all: months already paid on earlier mental health claims count.
+                            let used = u64::try_from(self.mental_health_days(claim)).unwrap_or(0);
+                            let latest = plus_months(p.first_period, months)
+                                .checked_sub_days(chrono::Days::new(used))
+                                .unwrap_or(p.first_period);
+                            if p.end > latest {
+                                return refuse("mental_health_limit", "the benefit runs past what the cover pays in all for mental health");
+                            }
+                        }
                         plan.amount_minor = claim.reserve_minor.max(p.monthly_minor);
                     }
                     (false, None) => {
                         plan.health = self.health_amount(claim, facts);
-                        let cap = match &plan.health {
+                        let mut cap = match &plan.health {
                             Some(h) => h.amount_minor,
-                            None => facts.sum_insured_minor - self.earlier_admitted(claim, facts),
+                            // An early payment built into the cover was paid out of the sum insured.
+                            None => {
+                                facts.sum_insured_minor
+                                    - self.earlier_admitted(claim, facts)
+                                    - (claim.admitted_minor - claim.advanced_minor - Self::on_top(claim, facts))
+                            }
                         };
+                        if let Some(room) = self.event_room(claim, facts) {
+                            // The advance is part of this benefit, so it is room already used.
+                            cap = cap.min(room + claim.advanced_minor);
+                        }
                         let amount = amount_minor.unwrap_or(cap);
                         if amount <= 0 || amount > cap {
                             return refuse("amount_exceeds_cover", "the amount is more than the cover pays for this event");
@@ -293,6 +368,40 @@ impl ClaimsState {
                 let already: i64 = claim.overpayments.iter().map(|o| o.amount_minor).sum();
                 plan.overpaid_minor = (claim.paid_minor(false) - already).max(0);
                 plan.amount_minor = claim.admitted_minor.max(plan.overpaid_minor);
+            }
+            Request::AdmitBuiltIn { code, amount_minor, settles } => {
+                let open = claim.status == Status::Open || (claim.status == Status::InPayment && !settles);
+                if !open {
+                    return refuse("not_open", "a built-in benefit is admitted on an open claim, or beside a benefit in payment");
+                }
+                let facts = Self::covered(claim)?;
+                let Some(benefit) = facts.built_in.iter().find(|b| &b.code == code) else {
+                    return refuse("unknown_benefit", "the cover has no built-in benefit with that code");
+                };
+                if !benefit.applies {
+                    return refuse("built_in_not_chosen", "the built-in benefit needs a feature the life did not choose");
+                }
+                let used: i64 = self
+                    .by_policy
+                    .get(&claim.policy)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|id| self.claims.get(id))
+                    .filter(|c| c.life == claim.life && c.status != Status::Reversed)
+                    .filter_map(|c| c.built_in.get(code))
+                    .sum();
+                let mut room = benefit.limit_minor.map_or(i64::MAX, |l| l - used);
+                if benefit.reduces_cover() {
+                    let taken = self.earlier_admitted(claim, facts) + claim.admitted_minor - Self::on_top(claim, facts);
+                    room = room.min(facts.sum_insured_minor - taken);
+                }
+                if let Some(event) = self.event_room(claim, facts) {
+                    room = room.min(event);
+                }
+                if *amount_minor <= 0 || *amount_minor > room {
+                    return refuse("built_in_limit", "the amount is more than the built-in benefit has left to pay");
+                }
+                plan.amount_minor = *amount_minor;
             }
             Request::FuneralAdvance { amount_minor } => {
                 if claim.claim_type != ClaimType::Death || claim.status != Status::Open {
@@ -413,7 +522,7 @@ impl ClaimsState {
             Request::Decline => profile.may_decline,
             Request::ReverseAdmission { .. } => profile.may_reverse_admission && profile.senior,
             Request::ExGratia { .. } => amount <= profile.max_ex_gratia_minor,
-            Request::FuneralAdvance { .. } => amount <= profile.max_admission_minor.get(&claim.claim_type).copied().unwrap_or(0),
+            Request::FuneralAdvance { .. } | Request::AdmitBuiltIn { .. } => amount <= profile.max_admission_minor.get(&claim.claim_type).copied().unwrap_or(0),
             Request::Withdraw | Request::EndBenefit { .. } | Request::SuspendBenefit { .. } | Request::ResumeBenefit { .. } => true,
         }
     }
@@ -424,6 +533,7 @@ impl ClaimsState {
         let two_signatures = match request {
             Request::Decline | Request::ReverseAdmission { .. } => true,
             Request::Admit { .. } => amount + claim.advanced_minor >= self.rules.two_signature_admission_minor,
+            Request::AdmitBuiltIn { .. } => amount >= self.rules.two_signature_admission_minor,
             Request::ExGratia { .. } => amount >= self.rules.two_signature_ex_gratia_minor,
             Request::WriteOff { .. } => amount >= self.rules.two_signature_write_off_minor,
             _ => false,
@@ -706,6 +816,42 @@ impl ClaimsState {
                     );
                 }
                 Self::meet_timer(claim, TimerKind::Decision, cx.today);
+            }
+            Request::AdmitBuiltIn { code, amount_minor, settles } => {
+                let reduces = claim
+                    .cover_check
+                    .as_ref()
+                    .and_then(|c| c.facts.built_in.iter().find(|b| &b.code == code))
+                    .is_some_and(crate::port::BuiltIn::reduces_cover);
+                cx.core.execute(Instruction::Admit {
+                    // Only an early payment comes off the cover.
+                    life: claim.life.clone().filter(|_| reduces),
+                    claim: id.clone(),
+                    policy,
+                    cover,
+                    amount_minor: *amount_minor,
+                    release_reserve: *settles,
+                    deduct_premium_minor: 0,
+                    terminate: None,
+                    repay_loan_minor: 0,
+                })?;
+                claim.admitted_minor += amount_minor;
+                claim.payable_minor += amount_minor;
+                *claim.built_in.entry(code.clone()).or_default() += amount_minor;
+                if *settles {
+                    claim.status = Status::Admitted;
+                    claim.reserve_minor = 0;
+                    self.start_timer(claim, TimerKind::Payment, cx.today);
+                    Self::meet_timer(claim, TimerKind::Decision, cx.today);
+                    cx.lifecycle(
+                        &self.rules,
+                        "claim_admitted",
+                        claim,
+                        &[("admitted_minor", amount_minor.to_string()), ("built_in", code.clone())],
+                    );
+                } else {
+                    cx.notify("built_in_admitted", &id, &[("code", code.clone()), ("amount_minor", amount_minor.to_string())]);
+                }
             }
             Request::FuneralAdvance { amount_minor } => {
                 // The reserve falls by what is advanced, so the claim's cost is unchanged.

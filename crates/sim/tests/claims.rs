@@ -44,6 +44,7 @@ fn rules() -> Rules {
         DecisionKind::ReverseAdmission,
         DecisionKind::ExGratia,
         DecisionKind::FuneralAdvance,
+        DecisionKind::AdmitBuiltIn,
         DecisionKind::EndBenefit,
         DecisionKind::RecoveryStatus,
         DecisionKind::WriteOff,

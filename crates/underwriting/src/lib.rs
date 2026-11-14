@@ -19,6 +19,7 @@ pub mod codes;
 pub mod command;
 pub mod config;
 pub mod driver;
+pub mod eligibility;
 pub mod evidence;
 pub mod host;
 pub mod load;

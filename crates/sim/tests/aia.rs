@@ -293,3 +293,89 @@ fn a_cover_added_later_is_held_to_its_entry_ages() {
     add(&mut c, &younger).unwrap();
     assert!(c.state(0).policies[&younger].covers.contains_key("tpd-own-occupation"));
 }
+
+/// Purpose: the claim facts carry what the product and the option a life chose say about a
+/// claim. An income cover to age 65 with the mental health limit and claim indexation gives
+/// the 65th birthday as the last day's limit, 24 months for mental health and indexation on,
+/// with the built-in benefits those choices switch on marked as applying and each limit
+/// worked out from the monthly benefit; the same cover on a two-year period gives 24 months
+/// and no age limit; a health cover carries its schedule with lifetime limits; and the
+/// interim product carries its $500,000 cap for one event while other products carry none.
+/// Why it matters: claims decides from these facts alone and never reads a product. A term
+/// left out is a term not applied: benefit paid past 65, a mental health claim paid without
+/// limit, a built-in benefit paid to someone who did not buy it, or one accident paid in
+/// full on every interim cover at once.
+#[test]
+fn the_claim_facts_carry_the_terms_of_the_option_chosen_and_the_products_limits() {
+    let mut c = cluster();
+    let living = product("aia_living.star");
+    let on = d(2028, 1, 10);
+    let income = |c: &mut Cluster, n: u64, chosen: &[(&str, &str)]| {
+        let option = pick(&living, "income-agreed-value", chosen);
+        let mut p = policy(n, "aia-living", d(1987, 6, 1), &[("income-agreed-value", 5_000_00, Some(option))]);
+        p.lives[0].factors.occupation_class = Some("2".to_string());
+        let id = issue(c, p).unwrap();
+        ic_core::cover_facts(c.state(0), &id.0, "income-agreed-value", Some("life-1"), on).unwrap()
+    };
+    let built = |facts: &ic_core::claims_module::port::CoverFacts, code: &str| {
+        let b = facts.built_in.iter().find(|b| b.code == code).unwrap_or_else(|| panic!("no built-in {code}"));
+        (b.kind.clone(), b.limit_minor, b.applies)
+    };
+
+    let to_65 = income(&mut c, 1, &[("period", "to-65"), ("mental-health", "limited"), ("claim-indexation", "cpi")]);
+    assert_eq!((to_65.benefit_months, to_65.benefit_to), (None, Some(d(2052, 6, 1))));
+    assert_eq!(
+        (to_65.mental_health_months, to_65.claim_indexation, to_65.event_cap_minor),
+        (Some(24), true, None)
+    );
+    assert_eq!(built(&to_65, "claim-indexation"), ("facility".to_string(), None, true));
+    assert!(built(&to_65, "mental-health-limit").2);
+    assert!(!built(&to_65, "future-insurability").2);
+    // Three months' benefit, and a fixed amount whatever the benefit.
+    assert_eq!(built(&to_65, "back-to-work"), ("additional".to_string(), Some(15_000_00), true));
+    assert_eq!(built(&to_65, "return-home"), ("reimbursement".to_string(), Some(10_000_00), true));
+    assert_eq!(built(&to_65, "pregnancy-premium-waiver").0, "premium_waiver");
+
+    let two_years = income(&mut c, 2, &[("period", "2y")]);
+    assert_eq!((two_years.benefit_months, two_years.benefit_to), (Some(24), None));
+    assert_eq!((two_years.mental_health_months, two_years.claim_indexation), (None, false));
+    assert_eq!(
+        (built(&two_years, "future-insurability").2, built(&two_years, "claim-indexation").2),
+        (true, false)
+    );
+
+    // A health schedule travels whole, lifetime limits included.
+    let cancer = policy(3, "aia-cancer-care", d(1987, 6, 1), &[("cancer-care", 0, Some("500".to_string()))]);
+    let id = issue(&mut c, cancer).unwrap();
+    let facts = ic_core::cover_facts(c.state(0), &id.0, "cancer-care", Some("life-1"), on).unwrap();
+    let limit = |category: &str| facts.health_limits.iter().find(|l| l.category == category).unwrap();
+    assert_eq!(facts.health_limits.len(), 14);
+    assert_eq!(
+        (
+            limit("public-hospital-cancer-cash").per_lifetime_minor,
+            limit("public-hospital-cancer-cash").per_year_minor
+        ),
+        (Some(5_000_00), None)
+    );
+    assert_eq!(
+        (limit("cancer-treatment").per_year_minor, limit("cancer-treatment").excess_minor),
+        (Some(500_000_00), Some(0))
+    );
+    assert_eq!(
+        (facts.chosen_excess_minor, facts.benefit_months, facts.claim_indexation),
+        (Some(500_00), None, false)
+    );
+
+    // The interim product's cap for one event is on every one of its covers' facts.
+    let interim = policy(
+        4,
+        "aia-interim",
+        d(1987, 6, 1),
+        &[("life", 400_000_00, None), ("accidental-tpd", 150_000_00, None)],
+    );
+    let id = issue(&mut c, interim).unwrap();
+    for cover in ["life", "accidental-tpd"] {
+        let facts = ic_core::cover_facts(c.state(0), &id.0, cover, Some("life-1"), on).unwrap();
+        assert_eq!(facts.event_cap_minor, Some(500_000_00), "{cover}");
+    }
+}
