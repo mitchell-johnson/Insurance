@@ -54,6 +54,9 @@ pub struct ApiSettings {
     pub listen: SocketAddr,
     pub identity: Identity,
     pub mode: Mode,
+    /// The customer master, asked before a servicing request that moves
+    /// value or cover: its base URL and its token scope.
+    pub customers: Option<(String, String)>,
 }
 
 impl ApiSettings {
@@ -69,6 +72,10 @@ impl ApiSettings {
     ///   set it for a sovereign cloud.
     /// - `IC_AUTH=dev`: trust caller headers instead. Refused in Kubernetes
     ///   and whenever an Azure endpoint is configured.
+    /// - `IC_CUSTOMER_MASTER_URL`, `IC_CUSTOMER_MASTER_SCOPE`: the customer
+    ///   master and its token scope, asked before a surrender, withdrawal,
+    ///   cancellation or reduction of cover from servicing. Both or
+    ///   neither; required in Kubernetes.
     ///
     /// Gateway to ledger nodes, chosen by `IC_NODES`:
     /// - `IC_NODES`: `host:port,host:port,...` of the nodes.
@@ -151,6 +158,19 @@ impl ApiSettings {
                 })
             }
         };
-        Ok(Self { listen, identity, mode })
+        let customers = match (get("IC_CUSTOMER_MASTER_URL"), get("IC_CUSTOMER_MASTER_SCOPE")) {
+            (Some(url), Some(scope)) => Some((url, scope)),
+            (None, None) if !in_kubernetes => None,
+            (None, None) => {
+                return Err("IC_CUSTOMER_MASTER_URL is required in Kubernetes: servicing requests are checked with the customer master".to_string())
+            }
+            _ => return Err("set IC_CUSTOMER_MASTER_URL and IC_CUSTOMER_MASTER_SCOPE together".to_string()),
+        };
+        Ok(Self {
+            listen,
+            identity,
+            mode,
+            customers,
+        })
     }
 }

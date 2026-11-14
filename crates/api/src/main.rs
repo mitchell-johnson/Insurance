@@ -71,6 +71,18 @@ async fn main() -> Result<(), String> {
         backend,
         auth: settings.identity.auth(),
         scope: AudienceScope::shipped().map_err(|e| e.to_string())?,
+        customers: match &settings.customers {
+            Some((base, scope)) => Some(Arc::new(ic_api::servicing::Hosted {
+                base: base.clone(),
+                scope: scope.clone(),
+                credential: ic_azure::credential::AzureCredential::from_env().map_err(|e| format!("customer master credential: {e}"))?,
+                http: ic_azure::http_client(),
+            })),
+            None => {
+                tracing::warn!("IC_CUSTOMER_MASTER_URL is not set: servicing requests are not checked with the customer master");
+                None
+            }
+        },
     });
     let listen = settings.listen;
     let listener = tokio::net::TcpListener::bind(listen).await.map_err(|e| format!("bind {listen}: {e}"))?;

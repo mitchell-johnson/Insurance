@@ -183,8 +183,22 @@ fn bad_settings_and_unsafe_identities_are_refused() {
         ("IC_ENTRA_AUDIENCE", "api://core"),
         ("KUBERNETES_SERVICE_HOST", "10.0.0.1"),
         ("IC_DATA_DIR", "  "),
+        ("IC_CUSTOMER_MASTER_URL", "https://customers.internal"),
+        ("IC_CUSTOMER_MASTER_SCOPE", "api://customers/.default"),
     ])
     .unwrap();
+    assert_eq!(
+        settings.customers,
+        Some(("https://customers.internal".to_string(), "api://customers/.default".to_string()))
+    );
+    // In Kubernetes servicing is never left unchecked, and half a setting is a mistake anywhere.
+    let entra = [("IC_ENTRA_TENANT_ID", "tenant"), ("IC_ENTRA_AUDIENCE", "api://core")];
+    refused(
+        &[entra[0], entra[1], ("KUBERNETES_SERVICE_HOST", "10.0.0.1")],
+        "IC_CUSTOMER_MASTER_URL is required",
+    );
+    refused(&[("IC_AUTH", "dev"), ("IC_CUSTOMER_MASTER_URL", "https://customers.internal")], "together");
+    assert_eq!(read(&[("IC_AUTH", "dev")]).unwrap().customers, None);
     assert!(matches!(settings.identity, Identity::Entra { .. }));
     assert!(matches!(settings.mode, Mode::Single(engine) if engine.data_dir.is_none()));
     // The identity turns into the authenticator the routes use.

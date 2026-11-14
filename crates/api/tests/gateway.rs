@@ -42,6 +42,7 @@ fn app(ledger: &Ledger, patience: Duration) -> Router {
         backend: Backend::cluster(gateway(ledger, patience)),
         auth: Auth::Dev,
         scope: AudienceScope::shipped().unwrap(),
+        customers: None,
     }))
 }
 

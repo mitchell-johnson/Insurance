@@ -198,6 +198,7 @@ async fn the_routes_enforce_entra_tokens_and_fail_closed_without_the_keys() {
             backend: ic_api::Backend::single(engine),
             auth,
             scope: AudienceScope::shipped().unwrap(),
+            customers: None,
         }))
     };
     let application = serde_json::to_value(ic_sim::persona::term_life(

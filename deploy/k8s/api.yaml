@@ -57,6 +57,13 @@ spec:
           env:
             - name: IC_LISTEN
               value: 0.0.0.0:8080
+            # The customer master, asked before a servicing request that
+            # moves value or cover (crates/api/src/servicing.rs). The API's
+            # workload identity needs the master's app role policy-servicing.
+            - name: IC_CUSTOMER_MASTER_URL
+              value: REPLACE-customer-master-url
+            - name: IC_CUSTOMER_MASTER_SCOPE
+              value: REPLACE-customer-master-scope
           ports:
             - name: http
               containerPort: 8080

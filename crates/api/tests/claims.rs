@@ -30,6 +30,7 @@ fn app() -> Router {
         backend: ic_api::Backend::single(engine),
         auth: Auth::Dev,
         scope: AudienceScope::shipped().unwrap(),
+        customers: None,
     }))
 }
 

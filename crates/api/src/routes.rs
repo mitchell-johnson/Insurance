@@ -31,6 +31,9 @@ pub struct AppState {
     pub backend: Backend,
     pub auth: Auth,
     pub scope: AudienceScope,
+    /// The customer master, asked before a servicing request that moves
+    /// value or cover. `None` only where `IC_CUSTOMER_MASTER_URL` is not set.
+    pub customers: Option<Arc<dyn crate::servicing::Customers>>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -220,8 +223,48 @@ async fn command(State(s): State<Shared>, headers: HeaderMap, Json(req): Json<Co
         (None, None, Some(policy)) => s.backend.locate(policy).await?.map(|e| e.partition).ok_or_else(Problem::not_found)?,
         (None, None, None) => return Err(Problem::bad_request("give a partition, a group or a policy")),
     };
+    if module == "policy-servicing" {
+        servicing_check(&s, &headers, &req.command).await?;
+    }
     let applied = s.backend.submit(partition, &key, module, req.command).await?;
     Ok(written(partition, &applied))
+}
+
+/// Put a servicing request that moves value or cover to the customer
+/// master before it reaches the ledger (`crate::servicing`).
+async fn servicing_check(s: &Shared, headers: &HeaderMap, command: &Command) -> Result<(), Problem> {
+    use crate::servicing::{check, Given, Outcome};
+    let (Some(customers), Some((policy, act))) = (s.customers.as_ref(), crate::servicing::act(command)) else {
+        return Ok(());
+    };
+    let Some(entry) = s.backend.locate(policy).await? else {
+        // The ledger answers for a policy nobody holds.
+        return Ok(());
+    };
+    let Some(view) = s.backend.policy(&entry.number).await? else {
+        return Ok(());
+    };
+    let unavailable = |detail: String| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "customers_unavailable", detail);
+    let on = view.business_date.ok_or_else(|| unavailable("the business date is not open".to_string()))?;
+    let given = Given::from_headers(|name| headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_string));
+    match check(customers.as_ref(), &view.policy.policyholder, act, on, &given).await {
+        Outcome::Proceed => {
+            if given.conversation.is_some() || given.review.is_some() || given.acting.is_some() {
+                tracing::info!(policy = %policy, act, conversation = ?given.conversation, review = ?given.review, acting = ?given.acting, "servicing request sent on after the customer master's check");
+            }
+            Ok(())
+        }
+        Outcome::Hold { code, detail } => {
+            tracing::info!(policy = %policy, act, code, "servicing request held");
+            Err(Problem::new(StatusCode::CONFLICT, code, detail))
+        }
+        Outcome::Refuse => Err(Problem::new(
+            StatusCode::FORBIDDEN,
+            "not_authorised",
+            "the person asking holds no authority for this act on this policy",
+        )),
+        Outcome::Unavailable(detail) => Err(unavailable(detail)),
+    }
 }
 
 /// An incoming payment from the payments module. A confident match becomes a

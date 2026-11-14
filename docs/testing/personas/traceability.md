@@ -466,12 +466,12 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | --- | --- | --- |
 | VUL-001 | full | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person` |
 | VUL-002 | full | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person`<br>`channels/tests/http.rs::a_vulnerable_customers_request_goes_to_a_person`<br>`channels/tests/http.rs::staff_who_open_a_policy_see_how_to_help_and_only_a_specialist_sees_why` |
-| VUL-003 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
+| VUL-003 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed`<br>`api/tests/servicing.rs::a_request_is_held_for_a_conversation_and_then_stands` |
 | VUL-004 | full | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
-| VUL-005 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
+| VUL-005 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed`<br>`api/tests/servicing.rs::a_request_is_held_for_a_conversation_and_then_stands` |
 | VUL-006 | full | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
 | VUL-007 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
-| VUL-008 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority`<br>`channels/tests/http.rs::an_attorney_sees_the_persons_policies_under_their_own_sign_in` |
+| VUL-008 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority`<br>`channels/tests/http.rs::an_attorney_sees_the_persons_policies_under_their_own_sign_in`<br>`api/tests/servicing.rs::a_representative_acts_only_with_an_authority_for_the_act` |
 | VUL-009 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-010 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-011 | full | `customers/tests/api.rs::a_guardian_gets_a_report_of_their_actions` |
@@ -480,7 +480,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | VUL-014 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-015 | full | `customers/tests/api.rs::a_death_prompts_a_person_to_consider_the_bereaved` |
 | VUL-017 | full | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due`<br>`channels/tests/http.rs::a_trained_person_reviews_vulnerability_markers`<br>`channels/tests/customers.rs::the_master_is_asked_about_markers_as_the_trained_person` |
-| VUL-018 | part | `customers/tests/api.rs::a_capacity_question_pauses_representatives` |
+| VUL-018 | part | `customers/tests/api.rs::a_capacity_question_pauses_representatives`<br>`api/tests/servicing.rs::a_representative_acts_only_with_an_authority_for_the_act` |
 | VUL-016 | full | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not`<br>`underwriting/tests/more_time.rs::a_customer_who_needs_more_time_gets_longer_to_answer_an_offer`<br>`channels/tests/http.rs::the_life_gives_their_own_consents` |
 | VUL-019 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_post_only_customer_and_their_representative_both_get_the_notice`<br>`documents/tests/requested_letters.rs::a_representative_sees_ordinary_letters_and_never_clinical_ones` |
 | VUL-020 | full | `payments/tests/aml.rs::repeated_refunds_raise_a_restricted_case` |

@@ -34,6 +34,7 @@ pub struct Call<'a> {
     relationships: &'a str,
     key: Option<&'a str>,
     body: Option<Value>,
+    headers: Vec<(&'a str, &'a str)>,
 }
 
 impl<'a> Call<'a> {
@@ -46,6 +47,7 @@ impl<'a> Call<'a> {
             relationships: "",
             key: None,
             body: None,
+            headers: Vec::new(),
         }
     }
     pub fn roles(mut self, r: &'a str) -> Self {
@@ -59,6 +61,10 @@ impl<'a> Call<'a> {
     }
     pub fn anonymous(mut self) -> Self {
         self.subject = None;
+        self
+    }
+    pub fn header(mut self, name: &'a str, value: &'a str) -> Self {
+        self.headers.push((name, value));
         self
     }
     pub fn key(mut self, k: &'a str) -> Self {
@@ -87,6 +93,9 @@ impl<'a> Call<'a> {
         }
         if let Some(k) = self.key {
             req = req.header("idempotency-key", k);
+        }
+        for (name, value) in &self.headers {
+            req = req.header(*name, *value);
         }
         let body = self.body.map_or_else(Body::empty, |b| Body::from(b.to_string()));
         let res = app.clone().oneshot(req.body(body).unwrap()).await.unwrap();
