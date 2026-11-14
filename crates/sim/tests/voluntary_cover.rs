@@ -510,7 +510,11 @@ fn a_lapsed_members_cover_is_reinstated_when_they_pay_what_it_needs() {
         })
         .expect("the reinstatement is announced");
     assert!(billed > 0, "the periods since the lapse are charged");
-    assert_eq!(credit(&c, p, &id), i128::from(paid - lapsed.arrears_minor - billed), "the rest stays the member's");
+    assert_eq!(
+        credit(&c, p, &id),
+        i128::from(paid - lapsed.arrears_minor - billed),
+        "the rest stays the member's"
+    );
     assert!(seen.iter().any(|e| matches!(e, Event::LayerAdded { .. })));
 
     // The member's cover carries on being billed and paid as before.
@@ -565,7 +569,11 @@ fn a_members_credit_moves_with_the_scheme_to_another_partition() {
     let member_account = accounts::member_suspense(&id, &exec(), NZD).id;
     assert_eq!(c.state(src).ledger.natural_balance(&member_account), 0, "nothing of the member's stays behind");
     assert_eq!(credit(&c, dst, &id), 4_62, "the member's money is the member's on the target");
-    assert_eq!(c.state(dst).ledger.natural_balance(&accounts::policy_suspense(&id, NZD).id), 0, "and not the scheme's");
+    assert_eq!(
+        c.state(dst).ledger.natural_balance(&accounts::policy_suspense(&id, NZD).id),
+        0,
+        "and not the scheme's"
+    );
     assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
 
     // December's bill is met first from the credit that moved.

@@ -106,7 +106,10 @@ pub(crate) fn begin(
     let mut set = PostingSet::new();
     let mut balances = Vec::new();
     // Each member's own money travels as its own line, named by the member.
-    let members = policy.member_accounts.iter().map(|life| (accounts::member_suspense(&policy.id, life, policy.currency), Some(life.clone())));
+    let members = policy
+        .member_accounts
+        .iter()
+        .map(|life| (accounts::member_suspense(&policy.id, life, policy.currency), Some(life.clone())));
     let policy_own = accounts::transferable_accounts(&policy.id, policy.currency).into_iter().map(|a| (a, None));
     for (account, member) in policy_own.chain(members).collect::<Vec<_>>() {
         let balance = ledger.balance(&account.id);
@@ -223,7 +226,11 @@ pub(crate) fn land(state: &mut CoreState, ctx: &mut Ctx<'_>, record: TransferRec
             continue;
         }
         state.ledger.open_account(account.clone())?;
-        if let Some(b) = record.balances.iter().find(|b| b.role == account.role && b.unit == account.unit && b.member.is_none()) {
+        if let Some(b) = record
+            .balances
+            .iter()
+            .find(|b| b.role == account.role && b.unit == account.unit && b.member.is_none())
+        {
             set.debit(account.clone(), b.balance, Dimensions::default());
             set.credit(accounts::transfer_in_transit(&account.unit), b.balance, Dimensions::default());
         }

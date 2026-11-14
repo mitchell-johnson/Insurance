@@ -344,16 +344,24 @@ pub(crate) fn reinstate(
         return Err(Reject::new("invalid_request", "a reinstatement names its reference"));
     }
     let Some(lapse) = policy.member_lapses.get(&life).cloned() else {
-        return Err(Reject::new("not_lapsed", format!("member {life} has no lapsed cover of their own to reinstate")));
+        return Err(Reject::new(
+            "not_lapsed",
+            format!("member {life} has no lapsed cover of their own to reinstate"),
+        ));
     };
     let product = catalog
         .product(&policy.product_hash)
         .ok_or_else(|| Reject::new("unknown_product", "product version not active"))?
         .clone();
-    let rules = product.arrears().ok_or_else(|| Reject::new("window_closed", "the product has no reinstatement"))?;
+    let rules = product
+        .arrears()
+        .ok_or_else(|| Reject::new("window_closed", "the product has no reinstatement"))?;
     let since = (ctx.date - lapse.lapsed_on).num_days();
     if since > i64::from(rules.reinstatement_days) {
-        return Err(Reject::new("window_closed", "the reinstatement window has closed; the member must apply for cover again"));
+        return Err(Reject::new(
+            "window_closed",
+            "the reinstatement window has closed; the member must apply for cover again",
+        ));
     }
     if rules.reinstatement_evidence_free_days.is_some_and(|free| since > i64::from(free)) {
         return Err(Reject::new(
