@@ -234,7 +234,7 @@ test({ id: "E2E-161", area: A, persona: "ST10", story: "US-ST10-1", title: "An a
   await s.stopped("#other-msg", "the latest suspense report lists nothing held for cust-nobody since 2027-09-01", 409);
 });
 
-test({ id: "E2E-162", area: A, persona: "ST10", story: "US-ST17-1", title: "Only the finance lead may record a migration cut-over total", matrix: ["MIG-004"],
+test({ id: "E2E-162", area: A, persona: "ST10", story: "US-ST17-1", title: "Only the finance lead may record a migration cut-over total", matrix: [],
   purpose: "As the finance operator, look at the cut-over Record button; as the lead, record a total against an account that is not a migration control account.",
   why: "Cut-over totals are what a migration is reconciled to; they are entered by the lead, and only against the accounts the close configuration names." }, async (t) => {
   const operator = await t.open("/finance", cast.st10);

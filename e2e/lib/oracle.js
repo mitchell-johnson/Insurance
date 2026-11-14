@@ -27,7 +27,10 @@
 //   - a fund's price is its net assets over its units on issue: the mid price
 //     is that rounded half-even to the fund's decimals, the buy price is it
 //     plus the buy spread rounded up, and the sell price is it less the sell
-//     spread rounded down (`products/funds/*.star`, `docs/unit-pricing.md`).
+//     spread rounded down (`products/funds/*.star`, `docs/unit-pricing.md`);
+//   - a group life member's cover is a multiple of salary by category, in place
+//     up to the automatic acceptance limit, at an annual rate per thousand by
+//     category (`products/group_life.star`, `products/rates/group_life_standard.star`).
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -177,5 +180,23 @@ function prices(fundCode, nav, unitsMicro) {
   return { mid: show(halfEven(n, d)), buy: show(up(n * (10000n + num("buy_spread_bps")), d * 10000n)), sell: show(down(n * (10000n - num("sell_spread_bps")), d * 10000n)) };
 }
 
+/// A member of a group life scheme (`products/group_life.star`): cover by formula is the category's multiple of
+/// salary, capped at the category's maximum; what is in place without underwriting is that, up to the cover's
+/// automatic acceptance limit; and a month's premium is the category's annual rate per thousand of the cover in
+/// place, over twelve, rounded half-even to the cent. Amounts are whole cents.
+function groupMember(category, salaryMinor) {
+  const text = read("group_life.star");
+  const c = new RegExp(`benefit_category\\("${category}", salary_multiple = "(\\d+)", max_sum_insured = dollars\\((\\d+)\\)`).exec(text);
+  if (!c) throw new Error(`group_life.star has no category ${category}`);
+  const limit = BigInt(/automatic_acceptance_limit = dollars\((\d+)\)/.exec(text)[1]) * 100n, cap = BigInt(c[2]) * 100n;
+  const table = /group_unit_rate\("([^"]+)"\)/.exec(text)[1];
+  const row = rateTable(table).find((r) => r.category === category);
+  if (!row) throw new Error(`${table} has no rate for ${category}`);
+  const byFormula = BigInt(salaryMinor) * BigInt(c[1]), formula = byFormula > cap ? cap : byFormula, automatic = formula > limit ? limit : formula;
+  // cents a month = cover in cents / 1000 x rate / 12
+  const monthly = halfEven(automatic * row.rate.n, 1000n * 12n * 10n ** BigInt(row.rate.scale));
+  return { formula: Number(formula), automatic: Number(automatic), above: Number(formula - automatic), monthly: Number(monthly) };
+}
+
 const money = (cents) => (cents / 100).toFixed(2);
-module.exports = { premium, age, addDays, addMonths, period, arrears, prices, product, rateTable, money, halfEven, dec };
+module.exports = { premium, age, addDays, addMonths, period, arrears, prices, product, rateTable, groupMember, money, halfEven, dec };
