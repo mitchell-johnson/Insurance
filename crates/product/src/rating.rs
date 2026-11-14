@@ -20,7 +20,7 @@ pub enum RatingError {
     FrequencyNotOffered,
     #[error("product has no billing feature")]
     NoBilling,
-    #[error("the cover does not offer that choice of excess")]
+    #[error("the cover does not offer that choice of excess or options")]
     ExcessOption,
     #[error("unknown cover {0}")]
     UnknownCover(String),
@@ -43,7 +43,8 @@ pub struct RatingFactors {
     /// Occupation class, where the life has one.
     #[serde(default)]
     pub occupation_class: Option<String>,
-    /// The excess level chosen, where the cover offers a choice.
+    /// The option chosen from the cover's menu (an excess level, or a
+    /// choice on each of its axes), where the cover offers one.
     #[serde(default)]
     pub excess_option: Option<String>,
     /// Loadings as fractions of the base premium, for example `0.50`.
@@ -111,9 +112,9 @@ pub fn cover_premium(cover: &CoverDefinition, table: &RateTable, f: &RatingFacto
         factor += l.get();
     }
     // The excess the customer chose scales the cover's price, loadings included.
-    let excess = match (&f.excess_option, cover.excess_options.is_empty()) {
-        (None, true) => Dec::from(1i64),
-        (Some(code), false) => cover.excess_option(code).ok_or(RatingError::ExcessOption)?.premium_factor.get(),
+    let excess = match (&f.excess_option, cover.has_options()) {
+        (None, false) => Dec::from(1i64),
+        (Some(code), true) => cover.option(code).map_err(|_| RatingError::ExcessOption)?.premium_factor,
         _ => return Err(RatingError::ExcessOption),
     };
     Ok(base * factor * excess)
@@ -168,6 +169,7 @@ pub fn modal_premium(product: &ProductDefinition, annual_by_cover: &BTreeMap<Str
         frequency,
         entitlements: &[],
         overrides: &[],
+        sums_insured: &BTreeMap::new(),
     };
     modal_premium_with(product, annual_by_cover, &state)
 }

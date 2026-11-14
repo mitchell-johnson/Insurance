@@ -59,7 +59,8 @@ def benefit_category(code, salary_multiple, max_sum_insured):
 def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, levies = [],
           expiry_age = None, min_sum_insured = 0, max_sum_insured = None, categories = [],
           automatic_acceptance_limit = None, excess_options = [], premium_waiver = None,
-          shared_counter = None, reduces = [], joint_first_event = False, insurability_option = None):
+          shared_counter = None, reduces = [], joint_first_event = False, insurability_option = None,
+          option_axes = [], min_entry_age = None, max_entry_age = None, built_in = []):
     return {
         "code": code,
         "cover_type": cover_type,
@@ -79,6 +80,51 @@ def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, 
         "reduces": reduces,
         "joint_first_event": joint_first_event,
         "insurability_option": insurability_option,
+        "option_axes": option_axes,
+        "min_entry_age": min_entry_age,
+        "max_entry_age": max_entry_age,
+        "built_in": built_in,
+    }
+
+def option_axis(code, name, choices):
+    """One question on a cover's options menu; a life's cover answers every axis."""
+    return {"code": code, "name": name, "choices": choices}
+
+def choice(code, name, premium_factor = "1", excess = None, waiting_days = None, benefit_months = None,
+           benefit_to_age = None, expiry_age = None, expiry_after_years = None, premium = None, features = []):
+    """One answer on an axis: what it does to the premium and the terms it sets."""
+    terms = {"features": features}
+    for key, value in [("excess_minor", excess), ("waiting_days", waiting_days), ("benefit_months", benefit_months),
+                       ("benefit_to_age", benefit_to_age), ("expiry_age", expiry_age),
+                       ("expiry_after_years", expiry_after_years), ("premium", premium)]:
+        if value != None:
+            terms[key] = value
+    return {"code": code, "name": name, "premium_factor": premium_factor, "terms": terms}
+
+def stepped_premium():
+    """Re-rated at each anniversary on the life's age then."""
+    return {"kind": "stepped"}
+
+def level_premium(to_age):
+    """Fixed at the age the layer was first rated, until this age."""
+    return {"kind": "level", "to_age": to_age}
+
+def level_term_premium(years):
+    """Fixed for blocks of this many years, each priced at the age it began."""
+    return {"kind": "level_term", "years": years}
+
+def built_in(code, name, kind, max = None, percent_of_cover = None, monthly_multiple = None, requires = None, definitions = []):
+    """A benefit the cover's wording gives besides its main one. kind: early_payment,
+    additional, reimbursement, monthly_addition, facility or premium_waiver."""
+    return {
+        "code": code,
+        "name": name,
+        "kind": kind,
+        "max_minor": max,
+        "percent_of_cover": percent_of_cover,
+        "monthly_multiple": monthly_multiple,
+        "requires_feature": requires,
+        "definitions": definitions,
     }
 
 def insurability_option(events, max_percent_of_original, max_increase, max_uses, within_days, to_age):
@@ -179,6 +225,14 @@ def min_lives(count):
 
 def paid(frequencies):
     return {"kind": "frequency", "frequencies": frequencies}
+
+def discount_category(code, covers, min_sum_insured = 0):
+    """Covers that count as one category towards a multi-benefit discount."""
+    return {"code": code, "covers": covers, "min_sum_insured_minor": min_sum_insured}
+
+def benefit_categories(required, categories, count):
+    """Each life holds a required cover and covers from at least `count` other categories."""
+    return {"kind": "benefit_categories", "required": required, "categories": categories, "count": count}
 
 def entitled(code):
     return {"kind": "entitlement", "code": code}

@@ -78,6 +78,34 @@ pub enum DiscountCondition {
     Entitlement {
         code: String,
     },
+    /// Judged for each life on its own covers: the life holds a cover from
+    /// the required category, and covers from at least `count` of the other
+    /// categories. A cover counts only where the life's sum insured on it is
+    /// at least its category's minimum.
+    BenefitCategories {
+        required: BenefitCategory,
+        categories: Vec<BenefitCategory>,
+        count: u32,
+    },
+}
+
+/// A set of covers that count as one category for a multi-benefit discount.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BenefitCategory {
+    pub code: String,
+    pub covers: Vec<String>,
+    /// The least sum insured on one of the covers, in minor units, for it
+    /// to count. A monthly benefit counts as its monthly amount.
+    #[serde(default)]
+    pub min_sum_insured_minor: i64,
+}
+
+impl BenefitCategory {
+    fn held_by(&self, sums: &BTreeMap<Line, i64>, life: &str) -> bool {
+        sums.iter()
+            .any(|(line, si)| line.life == life && self.covers.contains(&line.cover) && *si >= self.min_sum_insured_minor)
+    }
 }
 
 /// One step of a product's chain.
@@ -132,6 +160,9 @@ pub struct PricingState<'a> {
     /// Approved overrides in force: each runs after the product's own
     /// chain, on what it left, and is held to the same cap and floor.
     pub overrides: &'a [Override],
+    /// The sum insured of each line priced, for conditions judged on what
+    /// each life holds. A line priced per life has none and reads as zero.
+    pub sums_insured: &'a BTreeMap<Line, i64>,
 }
 
 /// An approved, per-policy discount in force on the day a period is priced.
@@ -201,6 +232,10 @@ fn rate(d: &Discount, state: &PricingState<'_>, line: &Line, only: Option<&Strin
         DiscountCondition::MinLives { count } => state.lives >= *count,
         DiscountCondition::Frequency { frequencies } => frequencies.contains(&state.frequency),
         DiscountCondition::Entitlement { code } => held(code).is_some(),
+        DiscountCondition::BenefitCategories { required, categories, count } => {
+            required.held_by(state.sums_insured, &line.life)
+                && categories.iter().filter(|c| c.held_by(state.sums_insured, &line.life)).count() >= *count as usize
+        }
     };
     if !holds {
         return None;

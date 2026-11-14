@@ -220,6 +220,95 @@ pub struct CoverDefinition {
     /// event in the life's own life. Absent: the cover has no such option.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub insurability_option: Option<InsurabilityOption>,
+    /// The axes of the cover's options menu (see [`crate::options`]). Where
+    /// there are any, each life's cover carries one choice on every axis.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub option_axes: Vec<crate::options::OptionAxis>,
+    /// The youngest a life may be, at its age last birthday, when the cover
+    /// starts for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_entry_age: Option<u32>,
+    /// The oldest a life may be when the cover starts for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_entry_age: Option<u32>,
+    /// What the cover pays or allows besides its main benefit, as its
+    /// wording sets out. Claims and servicing read these; the core does not.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub built_in: Vec<BuiltInBenefit>,
+}
+
+/// How a built-in benefit relates to the cover's sum insured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuiltInKind {
+    /// Paid early out of the sum insured, which it reduces.
+    EarlyPayment,
+    /// A lump sum paid on top of the sum insured, which it leaves alone.
+    Additional,
+    /// Costs the owner has paid, refunded on receipts, on top of the sum insured.
+    Reimbursement,
+    /// An amount paid each month on top of an income benefit.
+    MonthlyAddition,
+    /// A right the owner may use, such as more cover without evidence or a
+    /// change of premium structure; nothing is paid.
+    Facility,
+    /// Premium is not collected while it applies.
+    PremiumWaiver,
+}
+
+/// One built-in or optional benefit of a cover, and the most it pays: the
+/// lowest of the limits it sets. An optional benefit names the option
+/// feature that switches it on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BuiltInBenefit {
+    pub code: String,
+    pub name: String,
+    pub kind: BuiltInKind,
+    /// The most it pays, in minor units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_minor: Option<i64>,
+    /// The most it pays as a percentage of the life's sum insured on the cover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent_of_cover: Option<DecStr>,
+    /// The most it pays as a multiple of the monthly benefit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monthly_multiple: Option<DecStr>,
+    /// Only where the life's option has this feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires_feature: Option<String>,
+    /// Definition ids the claim is assessed against.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub definitions: Vec<String>,
+}
+
+impl BuiltInBenefit {
+    /// The most this benefit pays on a cover with this sum insured, in minor
+    /// units, the lowest of its limits. A monthly multiple reads the sum
+    /// insured as the monthly benefit. `None` where it sets no limit.
+    pub fn limit_minor(&self, sum_insured_minor: i64) -> Option<i64> {
+        // A share of the cover is cut down to whole minor units: a limit
+        // never rounds up past what the wording allows.
+        let of = |share: &DecStr, divisor: i64| {
+            let v = ic_money::Dec::from(sum_insured_minor) * share.get() / ic_money::Dec::from(divisor);
+            ic_money::round_integer(v, RoundingMode::Down).ok().and_then(|m| i64::try_from(m).ok())
+        };
+        [
+            self.max_minor,
+            self.percent_of_cover.as_ref().and_then(|p| of(p, 100)),
+            self.monthly_multiple.as_ref().and_then(|m| of(m, 1)),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    /// Whether this benefit applies to a life at this option.
+    pub fn applies(&self, option: Option<&crate::options::CoverOption>) -> bool {
+        self.requires_feature
+            .as_ref()
+            .is_none_or(|f| option.is_some_and(|o| o.has_feature(f)))
+    }
 }
 
 /// A future insurability option on a lump sum cover: after one of the named
@@ -263,9 +352,14 @@ impl CoverDefinition {
     /// options where it has any, and none where it has none.
     pub fn accepts_excess(&self, choice: Option<&str>) -> bool {
         match choice {
-            None => self.excess_options.is_empty(),
-            Some(code) => self.excess_option(code).is_some(),
+            None => !self.has_options(),
+            Some(code) => self.option(code).is_ok(),
         }
+    }
+
+    /// Whether a life of this age may start this cover.
+    pub fn accepts_entry_age(&self, age: u32) -> bool {
+        self.min_entry_age.is_none_or(|m| age >= m) && self.max_entry_age.is_none_or(|m| age <= m)
     }
 }
 

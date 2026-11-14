@@ -84,6 +84,7 @@ pub(crate) fn retail_premium_with(
 ) -> Result<ModalPremium, PremiumError> {
     let rated_on = rating_date(policy, period_start)?;
     let mut annual: BTreeMap<Line, Dec> = BTreeMap::new();
+    let mut sums: BTreeMap<Line, i64> = BTreeMap::new();
     let mut lives = std::collections::BTreeSet::new();
     for cover in policy.covers.values() {
         if cover.status != CoverStatus::InForce || cover.formula_driven || cover.chosen_by_members() {
@@ -110,14 +111,14 @@ pub(crate) fn retail_premium_with(
             };
             let f = factors_on(life, facts_on)?;
             let dob = f.date_of_birth.ok_or_else(|| PremiumError::MissingFactor(life.id.clone(), "date_of_birth"))?;
-            let age = match def.rating.premium_type {
-                PremiumType::Stepped | PremiumType::GroupUnitRate => age_on(dob, rated_on),
-                // Level until the cover's stated age, then on attained age
-                // like a stepped premium.
-                PremiumType::Level => match (age_on(dob, rated_on), def.rating.level_to_age) {
-                    (attained, Some(to)) if attained >= to => attained,
-                    _ => age_on(dob, layer.rating_start()),
-                },
+            // The premium structure is the cover's, or the one the life's
+            // option chose: level until its stated age, then on attained age
+            // like a stepped premium; level for blocks of years, each block
+            // at the age it began.
+            let attained = age_on(dob, rated_on);
+            let age = match def.premium_basis(layer.excess_option.as_deref()) {
+                Some(basis) => ic_product::options::rating_age(basis, age_on(dob, layer.rating_start()), attained),
+                None => attained,
             };
             let rf = RatingFactors {
                 age,
@@ -133,6 +134,7 @@ pub(crate) fn retail_premium_with(
                 cover: cover.code.clone(),
                 life: layer.life.to_string(),
             };
+            *sums.entry(line.clone()).or_insert(0) += layer.sum_insured_minor;
             *annual.entry(line).or_insert(Dec::from(0i64)) += p;
         }
     }
@@ -153,6 +155,7 @@ pub(crate) fn retail_premium_with(
         lives: lives.len() as u32,
         frequency: policy.frequency,
         entitlements: &held,
+        sums_insured: &sums,
     };
     Ok(modal_premium_by_line(product, &annual, &state)?)
 }

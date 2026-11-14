@@ -688,6 +688,7 @@ fn discounts_stack_in_the_declared_order_and_each_is_a_line_that_sums_to_the_net
         tier: String::new(),
         life: None,
     }];
+    let no_sums = BTreeMap::new();
     let state = |lives, frequency| PricingState {
         covers_elsewhere: 0,
         overrides: &[],
@@ -695,6 +696,7 @@ fn discounts_stack_in_the_declared_order_and_each_is_a_line_that_sums_to_the_net
         lives,
         frequency,
         entitlements: &held,
+        sums_insured: &no_sums,
     };
     // Base 1,000 + 200 a year, paid yearly by two lives: 10% of each, then (5 + 4 + 2)% of
     // base, then the fixed 30.00 (more than 1% of what is left on life) across both covers.
@@ -765,6 +767,7 @@ fn a_tier_sets_the_percentage_and_the_cap_and_floor_come_off_the_last_discount()
             lives: 1,
             frequency: Frequency::Yearly,
             entitlements: held,
+            sums_insured: &BTreeMap::new(),
         };
         modal_premium_with(p, &annual("1000", "0"), &state).unwrap()
     };
@@ -808,6 +811,7 @@ fn a_tier_sets_the_percentage_and_the_cap_and_floor_come_off_the_last_discount()
             lives: 2,
             frequency: Frequency::Yearly,
             entitlements: held,
+            sums_insured: &BTreeMap::new(),
         };
         modal_premium_by_line(&only, &couple, &state).unwrap()
     };

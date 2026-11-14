@@ -90,6 +90,50 @@ pub fn load_product(file: &str, source: &str) -> Result<ProductDefinition, LoadE
     Ok(p)
 }
 
+/// A cover's built-in benefits: distinct codes, a limit wherever money is
+/// paid, a monthly multiple only on an income cover, and an optional benefit
+/// only behind a feature some choice of the cover's options switches on.
+fn validate_built_in(file: &str, c: &crate::CoverDefinition) -> Result<(), LoadError> {
+    use crate::BuiltInKind;
+    let features: BTreeSet<&str> = c
+        .option_axes
+        .iter()
+        .flat_map(|a| &a.choices)
+        .flat_map(|ch| &ch.terms.features)
+        .map(String::as_str)
+        .collect();
+    let mut codes = BTreeSet::new();
+    for b in &c.built_in {
+        let fail = |why: &str| Err(invalid(file, format!("cover {}: built-in benefit {}: {why}", c.code, b.code)));
+        if b.code.is_empty() || b.name.is_empty() || !codes.insert(b.code.as_str()) {
+            return fail("needs a name and a code no other built-in benefit of the cover has");
+        }
+        let pays = !matches!(b.kind, BuiltInKind::Facility | BuiltInKind::PremiumWaiver);
+        let limits = [b.max_minor.is_some(), b.percent_of_cover.is_some(), b.monthly_multiple.is_some()];
+        if pays && !limits.contains(&true) {
+            return fail("pays money, so it sets the most it pays");
+        }
+        if !pays && limits.contains(&true) {
+            return fail("pays nothing, so it sets no limit");
+        }
+        let positive = |d: &Option<ic_money::DecStr>| d.as_ref().is_none_or(|v| v.get() > Dec::from(0i64));
+        if b.max_minor.is_some_and(|m| m <= 0) || !positive(&b.percent_of_cover) || !positive(&b.monthly_multiple) {
+            return fail("limits are above zero");
+        }
+        let income = matches!(c.benefit, Benefit::MonthlyBenefit { .. });
+        if (b.monthly_multiple.is_some() || b.kind == BuiltInKind::MonthlyAddition) && !income {
+            return fail("is reckoned in monthly benefits, so it belongs to an income cover");
+        }
+        if b.kind == BuiltInKind::EarlyPayment && !matches!(c.benefit, Benefit::LumpSum { .. }) {
+            return fail("is paid out of a lump sum, so it belongs to a lump sum cover");
+        }
+        if b.requires_feature.as_deref().is_some_and(|f| !features.contains(f)) {
+            return fail("names a feature none of the cover's options switches on");
+        }
+    }
+    Ok(())
+}
+
 fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadError> {
     if p.code.is_empty() || p.version == 0 {
         return Err(invalid(file, "product needs a code and a version of at least 1"));
@@ -155,6 +199,11 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                 ));
             }
         }
+        crate::options::validate_axes(c).map_err(|e| invalid(file, e.to_string()))?;
+        if c.min_entry_age.zip(c.max_entry_age).is_some_and(|(min, max)| min > max) {
+            return Err(invalid(file, format!("cover {}: the youngest entry age is above the oldest", c.code)));
+        }
+        validate_built_in(file, c)?;
         if let Benefit::InvestmentAccount { funds } = &c.benefit {
             if funds.is_empty() {
                 return Err(invalid(file, format!("cover {}: investment account needs a fund menu", c.code)));
@@ -267,6 +316,16 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                         DiscountCondition::Frequency { frequencies } => !frequencies.is_empty(),
                         DiscountCondition::Entitlement { code } => !code.is_empty(),
                         DiscountCondition::Always => true,
+                        DiscountCondition::BenefitCategories { required, categories, count } => {
+                            let all: Vec<_> = std::iter::once(required).chain(categories).collect();
+                            let named = all.iter().flat_map(|c| &c.covers).all(|c| p.covers.iter().any(|o| &o.code == c));
+                            let distinct = all.iter().map(|c| c.code.as_str()).collect::<BTreeSet<_>>().len() == all.len();
+                            let sound = all.iter().all(|c| !c.code.is_empty() && !c.covers.is_empty() && c.min_sum_insured_minor >= 0);
+                            if !named {
+                                return Err(invalid(file, format!("discount {}: a benefit category names a cover the product does not have", d.code)));
+                            }
+                            distinct && sound && *count as usize <= categories.len()
+                        }
                     };
                     if !counted {
                         return Err(invalid(file, format!("discount {}: its condition can never be told apart from none", d.code)));

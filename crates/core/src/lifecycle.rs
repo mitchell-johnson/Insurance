@@ -92,6 +92,33 @@ pub(crate) fn scheme_member_covers(product: &ProductDefinition, policy: &Policy)
 
 /// Build a policy from an application, validating it against the product.
 /// Shared by issue and by quotes, so the two can never disagree.
+/// Refuse a cover to a life outside the cover's entry ages, read as age last
+/// birthday on the day the cover starts for it. A cover with no entry ages,
+/// or a life whose date of birth is not known, is not checked here: rating
+/// asks for the date of birth on its own.
+pub(crate) fn entry_age(def: &ic_product::CoverDefinition, life: &LifeRecord, on: NaiveDate) -> Result<(), Reject> {
+    if def.min_entry_age.is_none() && def.max_entry_age.is_none() {
+        return Ok(());
+    }
+    let Some(dob) = life.factors.as_of(on).and_then(|f| f.date_of_birth) else {
+        return Ok(());
+    };
+    let age = age_on(dob, on);
+    if def.accepts_entry_age(age) {
+        return Ok(());
+    }
+    Err(Reject::new(
+        "entry_age",
+        format!(
+            "cover {} starts for lives aged {} to {}; life {} is {age}",
+            def.code,
+            def.min_entry_age.unwrap_or(0),
+            def.max_entry_age.map_or_else(|| "any age".to_string(), |m| m.to_string()),
+            life.id
+        ),
+    ))
+}
+
 pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate, index: u64) -> Result<(Policy, ProductDefinition), Reject> {
     if cmd.inception > today
         || today
@@ -169,15 +196,16 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
             let life = spec
                 .life
                 .ok_or_else(|| Reject::new("invalid_policy", format!("cover {} needs a life insured", spec.code)))?;
-            if !lives.contains_key(&life) {
+            let Some(record) = lives.get(&life) else {
                 return Err(Reject::new("invalid_policy", format!("life {life} is not on the policy")));
-            }
+            };
+            entry_age(def, record, cmd.inception)?;
             let total: i64 = cover.layers.iter().filter(|l| l.life == life).map(|l| l.sum_insured_minor).sum::<i64>() + spec.sum_insured_minor;
             ic_product::rating::check_sum_insured(def, total).map_err(|e| Reject::new("sum_insured", format!("cover {}: {e}", spec.code)))?;
             if !def.accepts_excess(spec.excess_option.as_deref()) {
                 return Err(Reject::new(
                     "excess_option",
-                    format!("cover {}: choose one of the excess levels it offers, or none where it offers none", spec.code),
+                    format!("cover {}: choose from the options it offers (an excess level, or one choice on each of its axes), or none where it offers none", spec.code),
                 ));
             }
             let id = cover.layers.len() as u32 + 1;
@@ -369,13 +397,22 @@ pub(crate) fn anniversaries(catalog: &Catalog, product: &ProductDefinition, poli
             let Some(def) = product.cover(&cover.code) else {
                 continue;
             };
-            let Some(limit) = def.expiry_age else {
+            if !def.may_expire() {
                 continue;
-            };
+            }
+            let cover_start = cover.start;
             for layer in cover.layers.iter_mut().filter(|l| l.end.is_none()) {
                 ctx.work += 1;
+                // The cover's expiry age, or what the life's option sets: an
+                // age, or a term of years from the cover's start.
+                let option = layer.excess_option.as_deref();
                 let dob = lives.get(&layer.life).and_then(|l| l.factors.as_of(on)).and_then(|f| f.date_of_birth);
-                if dob.is_some_and(|d| age_on(d, on) >= limit) {
+                let by_age = def.expiry_age_for(option).is_some_and(|limit| dob.is_some_and(|d| age_on(d, on) >= limit));
+                let by_term = def
+                    .expiry_after_years_for(option)
+                    .and_then(|years| cover_start.checked_add_months(chrono::Months::new(years.saturating_mul(12))))
+                    .is_some_and(|end| on >= end);
+                if by_age || by_term {
                     layer.end = Some(on);
                 }
             }
@@ -499,7 +536,7 @@ pub(crate) fn merge_layers(catalog: &Catalog, policy: &mut Policy, cover_code: &
     let level = catalog
         .product(&policy.product_hash)
         .and_then(|p| p.cover(cover_code))
-        .is_some_and(|def| def.rating.premium_type == PremiumType::Level);
+        .is_some_and(ic_product::CoverDefinition::may_be_level);
     let cutoff = ctx
         .date
         .checked_sub_days(Days::new(BACKDATING_LIMIT_DAYS))

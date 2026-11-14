@@ -90,7 +90,7 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
     if !def.accepts_excess(excess_option.as_deref()) {
         return Err(Reject::new(
             "excess_option",
-            format!("cover {} needs a choice of excess; add it as a cover", spec.cover),
+            format!("cover {} needs a choice from its options; add it as a cover", spec.cover),
         ));
     }
     if let Some(cover) = policy.covers.get_mut(&spec.cover) {
@@ -288,10 +288,13 @@ pub(crate) fn add_cover(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
         return Err(Reject::new("invalid_cover", "a sum insured and a loading cannot be negative"));
     }
     ic_product::rating::check_sum_insured(def, spec.sum_insured_minor).map_err(|e| Reject::new("sum_insured", format!("cover {}: {e}", spec.cover)))?;
+    if let Some(life) = policy.lives.get(&spec.life) {
+        crate::lifecycle::entry_age(def, life, effective)?;
+    }
     if !def.accepts_excess(spec.excess_option.as_deref()) {
         return Err(Reject::new(
             "excess_option",
-            format!("cover {}: choose one of the excess levels it offers, or none where it offers none", spec.cover),
+            format!("cover {}: choose from the options it offers (an excess level, or one choice on each of its axes), or none where it offers none", spec.cover),
         ));
     }
     let holds = |policy: &Policy, code: &str| {
@@ -495,7 +498,7 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
             }
         }
         Change::Excess(option) => {
-            if product.cover(spec.cover).is_none_or(|def| def.excess_option(option).is_none()) {
+            if product.cover(spec.cover).is_none_or(|def| def.option(option).is_err()) {
                 return Err(Reject::new(
                     "excess_option",
                     format!("cover {} does not offer excess level {option}", spec.cover),

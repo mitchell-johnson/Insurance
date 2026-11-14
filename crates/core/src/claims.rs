@@ -243,11 +243,16 @@ pub fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&s
             ic_product::WhileImprisoned::Pay => ic_claims::port::Imprisonment::Pay,
         };
     }
-    facts.chosen_excess_minor = at_event
+    // The option the life held the cover at on the event date: its excess,
+    // and the waiting period an income cover's option sets.
+    let chosen = at_event
         .iter()
         .find_map(|l| l.excess_option.as_deref())
-        .and_then(|option| product.and_then(|pr| pr.cover(cover)).and_then(|def| def.excess_option(option)))
-        .map(|o| o.excess_minor);
+        .and_then(|option| product.and_then(|pr| pr.cover(cover)).and_then(|def| def.option(option).ok()));
+    facts.chosen_excess_minor = chosen.as_ref().and_then(|o| o.terms.excess_minor);
+    if let Some(days) = chosen.as_ref().and_then(|o| o.terms.waiting_days) {
+        facts.waiting_days = days;
+    }
     let mut sum_insured: i64 = at_event.iter().map(|l| l.sum_insured_minor).sum();
     if product.is_some_and(|pr| pr.pays_step_applied_after_event()) {
         // The wording pays an indexation step applied after the event.
