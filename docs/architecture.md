@@ -397,7 +397,7 @@ The one place the insurer knows who a person or organisation is. The core and ev
 - Erasure register lock: 10 years agreed by Mitchell on 13 Nov 2026. No Azure subscription has been deployed to, so there is nothing to lock yet. At the first prod deployment of `infra/customers.bicep`, run `tools/lock-erasure-register.sh <rg> <registerAccountName>` once (irreversible; it checks the period and asks for the account name). Mitchell has approved running it then.
 - Group schemes now sends `mobile_phone` (optional column, +64 form). Its test against the real service (`crates/group/tests/driver.rs`) expects a mobile with matching given name and birth date but a different family name to score 55 (possible, not linked); changing the weights or the 80/40 bands in `matching.rs` means changing that test too.
 - Retention periods in `retention.rs` (7 years for most classes, 5 for verification evidence, 2 for prospects) were confirmed by Mitchell on 13 Nov 2026.
-- Known check status: `ci.yml` on main passed at `ea9de28` with the PostgreSQL step, the customer master's tests, the coverage floor and `customers.bicep` compiled. The death and retraction relay, marker reviews and the directory relay (migrations 002 to 006) landed after that run.
+- Known check status (14 Nov 2026): every customer master test passes against PostgreSQL on current main (migrations 1 to 10), crate coverage with group's driver tests was 98.55% on 13 Nov, and the persona matrix check is clean. CI on the Mac runners is the record; judge by main's latest `ci.yml` run.
 
 ## Area: adviser commission and held balances (`ic-distribution`)
 
