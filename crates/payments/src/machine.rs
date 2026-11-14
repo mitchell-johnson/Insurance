@@ -80,6 +80,15 @@ pub enum Command {
         policy: PolicyId,
         claim: String,
     },
+    /// The core ended one scheme member's own collection on a policy
+    /// (`Event::PaymentAuthorityCancelled` naming a life): their cover lapsed
+    /// or they left. Only authorities collecting for that member end; the
+    /// employer's goes on.
+    MemberCollectionEnded {
+        policy: PolicyId,
+        life: ic_core::LifeId,
+        reason: String,
+    },
     /// The core applied part of a receipt to a policy in a statutory fund
     /// (`Event::ReceiptApplied` with its `fund`).
     ReceiptFunded {
@@ -899,6 +908,7 @@ impl PaymentsState {
             Command::MarkHardship { authority, hardship } => self.mark_hardship(tx, &authority, hardship),
             Command::RecordConversation { item, outcome, note } => self.record_conversation(tx, &item, outcome, note),
             Command::PayerDeceased { policy, claim } => self.payer_deceased(tx, &policy, &claim),
+            Command::MemberCollectionEnded { policy, life, reason } => self.member_collection_ended(tx, &policy, &life, &reason),
             Command::ReceiptFunded { receipt, fund, amount_minor } => {
                 tx.need(Role::Service)?;
                 self.receipt_funded(tx, &receipt, &fund, amount_minor)

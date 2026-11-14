@@ -472,6 +472,50 @@ fn the_cores_death_notice_stops_collection() {
     assert!(ic_payments::query::react(&other).is_empty());
 }
 
+/// Purpose: when the core ends one scheme member's own collection (the
+/// event names a life), only that member's authority on the policy ends,
+/// with the core's reason; the employer's authority and the account are
+/// untouched, and saying it again changes nothing; only the service may
+/// say it.
+/// Why it matters: a member who left or lapsed must not be debited again,
+/// but taking it for a death would stop the employer's collection for the
+/// whole scheme and block an account that is still in use.
+#[test]
+fn a_members_ended_collection_stops_only_their_own_authority() {
+    use ic_log::StateMachine;
+    use ic_payments::model::AuthorityStatus;
+    let record = |event: serde_json::Value| -> ic_core::EventRecord {
+        serde_json::from_value(json!({"id": "3-78", "partition": 3, "seq": 78, "business_date": "2027-11-16", "log_index": 901, "event": event})).unwrap()
+    };
+    let mut desk = Desk::new();
+    desk.authority("a1", "pol-1", "0101234567", true);
+    for (id, life) in [("a2", "life-7"), ("a3", "life-8")] {
+        desk.ok(
+            &pam(),
+            Command::CreateAuthority {
+                authority: id.to_string(),
+                policy: policy("pol-1"),
+                party: format!("party-{id}"),
+                life: Some(ic_core::LifeId::from(life)),
+                account: account("Mere Member", "0201234567"),
+                sole_name: true,
+            },
+        );
+    }
+    let left = record(json!({"payment_authority_cancelled": {"policy": "pol-1", "claim": "member_left", "life": "life-7"}}));
+    let commands = ic_payments::query::react(&left);
+    assert_eq!(commands.len(), 1);
+    assert_eq!(desk.code(&rae(), commands[0].command.clone()), "not_permitted");
+    for (index, envelope) in commands.iter().chain(&ic_payments::query::react(&left)).enumerate() {
+        desk.state.apply(index as u64 + 1000, envelope.clone()).unwrap();
+    }
+    let a2 = &desk.state.authorities["a2"];
+    assert_eq!((a2.status, a2.reason.as_deref()), (AuthorityStatus::Cancelled, Some("member_left")));
+    assert_ne!(desk.state.authorities["a1"].status, AuthorityStatus::Cancelled, "the employer's goes on");
+    assert_ne!(desk.state.authorities["a3"].status, AuthorityStatus::Cancelled, "another member's goes on");
+    assert!(desk.state.blocked_accounts.is_empty(), "nobody died");
+}
+
 /// Purpose: the financial close's two questions. Cash is settled as at a
 /// day only when no reconciliation break opened by then is still open and
 /// no run valued by then is still waiting for the bank; unidentified
