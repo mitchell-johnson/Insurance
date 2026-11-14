@@ -99,7 +99,7 @@ Decided by Mitchell on 13 November 2026 (in the group thread): a scheme may let 
 
 ## A joint first-event cover
 
-A product cover with `joint_first_event` (core, 13 Nov 2026) is one cover with a layer per life. Underwriting needs nothing special for it: each life discloses and is decided on its own, a loading or exclusion stays on that life's part of the cover, and the policy is issued only when every life is settled (a declined life makes the others confirm before issue). Capacity is reserved per life, so a joint cover reserves its sum once for each life. No shipped product declares a joint cover yet. (Driver test `a_joint_cover_carries_each_lifes_own_terms`.)
+A product cover with `joint_first_event` (core, 13 Nov 2026) is one cover with a layer per life. Underwriting needs nothing special for it: each life discloses and is decided on its own, a loading or exclusion stays on that life's part of the cover, and the policy is issued only when every life is settled (a declined life makes the others confirm before issue). Capacity is reserved per life: the design counts a joint cover in full against each life's retention (agreed with reinsurance, 14 Nov); only a treaty declaring a joint basis would need more. No shipped product declares a joint cover yet. (Driver test `a_joint_cover_carries_each_lifes_own_terms`.)
 
 ## A future insurability option
 
