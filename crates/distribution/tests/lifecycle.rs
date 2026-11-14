@@ -542,7 +542,7 @@ fn a_claim_overpayment_shows_as_a_memo_line_and_moves_no_money() {
     // Written off: nothing is outstanding, so it leaves the position. The record of it stays.
     inject(&mut w, partition, claims("overpayment_written_off", &whole("0", "written_off")));
     assert!(w.dist.position(&party("a-co"), today).memo.is_empty());
-    assert_eq!(w.dist.memo["claims:clm-1/overpayment/1"].status, "written_off");
+    assert_eq!(w.dist.memo["claims:clm-1:clm-1/overpayment/1"].status, "written_off");
 
     assert_eq!(
         (
@@ -550,6 +550,43 @@ fn a_claim_overpayment_shows_as_a_memo_line_and_moves_no_money() {
             w.dist.balance(&party("a-co"), ic_core::counterparty::PartyLedger::CommissionPayable)
         ),
         (requested, payable)
+    );
+}
+
+/// Purpose: (E2E-143) two claims that each raise an overpayment under the same reference, for
+/// two different parties, both show, each on its own party's position, and an update to one
+/// leaves the other alone.
+/// Why it matters: claims numbers overpayments within a claim, so "op-1" recurs across
+/// claims. Keyed by the reference alone, the second overwrote the first and one debt vanished
+/// from the workbench, which lets held commission be released to someone who owes money.
+#[test]
+fn overpayments_with_the_same_reference_on_two_claims_are_two_memo_lines() {
+    let (mut w, policy, _) = advised_in(worked_example());
+    let partition = w.cluster.locate(&policy).unwrap();
+    let today = w.today();
+    let raise = |claim: &str, who: &str, outstanding: &str| CoreEvent::Module {
+        module: "claims".into(),
+        kind: "overpayment_raised".into(),
+        subject: claim.into(),
+        detail: [("overpayment", "op-1"), ("party", who), ("outstanding_minor", outstanding), ("status", "held")]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+    };
+    inject(&mut w, partition, raise("clm-1", "a-co", "9000"));
+    inject(&mut w, partition, raise("clm-2", "fap-one", "9000"));
+    assert_eq!(w.dist.memo.len(), 2);
+    for (who, claim) in [("a-co", "clm-1"), ("fap-one", "clm-2")] {
+        let memo = w.dist.position(&party(who), today).memo;
+        assert_eq!(memo.len(), 1, "{who}");
+        assert_eq!((memo[0].case_ref.as_str(), memo[0].outstanding_minor), (claim, 9000));
+    }
+    inject(&mut w, partition, raise("clm-2", "fap-one", "0"));
+    assert!(w.dist.position(&party("fap-one"), today).memo.is_empty());
+    assert_eq!(
+        w.dist.position(&party("a-co"), today).memo[0].outstanding_minor,
+        9000,
+        "the other claim's line is untouched"
     );
 }
 

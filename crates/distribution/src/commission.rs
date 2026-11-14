@@ -759,7 +759,9 @@ impl DistributionState {
             as_at: date,
         };
         self.changed.insert(line.party.clone(), self.seq);
-        self.memo.insert(format!("claims:{reference}"), line);
+        // Claims numbers overpayments within a claim, so the reference alone
+        // is not unique: two claims can each raise "op-1".
+        self.memo.insert(format!("claims:{claim}:{reference}"), line);
     }
 
     fn premium_applied(&mut self, policy: &PolicyId, reference: Option<String>, net: BTreeMap<String, i64>) {
