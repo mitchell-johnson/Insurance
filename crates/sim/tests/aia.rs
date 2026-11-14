@@ -704,3 +704,28 @@ fn an_event_before_a_policy_was_cancelled_is_still_covered() {
     assert_eq!(facts(before), (true, 400_000_00));
     assert_eq!(facts(ended), (false, 0));
 }
+
+/// Purpose: the life index row for a layer carries the option the life holds the cover at,
+/// as issued and as later changed, and a row written before the field existed still reads.
+/// Why it matters: the policy screens show the waiting period, benefit period and premium
+/// basis a customer chose from this row. Without it an adviser reads a cover's sum insured
+/// with no way to tell a 4-week wait from a 13-week one; a row that failed to load after
+/// the upgrade would take the whole policy off the screens.
+#[test]
+fn the_life_index_shows_the_option_a_cover_is_held_at() {
+    let mut c = cluster();
+    let living = product("aia_living.star");
+    let chosen = pick(&living, "life", &[]);
+    let id = issue(&mut c, policy(1, "aia-living", d(1987, 6, 1), &[("life", 400_000_00, Some(chosen.clone()))])).unwrap();
+    let mut view = ic_readmodel::Projections::new();
+    for record in c.take_events() {
+        view.apply(&record).unwrap();
+    }
+    let rows = view.layers_on_policy(&id);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].option.as_deref(), Some(chosen.as_str()));
+    let mut old = serde_json::to_value(rows[0]).unwrap();
+    old.as_object_mut().unwrap().remove("option").unwrap();
+    let read: ic_readmodel::LifeIndexRow = serde_json::from_value(old).unwrap();
+    assert_eq!(read.option, None);
+}

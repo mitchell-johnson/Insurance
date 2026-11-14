@@ -202,6 +202,7 @@ pub(crate) fn unwind_after(
                         life: l.life.clone(),
                         sum_insured_minor: l.sum_insured_minor,
                         start: l.start,
+                        option: l.excess_option.clone(),
                     })
                     .collect(),
                 reference: reference.to_string(),

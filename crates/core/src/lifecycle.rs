@@ -52,6 +52,7 @@ pub(crate) fn layer_infos(policy: &Policy) -> Vec<LayerInfo> {
                 life: l.life.clone(),
                 sum_insured_minor: l.sum_insured_minor,
                 start: l.start,
+                option: l.excess_option.clone(),
             })
         })
         .collect()
@@ -506,6 +507,7 @@ pub(crate) fn apply_indexation(catalog: &Catalog, product: &ProductDefinition, p
                             .map(|l| (l.loadings.clone(), l.exclusions.clone(), l.excess_option.clone()))
                             .unwrap_or_default();
                         let id = cover.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
+                        let option = excess_option.clone();
                         cover.layers.push(Layer {
                             paid_up: false,
                             id,
@@ -528,6 +530,7 @@ pub(crate) fn apply_indexation(catalog: &Catalog, product: &ProductDefinition, p
                             life,
                             sum_insured_minor: step,
                             start: on,
+                            option,
                         });
                     }
                 }

@@ -178,6 +178,7 @@ pub(crate) fn make_paid_up(ledger: &mut Ledger, catalog: &Catalog, policy: &mut 
                 life: old.life,
                 sum_insured_minor: kept,
                 start: today,
+                option: old.excess_option.clone(),
             },
             origin: old.origin,
             continues: None,

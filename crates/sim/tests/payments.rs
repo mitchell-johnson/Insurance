@@ -612,6 +612,23 @@ fn withheld_tax_paid_to_the_revenue_is_discharged_and_comes_back_if_the_bank_ret
     let bank = accounts::bank("main", NZD).id;
     let held = |c: &Cluster| c.state(0).ledger.natural_balance(&payable);
     assert_eq!(held(&c), 20_00);
+    let by_fund = |c: &Cluster| {
+        ic_core::remittance::held(&c.state(0).withheld, "schedular", NZD)
+            .into_iter()
+            .map(|h| (h.statutory_fund, h.minor))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(by_fund(&c), vec![(None, 20_00)]);
+    // No fund pays another's tax: nothing was withheld in SF1.
+    let wrong_fund = Command::RemitWithholding(Box::new(Remittance {
+        kind: "schedular".into(),
+        period: "2027-11".into(),
+        payment: "ir-0".into(),
+        amount: Money::new(1_00, NZD),
+        bank_account: "main".into(),
+        statutory_fund: Some("SF1".into()),
+    }));
+    assert_eq!(code(c.submit(0, "payments", wrong_fund)), "over_remittance");
     let remit = |payment: &str, minor: i64, period: &str, account: &str| {
         Command::RemitWithholding(Box::new(Remittance {
             kind: "schedular".into(),
@@ -641,6 +658,7 @@ fn withheld_tax_paid_to_the_revenue_is_discharged_and_comes_back_if_the_bank_ret
     send(&mut c, remit("ir-1", 15_00, "2027-11", "main")).unwrap();
     assert_eq!(code(send(&mut c, remit("ir-1", 5_00, "2027-11", "main"))), "duplicate_payment");
     assert_eq!((held(&c), c.state(0).ledger.natural_balance(&bank)), (5_00, -15_00));
+    assert_eq!(by_fund(&c), vec![(None, 5_00)]);
     let events = c.take_events();
     let remitted: Vec<_> = events
         .iter()
@@ -669,5 +687,6 @@ fn withheld_tax_paid_to_the_revenue_is_discharged_and_comes_back_if_the_bank_ret
     assert_eq!(code(send(&mut c, remit("ir-1", 15_00, "2027-11", "main"))), "duplicate_payment");
     send(&mut c, remit("ir-3", 20_00, "2027-11", "main")).unwrap();
     assert_eq!(held(&c), 0);
+    assert!(by_fund(&c).is_empty() && c.state(0).withheld.is_empty());
     clean(&c);
 }

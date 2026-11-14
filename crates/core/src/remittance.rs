@@ -45,6 +45,47 @@ pub struct RemittanceRecord {
     pub returned: bool,
 }
 
+/// Tax held, by liability account and then by statutory fund (empty for none).
+pub type Withheld = BTreeMap<String, BTreeMap<String, i128>>;
+
+/// One fund's share of a kind of withheld tax on a partition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldByFund {
+    pub statutory_fund: Option<String>,
+    pub minor: i128,
+}
+
+/// Keep the per-fund tally in step with what a command posted.
+pub(crate) fn tally(withheld: &mut Withheld, entries: &[ic_ledger::JournalEntry]) {
+    for posting in entries.iter().flat_map(|e| &e.body.postings) {
+        if !posting.account.0.starts_with("int/withholding_tax_payable/") {
+            continue;
+        }
+        let fund = posting.dims.statutory_fund.clone().unwrap_or_default();
+        let funds = withheld.entry(posting.account.0.clone()).or_default();
+        // A liability: credits add to what is held.
+        let held = funds.entry(fund.clone()).or_default();
+        *held -= posting.signed();
+        if *held == 0 {
+            funds.remove(&fund);
+        }
+    }
+    withheld.retain(|_, funds| !funds.is_empty());
+}
+
+/// What a partition holds of one kind of withheld tax, fund by fund.
+pub fn held(withheld: &Withheld, kind: &str, c: ic_money::Currency) -> Vec<HeldByFund> {
+    withheld
+        .get(&accounts::withholding_tax_payable(kind, c).id.0)
+        .into_iter()
+        .flatten()
+        .map(|(fund, minor)| HeldByFund {
+            statutory_fund: Some(fund.clone()).filter(|f| !f.is_empty()),
+            minor: *minor,
+        })
+        .collect()
+}
+
 fn plain(s: &str) -> bool {
     !s.is_empty() && s.len() <= 120 && s.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':'))
 }
@@ -63,7 +104,7 @@ fn dims(r: &Remittance) -> Dimensions {
         statutory_fund: r.statutory_fund.clone(),
         product: None,
         cover_type: None,
-        posting_type: Some(format!("withholding_{}", r.kind)),
+        posting_type: Some(format!("withholding_remittance_{}", r.kind)),
     }
 }
 
@@ -76,7 +117,13 @@ fn detail(r: &Remittance) -> BTreeMap<String, String> {
     ])
 }
 
-pub(crate) fn remit(ledger: &mut Ledger, book: &mut BTreeMap<String, RemittanceRecord>, ctx: &mut Ctx<'_>, r: Remittance) -> Result<(), Reject> {
+pub(crate) fn remit(
+    ledger: &mut Ledger,
+    book: &mut BTreeMap<String, RemittanceRecord>,
+    withheld: &Withheld,
+    ctx: &mut Ctx<'_>,
+    r: Remittance,
+) -> Result<(), Reject> {
     let bad = |m: &str| Reject::new("invalid_remittance", m);
     if !plain(&r.kind) || !plain(&r.payment) || r.statutory_fund.as_deref().is_some_and(|f| !plain(f)) {
         return Err(bad("the kind of tax, the payment and the fund are plain identifiers"));
@@ -101,11 +148,17 @@ pub(crate) fn remit(ledger: &mut Ledger, book: &mut BTreeMap<String, RemittanceR
     let c = r.amount.currency;
     let payable = accounts::withholding_tax_payable(&r.kind, c);
     let amount = i128::from(r.amount.minor);
-    // Never more than this partition holds: the liability does not go into debit.
-    if ledger.available(&payable.id) < amount {
+    // Never more than this partition holds, in all and in the fund named:
+    // the liability does not go into debit, and no fund pays another's tax.
+    let in_fund = withheld
+        .get(&payable.id.0)
+        .and_then(|funds| funds.get(r.statutory_fund.as_deref().unwrap_or_default()))
+        .copied()
+        .unwrap_or(0);
+    if ledger.available(&payable.id) < amount || in_fund < amount {
         return Err(Reject::new(
             "over_remittance",
-            format!("this partition holds less {} withheld than that", r.kind),
+            format!("this partition holds less {} withheld in that fund than that", r.kind),
         ));
     }
     let mut set = PostingSet::new();

@@ -213,6 +213,11 @@ pub struct CoreState {
     /// Withheld tax paid to the revenue authority, by the payment that paid it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub remittances: BTreeMap<String, crate::remittance::RemittanceRecord>,
+    /// Withheld tax still held, by liability account and then by statutory
+    /// fund (empty for none). The ledger keeps one balance per account; the
+    /// payer of the tax needs each fund's share.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub withheld: crate::remittance::Withheld,
     /// Funds, unit prices and unit orders. Unit holdings are ledger balances.
     #[serde(default)]
     pub investment: crate::invest::InvestmentBook,
@@ -254,6 +259,7 @@ impl CoreState {
             claims: ic_claims::ClaimsState::default(),
             counterparty: Default::default(),
             remittances: BTreeMap::new(),
+            withheld: BTreeMap::new(),
             investment: Default::default(),
             table_validations: BTreeMap::new(),
             holders: BTreeMap::new(),
@@ -960,7 +966,7 @@ impl CoreState {
                 }
                 Ok(())
             }),
-            Command::RemitWithholding(r) => crate::remittance::remit(&mut self.ledger, &mut self.remittances, ctx, *r),
+            Command::RemitWithholding(r) => crate::remittance::remit(&mut self.ledger, &mut self.remittances, &self.withheld, ctx, *r),
             Command::ReturnRemittance { kind, payment } => crate::remittance::returned(&mut self.ledger, &mut self.remittances, ctx, &kind, &payment),
             Command::PostCounterparty(posting) => match posting.policy.clone() {
                 // Commission follows a policy wherever it is, so a policy in
@@ -1300,6 +1306,7 @@ impl CoreState {
                 other => self.dispatch(&mut ctx, other),
             },
         };
+        crate::remittance::tally(&mut self.withheld, &ctx.entries);
         let partition = self.partition;
         let events: Vec<EventRecord> = ctx
             .events

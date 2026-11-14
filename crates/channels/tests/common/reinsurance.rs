@@ -80,6 +80,7 @@ pub fn seeded() -> ReinsuranceModule {
             life: LifeId::from("L1"),
             sum_insured_minor: 800_000_00,
             start: d(2027, 2, 1),
+            option: None,
         }],
         members: vec![],
     };

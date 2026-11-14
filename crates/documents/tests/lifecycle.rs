@@ -202,6 +202,7 @@ fn replayed_history_sends_nothing() {
         life: ic_core::LifeId::from("l1"),
         sum_insured_minor: 1,
         start: old,
+        option: None,
     };
     let events = kit.ok(
         "relay",

@@ -34,6 +34,8 @@ pub enum Query {
     Claims { question: ic_core::claims_module::report::Question },
     /// A question for the investment ledger on this partition.
     Investment { question: ic_core::invest::Question },
+    /// Withheld tax of one kind this partition still holds, fund by fund.
+    WithholdingHeld { kind: String, currency: ic_money::Currency },
     /// Underwriting loadings, a page of policies at a time. Sensitive: the
     /// caller is finance, and access is decided where the question enters.
     Loadings {
@@ -70,6 +72,7 @@ pub enum Answer {
     Claims(Option<ic_core::claims_module::report::Reply>),
     Investment(ic_core::invest::Reply),
     Loadings(ic_core::loadings::LoadingsPage),
+    WithholdingHeld(Vec<ic_core::remittance::HeldByFund>),
 }
 
 /// Answer a query from a partition's state and read models.
@@ -90,6 +93,7 @@ pub fn answer(core: &CoreState, view: &Projections, query: Query) -> Answer {
         Query::PaymentCandidates { matcher, payment } => Answer::Candidates(matcher.candidates(view, &payment)),
         Query::Claims { question } => Answer::Claims(core.business_date.map(|today| core.claims.answer(&question, today))),
         Query::Investment { question } => Answer::Investment(core.investment.answer(&core.ledger, &core.policies, &question)),
+        Query::WithholdingHeld { kind, currency } => Answer::WithholdingHeld(ic_core::remittance::held(&core.withheld, &kind, currency)),
         Query::Loadings { after, limit, as_at } => Answer::Loadings(ic_core::loadings::page(&core.policies, after.as_ref(), limit, as_at)),
     }
 }

@@ -402,6 +402,7 @@ fn layer_info(cover: &crate::policy::Cover, layer: &Layer) -> LayerInfo {
         life: layer.life.clone(),
         sum_insured_minor: layer.sum_insured_minor,
         start: layer.start,
+        option: layer.excess_option.clone(),
     }
 }
 
@@ -605,6 +606,7 @@ fn stage(
                                     life: life.clone(),
                                     sum_insured_minor: layer.sum_insured_minor,
                                     start: layer.start,
+                                    option: layer.excess_option.clone(),
                                 },
                                 layer.origin,
                             ));

@@ -422,6 +422,20 @@ impl ClusterClient {
         self.ask(partition, &Query::Investment { question: question.clone() }).await
     }
 
+    /// Withheld tax of one kind a partition still holds, fund by fund.
+    pub async fn withholding_held(
+        &self,
+        partition: PartitionId,
+        kind: &str,
+        currency: ic_money::Currency,
+    ) -> Result<Vec<ic_core::remittance::HeldByFund>, ClientError> {
+        let query = Query::WithholdingHeld {
+            kind: kind.to_string(),
+            currency,
+        };
+        self.ask(partition, &query).await
+    }
+
     /// Underwriting loadings on a partition, a page of policies at a time.
     /// Pass the page's `next` as `after` until it is None.
     pub async fn loadings(

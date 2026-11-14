@@ -58,6 +58,7 @@ pub fn layer(cover: &str, cover_type: &str, n: u32, life: &str, sum: i64, start:
         life: LifeId::from(life),
         sum_insured_minor: sum,
         start,
+        option: None,
     }
 }
 

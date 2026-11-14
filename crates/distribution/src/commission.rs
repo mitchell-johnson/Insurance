@@ -384,6 +384,7 @@ impl DistributionState {
             life: ic_core::LifeId("scheme".into()),
             sum_insured_minor: 0,
             start,
+            option: None,
         };
         self.add_layer(ctx, policy, info, LayerOrigin::Original, date);
         if let Some(l) = self.layers.get_mut(&layer_key(policy, &m.cover, 0)) {

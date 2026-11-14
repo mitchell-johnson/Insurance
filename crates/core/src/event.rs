@@ -70,6 +70,10 @@ pub struct LayerInfo {
     pub life: LifeId,
     pub sum_insured_minor: i64,
     pub start: NaiveDate,
+    /// The option the life holds the cover at, as its code
+    /// (`axis=choice,...` or an excess level). Not a health fact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option: Option<String>,
 }
 
 /// What a scheme member is covered for under a formula-driven cover: the

@@ -46,6 +46,10 @@ pub struct LifeIndexRow {
     pub life: LifeId,
     pub sum_insured_minor: i64,
     pub in_force: bool,
+    /// The option the life holds the cover at, as its code. Absent for
+    /// formula-driven scheme cover, which has no options.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option: Option<String>,
 }
 
 /// The policy directory, the life index and the billing view, fed from every
@@ -154,6 +158,7 @@ impl Projections {
                     life: c.life.clone(),
                     sum_insured_minor: c.sum_insured_minor,
                     in_force,
+                    option: None,
                 },
             );
         }
@@ -405,6 +410,7 @@ fn row(policy: &PolicyId, partition: PartitionId, l: &LayerInfo) -> LifeIndexRow
         life: l.life.clone(),
         sum_insured_minor: l.sum_insured_minor,
         in_force: true,
+        option: l.option.clone(),
     }
 }
 

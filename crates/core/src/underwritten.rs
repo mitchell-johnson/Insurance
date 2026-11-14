@@ -93,6 +93,7 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
             format!("cover {} needs a choice from its options; add it as a cover", spec.cover),
         ));
     }
+    let option = excess_option.clone();
     if let Some(cover) = policy.covers.get_mut(&spec.cover) {
         cover.layers.push(Layer {
             paid_up: false,
@@ -119,6 +120,7 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
             life: spec.life.clone(),
             sum_insured_minor: spec.sum_insured_minor,
             start: effective,
+            option,
         },
         origin: LayerOrigin::Increase,
         continues: None,
@@ -348,6 +350,7 @@ pub(crate) fn add_cover(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
     });
     let cover_type = cover.cover_type.clone();
     let id = cover.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
+    let option = spec.excess_option.clone();
     cover.layers.push(Layer {
         paid_up: false,
         id,
@@ -372,6 +375,7 @@ pub(crate) fn add_cover(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
             life: spec.life.clone(),
             sum_insured_minor: spec.sum_insured_minor,
             start: effective,
+            option,
         },
         origin: LayerOrigin::Increase,
         continues: None,
@@ -588,6 +592,10 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
             effective,
             sum_insured_minor: old.sum_insured_minor,
         });
+        let option = match &change {
+            Change::Terms { .. } => old.excess_option.clone(),
+            Change::Excess(option) => Some(option.clone()),
+        };
         ctx.emit(Event::LayerAdded {
             policy: policy.id.clone(),
             layer: LayerInfo {
@@ -597,6 +605,7 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
                 life: old.life,
                 sum_insured_minor: old.sum_insured_minor,
                 start: effective,
+                option,
             },
             origin: old.origin,
             continues: Some(old.id),

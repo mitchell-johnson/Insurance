@@ -316,6 +316,7 @@ fn layer(cover: &str, layer: u32, life: &str, sum: i64, start: NaiveDate) -> Lay
         life: LifeId::from(life),
         sum_insured_minor: sum,
         start,
+        option: None,
     }
 }
 
