@@ -45,3 +45,15 @@ incremental = false
 opt-level = 3
 [profile.dev.package.num-bigint-dig]
 opt-level = 3
+
+# The same lints as the workspace, which this package stands outside.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+# Amounts in minor units are written dollars_cents, for example 500_000_00.
+inconsistent_digit_grouping = "allow"
+type_complexity = "allow"
+too_many_arguments = "allow"

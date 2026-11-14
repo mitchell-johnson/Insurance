@@ -26,7 +26,11 @@ async fn close() -> Result<(), String> {
     let settings = WorkerSettings::from_lookup(|key| std::env::var(key).ok())?;
     let ledger = ic_raft::ClusterClient::new(settings.nodes.clone()).with_auth(settings.auth.clone());
     let day = ledger_day(&ledger, settings.patience).await?;
-    let input = EndOfDayInput { closing: day.business_date, partitions: day.partitions, step_timeout_secs: settings.step_timeout.as_secs() };
+    let input = EndOfDayInput {
+        closing: day.business_date,
+        partitions: day.partitions,
+        step_timeout_secs: settings.step_timeout.as_secs(),
+    };
     let steps = settings.steps()?;
     let report = run_end_of_day(&steps, &input).await.map_err(|e| format!("{e:?}"))?;
     println!("{}", serde_json::to_string(&report).map_err(|e| e.to_string())?);
