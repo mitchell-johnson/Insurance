@@ -567,6 +567,14 @@ impl ClaimsState {
         let facts = cx.core.cover_facts(&claim.policy, &claim.cover, claim.life.as_deref(), claim.event_date)?;
         claim.policyholder = facts.policyholder.clone();
         claim.life_party = facts.life_party.clone().or(claim.life_party);
+        let changed = facts
+            .known_then
+            .as_ref()
+            .is_some_and(|t| (t.in_force, t.life_on_policy, t.sum_insured_minor) != (facts.in_force, facts.life_on_policy, facts.sum_insured_minor));
+        if changed {
+            // Something recorded after the event changed the cover on that date: the assessor sees both.
+            note(&mut claim, cx, Some(actor), "cover_changed_since_event");
+        }
         claim.cover_check = Some(CoverCheck {
             checked_on: cx.today,
             facts,
@@ -673,6 +681,8 @@ impl ClaimsState {
             TaskKind::MedicalOpinion => self.authority.has_role(who, Role::MedicalOfficer) && vault_ref,
             // The certificate, declaration or register match is on file.
             TaskKind::ProofOfLife => owns && vault_ref,
+            // The employer's evidence of membership on the event date is kept with the claim.
+            TaskKind::MembershipEvidence => owns && vault_ref,
             TaskKind::CaseConference => (owns || profile.senior) && attendees >= 2,
             TaskKind::SeniorReview | TaskKind::ExclusionMatch => profile.senior,
             TaskKind::DeathRegisterCadence => self.leads(who),

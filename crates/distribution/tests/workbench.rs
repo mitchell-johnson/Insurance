@@ -1046,3 +1046,42 @@ fn a_release_to_a_party_pursued_elsewhere_can_be_refused_by_setting() {
     w.act("full", "fap-one", release(held)).unwrap();
     assert!(w.dist.actions["full"].needed.contains(&Role::Legal));
 }
+
+/// Purpose: held commission released through the workbench has tax withheld from it at the
+/// payee's rate, as a statement's payment does: the payment is the rest, and if the bank
+/// returns it, the money and its tax both go back to held.
+/// Why it matters: a release is commission paid. Paying it gross under-withholds the tax the
+/// insurer owes; keeping the tax on a returned release takes it twice when it is released again.
+#[test]
+fn a_release_of_held_commission_withholds_tax_and_a_return_gives_it_back() {
+    let (mut w, _, held) = suspended();
+    let tax = || InternalLedger::WithholdingTax { kind: "schedular".into() };
+    let rate = ic_distribution::model::Withholding::Rate(1_000);
+    w.send(
+        admin(),
+        Command::SetWithholding {
+            party: party("fap-one"),
+            withholding: rate,
+        },
+    )
+    .unwrap();
+    w.act("rel-1", "fap-one", release(held)).unwrap();
+    let events = w.sign("rel-1", finance_approver(), Role::CounterpartyFinanceApprover).unwrap();
+    let withheld = held / 10;
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::PaymentRequested { amount_minor, .. } if *amount_minor == held - withheld)));
+    assert_eq!((w.held("fap-one"), w.internal(tax())), (0, -withheld));
+    w.send(
+        module("payments"),
+        Command::PaymentReturned {
+            reference: "pay:rel-1".into(),
+            reason: "account closed".into(),
+        },
+    )
+    .unwrap();
+    w.sync();
+    assert_eq!((w.held("fap-one"), w.internal(tax())), (held, 0));
+    assert_eq!(w.ledger("fap-one", PartyLedger::Clearing), 0);
+    w.assert_reconciled();
+}

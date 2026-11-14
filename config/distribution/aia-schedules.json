@@ -1,0 +1,185 @@
+{
+  "placeholder": true,
+  "note": "Starter commission schedules for the AIA products. Every rate here is a best estimate of New Zealand adviser market terms, not AIA's or the insurer's agreed terms; replace each by a new version through the commission console once the distribution agreements are signed. A schedule says how much; the distribution rules say who is paid.",
+  "schedule_for_product": {
+    "aia-living": "aia-risk",
+    "aia-living-business": "aia-risk",
+    "aia-cover-for-life": "aia-risk",
+    "aia-starter": "aia-risk",
+    "aia-start-up-income": "aia-income",
+    "aia-essentials-life": "aia-simplified",
+    "aia-private-health": "aia-health",
+    "aia-cancer-care": "aia-health",
+    "aia-corporate": "aia-group"
+  },
+  "schedule_for_cover_type": {
+    "income_protection": "aia-income"
+  },
+  "no_commission": [
+    "aia-interim"
+  ],
+  "changes": [
+    {
+      "activate_schedule": {
+        "id": "aia-risk",
+        "version": 1,
+        "effective_from": "2026-01-01",
+        "options": {
+          "upfront": {
+            "initial_ppm": 2000000,
+            "renewal_ppm": 100000,
+            "renewal_from_month": 0
+          },
+          "hybrid": {
+            "initial_ppm": 1200000,
+            "renewal_ppm": 200000,
+            "renewal_from_month": 0
+          },
+          "level": {
+            "initial_ppm": 0,
+            "renewal_ppm": 300000,
+            "renewal_from_month": 0
+          }
+        },
+        "clawback": [
+          {
+            "months_under": 12,
+            "ppm": 1000000
+          },
+          {
+            "months_under": 24,
+            "ppm": 500000
+          }
+        ],
+        "cooling_off_days": 30,
+        "initial_earned": "first_premium",
+        "initial_on_indexation": false,
+        "replacement_carries_clawback": true,
+        "earns_on_waived_premium": true
+      }
+    },
+    {
+      "activate_schedule": {
+        "id": "aia-income",
+        "version": 1,
+        "effective_from": "2026-01-01",
+        "options": {
+          "upfront": {
+            "initial_ppm": 1500000,
+            "renewal_ppm": 100000,
+            "renewal_from_month": 0
+          },
+          "hybrid": {
+            "initial_ppm": 1000000,
+            "renewal_ppm": 150000,
+            "renewal_from_month": 0
+          },
+          "level": {
+            "initial_ppm": 0,
+            "renewal_ppm": 250000,
+            "renewal_from_month": 0
+          }
+        },
+        "clawback": [
+          {
+            "months_under": 12,
+            "ppm": 1000000
+          },
+          {
+            "months_under": 24,
+            "ppm": 500000
+          }
+        ],
+        "cooling_off_days": 30,
+        "initial_earned": "first_premium",
+        "initial_on_indexation": false,
+        "replacement_carries_clawback": true,
+        "earns_on_waived_premium": true
+      }
+    },
+    {
+      "activate_schedule": {
+        "id": "aia-simplified",
+        "version": 1,
+        "effective_from": "2026-01-01",
+        "options": {
+          "upfront": {
+            "initial_ppm": 1000000,
+            "renewal_ppm": 100000,
+            "renewal_from_month": 0
+          },
+          "level": {
+            "initial_ppm": 0,
+            "renewal_ppm": 200000,
+            "renewal_from_month": 0
+          }
+        },
+        "clawback": [
+          {
+            "months_under": 12,
+            "ppm": 1000000
+          },
+          {
+            "months_under": 24,
+            "ppm": 500000
+          }
+        ],
+        "cooling_off_days": 30,
+        "initial_earned": "first_premium",
+        "initial_on_indexation": false,
+        "replacement_carries_clawback": true,
+        "earns_on_waived_premium": true
+      }
+    },
+    {
+      "activate_schedule": {
+        "id": "aia-health",
+        "version": 1,
+        "effective_from": "2026-01-01",
+        "options": {
+          "upfront": {
+            "initial_ppm": 1000000,
+            "renewal_ppm": 150000,
+            "renewal_from_month": 0
+          },
+          "level": {
+            "initial_ppm": 0,
+            "renewal_ppm": 200000,
+            "renewal_from_month": 0
+          }
+        },
+        "clawback": [
+          {
+            "months_under": 12,
+            "ppm": 1000000
+          }
+        ],
+        "cooling_off_days": 30,
+        "initial_earned": "first_premium",
+        "initial_on_indexation": false,
+        "replacement_carries_clawback": true,
+        "earns_on_waived_premium": true
+      }
+    },
+    {
+      "activate_schedule": {
+        "id": "aia-group",
+        "version": 1,
+        "effective_from": "2026-01-01",
+        "options": {
+          "level": {
+            "initial_ppm": 0,
+            "renewal_ppm": 100000,
+            "renewal_from_month": 0
+          }
+        },
+        "clawback": [],
+        "cooling_off_days": 0,
+        "initial_earned": "first_premium",
+        "initial_on_indexation": false,
+        "replacement_carries_clawback": true,
+        "earns_on_waived_premium": true
+      }
+    }
+  ]
+}
