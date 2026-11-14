@@ -2097,6 +2097,11 @@ async fn the_claims_console() {
         (StatusCode::OK, &json!(1), &json!("cl-1")),
         "{work}"
     );
+    // The page links each wording from these: the cover's, and what each decision relied on.
+    assert!(
+        work["view"]["definitions"].is_array() && work["view"]["decision_definitions"].is_object(),
+        "{work}"
+    );
     // Investigation cases are answered for whoever signed in, gathered from every partition.
     let (status, cases) = ask("sub-cl1", "cases").await;
     assert_eq!((status, cases["rows"].is_array()), (StatusCode::OK, true), "{cases}");
