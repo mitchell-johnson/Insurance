@@ -401,8 +401,9 @@ test({ id: "E2E-056", area: A, persona: "ST14", story: "US-ST14-1", title: "The 
   await s.fill("#p-from", plus(1)); await s.fill("#p-to", plus(-30));
   await s.press("Show", "#period");
   const o = await s.outcome("#period-msg").catch(() => null);
-  s.expect(400, 409, 422);
+  s.expect(400, 403, 409, 422);
   if (!o || o.kind !== "bad") throw new Error("a period that ends before it starts was accepted without a word");
+  if (!/before it starts/i.test(o.words)) throw new Error(`the refusal does not say what is wrong with the period: "${o.words}"`);
 });
 
 test({ id: "E2E-057", area: A, persona: "ST14", story: "US-ST14-1", title: "Every complaint a customer has made is found from their reference",

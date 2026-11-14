@@ -38,17 +38,29 @@ async function suspended(t) {
   }
   throw new Error("the adviser's portal never learned of the suspension");
 }
-/// Ask the commission console a question through its form.
-async function asks(s, question, fields = "") {
+/// Ask the commission console a question through its Look up form, filling the fields the question shows.
+async function asks(s, question, fields = {}) {
+  await s.tab("Look up");
   await s.pick("#q", question);
-  await s.fill("#f", fields);
-  await s.press("Ask");
+  for (const [key, value] of Object.entries(fields)) await s.fill("#q-" + key, value);
+  await s.press("Show", "#ask");
 }
-/// Send the commission console one command through its form.
+/// Make a change through the commission console's Change something form.
+async function changes(s, action, fields, purpose) {
+  await s.tab("Change something");
+  await s.pick("#a", action);
+  for (const [key, value] of Object.entries(fields)) {
+    if (await s.$("#a-" + key).evaluate((el) => el.tagName === "SELECT")) await s.pick("#a-" + key, value); else await s.fill("#a-" + key, value);
+  }
+  await s.fill("#a-purpose", purpose);
+  await s.press("Do it", "#do");
+}
+/// Send the commission console one command in the module's own JSON, for the few with no form.
 async function sends(s, command, purpose) {
+  await s.tab("Another command");
   await s.fill("#cmd", typeof command === "string" ? command : JSON.stringify(command));
   await s.fill("#purpose", purpose);
-  await s.press("Send");
+  await s.press("Send", "#send");
 }
 /// A remedy a senior underwriter has prepared and nobody has signed. The review named does not exist, which the module
 /// only checks when the second senior signs: nobody's cover is touched.
@@ -166,7 +178,7 @@ test({ id: "E2E-271", area: ADV, persona: "D1", story: "US-D01-3", title: "Askin
   await s.tab("Commission");
   await s.fill("#st-number", 999);
   await s.press("Show", "#st-form");
-  await s.stopped("#st-msg", "no such", 404);
+  await s.stopped("#st-msg", "Nothing was found with that reference", 404);
 });
 
 test({ id: "E2E-272", area: ADV, persona: "D9", story: "US-D09-1", title: "When a provider's licence is suspended its adviser's portal becomes read-only and says why", matrix: ["ADV-019"], lock: "licence:d9",
@@ -201,16 +213,15 @@ test({ id: "E2E-274", area: ADV, persona: "D1", story: "US-D01-3", title: "An ad
   if (r.status !== 400 || !String(r.data.detail).includes("not one of your matches")) throw new Error(`the dispute answered ${r.status} ${JSON.stringify(r.data)}`);
 });
 
-test({ id: "E2E-275", area: ADV, persona: "P1", story: "US-D01-1", title: "A customer who opens the adviser portal is shown nobody's book", matrix: ["ADV-035"],
+test({ id: "E2E-275", area: ADV, persona: "P1", story: "US-D01-1", title: "A customer who opens the adviser portal is refused, and is shown nobody's book", matrix: ["ADV-035"],
   purpose: "Open the adviser portal as a retail customer who has a policy with an adviser.",
-  why: "The adviser portal and the customer's sign-in share a realm. A customer who finds the page must see no engagements, no book and no other customer." }, async (t) => {
+  why: "The adviser portal and the customer's sign-in share a realm. A customer who finds the page must be told it is not theirs and see no book and no other customer." }, async (t) => {
   const p = await advised(t);
-  const s = await t.open("/adviser", cast.p1);
-  await s.sees("Your book");
-  await s.never(p.number, "#book");
-  await s.never("Advisers under you");
-  const book = await t.does(cast.p1, "GET", "/adviser/v1/book", undefined, "reads the book");
-  if (book.engagements.length || book.policies.length) throw new Error(`the customer is shown a book: ${JSON.stringify(book)}`);
+  const s = await t.open("/adviser", cast.p1, 403);
+  await s.refused("the adviser portal is for advisers and advice providers");
+  await s.never(p.number);
+  const book = await t.sys.portal("GET", "/adviser/v1/book", cast.p1);
+  if (book.status !== 403) throw new Error(`asking for the book directly answered ${book.status} ${JSON.stringify(book.data).slice(0, 200)}`);
 });
 
 // --- The commission console. ------------------------------------------------------------------------------------
@@ -229,8 +240,8 @@ test({ id: "E2E-277", area: COM, persona: "Auditor", story: "US-D10-1", title: "
   await s.sees("may look, holds no role that changes anything", "#me");
   await asks(s, "status");
   await s.sees(t.stack.opening, "#answer");
-  await sends(s, { add_party: { party: t.ref("adv"), kind: "adviser" } }, "trying a change");
-  await s.stopped("#send-msg", "none of your roles allows", 403);
+  await changes(s, "add_party", { party: t.ref("adv"), kind: "adviser" }, "trying a change");
+  await s.stopped("#do-msg", "none of your roles allows", 403);
 });
 
 test({ id: "E2E-278", area: COM, persona: "ST5", story: "US-D10-1", title: "Staff with no commission role are refused the console", matrix: [],
@@ -244,7 +255,7 @@ test({ id: "E2E-279", area: COM, persona: "Commission", story: "US-D10-1", title
   purpose: "As commission operations, ask for Harbourline Advice's position at the month end.",
   why: "The position is what operations read before releasing or holding money: the licence history must be there with its source." }, async (t) => {
   const s = await t.open("/commission", cast.comops);
-  await asks(s, "position", `party=${cast.d6.party}&as_at=2027-11-30`);
+  await asks(s, "position", { party: cast.d6.party, as_at: "2027-11-30" });
   await s.sees("FSPR-6", "#answer");
   await s.sees("2020-01-01", "#answer");
   await s.sees("Summary", "#answer");
@@ -255,11 +266,15 @@ test({ id: "E2E-279", area: COM, persona: "Commission", story: "US-D10-1", title
 });
 
 test({ id: "E2E-280", area: COM, persona: "Commission", story: "US-D10-1", title: "A question asked without what it needs is answered with what is missing", matrix: [],
-  purpose: "Ask for a party's position without naming the party.",
+  purpose: "Ask for a party's position without naming the party, on the form and then by hand.",
   why: "The console is a form over the module; a person who leaves a field out must be told which, in the module's words." }, async (t) => {
   const s = await t.open("/commission", cast.comops);
-  await asks(s, "position");
-  await s.stopped("#ask-msg", "position needs party", 400);
+  await asks(s, "position", { as_at: "2027-11-30" });
+  // The form marks the party as required and does not send the question; asked by hand, the module says what is missing.
+  if (!(await s.$("#q-party").evaluate((el) => el.validity.valueMissing))) throw new Error("the form does not mark the party as missing");
+  if ((await s.text("#answer")) !== "") throw new Error("the page shows an answer to a question that lacks its party");
+  const r = await t.sys.portal("GET", COMMISSION + "position", cast.comops);
+  if (r.status !== 400 || !String(r.data.detail).includes("position needs party")) throw new Error(`asked by hand the question answered ${r.status} ${JSON.stringify(r.data)}`);
 });
 
 test({ id: "E2E-281", area: COM, persona: "Commission", story: "US-D10-1", title: "A command that is not valid JSON never leaves the page", matrix: [],
@@ -275,8 +290,8 @@ test({ id: "E2E-282", area: COM, persona: "Commission", story: "US-D10-1", title
   why: "Who is an adviser, and under whom, decides who is paid. The people who run payments must not be able to change it." }, async (t) => {
   const party = t.ref("adv");
   const s = await t.open("/commission", cast.comops);
-  await sends(s, { add_party: { party, kind: "adviser" } }, "trying to add an adviser");
-  await s.stopped("#send-msg", "none of your roles allows", 403);
+  await changes(s, "add_party", { party, kind: "adviser" }, "trying to add an adviser");
+  await s.stopped("#do-msg", "none of your roles allows", 403);
   const position = await t.does(cast.comops, "GET", `${COMMISSION}position?party=${party}&as_at=2027-11-30`, undefined, "reads the position");
   if (position.licence_history.length) throw new Error("the refused party has a history");
 });
@@ -286,18 +301,18 @@ test({ id: "E2E-283", area: COM, persona: "Distribution", story: "US-D10-1", tit
   why: "A party entered twice would split an adviser's commission between two records." }, async (t) => {
   const party = t.ref("adv");
   const s = await t.open("/commission", cast.dist);
-  await sends(s, { add_party: { party, kind: "adviser" } }, "a new adviser joins");
-  await s.done("#send-msg", "Done.");
-  await sends(s, { add_party: { party, kind: "adviser" } }, "entered again by mistake");
-  await s.stopped("#send-msg", "already in the structure", 409);
+  await changes(s, "add_party", { party, kind: "adviser" }, "a new adviser joins");
+  await s.done("#do-msg", "Done.");
+  await changes(s, "add_party", { party, kind: "adviser" }, "entered again by mistake");
+  await s.stopped("#do-msg", "already in the structure", 409);
 });
 
 test({ id: "E2E-284", area: COM, persona: "Distribution", story: "US-D10-1", title: "A policy cannot be given to an adviser from the commission console", matrix: ["ADV-013"],
   purpose: "Send the module's own appoint-adviser command through the console.",
   why: "Only the policyholder appoints an adviser. The console must not be a way round that, even for an administrator." }, async (t) => {
   const s = await t.open("/commission", cast.dist);
-  await sends(s, { appoint_adviser: { policy: "pol-any", engagement: "eng-d1", book: null } }, "trying to assign a policy");
-  await s.stopped("#send-msg", "not a command the console sends", 400);
+  await changes(s, "appoint_adviser", { policy: "pol-any", engagement: "eng-d1" }, "trying to assign a policy");
+  await s.stopped("#do-msg", "not a command the console sends", 400);
 });
 
 test({ id: "E2E-285", area: COM, persona: "ST13", story: "US-D09-1", title: "Compliance records a licence event and operations cannot", matrix: ["ADV-019"],
@@ -305,14 +320,14 @@ test({ id: "E2E-285", area: COM, persona: "ST13", story: "US-D09-1", title: "Com
   why: "A licence event stops an adviser trading and holds their money. It must come from compliance, with the regulator's reference, and open a case." }, async (t) => {
   const party = t.ref("fap");
   await t.does(cast.dist, "POST", COMMISSION + "commands", { command: { add_party: { party, kind: "fap" } }, purpose: "a new provider" }, "adds the provider");
-  const event = { record_licence: { party, state: "revoked", effective: t.stack.opening, source_ref: "FMA-2027-204" } };
+  const event = { party, state: "revoked", effective: t.stack.opening, source_ref: "FMA-2027-204" };
   const ops = await t.open("/commission", cast.comops);
-  await sends(ops, event, "the regulator's notice");
-  await ops.stopped("#send-msg", "none of your roles allows", 403);
+  await changes(ops, "record_licence", event, "the regulator's notice");
+  await ops.stopped("#do-msg", "none of your roles allows", 403);
   const s = await t.open("/commission", cast.st13);
   await s.sees("st13: compliance", "#me");
-  await sends(s, event, "the regulator's notice");
-  await s.done("#send-msg", "Done.");
+  await changes(s, "record_licence", event, "the regulator's notice");
+  await s.done("#do-msg", "Done.");
   await asks(s, "conduct_cases");
   await s.sees(party, "#answer");
   await s.sees("FMA-2027-204", "#answer");
@@ -323,7 +338,7 @@ test({ id: "E2E-286", area: COM, persona: "Commission", story: "US-D10-1", title
   why: "Held commission is other people's money. The module's total must agree with the ledger every day, and the month cannot close while it does not." }, async (t) => {
   const control = await t.does(cast.comops, "GET", `${COMMISSION}held_control?date=${t.stack.opening}`, undefined, "reads the control");
   const s = await t.open("/commission", cast.comops);
-  await asks(s, "held_control", `date=${t.stack.opening}`);
+  await asks(s, "held_control", { date: t.stack.opening });
   await s.sees("Agrees with ledger", "#answer");
   if (control.agrees_with_ledger !== true) throw new Error(`the control does not agree with the ledger: ${JSON.stringify(control)}`);
   // The four age bands add up to the total held.
@@ -336,8 +351,8 @@ test({ id: "E2E-287", area: COM, persona: "Commission", story: "US-D10-1", title
   purpose: "Ask the console for a case by an identifier nobody has used.",
   why: "People paste identifiers from email; a wrong one must be answered with a message and nothing else on the page may change." }, async (t) => {
   const s = await t.open("/commission", cast.comops);
-  await asks(s, "case", "id=" + t.ref("case"));
-  await s.stopped("#ask-msg", "no such", 404);
+  await asks(s, "case", { id: t.ref("case") });
+  await s.stopped("#ask-msg", "Nothing was found with that reference", 404);
 });
 
 // --- Replacement matches. ---------------------------------------------------------------------------------------
@@ -485,5 +500,5 @@ test({ id: "E2E-300", area: UW, persona: "ST1", story: "US-ST01-1", title: "Work
   await s.tab("Proposals");
   await s.fill("#p-id", t.ref("prop"));
   await s.press("Open", "#p-form");
-  await s.stopped("#p-msg", "no such", 404);
+  await s.stopped("#p-msg", "Nothing was found with that reference", 404);
 });

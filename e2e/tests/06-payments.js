@@ -316,16 +316,22 @@ test({ id: "E2E-185", area: A, persona: "ST10", story: "US-ST10-1", title: "A pa
   await s.sees("returned", "#run");
 });
 
-test({ id: "E2E-186", area: A, persona: "ST10", story: "US-ST10-1", title: "The maker sends a rejected item to the bank again from the run", matrix: ["INC-007"],
-  purpose: "After the bank rejects an item, press Send what is unpaid again on the run.",
-  why: "The runbook for a part-failed run is a new submission of only what was not paid; the button is how the maker does it." }, async (t) => {
+test({ id: "E2E-186", area: A, persona: "ST10", story: "US-ST10-1", title: "The maker sends a run the bank refused whole to the bank again, on a value date they give", matrix: ["INC-007"],
+  purpose: "After the bank refuses a submitted file, press Send what is unpaid again on the run and give the new value date.",
+  why: "The runbook for a refused file is a new submission of what was not paid, under the approval that stands; the button is how the maker does it." }, async (t) => {
   const to = await payee(t);
-  const [good, bad] = [item(t, to.id, 150_00), item(t, to.id, 260_00)];
-  const id = await run(t, [good, bad]);
+  const id = await run(t, [item(t, to.id, 150_00), item(t, to.id, 260_00)]);
   await sends(t, cast.st17, { type: "approve_run", run: id });
-  await settled(t, id, { rejected: { [bad.item]: "bank could not read the line" } });
+  // The bank driver's part: the file went, and the bank answered that it holds none of it.
+  const submission = `${id}-1`;
+  await reports(t, { type: "begin_submission", submission, region: "akl" });
+  await reports(t, { type: "record_submitted", submission, content_hash: "e2e", bank_reference: `B-${id}` });
+  await reports(t, { type: "record_acknowledgement", submission, refused: "the file could not be read", rejected: {} });
   const s = await opened(t, cast.st10, id);
   await s.press("Send what is unpaid again", "#run-actions");
+  // The page asks which day the bank should pay the new submission.
+  await s.page.locator("dialog[open]").waitFor({ state: "visible" });
+  await s.answer(tomorrow(t));
   await s.done("#run-msg", "A new submission is queued.");
 });
 

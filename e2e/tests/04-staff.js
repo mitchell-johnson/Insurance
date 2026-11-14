@@ -130,7 +130,7 @@ test({ id: "E2E-119", area: A, persona: "ST5", story: "US-ST05-1", title: "A mis
   const s = await t.open("/staff", cast.st5b);
   await lookup(s, "pol-does-not-exist");
   const words = await s.stopped("#lookup-msg", "", 404);
-  if (!/policy/i.test(words)) throw new Error(`the screen answers a mistyped policy number with "${words}"`);
+  if (/no such resource/i.test(words) || !/nothing was found|not found|no policy/i.test(words)) throw new Error(`the screen answers a mistyped policy number with "${words}"`);
 });
 
 test({ id: "E2E-120", area: A, persona: "ST5", story: "US-ST05-1", title: "The collections officer sees what is owed on a policy and no health information", matrix: ["COL-001"],
