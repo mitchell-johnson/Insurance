@@ -157,3 +157,30 @@ fn withheld_tax_is_paid_to_the_revenue_and_discharged_on_each_partition() {
     assert_eq!(desk.state.tax_remittances["tax-1"].status, TaxStatus::Returned);
     desk.ok(&mia(), request("tax-2", "rwt", "2027-11"));
 }
+
+/// Purpose: a month's figure is split between the holdings in proportion to
+/// what each holds, each share at most its holding, the odd cents to the
+/// largest remainders and ties to the first; holdings of nothing or less
+/// are left out; and where too little is held the holdings come back as
+/// they are, for the module to stop.
+/// Why it matters: the core refuses a share above what a fund holds, and a
+/// split that loses or adds a cent would not match finance's figure.
+#[test]
+fn a_months_figure_is_split_between_the_holdings() {
+    use ic_payments::tax::shares_for;
+    let f = |s: &str| Some(s.to_string());
+    let held = [(0, f("a"), 1_00), (1, f("a"), 1_00), (1, None, 1_00), (2, None, 0), (3, None, -5)];
+    assert_eq!(shares_for(2_00, &held), [share(0, Some("a"), 67), share(1, Some("a"), 67), share(1, None, 66)]);
+    assert_eq!(shares_for(1, &held), [share(0, Some("a"), 1)]);
+    assert_eq!(
+        shares_for(3_00, &held),
+        [share(0, Some("a"), 1_00), share(1, Some("a"), 1_00), share(1, None, 1_00)]
+    );
+    assert_eq!(shares_for(5_00, &[(0, None, 1_00)]), [share(0, None, 1_00)]);
+    assert_eq!(shares_for(0, &[(0, None, 1_00)]), [share(0, None, 1_00)]);
+    assert!(shares_for(1_00, &[]).is_empty());
+    assert_eq!(
+        shares_for(10_00, &[(0, None, 3_00), (1, None, 97_00)]),
+        [share(0, None, 30), share(1, None, 9_70)]
+    );
+}

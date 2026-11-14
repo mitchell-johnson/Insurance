@@ -40,6 +40,8 @@ pub struct Pass {
     pub relationships: usize,
     /// Parties holding bank details the customer master was asked about.
     pub erasures: usize,
+    /// Tax remittances given finance's figure and the partitions' holdings.
+    pub taxes: usize,
     /// What could not be done this time. The next pass tries again.
     pub problems: Vec<String>,
 }
@@ -451,6 +453,9 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
         if let Err(e) = self.check_erasure(&mut pass).await {
             pass.problems.push(e);
         }
+        if let Err(e) = self.price_tax(&mut pass).await {
+            pass.problems.push(e);
+        }
         if let Err(e) = self.propose_sweep().await {
             pass.problems.push(e);
         }
@@ -552,6 +557,48 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
             }
         }
         Ok(())
+    }
+
+    /// For each tax remittance waiting for figures, ask finance what the
+    /// closed month owes (`withholding_due`) and each partition what it
+    /// holds, split the figure between the holdings and record it. A month
+    /// finance has not closed, or a partition that does not answer, is left
+    /// for the next pass.
+    async fn price_tax(&self, pass: &mut Pass) -> Result<(), String> {
+        let waiting: Vec<(String, ic_payments::tax::TaxRemittance)> = self.ask(json!({"q": "tax_remittances_to_price"})).await?;
+        let now = (self.clock)();
+        for (id, remittance) in waiting {
+            match self.tax_figures(&remittance).await {
+                Ok((due_minor, due_on, shares)) => {
+                    let key = format!("tax-price:{id}:{}", now.format("%Y%m%dT%H%M%S"));
+                    let command = Command::PriceTaxRemittance {
+                        remittance: id.clone(),
+                        due_minor,
+                        due_on,
+                        shares,
+                    };
+                    match self.tell(key, command).await {
+                        Ok(()) => pass.taxes += 1,
+                        Err(e) => pass.problems.push(format!("tax {id}: {e}")),
+                    }
+                }
+                Err(e) => pass.problems.push(format!("tax {id}: {e}")),
+            }
+        }
+        Ok(())
+    }
+
+    async fn tax_figures(&self, t: &ic_payments::tax::TaxRemittance) -> Result<(i64, chrono::NaiveDate, Vec<ic_payments::tax::Share>), String> {
+        #[derive(serde::Deserialize)]
+        struct Due {
+            amount_minor: i64,
+            due: chrono::NaiveDate,
+        }
+        let question = json!({"q": "withholding_due", "kind": t.kind, "period": t.period});
+        let answer = self.module.ask("finance", question).await.map_err(|e| format!("finance: {e}"))?;
+        let due: Due = serde_json::from_value(answer).map_err(crate::ports::unreadable)?;
+        let held = self.core.withholding_held(&t.kind).await?;
+        Ok((due.amount_minor, due.due, ic_payments::tax::shares_for(due.amount_minor, &held)))
     }
 
     /// The evacuation drill from this pump's region: a token payment through

@@ -704,30 +704,56 @@ fn the_loader_refuses_unsound_option_totals_and_anniversary_options() {
     let life = living.cover("life").unwrap();
     let events = life.insurability_option.as_ref().unwrap();
     assert_eq!(
-        (events.max_total_increase_minor, events.once_in_days, events.max_total_percent_of_original.as_ref().map(|p| p.get())),
+        (
+            events.max_total_increase_minor,
+            events.once_in_days,
+            events.max_total_percent_of_original.as_ref().map(|p| p.get())
+        ),
         (Some(750_000_00), Some(365), Some(ic_money::Dec::from(100i64)))
     );
     let anniversary = life.anniversary_option.as_ref().unwrap();
     assert_eq!(
-        (anniversary.every_years, anniversary.at_least_minor, anniversary.max_total_increase_minor, anniversary.within_days, anniversary.to_age),
+        (
+            anniversary.every_years,
+            anniversary.at_least_minor,
+            anniversary.max_total_increase_minor,
+            anniversary.within_days,
+            anniversary.to_age
+        ),
         (3, 100_000_00, 1_000_000_00, 60, 60)
     );
     assert_eq!(anniversary.requires_feature.as_deref(), Some("future-insurability"));
     let events_wrong = "an insurability option is on a lump sum cover";
     let anniversary_wrong = "an anniversary option is on a lump sum cover";
     let cases = [
-        ("max_total_percent_of_original = \"100\",", "max_total_percent_of_original = \"40\",", events_wrong),
+        (
+            "max_total_percent_of_original = \"100\",",
+            "max_total_percent_of_original = \"40\",",
+            events_wrong,
+        ),
         ("max_total_increase = dollars(750000),", "max_total_increase = dollars(1000),", events_wrong),
         ("        once_in_days = 365,\n    )", "        once_in_days = 0,\n    )", events_wrong),
         ("\"separation\",", "\"separation\", \"anniversary\",", events_wrong),
         ("every_years = 3,", "every_years = 0,", anniversary_wrong),
         ("at_least = dollars(100000),", "at_least = 0,", anniversary_wrong),
-        ("max_total_percent_of_original = \"200\",", "max_total_percent_of_original = \"10\",", anniversary_wrong),
-        ("max_total_increase = dollars(1000000),", "max_total_increase = dollars(99999),", anniversary_wrong),
+        (
+            "max_total_percent_of_original = \"200\",",
+            "max_total_percent_of_original = \"10\",",
+            anniversary_wrong,
+        ),
+        (
+            "max_total_increase = dollars(1000000),",
+            "max_total_increase = dollars(99999),",
+            anniversary_wrong,
+        ),
         ("requires = \"future-insurability\",", "requires = \"\",", anniversary_wrong),
         ("within_days = 60,", "within_days = 0,", anniversary_wrong),
         ("to_age = 60,", "to_age = 0,", anniversary_wrong),
-        ("                once_in_days = 365,\n            ),", "                once_in_days = 0,\n            ),", anniversary_wrong),
+        (
+            "                once_in_days = 365,\n            ),",
+            "                once_in_days = 0,\n            ),",
+            anniversary_wrong,
+        ),
     ];
     for (from, to, why) in cases {
         assert_eq!(source.matches(from).count(), 1, "{from}");

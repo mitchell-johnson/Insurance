@@ -536,7 +536,13 @@ fn a_limited_pay_cover_is_made_paid_up_for_the_share_of_the_term_paid() {
 fn close_to(c: &mut Cluster, to: NaiveDate) {
     while c.state(0).business_date.unwrap() < to {
         let today = c.state(0).business_date.unwrap();
-        let owing: Vec<(PolicyId, i64)> = c.state(0).policies.iter().map(|(id, p)| (id.clone(), p.outstanding_minor())).filter(|(_, o)| *o > 0).collect();
+        let owing: Vec<(PolicyId, i64)> = c
+            .state(0)
+            .policies
+            .iter()
+            .map(|(id, p)| (id.clone(), p.outstanding_minor()))
+            .filter(|(_, o)| *o > 0)
+            .collect();
         for (id, minor) in owing {
             let pay = Command::ApplyReceipt {
                 policy: id,
@@ -569,7 +575,11 @@ fn exercise(c: &mut Cluster, policy: &PolicyId, reference: &str, event: &str, on
 /// yearly indexation increases.
 fn life_layers(c: &Cluster, id: &PolicyId) -> Vec<i64> {
     let layers = &c.state(0).policies[id].covers["life"].layers;
-    layers.iter().filter(|l| l.origin != ic_core::LayerOrigin::Indexation).map(|l| l.sum_insured_minor).collect()
+    layers
+        .iter()
+        .filter(|l| l.origin != ic_core::LayerOrigin::Indexation)
+        .map(|l| l.sum_insured_minor)
+        .collect()
 }
 
 /// Purpose: AIA Living Life Cover's special events increases stop at the lower of the original

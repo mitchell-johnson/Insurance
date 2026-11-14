@@ -24,6 +24,8 @@ pub trait Module: Send + Sync {
     /// Give another hosted module a command in its own form. `Ok` is that
     /// module's answer, whatever it is; `Err` means it could not be asked.
     fn tell(&self, module: &str, command: Value) -> impl Future<Output = Result<Value, String>> + Send;
+    /// Ask another hosted module a question in its own form.
+    fn ask(&self, module: &str, question: Value) -> impl Future<Output = Result<Value, String>> + Send;
 }
 
 /// The core. `Ok(None)` is done, `Ok(Some(code))` is the core's refusal,
@@ -39,6 +41,9 @@ pub trait Core: Send + Sync {
     }
     /// Send a command that names no policy to one partition.
     fn send_on(&self, partition: u16, key: &str, caller: &str, command: Command) -> impl Future<Output = Result<Option<String>, String>> + Send;
+    /// What each partition holds of a kind of withheld tax in New Zealand
+    /// dollars, fund by fund. Holdings of nothing are left out.
+    fn withholding_held(&self, kind: &str) -> impl Future<Output = Result<Vec<ic_payments::tax::Held>, String>> + Send;
     /// Send a command to the partition that holds `policy`.
     fn send_to(&self, policy: &PolicyId, key: &str, caller: &str, command: Command) -> impl Future<Output = Result<Option<String>, String>> + Send;
     /// Hand an unexpected credit to cash matching. `Ok(Some(reason))` means
@@ -81,6 +86,10 @@ impl Module for ClusterClient {
 
     async fn tell(&self, module: &str, command: Value) -> Result<Value, String> {
         self.propose_module_until(module, &command, Duration::from_secs(20)).await.map_err(lost)?.result
+    }
+
+    async fn ask(&self, module: &str, question: Value) -> Result<Value, String> {
+        self.query_module(module, &question).await.map_err(lost)?
     }
 }
 
@@ -138,6 +147,18 @@ impl ClusterCore {
 impl Core for ClusterCore {
     async fn send_on(&self, partition: u16, key: &str, caller: &str, command: Command) -> Result<Option<String>, String> {
         self.propose(partition, key, caller, command).await
+    }
+
+    async fn withholding_held(&self, kind: &str) -> Result<Vec<ic_payments::tax::Held>, String> {
+        let partitions = self.client.partitions(Duration::from_secs(20)).await?;
+        let mut held = Vec::new();
+        for partition in 0..partitions {
+            for fund in self.client.withholding_held(partition, kind, ic_money::Currency::NZD).await.map_err(lost)? {
+                let minor = i64::try_from(fund.minor).map_err(|_| format!("partition {partition} holds more {kind} than can be paid"))?;
+                held.push((partition, fund.statutory_fund, minor));
+            }
+        }
+        Ok(held)
     }
 
     async fn send_to(&self, policy: &PolicyId, key: &str, caller: &str, command: Command) -> Result<Option<String>, String> {
