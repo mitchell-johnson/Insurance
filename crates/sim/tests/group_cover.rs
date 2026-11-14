@@ -1078,3 +1078,155 @@ fn a_cover_check_also_says_what_the_record_showed_on_the_event_date() {
     assert_eq!((exec.in_force, exec.sum_insured_minor), (true, 400_000_00));
     assert_eq!(then(&exec), Some((true, true, 750_000_00)));
 }
+
+fn receipt(c: &mut Cluster, p: PartitionId, id: &PolicyId, reference: &str, minor: i64) {
+    let receipt = Command::ApplyReceipt {
+        policy: id.clone(),
+        receipt: reference.into(),
+        amount: ic_money::Money::new(minor, ic_money::Currency::NZD),
+    };
+    c.submit(p, "cash-matching", receipt).unwrap();
+}
+
+/// What is still owed on each of the scheme's bills, oldest first.
+fn open_bills(c: &Cluster, p: PartitionId, id: &PolicyId) -> Vec<(NaiveDate, i64)> {
+    c.state(p).policies[id].receivables.iter().map(|r| (r.due, r.outstanding_minor)).collect()
+}
+
+/// Purpose: matrix GRP-013. An employer remits 80% of what two invoices come to: the money
+/// settles the older invoice first and the rest goes to the newer one, the scheme's standing is
+/// counted from the newer invoice's own due date, and no member of the scheme is put in arrears
+/// by the shortfall.
+/// Why it matters: a short remittance is the employer's debt, not any employee's. Spreading it
+/// across members would send arrears notices to people whose premium was deducted from their
+/// pay; settling the newest invoice first would leave the oldest unpaid and lapse the scheme
+/// sooner than its terms allow.
+#[test]
+fn a_short_remittance_settles_the_oldest_invoice_first_and_puts_no_member_in_arrears() {
+    let mut c = cluster(d(2027, 11, 1));
+    let (p, id) = scheme(&mut c);
+    days(&mut c, 31);
+    let bills = open_bills(&c, p, &id);
+    assert_eq!(bills.iter().map(|(due, _)| *due).collect::<Vec<_>>(), vec![d(2027, 11, 1), d(2027, 12, 1)]);
+    let total: i64 = bills.iter().map(|(_, owed)| owed).sum();
+    let paid = total * 8 / 10;
+    receipt(&mut c, p, &id, "remit-1", paid);
+    let after = open_bills(&c, p, &id);
+    assert_eq!(after[0].1, 0, "the older invoice is settled first");
+    assert_eq!(after[1].1, total - paid);
+    let policy = &c.state(p).policies[&id];
+    assert_eq!(policy.oldest_unpaid_due(), Some(d(2027, 12, 1)));
+    assert!(policy.member_standing.is_empty(), "no member is in arrears for the employer's shortfall");
+    days(&mut c, 46);
+    assert_eq!(c.state(p).policies[&id].status, PolicyStatus::InForce);
+    assert!(c.state(p).policies[&id].member_standing.is_empty());
+}
+
+/// Purpose: matrix GRP-015. One remittance pays two invoices for the whole scheme and is then
+/// recalled as a duplicate: the recall reverses its allocation by new entries, both invoices are
+/// owed again, and the scheme's standing is worked out from the older invoice's original due
+/// date, so it is in grace at once rather than given a fresh period.
+/// Why it matters: a recall must not restart the lapse clock, or a scheme could stay covered
+/// indefinitely by paying and recalling. Rewriting the original receipt entry instead of
+/// reversing it would break the ledger's history that the bank reconciliation relies on.
+#[test]
+fn a_recalled_remittance_reopens_both_invoices_from_their_original_due_dates() {
+    let mut c = cluster(d(2027, 11, 1));
+    let (p, id) = scheme(&mut c);
+    days(&mut c, 31);
+    let total: i64 = open_bills(&c, p, &id).iter().map(|(_, owed)| owed).sum();
+    receipt(&mut c, p, &id, "remit-dup", total);
+    assert!(open_bills(&c, p, &id).iter().all(|(_, owed)| *owed == 0));
+    let entries_before = c.state(p).ledger.entry_count();
+    days(&mut c, 20);
+    c.take_events();
+    let recall = Command::ReverseReceipt {
+        policy: id.clone(),
+        receipt: "remit-dup".into(),
+    };
+    c.submit(p, "cash-matching", recall).unwrap();
+    assert!(c.state(p).ledger.entry_count() > entries_before, "the recall is a new entry");
+    assert_eq!(open_bills(&c, p, &id).iter().map(|(_, owed)| owed).sum::<i64>(), total);
+    let policy = &c.state(p).policies[&id];
+    assert_eq!(policy.oldest_unpaid_due(), Some(d(2027, 11, 1)), "counted from the original due date");
+    assert_eq!(policy.standing, Some(ic_core::Standing::InGrace));
+    let changed = c
+        .take_events()
+        .into_iter()
+        .any(|e| matches!(e.event, Event::StandingChanged { to: Some(ic_core::Standing::InGrace), oldest_unpaid_due: Some(due), .. } if due == d(2027, 11, 1)));
+    assert!(changed, "the standing change names the original due date");
+}
+
+/// Purpose: matrix GRP-025. A pool is billed a deposit premium on its estimate for the year and
+/// the deposit is earned day by day, to the cent over the year. The year-end declaration comes
+/// in higher than the estimate and is backdated to the start of the year: an adjustment is
+/// raised for every month already billed at the difference, and the premium it adds for months
+/// already past is recognised as earned at the next day's close, in the current period.
+/// Why it matters: a deposit earned in lumps would misstate every month's income, and an
+/// adjustment for last year recognised back in last year's closed periods would reopen
+/// accounts already reported.
+#[test]
+fn a_pool_deposit_is_earned_daily_and_the_year_end_declaration_is_recognised_now() {
+    let mut c = cluster(d(2027, 11, 1));
+    let pool = |headcount, total_salary_minor| LifeFactors {
+        category: Some("staff".into()),
+        pool: Some(PoolAggregate { headcount, total_salary_minor }),
+        ..LifeFactors::default()
+    };
+    let spec = LifeSpec {
+        id: life("warehouse"),
+        kind: LifeKind::Pool {
+            headcount: 0,
+            total_salary_minor: 0,
+        },
+        factors: pool(40, 3_000_000_00),
+    };
+    let issue = group_scheme(23, d(2027, 11, 1), vec![spec]);
+    let (p, id) = (c.partition_of(&issue.group), issue.policy.clone());
+    c.submit(p, "new-business", issue_command(issue)).unwrap();
+    receipt(&mut c, p, &id, "deposit", 20_000_00);
+    c.take_events();
+
+    let mut earned: i128 = 0;
+    let mut by_day = 0usize;
+    while c.business_date().unwrap() < d(2028, 11, 1) {
+        days(&mut c, 1);
+        for e in c.take_events() {
+            if let Event::PremiumEarned { policy, amount_fine, .. } = e.event {
+                if policy == id {
+                    earned += amount_fine;
+                    by_day += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(earned, 12 * 550_00 * ic_money::FINE_PER_MINOR, "the year's deposit earned exactly");
+    assert!(by_day >= 360, "earned day by day, {by_day} times");
+
+    // The declaration: 44 people on 3,300,000 for the whole year, 605.00 a month.
+    let owed_before: i64 = c.state(p).policies[&id].receivables.iter().map(|r| r.total_minor).sum();
+    let declared = MemberChange::Changed {
+        life: life("warehouse"),
+        effective: d(2027, 11, 1),
+        factors: pool(44, 3_300_000_00),
+    };
+    membership(&mut c, p, &id, vec![declared]).unwrap();
+    let billed_after: i64 = c.state(p).policies[&id].receivables.iter().map(|r| r.total_minor).sum();
+    assert_eq!(
+        billed_after - owed_before,
+        13 * 55_00,
+        "the difference for every month billed, November 2028 included"
+    );
+    let today = c.business_date().unwrap();
+    days(&mut c, 1);
+    let catch_up = c.take_events().into_iter().find_map(|e| match e.event {
+        Event::PremiumEarned { policy, through, amount_fine } if policy == id => Some((through, amount_fine)),
+        _ => None,
+    });
+    let (through, amount) = catch_up.expect("earned at the close");
+    assert_eq!(through, today, "recognised in the current period");
+    assert!(
+        amount >= 12 * 55_00 * ic_money::FINE_PER_MINOR,
+        "the past months' difference is earned at once: {amount}"
+    );
+}

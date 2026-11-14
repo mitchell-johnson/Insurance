@@ -60,7 +60,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | CLM Claims and claims operations | 42 | 0 | 0 | 0 |
 | RI Reinsurance | 16 | 1 | 1 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 5 | 8 | 3 |
-| GRP Group scheme administration | 37 | 3 | 0 | 1 |
+| GRP Group scheme administration | 40 | 0 | 0 | 0 |
 | JNT Joint lives, ownership, assignments and dependants | 3 | 8 | 20 | 14 |
 | ADV Advisers and commission | 45 | 0 | 0 | 0 |
 | HLT Composable health product | 5 | 3 | 3 | 0 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 8 | 3 | 7 | 8 |
-| **Total** | **391** | **85** | **101** | **83** |
+| **Total** | **394** | **82** | **101** | **82** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 37 | 26 | 6 |
-| B | 115 | 15 | 12 |
-| C | 231 | 41 | 74 |
+| B | 116 | 14 | 12 |
+| C | 233 | 39 | 74 |
 | D | 8 | 3 | 9 |
 
 ### Still to build, by owner
@@ -92,14 +92,14 @@ Every row not yet fully built, with the area that finishes it. The same list is 
 
 | Owner | Rows left | Priority 1 |
 | --- | ---: | ---: |
-| Core | 173 | 78 |
+| Core | 170 | 77 |
 | Portal and app services | 5 | 3 |
 | Unit pricing | 5 | 1 |
 | Reinsurance | 2 | 0 |
 | Underwriting and new business | 1 | 1 |
-| **Total** | **186** | **83** |
+| **Total** | **183** | **82** |
 
-##### Core (173)
+##### Core (170)
 
 | Row | Built | Priority | Scenario |
 | --- | --- | ---: | --- |
@@ -121,7 +121,6 @@ Every row not yet fully built, with the area that finishes it. The same list is 
 | COL-024 | part | 1 | S5: card tokens invalidated for 300 customers before a billing day |
 | COL-025 | part | 1 | S15: collection channel down four hours on a collection day |
 | DSC-005 | part | 1 | Cannot take part in a step-count programme |
-| GRP-013 | part | 1 | Employer remits 80% of the invoice |
 | INC-001 | none | 1 | Runbook 1: anniversary run misses one partition |
 | INC-002 | none | 1 | Runbook 2 and S25: wrong indexation rate applied to a cohort |
 | INC-003 | part | 1 | Runbook 3 and S24: truncated file confirmed in error |
@@ -205,8 +204,6 @@ Every row not yet fully built, with the area that finishes it. The same list is 
 | COL-006 | part | 2 | Payment covers a policy fee, a reinstatement charge and part of two premiums |
 | COL-013 | part | 2 | S3: call task on day 17 reaches Kath, the other owner |
 | COL-017 | part | 2 | Third consecutive dishonour on one authority |
-| GRP-015 | part | 2 | S12: one remittance covers two invoices and 120 members, then is recalled as a duplicate |
-| GRP-025 | part | 2 | Deposit premium on a pool, year-end declaration higher than the estimate |
 | HLT-003 | part | 2 | Add then remove a component |
 | HLT-005 | none | 2 | Claim line for a component the life does not hold |
 | HLT-006 | part | 2 | Maternity component added, claim inside its waiting period |
@@ -334,7 +331,6 @@ Every row not yet fully built, with the area that finishes it. The same list is 
 - **RES** (5): RES-001, RES-002, RES-004, RES-005, RES-011
 - **UW** (1): UW-006
 - **INV** (1): INV-015
-- **GRP** (1): GRP-013
 - **JNT** (4): JNT-008, JNT-013, JNT-023, JNT-030
 - **DSC** (1): DSC-005
 - **ANV** (1): ANV-016

@@ -305,9 +305,9 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | GRP-010 | full | `group/tests/excess.rs::a_loading_is_itemised_to_the_employer_only_with_the_members_consent`<br>`sim/tests/group_cover.rs::a_loading_reaches_the_employer_only_in_a_total_unless_the_member_agreed` |
 | GRP-011 | full | `group/tests/excess.rs::too_few_members_for_a_total_means_the_member_pays_the_loading`<br>`group/tests/excess.rs::staff_are_told_when_leavers_leave_too_few_members_in_the_total` |
 | GRP-012 | full | `group/tests/billing.rs::the_invoice_view_agrees_with_the_core_by_billing_group` |
-| GRP-013 | part | `group/tests/billing.rs::a_short_payment_is_brought_forward_on_the_next_invoice_and_falls_on_no_member` |
+| GRP-013 | full | `group/tests/billing.rs::a_short_payment_is_brought_forward_on_the_next_invoice_and_falls_on_no_member`<br>`sim/tests/group_cover.rs::a_short_remittance_settles_the_oldest_invoice_first_and_puts_no_member_in_arrears` |
 | GRP-014 | full | `group/tests/billing.rs::persistent_short_payment_suspends_joiners_until_paid` |
-| GRP-015 | part | `payments/tests/returned.rs::a_remittance_recalled_as_a_duplicate_is_given_back_and_reversed` |
+| GRP-015 | full | `payments/tests/returned.rs::a_remittance_recalled_as_a_duplicate_is_given_back_and_reversed`<br>`sim/tests/group_cover.rs::a_recalled_remittance_reopens_both_invoices_from_their_original_due_dates` |
 | GRP-016 | full | `sim/tests/voluntary_cover.rs::a_member_who_does_not_pay_loses_only_the_cover_they_pay_for`<br>`group/tests/excess.rs::a_member_who_stops_paying_their_loading_loses_only_that_cover` |
 | GRP-017 | full | `group/tests/health.rs::a_members_choice_puts_their_plan_and_dependants_into_force`<br>`sim/tests/health_menu.rs::chosen_covers_are_billed_to_whoever_pays_each_and_a_change_touches_only_what_changed` |
 | GRP-018 | full | `group/tests/health.rs::a_members_choice_puts_their_plan_and_dependants_into_force`<br>`sim/tests/voluntary_cover.rs::cover_the_member_pays_for_is_billed_and_paid_apart_from_the_scheme`<br>`group/tests/excess.rs::a_member_who_pays_their_loading_keeps_the_cover` |
@@ -317,7 +317,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | GRP-022 | full | `group/tests/year.rs::without_an_agreement_the_scheme_runs_on_old_rates_and_then_ends`<br>`group/tests/year.rs::a_rate_guarantee_rolls_the_year_without_an_agreement` |
 | GRP-023 | full | `group/tests/leavers.rs::a_leaver_can_continue_their_cover_as_an_individual_policy`<br>`group/tests/leavers.rs::an_option_not_taken_up_expires` |
 | GRP-024 | full | `group/tests/leavers.rs::a_seasonal_worker_serves_the_waiting_period_again_on_rejoining`<br>`group/src/model.rs::membership_follows_a_member_through_every_change` |
-| GRP-025 | part | `group/tests/year.rs::a_pool_scheme_is_run_on_declarations`<br>`sim/tests/group_cover.rs::a_pool_is_billed_on_its_declared_aggregate` |
+| GRP-025 | full | `group/tests/year.rs::a_pool_scheme_is_run_on_declarations`<br>`sim/tests/group_cover.rs::a_pool_is_billed_on_its_declared_aggregate`<br>`sim/tests/group_cover.rs::a_pool_deposit_is_earned_daily_and_the_year_end_declaration_is_recognised_now` |
 | GRP-026 | full | `group/tests/year.rs::a_pool_scheme_is_run_on_declarations`<br>`group/tests/year.rs::a_pools_renewal_waits_for_an_overdue_declaration` |
 | GRP-027 | full | `channels/tests/journeys.rs::employer_changes_can_need_a_second_administrator` |
 | GRP-030 | full | `group/tests/billing.rs::a_new_site_joins_with_its_own_billing_group_and_headcount` |
