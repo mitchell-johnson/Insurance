@@ -10,7 +10,7 @@ Every part of the system other than the core knows the core only through three t
 
 1. **Commands in.** A part changes a policy or moves money only by sending the core a typed command as a named caller (`new-business`, `payments`, `group-admin`, `claims` and so on), with an idempotency key that never changes for the same intent. Inside the cluster that goes through `ClusterClient`; from outside it is `POST /v1/commands` on `ic-api` with an Entra ID token whose app role is the caller name. The core checks each command against `allowed_callers()` in `crates/core/src/command.rs`, so a replacement system takes over a caller name, not a code path.
 2. **Events out.** Each of the 64 partitions publishes a gapless ordered stream of events (`EventRecord { partition, seq }`). Modules on the nodes read it directly; anything outside reads the Event Hubs hub `policy-events` or the node's event routes with a checkpoint per partition. Events carry no personal or health data, only opaque IDs.
-3. **People by party ID.** The core never holds a name, address or date of birth. It holds `pty_…` IDs, and whoever needs the person asks the customer master.
+3. **People by party ID.** The core never holds a name, address or date of birth. It holds `pty_…` IDs, and whoever needs the person asks the people master (the customer master), which is a separate system with its own database.
 
 A part that is replaced therefore has two jobs: send the commands that part used to send, and answer the questions other parts used to ask it. The tables below list both for each part.
 
@@ -38,9 +38,9 @@ The verdicts use four levels, matching the colours in the diagram:
 - **Designed seam**: the contract is narrow and documented; an existing system can take over with an adapter.
 - **Swappable, heavy**: possible, but several other parts read from it or ask it questions, and all of those would need re-pointing.
 
-### Customer master (`ic-customers`): designed seam, the first swap candidate
+### People master (customer master, `ic-customers`): separate from the core, the first swap candidate
 
-Who a person or organisation is: parties, relationships, matching, contact points, vulnerability markers, representatives, due diligence, the customer's own spending hold, retention and erasure. A stateless HTTP service with its own PostgreSQL, not on the ledger, because personal data must be erasable. The design notes assumed the bank's platform supplied this; it was built because nothing did.
+The people master is its own system, outside the ledger cluster and outside the core, and the diagram draws it as its own band. It is who a person or organisation is: parties, relationships, matching, contact points, vulnerability markers, representatives, due diligence, the customer's own spending hold, retention and erasure. A stateless HTTP service with its own PostgreSQL, not on the ledger, because personal data must be erasable. The design notes assumed the bank's platform supplied this; it was built because nothing did.
 
 | | |
 |---|---|

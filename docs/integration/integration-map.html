@@ -39,8 +39,15 @@ h1{font-size:26px;margin:0 0 4px}.sub{color:#5a6372;margin:0 0 18px;font-size:14
 <div class="band"><div class="bl">Front doors and services (stateless, on AKS)</div><div class="row">
 <div class="b scr"><h3>Portal gateway <code>ic-portal</code> <span class="tag ts">SWAP SCREENS</span></h3><p>All web pages and app APIs. Replace the pages freely; the consoles carry approvals other modules rely on.</p></div>
 <div class="b keep"><h3>Core API <code>ic-api</code> <span class="tag tk">KEEP</span></h3><p><code>POST /v1/commands</code>, policies, quotes, payments, claims views. The door for your own systems: an Entra app role = the caller name.</p></div>
-<div class="b seam"><h3>Customer master <code>ic-customers</code> <span class="tag tg">SWAP: FIRST CANDIDATE</span></h3><p>Own PostgreSQL. Your CRM can take over behind a facade: <code>/parties/match</code>, <code>contact-points</code>, <code>spending-hold</code>, <code>routing</code>, <code>authority</code>, <code>due-diligence</code>; plus relays deaths and relationships.</p></div>
 <div class="b ext"><h3>Module drivers</h3><p>Stateless processes that talk to the outside for a module: payments pump, underwriting, reinsurance, unit pricing, documents, group, finance close.</p></div>
+</div></div>
+<div class="conn"><span><span class="arr">⇅</span>Every system below names a person only by party ID (<code>pty_…</code>) and asks the people master for anything personal</span></div>
+<div class="band" style="background:#e5f6ec;border:2.5px solid #2f9d62">
+<div class="bl" style="color:#1f6e44">People master: separate from the core, on its own (customer master, <code>ic-customers</code>)</div>
+<div class="row">
+<div class="b seam" style="flex:1.2;background:#fff"><h3>People master <span class="tag tg">SEPARATE · SWAP: FIRST CANDIDATE</span></h3><p>Who every person and organisation is: names, contact points, relationships, vulnerability, representatives, due diligence, the customer's own spending hold, retention and erasure. Own PostgreSQL with per-person encryption, not on the ledger, because personal data must be erasable and the ledger never forgets. Your existing CRM or party master can take this role.</p></div>
+<div class="b seam" style="background:#fff"><h3>Others ask it</h3><p><code>POST /v1/parties/match</code> (group) · <code>contact-points</code> (documents) · <code>spending-hold</code> (payments) · <code>routing</code>, <code>authority</code> (core API, before value leaves a policy) · <code>due-diligence</code> (new business, servicing)</p></div>
+<div class="b seam" style="background:#fff"><h3>It tells others</h3><p>Deaths to every partition (claims <code>RecordDeath</code>) · owners, assignees, dependants to the portal's directory · holds to the core · events on <code>customer-events</code></p></div>
 </div></div>
 <div class="conn"><span><span class="arr">↓</span>Commands: named caller + fixed idempotency key</span><span><span class="arr">↑</span>Events: gapless, per partition, no personal data</span><span><span class="arr">⇄</span>Each workload has its own cluster token and grant</span></div>
 
@@ -75,7 +82,7 @@ h1{font-size:26px;margin:0 0 4px}.sub{color:#5a6372;margin:0 0 18px;font-size:14
 <div class="b ext"><h3>Inland Revenue, email, SMS, print</h3><p>Withheld tax via payments; Azure Communication Services; print outbox.</p></div>
 </div><div class="row" style="margin-top:10px">
 <div class="b ext nb"><h3>Your ERP / general ledger</h3><p>From finance: trial balance, movements, extracts in immutable Blob. Journal export in your format not built.</p></div>
-<div class="b ext"><h3>Your data warehouse, CRM, analytics</h3><p>Event Hubs <code>policy-events</code> and <code>customer-events</code>; finance extracts.</p></div>
+<div class="b ext"><h3>Your data warehouse, analytics</h3><p>Event Hubs <code>policy-events</code> and <code>customer-events</code>; finance extracts.</p></div>
 <div class="b ext"><h3>Your old policy system</h3><p>Migration cohorts loaded as caller <code>migration</code>, agreed with finance's cutover control.</p></div>
 <div class="b keep"><h3>Azure platform <span class="tag tk">KEEP</span></h3><p>Key Vault (signing, keys), immutable Blob (sealed log, Merkle roots), Event Hubs, AKS, PostgreSQL.</p></div>
 </div></div>
