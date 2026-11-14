@@ -385,9 +385,6 @@ pub fn catalogue() -> Vec<Tool> {
         tool("quote", "Price an application", S, M::POST, "/staff/v1/new-business/quote", "The first period's bill for an application, as the core would charge it. Nothing is written.")
             .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record.")
             .json(r#"{"policy", "number", "group", "policyholder", "product_code", "inception": "YYYY-MM-DD", "frequency", "lives": [...], "covers": [...]} as the core's IssuePolicy"#),
-        tool("issue_policy", "Issue a policy", S, M::POST, "/staff/v1/new-business/policies", "Issue a policy from an accepted application, as new business does. Safe to repeat with the same idempotency key.")
-            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record.")
-            .json(r#"{"policy", "number", "group", "policyholder", "product_code", "inception": "YYYY-MM-DD", "frequency", "lives": [...], "covers": [...]} as the core's IssuePolicy"#),
         tool("core_policy", "A policy as the core holds it", S, M::GET, "/staff/v1/core/policies/{number}", "A policy by its number with every cover layer, life, loading, exclusion and the billing position. Underwriting terms imply health, so this needs the insurance-sensitive class.")
             .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record."),
         // ---- The customer master's staff work.

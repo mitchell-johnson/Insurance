@@ -471,7 +471,6 @@ Some work is done by another service, and the portal is where people reach it. T
 | Route | Action | Sent to |
 | --- | --- | --- |
 | `POST /staff/v1/new-business/quote` | `new_business.quote` | The core's dry run on the group's partition. Nothing is written. |
-| `POST /staff/v1/new-business/policies` | `new_business.issue` | `IssuePolicy` on the group's partition as the caller `new-business`, keyed `new-business:{person}:{idempotency key}`. |
 | `GET /staff/v1/core/policies/{number}` | `policy.core_view` (insurance-sensitive class) | Every partition's read side. A policy that is not there and one the person may not see are the same refusal. |
 | `POST /staff/v1/customers/search`, `/match`, `POST /staff/v1/customers` | `customers.find`, `customers.create` | The customer master as `staff`, purpose `servicing`. |
 | `GET /staff/v1/customers/{party}` (with `as_of`, `known_at`), `/history`, `/relationships`, `/due-diligence` | `customers.view` | The same. |
@@ -482,9 +481,9 @@ Some work is done by another service, and the portal is where people reach it. T
 | `GET /ops/v1/reconciliation` | operations role | Every partition's end-of-day view, joined: breaks, in-transit, unfinished policies. |
 | `GET /ops/v1/customers/index`, `POST /ops/v1/customers/{party}/verify`, `/rewrap`, `/reshred` | operations role | The customer master as `operations`. |
 
-The master is always told who the member of staff is (`x-ic-actor`) and never names a party to act for. For this the portal's identity holds the `staff`, `privacy` and `operations` roles on the customer master (docs/operations.md, step 4), and its node token may name the caller `new-business` (`deploy/cluster-access/grants.json`).
+The master is always told who the member of staff is (`x-ic-actor`) and never names a party to act for. For this the portal's identity holds the `staff`, `privacy` and `operations` roles on the customer master (docs/operations.md, step 4).
 
-Policy servicing changes are not here: staff enter them for the customer (`POST /staff/v1/requests`) and the customer approves them in the app, as before. The end-of-day close runs on its schedule as a workflow and is not started from the portal; its result is what `/ops/v1/reconciliation` reads.
+A policy is not issued here. The core trusts its new business caller to send only terms underwriting accepted, so a policy is issued from underwriting's decision (the path the portal's applications already take), never from an application typed in by hand. Policy servicing changes are not here either: staff enter them for the customer (`POST /staff/v1/requests`) and the customer approves them in the app, as before. The end-of-day close runs on its schedule as a workflow and is not started from the portal; its result is what `/ops/v1/reconciliation` reads.
 
 ## The MCP server
 

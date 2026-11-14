@@ -43,8 +43,6 @@ pub mod actions {
     pub const VULNERABILITY_KIND: &str = "service.vulnerability_kind";
     /// Price an application before it is issued: a dry run, never written.
     pub const QUOTE: &str = "new_business.quote";
-    /// Issue a policy from an accepted application.
-    pub const ISSUE: &str = "new_business.issue";
     /// Read a policy as the core holds it: covers, terms and billing.
     pub const CORE_POLICY: &str = "policy.core_view";
     /// Find people in the customer master: search and match.

@@ -39,7 +39,6 @@
       "read_partitions": true,
       "callers": [
         "claims",
-        "new-business",
         "policy-servicing"
       ],
       "write_modules": [

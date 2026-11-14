@@ -3153,40 +3153,6 @@ async fn staff_quote(State(s): State<Shared>, headers: HeaderMap, method: Method
     }
 }
 
-/// Issue a policy from an accepted application, as the new business module
-/// does. Safe to repeat with the same idempotency key.
-async fn staff_issue(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Query(why): Query<Why>, body: Bytes) -> Answer {
-    let session = s.staff(&headers, &method, &uri, &body).await?;
-    let application = application(&body)?;
-    let key = key(&headers, &session.party.0)?;
-    let record = format!("application:{}", application.number);
-    s.may_act(
-        &session,
-        staff_actions::ISSUE,
-        DataClass::Personal,
-        record,
-        Some(application.policyholder.clone()),
-        why,
-    )
-    .await?;
-    let partition = crate::claims::partition_of(&application.group, s.claims.count());
-    let envelope = ic_core::Envelope {
-        key: format!("new-business:{key}"),
-        caller: NEW_BUSINESS.to_string(),
-        salt: ic_raft::client::fresh_salt(),
-        traceparent: None,
-        command: ic_core::Command::IssuePolicy(Box::new(application)),
-    };
-    let proposed = s.claims.propose(partition, envelope).await.map_err(core_down)?;
-    if let Some((code, message)) = proposed.rejected {
-        return Err(module_refusal(&code, &message));
-    }
-    accepted(json!({ "accepted": true, "partition": partition, "duplicate": proposed.duplicate, "events": proposed.events }))
-}
-
-/// The caller the core knows new business by.
-pub const NEW_BUSINESS: &str = "new-business";
-
 /// A policy as the core holds it: covers with their layers, loadings and
 /// exclusions, lives, billing. Underwriting terms imply health, so this is
 /// for staff holding the insurance-sensitive class.
@@ -3582,7 +3548,6 @@ pub fn router(state: Shared) -> Router {
         .route("/ops/v1/customers/rewrap", post(ops_customers_rewrap))
         .route("/ops/v1/customers/reshred", post(ops_customers_reshred))
         .route("/staff/v1/new-business/quote", post(staff_quote))
-        .route("/staff/v1/new-business/policies", post(staff_issue))
         .route("/staff/v1/core/policies/{number}", get(staff_core_policy))
         .route("/staff/v1/customers", post(customers_create))
         .route("/staff/v1/customers/search", post(customers_search))

@@ -258,25 +258,7 @@ impl Partitions for ClaimsCore {
         } else {
             let command = match envelope.command {
                 Command::Claims(command) => command,
-                // New business, as the core takes it from the caller it knows.
-                Command::IssuePolicy(application) => {
-                    let proposed = if envelope.caller == "new-business" && application.product_code != "none" {
-                        Proposed {
-                            duplicate: false,
-                            events: 1,
-                            rejected: None,
-                        }
-                    } else {
-                        Proposed {
-                            duplicate: false,
-                            events: 0,
-                            rejected: Some(("unknown_product".into(), "there is no product none".into())),
-                        }
-                    };
-                    part.seen.insert(envelope.key.clone(), proposed.clone());
-                    return Box::pin(async move { Ok(proposed) });
-                }
-                _ => panic!("the console sent the core something other than a claims command or an application"),
+                _ => panic!("the console sent the core something other than a claims command"),
             };
             let proposed = if command.allowed_callers().contains(&envelope.caller.as_str()) {
                 part.apply(*command)

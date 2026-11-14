@@ -290,7 +290,7 @@ fn portal_signed_in_by(
                 template("commission-reader", &[ic_channels::commission::actions::VIEW], &[DataClass::Ordinary]),
                 template(
                     "new-business",
-                    &[staff_actions::QUOTE, staff_actions::ISSUE, staff_actions::CORE_POLICY],
+                    &[staff_actions::QUOTE, staff_actions::CORE_POLICY],
                     &[DataClass::Ordinary, DataClass::Personal, DataClass::InsuranceSensitive],
                 ),
                 template(
@@ -5268,10 +5268,10 @@ async fn logged(portal: &Portal, subject: &str) -> Vec<(String, String, bool)> {
         .collect()
 }
 
-/// Purpose: a member of new business staff prices an application and issues the policy through the portal; the core is sent the application as new business, a repeat is a duplicate, and the core's refusal and a closed date come back as such.
-/// Why it matters: issuing a policy had no screen and no tool; without this route an MCP user, or anyone in the portal, could not do the most basic thing an insurer does. It must pass the same staff checks as every other action and be safe to repeat.
+/// Purpose: a member of new business staff prices an application through the portal; the core's refusal and a closed date come back as such, and there is no route to issue a policy by hand.
+/// Why it matters: pricing had no screen and no tool. Issuing must not be offered here: the core trusts its new business caller to send only underwritten terms, so a hand-typed application could put cover in force with no disclosure assessed.
 #[tokio::test]
-async fn new_business_quotes_and_issues_a_policy() {
+async fn new_business_quotes_but_never_issues_by_hand() {
     let portal = portal();
     let quote = "/staff/v1/new-business/quote?case=nb-77";
     let (status, priced) = portal.write("POST", "sub-nb1", quote, application(71, "term-life")).await;
@@ -5301,34 +5301,21 @@ async fn new_business_quotes_and_issues_a_policy() {
         StatusCode::FORBIDDEN
     );
 
-    let issue = "/staff/v1/new-business/policies?case=nb-77";
-    let headers = [("x-dev-subject", "sub-nb1".to_string()), ("idempotency-key", "issue-71".to_string())];
-    let (status, first) = portal.send("POST", issue, &headers, Some(application(71, "term-life"))).await;
+    // Issuing is not offered: a policy is issued from underwriting's decision, never typed in.
     assert_eq!(
-        (status, first["accepted"].as_bool(), first["duplicate"].as_bool()),
-        (StatusCode::ACCEPTED, Some(true), Some(false)),
-        "{first}"
-    );
-    let again = portal.send("POST", issue, &headers, Some(application(71, "term-life"))).await.1;
-    assert_eq!(again["duplicate"], true, "the same key twice issues one policy");
-    let keyless = [("x-dev-subject", "sub-nb1".to_string())];
-    assert_eq!(
-        portal.send("POST", issue, &keyless, Some(application(74, "term-life"))).await.0,
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(portal.write("POST", "sub-nb1", issue, application(75, "none")).await.0, StatusCode::CONFLICT);
-    assert_eq!(
-        portal.write("POST", "sub-sue", issue, application(76, "term-life")).await.0,
-        StatusCode::FORBIDDEN
+        portal
+            .write("POST", "sub-nb1", "/staff/v1/new-business/policies", application(71, "term-life"))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
     );
 
     // Each was asked by the four questions and is in the access log, refusals too.
     let lines = logged(&portal, "sub-nb1").await;
     assert!(
-        lines.iter().any(|(a, r, _)| a == "new_business.issue" && r.starts_with("application:")),
+        lines.iter().any(|(a, r, _)| a == "new_business.quote" && r == "application:KTL00000071"),
         "{lines:?}"
     );
-    assert!(lines.iter().any(|(a, _, _)| a == "new_business.quote"), "{lines:?}");
 }
 
 /// Purpose: the core's own view of a policy is read across the partitions for staff who hold the insurance-sensitive class, is the same refusal for a policy that is not there as for one the person may not see, and the operations reconciliation joins every partition's breaks.
