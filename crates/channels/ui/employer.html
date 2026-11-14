@@ -41,7 +41,8 @@ async function open(s) {
   $("title").textContent = `Scheme ${s.number}`;
   const sum = of("scheme")[0];
   put($("summary"), sum ? h("p", {}, `${sum.body.members} ${sum.body.members === 1 ? "member" : "members"}, total cover ${money(sum.body.sum_insured_minor)}.`) : null);
-  put($("members"), table(["Member", "Cover", "Sum insured", "In force"], of("member").map((r) => [r.body.life, r.body.cover, money(r.body.sum_insured_minor), r.body.in_force ? "yes" : "no"])));
+  const held = (o) => o ? Object.entries(o).map(([k, v]) => `${String(k).replace(/[_-]/g, " ")} ${String(v).replace(/[_-]/g, " ")}`).join(", ") : "";
+  put($("members"), table(["Member", "Cover", "Held at", "Sum insured", "In force"], of("member").map((r) => [r.body.life, r.body.cover, held(r.body.options), money(r.body.sum_insured_minor), r.body.in_force ? "yes" : "no"])));
   put($("billing"), table(["Item", "Details"], of("billing").map((r) => [r.key.split("/").slice(1).join(" "), portal.details(r.body)])));
   const claims = await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(scheme) + "/claims");
   put($("claims"), claims.rows.length ? table(["Claim", "Status", "Notified", "Closed"], claims.rows.map((c) => [c.claim, String(c.status).replace(/_/g, " "), c.notified_on, c.closed_on || ""]))

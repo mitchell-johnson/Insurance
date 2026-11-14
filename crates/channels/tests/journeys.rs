@@ -298,6 +298,50 @@ fn what_the_channel_emits_carries_no_personal_or_clinical_data() {
     }
 }
 
+/// Purpose: a cover bought with options (here an AIA life cover, with a choice on each axis of its menu) reaches the policyholder's
+/// device and the staff and adviser views with each axis and the choice made on it; a cover with no menu carries no options; and
+/// the option code is read axis by axis, or as one level for a flat list such as a health excess.
+/// Why it matters: two people with "income cover" can hold very different things: a four-week or a two-year wait, a benefit to 65 or
+/// for two years. A screen that shows only the cover's name leaves the customer, the adviser and the person on the phone unable to
+/// say what was bought.
+#[test]
+fn a_cover_row_shows_the_options_it_is_held_at() {
+    use ic_channels::state::chosen;
+    let mut w = World::new();
+    let source = std::fs::read_to_string(format!("{}/../../products/aia_living.star", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let product = ic_product::load_product("aia_living.star", &source).unwrap();
+    let axes = &product.cover("life").unwrap().option_axes;
+    assert!(!axes.is_empty(), "the product's life cover has a menu");
+    let picked: Vec<(&str, &str)> = axes.iter().map(|a| (a.code.as_str(), a.choices[0].code.as_str())).collect();
+    let code = ic_product::options::option_code(&picked);
+
+    let mut issue = term_life(5, open(), d(1987, 6, 1), Sex::Female, false, 400_000_00, None, Frequency::Monthly, None);
+    issue.product_code = "aia-living".to_string();
+    issue.covers[0].code = "life".to_string();
+    issue.covers[0].excess_option = Some(code.clone());
+    let pol = w.issue(issue);
+    let owner = "party-00000005";
+    let key = w
+        .held(owner)
+        .into_iter()
+        .find(|k| k.starts_with(&format!("{pol}/cover/life/")))
+        .expect("the cover row");
+    let body = w.row(owner, &key).unwrap();
+    for (axis, choice) in &picked {
+        assert_eq!(body["options"][*axis], *choice, "{body}");
+    }
+    assert_eq!(body["options"].as_object().unwrap().len(), picked.len());
+
+    // A cover with no menu says nothing about options.
+    let plain = retail(&mut w);
+    let key = w.held(KIRI).into_iter().find(|k| k.starts_with(&format!("{plain}/cover/"))).unwrap();
+    assert!(w.row(KIRI, &key).unwrap().get("options").is_none());
+
+    assert_eq!(chosen("waiting=4w, benefit=to65"), Some(json!({ "waiting": "4w", "benefit": "to65" })));
+    assert_eq!(chosen("500"), Some(json!({ "level": "500" })));
+    assert_eq!(chosen("  "), None);
+}
+
 /// Purpose: the relay delivers at least once and in order; a repeat changes nothing, a hole is reported and nothing after it is applied, and redelivery heals it.
 /// Why it matters: the event stream is the only source of the views; applying across a gap would leave them silently wrong.
 #[test]
