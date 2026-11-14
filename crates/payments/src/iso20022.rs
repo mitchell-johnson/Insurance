@@ -115,6 +115,28 @@ pub fn document(batch: &Batch, ordering: &OrderingAccount) -> Result<String, Str
         let end_to_end = id("item ID", &item.item)?;
         let instructed = format!("<InstdAmt Ccy=\"{currency}\">{}</InstdAmt>", amount(item.amount_minor));
         let (party, party_account) = (name(&item.name), account_id(&item.number));
+        if let Some(f) = item.foreign.as_ref().filter(|_| batch.direction == Direction::Credit) {
+            // Paid abroad: the bank converts the run's amount into the
+            // beneficiary's currency, charges are shared, and the
+            // beneficiary's bank is named by BIC.
+            let account = if f.country.len() == 2 && item.number.starts_with(&f.country) && item.number.len() >= 15 {
+                format!("<Id><IBAN>{}</IBAN></Id>", text(&item.number))
+            } else {
+                account_id(&item.number)
+            };
+            transactions.push_str(&format!(
+                "<CdtTrfTxInf><PmtId><EndToEndId>{end_to_end}</EndToEndId></PmtId>\
+                 <Amt><EqvtAmt><Amt Ccy=\"{currency}\">{}</Amt><CcyOfTrf>{}</CcyOfTrf></EqvtAmt></Amt><ChrgBr>SHAR</ChrgBr>\
+                 <CdtrAgt><FinInstnId><BICFI>{}</BICFI></FinInstnId></CdtrAgt>\
+                 <Cdtr><Nm>{party}</Nm><PstlAdr><Ctry>{}</Ctry><AdrLine>{}</AdrLine></PstlAdr></Cdtr><CdtrAcct>{account}</CdtrAcct></CdtTrfTxInf>",
+                amount(item.amount_minor),
+                id("currency", &f.currency)?,
+                id("BIC", &f.bic)?,
+                id("country", &f.country)?,
+                text(&f.address.chars().take(70).collect::<String>()),
+            ));
+            continue;
+        }
         transactions.push_str(&match batch.direction {
             Direction::Credit => format!(
                 "<CdtTrfTxInf><PmtId><EndToEndId>{end_to_end}</EndToEndId></PmtId><Amt>{instructed}</Amt>\
@@ -243,6 +265,7 @@ pub fn read_initiation(xml: &str) -> Result<Initiation, String> {
         for t in info.children().filter(|c| c.tag_name().name() == tx) {
             let id = text_at(t, &["PmtId", "EndToEndId"]).ok_or_else(|| missing("end-to-end reference"))?;
             let amount = text_at(t, &["Amt", "InstdAmt"])
+                .or_else(|| text_at(t, &["Amt", "EqvtAmt", "Amt"]))
                 .or_else(|| text_at(t, &["InstdAmt"]))
                 .and_then(|a| minor(&a))
                 .ok_or_else(|| missing("amount"))?;

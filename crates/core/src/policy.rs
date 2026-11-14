@@ -257,9 +257,18 @@ pub struct Cover {
     /// whose amount moves with the member's data.
     pub layers: Vec<Layer>,
     pub formula_driven: bool,
+    /// The first day without the cover, where the policy's ending ended it.
+    /// Formula-driven cover has no layers to carry the date.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_on: Option<NaiveDate>,
 }
 
 impl Cover {
+    /// Whether the cover itself was running on a date: still in force, or
+    /// ended by the policy's ending on a later day.
+    pub fn running_on(&self, on: NaiveDate) -> bool {
+        self.status == CoverStatus::InForce || self.ended_on.is_some_and(|ended| ended > on)
+    }
     /// A cover's sum insured on a date is the sum of its layers in force.
     pub fn sum_insured_on(&self, on: NaiveDate) -> i64 {
         self.layers.iter().filter(|l| l.in_force_on(on)).map(|l| l.sum_insured_minor).sum()
@@ -653,6 +662,9 @@ pub struct Policy {
     /// Each use of a cover's insurability option, by its reference.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub option_uses: BTreeMap<String, OptionUse>,
+    /// Each suspension of the policy at the owner's request, by its reference.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub suspensions: BTreeMap<String, crate::suspension::CoverSuspension>,
     /// Each cover made paid up, by the request's reference.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub paid_up: BTreeMap<String, crate::paid_up::PaidUpRecord>,

@@ -158,6 +158,7 @@ pub fn config() -> Config {
         primary: "anz-file".to_string(),
         secondary: Some("bnz-file".to_string()),
         urgent: Some("anz-api".to_string()),
+        cross_border: None,
         approvals,
         item_limit_minor: 100_000_00,
         run_limit_minor: 500_000_00,

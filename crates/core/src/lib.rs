@@ -29,6 +29,8 @@ pub mod policy;
 pub mod premium;
 pub mod recon;
 pub mod reinsurance;
+pub mod remittance;
+pub mod suspension;
 
 pub mod arrangement;
 mod arrears;

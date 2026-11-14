@@ -63,6 +63,12 @@ pub enum Approver {
 /// else on such a policy waits until every owner has signed it.
 pub const EITHER_OWNER: &[&str] = &["notify_claim", "update_contact_details"];
 
+/// Requests that move money or change where it goes. A person's own
+/// request of one of these kinds is taken only signed on their enrolled
+/// device, which needs a connection for the challenge: a payment keyed in
+/// with no signal is not queued and sent later as if it had been signed.
+pub const MONEY_KINDS: &[&str] = &["make_payment", "change_payment_method", "change_bank_account", "withdrawal", "surrender"];
+
 pub mod assisted {
     /// Enter a change for a customer, for them to approve in the app.
     pub const ENTER: &str = "service.enter_change";
@@ -882,6 +888,10 @@ impl ChannelState {
                 }
             }
         };
+        // Where others must still approve, the customer's signature is taken at approval.
+        if matches!(actor, Actor::Party(_)) && request.status == RequestStatus::Pending && MONEY_KINDS.contains(&request.kind.as_str()) && !request.signed {
+            return Err(reject("step_up_required", "sign this on your device while connected; nothing has been sent"));
+        }
         request.submitted = at;
         Ok(request)
     }

@@ -60,11 +60,18 @@ pub(crate) fn layer_infos(policy: &Policy) -> Vec<LayerInfo> {
 /// A scheme member's cover under each formula-driven cover, on the given
 /// details.
 pub(crate) fn member_covers(product: &ProductDefinition, policy: &Policy, life: &LifeId, factors: &LifeFactors) -> Vec<MemberCover> {
+    member_covers_on(product, policy, life, factors, None)
+}
+
+/// The same for a past date: a cover the scheme's ending ended after that
+/// date still counts, so a death before a scheme ended is still covered.
+pub(crate) fn member_covers_on(product: &ProductDefinition, policy: &Policy, life: &LifeId, factors: &LifeFactors, on: Option<NaiveDate>) -> Vec<MemberCover> {
     let dependant = policy.lives.get(life).is_some_and(|l| matches!(l.kind, LifeKind::Dependant { .. }));
+    let running = |c: &Cover| on.map_or(c.status == CoverStatus::InForce, |on| c.running_on(on));
     policy
         .covers
         .values()
-        .filter(|c| c.formula_driven && c.status == CoverStatus::InForce && !dependant)
+        .filter(|c| c.formula_driven && running(c) && !dependant)
         .filter_map(|c| {
             let def = product.cover(&c.code)?;
             let sum_insured_minor = member_sum_insured(def, factors, life, product.rounding, product.currency).ok()?;
@@ -186,6 +193,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
             definitions: bindings,
             layers: vec![],
             formula_driven: formula,
+            ended_on: None,
         });
         if !formula && scheme {
             return Err(Reject::new(
@@ -287,6 +295,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         replaces: Vec::new(),
         payee_debts: BTreeMap::new(),
         paid_up: BTreeMap::new(),
+        suspensions: BTreeMap::new(),
         member_accounts: BTreeSet::new(),
         member_standing: BTreeMap::new(),
         interests: BTreeMap::new(),
@@ -724,6 +733,7 @@ pub(crate) fn close_out(
     }
     for cover in policy.covers.values_mut() {
         cover.status = CoverStatus::Ended;
+        cover.ended_on = Some(cover_ends.max(cover.start));
         for l in cover.layers.iter_mut().filter(|l| l.end.is_none()) {
             // A layer cannot end before it starts.
             l.end = Some(cover_ends.max(l.start));

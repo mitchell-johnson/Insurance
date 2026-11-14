@@ -82,6 +82,21 @@ pub struct AccountDetails {
     pub number: String,
 }
 
+/// What a bank needs to pay an account outside New Zealand (CLM-028). The
+/// account's number (an IBAN where the country uses them) is in the
+/// payee's `AccountDetails`. The bank converts from the run's currency.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForeignAccount {
+    /// The beneficiary's bank, by BIC: 8 or 11 letters and digits.
+    pub bic: String,
+    /// The account's country, ISO 3166 alpha-2.
+    pub country: String,
+    /// The currency the beneficiary receives, ISO 4217.
+    pub currency: String,
+    /// The beneficiary's address as the bank needs it.
+    pub address: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthorityStatus {
@@ -177,6 +192,9 @@ pub struct Payee {
     pub suspect: bool,
     #[serde(default)]
     pub closed: bool,
+    /// An account abroad, paid through the route's cross-border channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreign: Option<ForeignAccount>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -322,6 +340,9 @@ pub struct Item {
     /// The account as it was when the run was checked: what the file says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<AccountDetails>,
+    /// The account abroad as it was when the run was checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreign: Option<ForeignAccount>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submission: Option<Id>,
     /// Settled at some point, so the core has heard of it.

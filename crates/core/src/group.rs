@@ -1135,6 +1135,7 @@ pub(crate) fn split(
                 replaces: Vec::new(),
                 payee_debts: Default::default(),
                 paid_up: Default::default(),
+                suspensions: Default::default(),
                 member_accounts: Default::default(),
                 member_standing: Default::default(),
                 interests: Default::default(),
@@ -1359,6 +1360,7 @@ pub(crate) fn set_member_covers(ledger: &mut Ledger, catalog: &Catalog, policy: 
             definitions,
             layers: vec![],
             formula_driven: false,
+            ended_on: None,
         });
     }
     let d = deltas(catalog, &product, policy, &spec.life, effective, same_details(&record), &before, &after)?;

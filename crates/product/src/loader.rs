@@ -141,6 +141,9 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
     if p.covers.is_empty() {
         return Err(invalid(file, "product offers no covers"));
     }
+    if p.cover_suspension.is_some_and(|s| s.max_months == 0 || s.max_months > 60) {
+        return Err(invalid(file, "a cover suspension allows between 1 and 60 months in all"));
+    }
     let mut codes = BTreeSet::new();
     for c in &p.covers {
         if !codes.insert(c.code.as_str()) {
@@ -338,7 +341,10 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                             let all: Vec<_> = required.iter().chain(categories).collect();
                             let named = all.iter().flat_map(|c| &c.covers).all(|c| p.covers.iter().any(|o| &o.code == c));
                             let distinct = all.iter().map(|c| c.code.as_str()).collect::<BTreeSet<_>>().len() == all.len();
-                            let elsewhere = |e: &String| e.split_once('/').is_some_and(|(product, cover)| !product.is_empty() && !cover.is_empty() && !cover.contains('/'));
+                            let elsewhere = |e: &String| {
+                                e.split_once('/')
+                                    .is_some_and(|(product, cover)| !product.is_empty() && !cover.is_empty() && !cover.contains('/'))
+                            };
                             let sound = all
                                 .iter()
                                 .all(|c| !c.code.is_empty() && !c.covers.is_empty() && c.min_sum_insured_minor >= 0 && c.elsewhere.iter().all(elsewhere));

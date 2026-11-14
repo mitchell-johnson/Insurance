@@ -485,6 +485,41 @@ pub enum Event {
         life: LifeId,
         amount_minor: i64,
     },
+    /// This partition's share of withheld tax was paid to the revenue
+    /// authority. `outstanding_minor` is what the partition still holds.
+    WithholdingRemitted {
+        kind: String,
+        period: String,
+        payment: String,
+        amount_minor: i64,
+        bank_account: String,
+        outstanding_minor: i128,
+    },
+    /// The bank sent a payment of withheld tax back; it is owed again.
+    WithholdingRemittanceReturned {
+        kind: String,
+        period: String,
+        payment: String,
+        amount_minor: i64,
+        bank_account: String,
+        outstanding_minor: i128,
+    },
+    /// The owner suspended the policy: no premium for the days from `from`
+    /// up to `to`, and nothing that happens in them is covered. The premium
+    /// side is announced by `HardshipGranted` under the same name.
+    CoverSuspended {
+        policy: PolicyId,
+        reference: String,
+        from: NaiveDate,
+        to: NaiveDate,
+    },
+    /// A suspended policy came back on cover on `on`, ahead of `planned_to`.
+    CoverResumed {
+        policy: PolicyId,
+        reference: String,
+        on: NaiveDate,
+        planned_to: NaiveDate,
+    },
     /// A limited-pay cover was made paid up for a life: no more premium,
     /// and the reduced sum insured for life. The layers it rewrote are
     /// announced by `LayerReduced`, `LayerEnded` and `LayerAdded`.

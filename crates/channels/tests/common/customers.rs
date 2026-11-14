@@ -38,6 +38,10 @@ pub struct MasterDouble {
     pub markers: Mutex<BTreeMap<String, Value>>,
     /// What trained staff asked, with who asked.
     pub care: Mutex<Vec<(String, Care)>>,
+    /// The master's decision for (party, caller): `allow` or `route`. Anyone else is refused.
+    pub authorities: Mutex<BTreeMap<(String, String), &'static str>>,
+    /// Who was asked about: (staff, party, caller).
+    pub asked_for: Mutex<Vec<(String, String, String)>>,
 }
 
 impl MasterDouble {
@@ -174,6 +178,18 @@ impl Master for MasterDouble {
             })?;
             let hold = self.holds.lock().unwrap().get(&party.0).cloned();
             Ok((200, hold.unwrap_or_else(|| json!({ "held": false, "placed_at": null, "removal": null }))))
+        })
+    }
+
+    fn speaks_for(&self, staff: &PartyId, party: &PartyId, caller: &PartyId) -> Asked<'_> {
+        let (staff, party, caller) = (staff.clone(), party.clone(), caller.clone());
+        Box::pin(async move {
+            self.asked_for.lock().unwrap().push((staff.0, party.0.clone(), caller.0.clone()));
+            if self.down.load(Ordering::SeqCst) {
+                return Err("connection refused".to_string());
+            }
+            let decision = self.authorities.lock().unwrap().get(&(party.0, caller.0)).cloned().unwrap_or("refuse");
+            Ok((200, json!({ "decision": decision })))
         })
     }
 

@@ -210,6 +210,9 @@ pub struct CoreState {
     /// Counterparty posting references this partition has accepted.
     #[serde(default)]
     pub counterparty: crate::counterparty::CounterpartyBook,
+    /// Withheld tax paid to the revenue authority, by the payment that paid it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub remittances: BTreeMap<String, crate::remittance::RemittanceRecord>,
     /// Funds, unit prices and unit orders. Unit holdings are ledger balances.
     #[serde(default)]
     pub investment: crate::invest::InvestmentBook,
@@ -250,6 +253,7 @@ impl CoreState {
             last_close: None,
             claims: ic_claims::ClaimsState::default(),
             counterparty: Default::default(),
+            remittances: BTreeMap::new(),
             investment: Default::default(),
             table_validations: BTreeMap::new(),
             holders: BTreeMap::new(),
@@ -641,6 +645,15 @@ impl CoreState {
                     crate::paid_up::make_paid_up(&mut s.ledger, &s.catalog, p, ctx, *spec)
                 })
             }
+            Command::SuspendCover(spec) => {
+                let policy = spec.policy.clone();
+                self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                    crate::suspension::suspend(&mut s.ledger, &s.catalog, p, ctx, *spec)
+                })
+            }
+            Command::ResumeCover { policy, reference } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                crate::suspension::resume(&mut s.ledger, &s.catalog, p, ctx, &reference)
+            }),
             Command::ExerciseOption(spec) => {
                 let policy = spec.policy.clone();
                 self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
@@ -692,6 +705,9 @@ impl CoreState {
                 crate::hardship::grant(&mut s.ledger, &s.catalog, p, ctx, hardship, from, to, share_bps)
             }),
             Command::EndHardship { policy, hardship } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                if p.suspensions.contains_key(&hardship) {
+                    return Err(Reject::new("cover_suspended", "that is a suspension of cover; it ends by resuming cover"));
+                }
                 crate::hardship::end(&mut s.ledger, &s.catalog, p, ctx, &hardship)
             }),
             Command::RefundMemberCredit { policy, life, amount } => {
@@ -944,6 +960,8 @@ impl CoreState {
                 }
                 Ok(())
             }),
+            Command::RemitWithholding(r) => crate::remittance::remit(&mut self.ledger, &mut self.remittances, ctx, *r),
+            Command::ReturnRemittance { kind, payment } => crate::remittance::returned(&mut self.ledger, &mut self.remittances, ctx, &kind, &payment),
             Command::PostCounterparty(posting) => match posting.policy.clone() {
                 // Commission follows a policy wherever it is, so a policy in
                 // transfer is refused like any other command on it.

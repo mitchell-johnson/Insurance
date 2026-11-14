@@ -44,6 +44,8 @@ type TestDriver = Driver<LocalModule, MemoryStore, LocalWrap, Quiet, MemoryDirec
 struct Core {
     cluster: Arc<Mutex<Cluster>>,
     down: Arc<Mutex<bool>>,
+    /// Cover code to the sum its layers now hold, as a claim leaves them.
+    cut: Arc<Mutex<std::collections::BTreeMap<String, i64>>>,
 }
 
 impl Policies for Core {
@@ -53,10 +55,19 @@ impl Policies for Core {
         }
         let cluster = self.cluster.lock().unwrap();
         let Some(partition) = cluster.locate(policy) else { return Ok(None) };
-        Ok(cluster.state(partition).policies.get(policy).map(|p| PolicyRecord {
-            policy: p.clone(),
-            outstanding_minor: Some(0),
-            oldest_unpaid_due: None,
+        let cut = self.cut.lock().unwrap().clone();
+        Ok(cluster.state(partition).policies.get(policy).map(|p| {
+            let mut p = p.clone();
+            for (cover, sum) in &cut {
+                for layer in &mut p.covers.get_mut(cover).unwrap().layers {
+                    layer.sum_insured_minor = *sum;
+                }
+            }
+            PolicyRecord {
+                policy: p,
+                outstanding_minor: Some(0),
+                oldest_unpaid_due: None,
+            }
         }))
     }
 }
@@ -180,6 +191,7 @@ impl World {
         let core = Core {
             cluster: Arc::new(Mutex::new(cluster)),
             down: Default::default(),
+            cut: Default::default(),
         };
         let mut world = Self { driver, core, next_seq: 1 };
         world.relay().await;
@@ -265,6 +277,66 @@ async fn a_new_policy_gets_its_schedule_from_the_policy() {
     );
     assert!(w.driver.module.state().triggers.values().all(|t| t.kind != DocumentKind::PolicySchedule));
     assert_eq!(w.pass().await, LetterPass::default());
+}
+
+/// Purpose: a partial trauma payment that cuts the trauma cover and the
+/// life cover linked to it (two `LayerReduced` the same day) is answered
+/// with one new schedule, issued from the policy as the core then holds
+/// it, showing both reduced sums, with the wording it is issued under.
+/// Why it matters: after a claim the customer must be told what cover is
+/// left (CLM-009); a schedule still showing the old sums would promise a
+/// benefit already paid, and two schedules for one claim would confuse.
+#[tokio::test]
+async fn a_partial_trauma_payment_brings_one_new_schedule_with_the_cover_left() {
+    let w = World::new(&[
+        ("schedule", DocumentKind::PolicySchedule, SCHEDULE),
+        ("wording", DocumentKind::PolicyWording, WORDING),
+    ])
+    .await;
+    assert_eq!(w.pass().await.issued, 1, "the schedule at issue");
+    // $25,000 paid on the $100,000 trauma cover; the life cover it
+    // accelerates loses the same.
+    w.core
+        .cut
+        .lock()
+        .unwrap()
+        .extend([("trauma".to_string(), 7_500_000), ("life".to_string(), 47_500_000)]);
+    let paid_on = open() + chrono::Duration::days(40);
+    let reduced = |seq: u64, cover: &str, before: i64, kept: i64| EventRecord {
+        business_date: paid_on,
+        ..event(
+            seq,
+            CoreEvent::LayerReduced {
+                policy: the_policy(),
+                cover: cover.into(),
+                layer: 1,
+                continued_as: 2,
+                effective: paid_on,
+                sum_insured_minor: before,
+                kept_minor: kept,
+            },
+        )
+    };
+    w.observe(9, vec![reduced(1, "trauma", 10_000_000, 7_500_000), reduced(2, "life", 50_000_000, 47_500_000)])
+        .await;
+    let schedules: Vec<_> = w
+        .driver
+        .module
+        .state()
+        .triggers
+        .values()
+        .filter(|t| t.kind == DocumentKind::PolicySchedule)
+        .cloned()
+        .collect();
+    assert_eq!(schedules.len(), 1, "one schedule for the day's changes");
+    let pass = w.pass().await;
+    assert_eq!((pass.issued, pass.errors.clone()), (1, vec![]), "{pass:?}");
+    let document = w.driver.document(&document_id(&schedules[0])).await.unwrap();
+    assert_eq!(document.wordings, vec![tref("wording", 1)]);
+    assert_eq!(
+        w.driver.read(&document.id).await.unwrap().text,
+        "Schedule KTL00000001 for Aroha Ngata, term-life from 15 November 2027. life $475,000.00. trauma $75,000.00."
+    );
 }
 
 /// Purpose: an arrears notice goes as a notice with its clock, with the

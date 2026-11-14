@@ -15,6 +15,7 @@ fn item(id: &str, name: &str, number: &str, amount_minor: i64) -> BatchItem {
         name: name.into(),
         number: number.into(),
         amount_minor,
+        foreign: None,
     }
 }
 

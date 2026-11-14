@@ -32,6 +32,9 @@ pub struct BatchItem {
     pub name: String,
     pub number: String,
     pub amount_minor: i64,
+    /// Where an account abroad is, and what it is paid in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreign: Option<crate::model::ForeignAccount>,
 }
 
 /// One submission as the bank receives it.
@@ -93,6 +96,16 @@ impl Batch {
         );
         for i in &self.items {
             out.push_str(&format!("D|{}|{}|{}|{}\n", field(&i.item), field(&i.name), field(&i.number), i.amount_minor));
+            if let Some(f) = &i.foreign {
+                out.push_str(&format!(
+                    "F|{}|{}|{}|{}|{}\n",
+                    field(&i.item),
+                    field(&f.bic),
+                    field(&f.country),
+                    field(&f.currency),
+                    field(&f.address)
+                ));
+            }
         }
         out.push_str(&format!("T|{}|{}\n", self.items.len(), self.total_minor()));
         out
@@ -150,6 +163,7 @@ impl PaymentsState {
                     name: account.name.clone(),
                     number: account.number.clone(),
                     amount_minor: item.new.amount_minor,
+                    foreign: item.foreign.clone(),
                 })
             })
             .collect::<Option<Vec<_>>>()?;

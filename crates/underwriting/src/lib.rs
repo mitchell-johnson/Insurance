@@ -13,6 +13,7 @@
 //! sealed in the clinical store ([`clinical`]) and the state holds only
 //! references and hashes.
 
+pub mod advice;
 pub mod authority;
 pub mod case;
 pub mod codes;

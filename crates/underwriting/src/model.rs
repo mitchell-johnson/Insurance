@@ -128,6 +128,10 @@ pub struct QuoteBinding {
     /// The quoted premium for the first period at standard rates.
     pub premium_minor: i64,
     pub quoted_on: NaiveDate,
+    /// Each cover's quoted premium for a year at standard rates, by cover
+    /// code, where the quote breaks it down.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cover_premiums_minor: BTreeMap<String, i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -737,6 +741,9 @@ pub struct Proposal {
     /// For a new policy replacing cover on another of ours: what it replaces.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub replaces: Vec<ReplacedCover>,
+    /// The adviser's commission option, where an adviser wrote it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commission_option: Option<String>,
 }
 
 /// An offer to a scheme member to pay the loading on their excess cover

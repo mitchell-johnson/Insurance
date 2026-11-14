@@ -6,6 +6,7 @@
 <div data-view="Policies">
 <section><h2>Look up a policy</h2><form id="lookup"><div class="row"><div><label for="pol">Policy ID</label><input id="pol" required></div><div><label for="case">Case or task you are working on</label><input id="case" required></div><div><label for="scope">Queue or team (optional)</label><input id="scope" placeholder="queue:claims-life"></div><button>Open</button></div></form><div id="lookup-msg" aria-live="polite"></div></section>
 <section id="pol-view" hidden><h2>Policy</h2><div id="approach"></div><div id="withheld"></div><div id="pol-rows"></div><h2>Advisers</h2><div id="pol-advisers"></div>
+<h2>Someone has phoned about this policy</h2><p class="muted">Check before you say anything, including whether a policy exists. Leave the reference empty if the caller is not a customer or you cannot identify them. The contact is recorded either way.</p><form id="caller-form"><div class="row"><div><label for="caller-ref">Caller's customer reference</label><input id="caller-ref"></div><button>Check the caller</button></div></form><div id="caller-msg" aria-live="polite"></div>
 <h2>Make a request for the customer</h2><form id="for-customer"><div class="row"><div><label for="ckind">Change</label><select id="ckind"><option value="change_frequency">Change payment frequency</option><option value="decline_indexation">Decline indexation</option><option value="cancel_policy">Cancel policy</option></select></div><div><label for="cnote">Details</label><input id="cnote"></div><div><label for="creason">Why (recorded with your name and the case)</label><input id="creason" required></div><div><label for="ceffective">Effective from (optional)</label><input id="ceffective" type="date"></div><div><label for="camount">Amount it moves, in dollars (optional)</label><input id="camount" type="number" min="0" step="0.01"></div><button>Send to customer's app</button></div><p class="muted">The customer approves it in their app. You cannot approve it for them. A change above your limit, or dated in the past, goes to a second member of staff first.</p></form><div id="cust-msg" aria-live="polite"></div></section></div>
 <section data-view="Policies"><h2>Be the second person on a colleague's change</h2><p class="muted">A change a colleague entered for a customer that is above their limit, or dated in the past, needs you to agree it before it goes to the customer.</p><form id="second"><div class="row"><div><label for="second-id">Request</label><input id="second-id" required></div><button>Agree it</button></div></form><div id="second-msg" aria-live="polite"></div></section>
 
@@ -61,6 +62,14 @@ $("lookup").addEventListener("submit", run($("lookup-msg"), async () => {
   put($("withheld"), view.withheld ? h("div", { class: "banner warn" }, `${view.withheld} item(s) are withheld because your role does not include that class of data.`) : null);
   put($("pol-rows"), table(["What", "About", "Details"], view.rows.map((r) => [r.kind + (r.sensitive ? " (sensitive)" : ""), r.subject || "", portal.details(r.body)])));
   put($("pol-advisers"), table(["Adviser", "Standing"], view.advisers.map((a) => [a.adviser, a.standing.state === "read_only" ? `Read-only since ${a.standing.since} (${words(a.standing.status)} licence of ${a.standing.licence_of})` : words(a.standing.state)])));
+}));
+$("caller-form").addEventListener("submit", run($("caller-msg"), async () => {
+  const body = { caller: $("caller-ref").value.trim() || null, case: $("case").value };
+  if ($("scope").value) body.scope = $("scope").value;
+  const r = await api(R, "POST", `/staff/v1/policies/${encodeURIComponent(policy)}/caller`, body);
+  const head = { discuss: "You may discuss this policy with the caller.", refer: "Refer this call.", refuse: "Do not discuss this policy with the caller. Say:" }[r.outcome];
+  put($("caller-msg"), h("div", { class: "banner " + (r.outcome === "discuss" ? "ok" : "warn"), role: "status" }, h("span", {}, h("strong", {}, head), " ", r.say,
+    r.checked ? "" : " The customer records could not be reached to check for an authority. Try again shortly if the caller says they hold one.")));
 }));
 $("for-customer").addEventListener("submit", run($("cust-msg"), async () => {
   const payload = { note: $("cnote").value };
