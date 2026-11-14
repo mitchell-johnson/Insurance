@@ -381,8 +381,61 @@ pub fn catalogue() -> Vec<Tool> {
             .query("`id`, `fund`, `from`, `to`, `pricing_date`, `as_at` as the question needs."),
         tool("pricing_command", "Act in unit pricing", S, M::POST, "/staff/v1/unit-pricing/commands", "Prepare, approve or reject a price, suspend or resume a fund, raise or close a price error, republish.")
             .json(r#"{"<command>": {...}}"#),
+        // ---- New business and the core's own view of a policy.
+        tool("quote", "Price an application", S, M::POST, "/staff/v1/new-business/quote", "The first period's bill for an application, as the core would charge it. Nothing is written.")
+            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record.")
+            .json(r#"{"policy", "number", "group", "policyholder", "product_code", "inception": "YYYY-MM-DD", "frequency", "lives": [...], "covers": [...]} as the core's IssuePolicy"#),
+        tool("issue_policy", "Issue a policy", S, M::POST, "/staff/v1/new-business/policies", "Issue a policy from an accepted application, as new business does. Safe to repeat with the same idempotency key.")
+            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record.")
+            .json(r#"{"policy", "number", "group", "policyholder", "product_code", "inception": "YYYY-MM-DD", "frequency", "lives": [...], "covers": [...]} as the core's IssuePolicy"#),
+        tool("core_policy", "A policy as the core holds it", S, M::GET, "/staff/v1/core/policies/{number}", "A policy by its number with every cover layer, life, loading, exclusion and the billing position. Underwriting terms imply health, so this needs the insurance-sensitive class.")
+            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record."),
+        // ---- The customer master's staff work.
+        tool("find_customers", "Search the customer master", S, M::POST, "/staff/v1/customers/search", "Score every person against what you know (names, birth date, contact points), best first.")
+            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record.")
+            .json(r#"{"family_name", "given_name"?, "date_of_birth"?: "YYYY-MM-DD", "email"?, "mobile_phone"?, "ird_number"?}"#),
+        tool("match_customer", "Match a person", S, M::POST, "/staff/v1/customers/match", "The one record a source's person is, or that there is none.")
+            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record.")
+            .json(r#"{"source": "where they came from, e.g. claims", "family_name", "given_name"?, "date_of_birth"?, "email"?, "mobile_phone"?, "create_if_none"?: false}"#),
+        tool("create_customer", "Add a person", S, M::POST, "/staff/v1/customers", "Add a person to the customer master.")
+            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record.")
+            .json(r#"{"kind": "person" | "organisation", "facts": [...], "allow_duplicate"?: false} as the customer master takes it"#),
+        tool("customer", "A person's record", S, M::GET, "/staff/v1/customers/{party}", "A person's record as your role may read it, on a date and as known at a time.")
+            .query("`as_of`: the date to read the record on (YYYY-MM-DD); `known_at`: what was known at a time (RFC 3339); `case`, `scope`: why, as for other reads."),
+        tool("customer_history", "A record's history", S, M::GET, "/staff/v1/customers/{party}/history", "Every version of a person's facts: what was true when, and when it was learned.")
+            .query("`as_of`: the date to read the record on (YYYY-MM-DD); `known_at`: what was known at a time (RFC 3339); `case`, `scope`: why, as for other reads."),
+        tool("customer_relationships", "A person's relationships", S, M::GET, "/staff/v1/customers/{party}/relationships", "Who and what the person is related to: policies, schemes, attorneys, employers.")
+            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record."),
+        tool("customer_due_diligence", "Due diligence", S, M::GET, "/staff/v1/customers/{party}/due-diligence", "What the anti-money laundering checks hold about the person.")
+            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record."),
+        tool("change_customer", "Change a person's record", S, M::POST, "/staff/v1/customers/{party}/commands", "One of the customer master's record commands: record facts, decline a correction, add or end a relationship, place a spending hold.")
+            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record.")
+            .json(r#"{"command": "<name>", "version"?: "<last seen>", ...}"#),
+        tool("customer_export", "Everything held about a person", S, M::GET, "/staff/v1/customers/{party}/export", "For a Privacy Act request: every field and its history.")
+            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record."),
+        tool("customer_audit", "Who read or changed a record", S, M::GET, "/staff/v1/customers/{party}/audit", "For the privacy officer: every read and change of the person's record.")
+            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record."),
+        tool("actions_by", "What one person did", S, M::GET, "/staff/v1/actors/{actor}/actions", "For the privacy officer: what one member of staff or service did across records.")
+            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record."),
+        tool("merge_customers", "Merge duplicates", S, M::POST, "/staff/v1/customers/merges", "Merge a duplicate record into the one that stays.")
+            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record.")
+            .json(r#"{"survivor": "<party that stays>", "absorbed": "<duplicate>", "review"?: "<review id>"}"#),
+        tool("unmerge_customers", "Undo a merge", S, M::POST, "/staff/v1/customers/unmerges", "Separate two records merged in error.")
+            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record.")
+            .json(r#"{"survivor", "absorbed"}"#),
+        tool("duplicate_reviews", "Likely duplicates", S, M::GET, "/staff/v1/customers/reviews", "The open reviews of likely duplicate records.")
+            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record."),
+        tool("dismiss_review", "Not a duplicate", S, M::POST, "/staff/v1/customers/reviews/{review}/dismiss", "Close a duplicate review found not to be one.")
+            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record."),
         // ---- Operations.
         tool("regions", "Regions and fail-over", O, M::GET, "/ops/v1/regions", "For operations: each region's nodes, which is serving, and the channel module's state."),
+        tool("reconciliation", "Reconciliation", O, M::GET, "/ops/v1/reconciliation", "For operations: the book's reconciliation across every partition, the checks the close makes, and how many policies the run has still to visit."),
+        tool("customer_index", "Customer search index", O, M::GET, "/ops/v1/customers/index", "For operations: the customer master's search index and how far behind it is."),
+        tool("verify_customer", "Check a record's chain", O, M::POST, "/ops/v1/customers/{party}/verify", "For operations: check a person's record has an unbroken hash chain."),
+        tool("rewrap_customers", "Re-encrypt records", O, M::POST, "/ops/v1/customers/rewrap", "For operations: re-encrypt records still under an old key, a batch at a time.")
+            .json(r#"{"current_key_id", "limit"?: 1000}"#),
+        tool("reshred_customers", "Erase again after a restore", O, M::POST, "/ops/v1/customers/reshred", "For operations: after a restore from backup, erase again what had been shredded since.")
+            .json(r#"{"since": "YYYY-MM-DD, the day the restored backup was taken"}"#),
     ]
 }
 

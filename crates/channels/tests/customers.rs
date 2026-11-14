@@ -217,3 +217,105 @@ async fn the_client_reads_every_kind_of_answer() {
     assert!(route_to_person(Some(Err("down".into()))));
     assert!(!route_to_person(None));
 }
+
+/// Purpose: staff and operations work goes to the master's own route for it, in the role the master's policy decides it on (staff, privacy, operations), with the purpose it keys on, the member of staff as the actor and no party to act for, and a write's idempotency key.
+/// Why it matters: the master decides by role and purpose alone; staff work sent as the portal would be refused or logged as a customer's own access, and a missing key would merge twice on a retry.
+#[tokio::test]
+async fn the_master_is_asked_for_staff_work_in_the_role_it_needs() {
+    use ic_channels::customers::Desk;
+    let (master, seen) = master().await;
+    let staff = PartyId("cd-1".into());
+    let party = || PartyId("party-1".into());
+    let calls = vec![
+        Desk::Search(json!({ "family_name": "Ngata" })),
+        Desk::Match(json!({ "source": "claims", "family_name": "Ngata" })),
+        Desk::Create {
+            key: "k1".into(),
+            body: json!({ "kind": "person" }),
+        },
+        Desk::Read {
+            party: party(),
+            query: "&as_of=2027-11-01".into(),
+        },
+        Desk::History {
+            party: party(),
+            query: String::new(),
+        },
+        Desk::Relationships(party()),
+        Desk::DueDiligence(party()),
+        Desk::Change {
+            party: party(),
+            key: "k2".into(),
+            body: json!({ "command": "record" }),
+        },
+        Desk::Merge {
+            key: "k3".into(),
+            body: json!({}),
+        },
+        Desk::Unmerge {
+            key: "k4".into(),
+            body: json!({}),
+        },
+        Desk::Reviews,
+        Desk::Dismiss("rv/2".into()),
+        Desk::Export(party()),
+        Desk::Audit(party()),
+        Desk::ActionsBy(PartyId("sue".into())),
+        Desk::Index,
+        Desk::Verify(party()),
+        Desk::Rewrap(json!({ "current_key_id": "k" })),
+        Desk::Reshred(json!({ "since": "2027-11-01" })),
+    ];
+    for call in calls {
+        assert_eq!(master.desk(&staff, call).await.unwrap().0, 200);
+    }
+    let seen = seen.lock().unwrap().clone();
+    let routes: Vec<String> = seen
+        .iter()
+        .map(|(m, p, h)| format!("{m} {p} as {} for {}", header(h, "x-ic-caller").unwrap(), header(h, "x-ic-purpose").unwrap()))
+        .collect();
+    assert_eq!(
+        routes,
+        [
+            "POST /v1/parties/search as staff for servicing",
+            "POST /v1/parties/match as staff for servicing",
+            "POST /v1/parties as staff for servicing",
+            "GET /v1/parties/party-1?purpose=servicing&as_of=2027-11-01 as staff for servicing",
+            "GET /v1/parties/party-1/history?purpose=servicing as staff for servicing",
+            "GET /v1/parties/party-1/relationships as staff for servicing",
+            "GET /v1/parties/party-1/due-diligence as staff for servicing",
+            "POST /v1/parties/party-1/commands as staff for servicing",
+            "POST /v1/merges as staff for duplicates",
+            "POST /v1/unmerges as staff for duplicates",
+            "GET /v1/reviews as staff for duplicates",
+            "POST /v1/reviews/rv2/dismiss as staff for duplicates",
+            "GET /v1/parties/party-1/export?purpose=subject_access as staff for subject_access",
+            "GET /v1/parties/party-1/audit as privacy for audit",
+            "GET /v1/actors/sue/actions as privacy for audit",
+            "GET /v1/admin/index as operations for operations",
+            "POST /v1/admin/verify/party-1 as operations for operations",
+            "POST /v1/admin/rewrap as operations for operations",
+            "POST /v1/admin/reshred as operations for operations",
+        ]
+    );
+    for (_, path, headers) in &seen {
+        assert_eq!(header(headers, "x-ic-actor"), Some("cd-1"), "{path}");
+        assert_eq!(header(headers, "x-ic-party"), None, "staff act for nobody: {path}");
+    }
+    let keys: Vec<Option<&str>> = seen.iter().map(|(_, _, h)| header(h, "idempotency-key")).collect();
+    assert_eq!(keys.iter().flatten().copied().collect::<Vec<_>>(), ["k1", "k2", "k3", "k4"]);
+}
+
+/// Purpose: the dates a record is read as at are checked and passed in the master's own form, and anything else is refused.
+/// Why it matters: these values are put into the master's query string; a value that is not a date could carry another parameter with it.
+#[test]
+fn a_record_is_read_as_at_dates_that_are_dates() {
+    use ic_channels::customers::as_at;
+    assert_eq!(as_at(None, None).unwrap(), "");
+    assert_eq!(
+        as_at(Some("2027-11-01"), Some("2027-11-02T10:00:00+13:00")).unwrap(),
+        "&as_of=2027-11-01&known_at=2027-11-01T21:00:00Z"
+    );
+    assert!(as_at(Some("2027-11-01&purpose=break_glass"), None).is_err());
+    assert!(as_at(None, Some("yesterday")).is_err());
+}

@@ -147,6 +147,25 @@ pub enum Question {
         purpose: Option<Purpose>,
         at: At,
     },
+    /// Whether a member of staff may take one action on one record, by the
+    /// four questions, with the request to write to the access log. Used
+    /// where the work itself is done by another service (the core's new
+    /// business, the customer master). `about` is the person the record is
+    /// about, where there is one: nobody works their own record or that of
+    /// someone they are connected to.
+    StaffAct {
+        staff: PartyId,
+        action: String,
+        class: DataClass,
+        record: String,
+        #[serde(default)]
+        about: Option<PartyId>,
+        #[serde(default)]
+        scopes: Vec<String>,
+        #[serde(default)]
+        purpose: Option<Purpose>,
+        at: At,
+    },
     /// Staff access as an administrator sees it: grants waiting, alignment with the external source.
     StaffAdmin {
         staff: PartyId,
@@ -547,6 +566,27 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             json!({ "decision": decision, "explanation": decision.denied.map(crate::staff::Denial::explain) })
         }
         Question::OwnAccess { staff, at } => d.staff.own_access(&staff, at),
+        Question::StaffAct {
+            staff,
+            action,
+            class,
+            record,
+            about,
+            scopes,
+            purpose,
+            at,
+        } => {
+            let (request, mut decision) = staff_check(state, &staff, &action, class, scopes, record, purpose, at);
+            let connected = |who: &PartyId| *who == staff || d.staff.connections.get(&staff).is_some_and(|c| c.iter().any(|p| p == who));
+            if decision.allowed && about.as_ref().is_some_and(connected) {
+                decision = crate::staff::Decision {
+                    allowed: false,
+                    denied: Some(crate::staff::Denial::Personal),
+                    ..decision
+                };
+            }
+            json!({ "request": request, "decision": decision, "explanation": decision.denied.map(crate::staff::Denial::explain) })
+        }
         Question::StaffPolicy {
             staff,
             policy,

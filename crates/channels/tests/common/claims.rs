@@ -12,8 +12,10 @@ use ic_core::claims_module::config::{Line, Profile, Queue, Role, Staff};
 use ic_core::claims_module::report::{Question, Reply};
 use ic_core::claims_module::testing::FakeCore;
 use ic_core::claims_module::{AuthorityBook, ClaimType, ClaimsState, Command as ClaimsCommand, CoverFacts, DecisionKind, Rules};
+use ic_core::command::IssuePolicy;
 use ic_core::{Command, Envelope, PolicyId};
 use ic_ledger::PartitionId;
+use serde_json::{json, Value};
 
 type Asked<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, String>> + Send + 'a>>;
 
@@ -214,6 +216,37 @@ impl Partitions for ClaimsCore {
         Box::pin(async move { Ok(page) })
     }
 
+    /// A bill of 12.34 for any product but `none`, which the core refuses,
+    /// and `later`, which waits for a business date to open.
+    fn quote(&self, partition: PartitionId, application: IssuePolicy) -> Asked<'_, Option<Result<Value, (String, String)>>> {
+        let answer = match application.product_code.as_str() {
+            "later" => None,
+            "none" => Some(Err(("unknown_product".to_string(), "there is no product none".to_string()))),
+            _ => Some(Ok(json!({ "total_minor": 1234, "product": application.product_code, "partition": partition }))),
+        };
+        Box::pin(async move { Ok(answer) })
+    }
+
+    /// `pol-c0` on partition 0 and `pol-c1` on 1, as the read side has them.
+    fn policy(&self, partition: PartitionId, number: String) -> Asked<'_, Option<Value>> {
+        let held = (number == format!("pol-c{partition}"))
+            .then(|| json!({ "entry": { "partition": partition }, "policy": { "number": number, "policyholder": "kiri" }, "billing": null }));
+        Box::pin(async move { Ok(held) })
+    }
+
+    /// Partition 0 is clean; partition 1 has a break and money in transit.
+    fn closing(&self, partition: PartitionId) -> Asked<'_, Value> {
+        let view = match partition {
+            0 => {
+                json!({ "partition": 0, "business_date": "2027-11-15", "breaks": [], "unfinished": [], "transfer_in_transit": "0", "transfer_in_flight": false })
+            }
+            _ => {
+                json!({ "partition": 1, "business_date": "2027-11-16", "breaks": [{ "check": "suspense_clear", "detail": "12.00 in suspense" }], "unfinished": ["pol-c1"], "transfer_in_transit": "0", "transfer_in_flight": false })
+            }
+        };
+        Box::pin(async move { Ok(view) })
+    }
+
     fn propose(&self, partition: PartitionId, envelope: Envelope) -> Asked<'_, Proposed> {
         let mut parts = self.0.lock().unwrap();
         let part = &mut parts[usize::from(partition)];
@@ -223,8 +256,27 @@ impl Partitions for ClaimsCore {
                 ..first.clone()
             }
         } else {
-            let Command::Claims(command) = envelope.command else {
-                panic!("the console sent the core something other than a claims command");
+            let command = match envelope.command {
+                Command::Claims(command) => command,
+                // New business, as the core takes it from the caller it knows.
+                Command::IssuePolicy(application) => {
+                    let proposed = if envelope.caller == "new-business" && application.product_code != "none" {
+                        Proposed {
+                            duplicate: false,
+                            events: 1,
+                            rejected: None,
+                        }
+                    } else {
+                        Proposed {
+                            duplicate: false,
+                            events: 0,
+                            rejected: Some(("unknown_product".into(), "there is no product none".into())),
+                        }
+                    };
+                    part.seen.insert(envelope.key.clone(), proposed.clone());
+                    return Box::pin(async move { Ok(proposed) });
+                }
+                _ => panic!("the console sent the core something other than a claims command or an application"),
             };
             let proposed = if command.allowed_callers().contains(&envelope.caller.as_str()) {
                 part.apply(*command)
@@ -259,6 +311,18 @@ impl Partitions for Down {
     }
 
     fn loadings(&self, _partition: PartitionId, _after: Option<PolicyId>, _as_at: chrono::NaiveDate) -> Asked<'_, ic_core::loadings::LoadingsPage> {
+        Box::pin(async { Err("no leader".to_string()) })
+    }
+
+    fn quote(&self, _partition: PartitionId, _application: IssuePolicy) -> Asked<'_, Option<Result<Value, (String, String)>>> {
+        Box::pin(async { Err("no leader".to_string()) })
+    }
+
+    fn policy(&self, _partition: PartitionId, _number: String) -> Asked<'_, Option<Value>> {
+        Box::pin(async { Err("no leader".to_string()) })
+    }
+
+    fn closing(&self, _partition: PartitionId) -> Asked<'_, Value> {
         Box::pin(async { Err("no leader".to_string()) })
     }
 

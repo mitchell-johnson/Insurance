@@ -55,6 +55,8 @@
    deploy/entra/apps.sh grant api://<name>-customers portal <portal identity principal id>
    ```
 
+   The portal also does staff and operations work in the customer master for people who passed its own checks (docs/channels.md, "Staff work in other services"), so its identity holds `staff`, `privacy` and `operations` there too: repeat the grant with each of those role names.
+
    Each reinsurer that reads its statements by API sends a certificate and gets its own application: `deploy/entra/apps.sh reinsurer <name> <reinsurer id> <certificate.pem>` prints the entry for `IC_REINSURANCE_API_CLIENTS`.
 
 5. **Fill in `deploy/k8s`.** Replace every `REPLACE-` value: in `kustomization.yaml`, `identities.yaml`, `settings.yaml` and `bootstrap.yaml` from the main deployment; in `api.yaml` with the customer master's address and app scope; in `portal.yaml` and `payments.yaml` from the main deployment and steps 4, 8 and 9; and in each module's manifest from its template above. `grep -l REPLACE- deploy/k8s/*.yaml` lists what is left; `kubectl kustomize deploy/k8s` must show none. The Temporal address in `settings.yaml` waits on the Temporal decision (`docs/decisions.md`). The first business date in `bootstrap.yaml` is set once and can never be changed.

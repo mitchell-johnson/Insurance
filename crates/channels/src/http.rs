@@ -30,10 +30,12 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::classes::DataClass;
 use crate::directory::{Actor, DelegateAccess, DirectoryCommand};
 use crate::identity::{action_hash, Enrolment, IdentityCommand, MAX_CHALLENGE_SECS};
 use crate::ops::{RegionSource, StatusPage};
 use crate::query::{self, DeviceProof, Question, MODULE};
+use crate::staff::actions as staff_actions;
 use crate::staff::{AccessRequest, At, Decision, Purpose, PurposeKind, StaffCommand};
 use crate::state::{ChannelState, Command, Effect, Envelope, Output, GATEWAY};
 use crate::ui::UiConfig;
@@ -3069,6 +3071,367 @@ async fn ops_regions(State(s): State<Shared>, headers: HeaderMap) -> Answer {
     ok(json!({ "regions": report, "status": StatusPage::from(&report), "channels": module }))
 }
 
+// ---- New business, the core's own view and the customer master ----------
+//
+// Work done by another service on a member of staff's behalf. The portal
+// asks the four questions first and writes the access log line, then the
+// other service does the work and decides again by its own rules.
+
+impl AppState {
+    /// Whether this person may take `action` on `record`, logged either way.
+    async fn may_act(&self, session: &Session, action: &str, class: DataClass, record: String, about: Option<PartyId>, why: Why) -> Result<(), Problem> {
+        let view = self
+            .ask(Question::StaffAct {
+                staff: session.party.clone(),
+                action: action.to_string(),
+                class,
+                record,
+                about,
+                scopes: why
+                    .scope
+                    .iter()
+                    .flat_map(|s| s.split(','))
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+                purpose: why.case.map(|reference| Purpose {
+                    kind: PurposeKind::Task,
+                    reference,
+                }),
+                at: session.at,
+            })
+            .await?;
+        self.logged(view).await.map(|_| ())
+    }
+
+    /// Every partition's answer, or the first that could not be had.
+    async fn every_partition<T, F>(&self, ask: impl Fn(ic_ledger::PartitionId) -> F) -> Result<Vec<T>, Problem>
+    where
+        F: Future<Output = Result<T, String>>,
+    {
+        futures::future::join_all((0..self.claims.count()).map(ask))
+            .await
+            .into_iter()
+            .map(|a| a.map_err(core_down))
+            .collect()
+    }
+}
+
+fn core_down(reason: String) -> Problem {
+    Problem::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "core_unavailable",
+        format!("the core could not be reached: {reason}"),
+    )
+}
+
+/// An application as the core takes it, or why it is not one.
+fn application(body: &[u8]) -> Result<ic_core::command::IssuePolicy, Problem> {
+    serde_json::from_slice(body).map_err(|e| Problem::bad_request(format!("that is not an application the core takes: {e}")))
+}
+
+/// Price an application: the first period's bill. Nothing is written.
+async fn staff_quote(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Query(why): Query<Why>, body: Bytes) -> Answer {
+    let session = s.staff(&headers, &method, &uri, &body).await?;
+    let application = application(&body)?;
+    let record = format!("application:{}", application.number);
+    s.may_act(
+        &session,
+        staff_actions::QUOTE,
+        DataClass::Personal,
+        record,
+        Some(application.policyholder.clone()),
+        why,
+    )
+    .await?;
+    let partition = crate::claims::partition_of(&application.group, s.claims.count());
+    match s.claims.quote(partition, application).await.map_err(core_down)? {
+        None => Err(Problem::new(StatusCode::SERVICE_UNAVAILABLE, "not_ready", "the business date is not open")),
+        Some(Ok(premium)) => ok(json!({ "partition": partition, "premium": premium })),
+        Some(Err((code, message))) => Err(module_refusal(&code, &message)),
+    }
+}
+
+/// Issue a policy from an accepted application, as the new business module
+/// does. Safe to repeat with the same idempotency key.
+async fn staff_issue(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Query(why): Query<Why>, body: Bytes) -> Answer {
+    let session = s.staff(&headers, &method, &uri, &body).await?;
+    let application = application(&body)?;
+    let key = key(&headers, &session.party.0)?;
+    let record = format!("application:{}", application.number);
+    s.may_act(
+        &session,
+        staff_actions::ISSUE,
+        DataClass::Personal,
+        record,
+        Some(application.policyholder.clone()),
+        why,
+    )
+    .await?;
+    let partition = crate::claims::partition_of(&application.group, s.claims.count());
+    let envelope = ic_core::Envelope {
+        key: format!("new-business:{key}"),
+        caller: NEW_BUSINESS.to_string(),
+        salt: ic_raft::client::fresh_salt(),
+        traceparent: None,
+        command: ic_core::Command::IssuePolicy(Box::new(application)),
+    };
+    let proposed = s.claims.propose(partition, envelope).await.map_err(core_down)?;
+    if let Some((code, message)) = proposed.rejected {
+        return Err(module_refusal(&code, &message));
+    }
+    accepted(json!({ "accepted": true, "partition": partition, "duplicate": proposed.duplicate, "events": proposed.events }))
+}
+
+/// The caller the core knows new business by.
+pub const NEW_BUSINESS: &str = "new-business";
+
+/// A policy as the core holds it: covers with their layers, loadings and
+/// exclusions, lives, billing. Underwriting terms imply health, so this is
+/// for staff holding the insurance-sensitive class.
+async fn staff_core_policy(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(number): Path<String>,
+    Query(why): Query<Why>,
+) -> Answer {
+    let session = s.staff(&headers, &method, &uri, b"").await?;
+    let found = s.every_partition(|p| s.claims.policy(p, number.clone())).await?.into_iter().flatten().next();
+    // Asked whether or not it exists, so a refusal says nothing about the book.
+    let holder = found.as_ref().and_then(|v| v["policy"]["policyholder"].as_str()).map(PartyId::from);
+    s.may_act(
+        &session,
+        staff_actions::CORE_POLICY,
+        DataClass::InsuranceSensitive,
+        format!("policy:{number}"),
+        holder,
+        why,
+    )
+    .await?;
+    ok(found.ok_or_else(Problem::not_found)?)
+}
+
+/// The book's reconciliation across every partition: what the close checks.
+async fn ops_reconciliation(State(s): State<Shared>, headers: HeaderMap) -> Answer {
+    let caller = s.workforce.authenticate(&headers).await?;
+    if !caller.has_role(OPERATIONS) {
+        return Err(Problem::forbidden("the operations console needs the operations role"));
+    }
+    let views = s.every_partition(|p| s.claims.closing(p)).await?;
+    ok(crate::claims::reconciliation(&views).map_err(core_down)?)
+}
+
+/// The master's answer as it gave it, or why there is none. Its refusals
+/// are passed on with its own reason.
+fn desked(answer: Result<crate::customers::Answered, String>) -> Answer {
+    match answer {
+        Ok((status, body)) if status < 300 => ok(body),
+        Ok((status, body)) => Err(Problem::new(
+            StatusCode::from_u16(status)
+                .ok()
+                .filter(StatusCode::is_client_error)
+                .unwrap_or(StatusCode::BAD_GATEWAY),
+            body["title"].as_str().unwrap_or("customer_master"),
+            body["detail"].as_str().unwrap_or("the customer master did not take it"),
+        )),
+        Err(e) => Err(Problem::new(StatusCode::SERVICE_UNAVAILABLE, "customer_master_unavailable", e)),
+    }
+}
+
+/// Staff work in the customer master: the four questions, then the master.
+async fn desk(s: &Shared, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8], why: Why, desk: crate::customers::Desk) -> Answer {
+    let session = s.staff(headers, method, uri, body).await?;
+    let master = s.master()?;
+    let action = desk.action().ok_or_else(|| Problem::forbidden("that is operations work"))?;
+    let record = match desk.about() {
+        Some(party) => format!("party:{}", party.0),
+        None => "customers".to_string(),
+    };
+    s.may_act(&session, action, DataClass::Personal, record, desk.about().cloned(), why).await?;
+    desked(master.desk(&session.party, desk).await)
+}
+
+/// Operations work in the customer master: the operations role decides.
+async fn ops_desk(s: &Shared, headers: &HeaderMap, desk: crate::customers::Desk) -> Answer {
+    let caller = s.workforce.authenticate(headers).await?;
+    if !caller.has_role(OPERATIONS) {
+        return Err(Problem::forbidden("the operations console needs the operations role"));
+    }
+    let master = s.master()?;
+    desked(master.desk(&PartyId::from(caller.subject.as_str()), desk).await)
+}
+
+fn body_json(body: &[u8]) -> Result<Value, Problem> {
+    let value: Value = parse(body)?;
+    if value.is_object() {
+        Ok(value)
+    } else {
+        Err(Problem::bad_request("the request body is an object"))
+    }
+}
+
+#[derive(Deserialize)]
+struct AsAt {
+    as_of: Option<String>,
+    known_at: Option<String>,
+    case: Option<String>,
+    scope: Option<String>,
+}
+
+impl AsAt {
+    fn split(self) -> Result<(String, Why), Problem> {
+        let query = crate::customers::as_at(self.as_of.as_deref(), self.known_at.as_deref()).map_err(Problem::bad_request)?;
+        Ok((
+            query,
+            Why {
+                case: self.case,
+                scope: self.scope,
+            },
+        ))
+    }
+}
+
+async fn customers_search(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Query(why): Query<Why>, body: Bytes) -> Answer {
+    let probe = body_json(&body)?;
+    desk(&s, &headers, &method, &uri, &body, why, crate::customers::Desk::Search(probe)).await
+}
+
+async fn customers_match(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Query(why): Query<Why>, body: Bytes) -> Answer {
+    let probe = body_json(&body)?;
+    desk(&s, &headers, &method, &uri, &body, why, crate::customers::Desk::Match(probe)).await
+}
+
+async fn customers_create(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Query(why): Query<Why>, body: Bytes) -> Answer {
+    let new = body_json(&body)?;
+    let key = key(&headers, "staff")?;
+    desk(&s, &headers, &method, &uri, &body, why, crate::customers::Desk::Create { key, body: new }).await
+}
+
+async fn customers_read(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(party): Path<String>, Query(at): Query<AsAt>) -> Answer {
+    let (query, why) = at.split()?;
+    let party = PartyId::from(party.as_str());
+    desk(&s, &headers, &method, &uri, b"", why, crate::customers::Desk::Read { party, query }).await
+}
+
+async fn customers_history(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(party): Path<String>, Query(at): Query<AsAt>) -> Answer {
+    let (query, why) = at.split()?;
+    let party = PartyId::from(party.as_str());
+    desk(&s, &headers, &method, &uri, b"", why, crate::customers::Desk::History { party, query }).await
+}
+
+async fn customers_relationships(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(party): Path<String>,
+    Query(why): Query<Why>,
+) -> Answer {
+    let desk_for = crate::customers::Desk::Relationships(PartyId::from(party.as_str()));
+    desk(&s, &headers, &method, &uri, b"", why, desk_for).await
+}
+
+async fn customers_due_diligence(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(party): Path<String>,
+    Query(why): Query<Why>,
+) -> Answer {
+    let desk_for = crate::customers::Desk::DueDiligence(PartyId::from(party.as_str()));
+    desk(&s, &headers, &method, &uri, b"", why, desk_for).await
+}
+
+async fn customers_command(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(party): Path<String>,
+    Query(why): Query<Why>,
+    body: Bytes,
+) -> Answer {
+    let change = body_json(&body)?;
+    let key = key(&headers, "staff")?;
+    let desk_for = crate::customers::Desk::Change {
+        party: PartyId::from(party.as_str()),
+        key,
+        body: change,
+    };
+    desk(&s, &headers, &method, &uri, &body, why, desk_for).await
+}
+
+async fn customers_export(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(party): Path<String>, Query(why): Query<Why>) -> Answer {
+    let desk_for = crate::customers::Desk::Export(PartyId::from(party.as_str()));
+    desk(&s, &headers, &method, &uri, b"", why, desk_for).await
+}
+
+async fn customers_audit(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(party): Path<String>, Query(why): Query<Why>) -> Answer {
+    let desk_for = crate::customers::Desk::Audit(PartyId::from(party.as_str()));
+    desk(&s, &headers, &method, &uri, b"", why, desk_for).await
+}
+
+async fn customers_actions_by(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(actor): Path<String>,
+    Query(why): Query<Why>,
+) -> Answer {
+    let desk_for = crate::customers::Desk::ActionsBy(PartyId::from(actor.as_str()));
+    desk(&s, &headers, &method, &uri, b"", why, desk_for).await
+}
+
+async fn customers_merge(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Query(why): Query<Why>, body: Bytes) -> Answer {
+    let merge = body_json(&body)?;
+    let key = key(&headers, "staff")?;
+    desk(&s, &headers, &method, &uri, &body, why, crate::customers::Desk::Merge { key, body: merge }).await
+}
+
+async fn customers_unmerge(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Query(why): Query<Why>, body: Bytes) -> Answer {
+    let unmerge = body_json(&body)?;
+    let key = key(&headers, "staff")?;
+    desk(&s, &headers, &method, &uri, &body, why, crate::customers::Desk::Unmerge { key, body: unmerge }).await
+}
+
+async fn customers_reviews(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Query(why): Query<Why>) -> Answer {
+    desk(&s, &headers, &method, &uri, b"", why, crate::customers::Desk::Reviews).await
+}
+
+async fn customers_dismiss(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(review): Path<String>,
+    Query(why): Query<Why>,
+) -> Answer {
+    desk(&s, &headers, &method, &uri, b"", why, crate::customers::Desk::Dismiss(review)).await
+}
+
+async fn ops_customers_index(State(s): State<Shared>, headers: HeaderMap) -> Answer {
+    ops_desk(&s, &headers, crate::customers::Desk::Index).await
+}
+
+async fn ops_customers_verify(State(s): State<Shared>, headers: HeaderMap, Path(party): Path<String>) -> Answer {
+    ops_desk(&s, &headers, crate::customers::Desk::Verify(PartyId::from(party.as_str()))).await
+}
+
+async fn ops_customers_rewrap(State(s): State<Shared>, headers: HeaderMap, body: Bytes) -> Answer {
+    let request = body_json(&body)?;
+    ops_desk(&s, &headers, crate::customers::Desk::Rewrap(request)).await
+}
+
+async fn ops_customers_reshred(State(s): State<Shared>, headers: HeaderMap, body: Bytes) -> Answer {
+    let request = body_json(&body)?;
+    ops_desk(&s, &headers, crate::customers::Desk::Reshred(request)).await
+}
+
 /// The public status, in plain words. No sign-in.
 async fn status_json(State(s): State<Shared>) -> Answer {
     let report = s.regions.report().await;
@@ -3213,6 +3576,29 @@ pub fn router(state: Shared) -> Router {
         .route("/internal/v1/commands", post(module_command))
         .route("/internal/v1/pending", get(module_pending))
         .route("/ops/v1/regions", get(ops_regions))
+        .route("/ops/v1/reconciliation", get(ops_reconciliation))
+        .route("/ops/v1/customers/index", get(ops_customers_index))
+        .route("/ops/v1/customers/{party}/verify", post(ops_customers_verify))
+        .route("/ops/v1/customers/rewrap", post(ops_customers_rewrap))
+        .route("/ops/v1/customers/reshred", post(ops_customers_reshred))
+        .route("/staff/v1/new-business/quote", post(staff_quote))
+        .route("/staff/v1/new-business/policies", post(staff_issue))
+        .route("/staff/v1/core/policies/{number}", get(staff_core_policy))
+        .route("/staff/v1/customers", post(customers_create))
+        .route("/staff/v1/customers/search", post(customers_search))
+        .route("/staff/v1/customers/match", post(customers_match))
+        .route("/staff/v1/customers/merges", post(customers_merge))
+        .route("/staff/v1/customers/unmerges", post(customers_unmerge))
+        .route("/staff/v1/customers/reviews", get(customers_reviews))
+        .route("/staff/v1/customers/reviews/{review}/dismiss", post(customers_dismiss))
+        .route("/staff/v1/customers/{party}", get(customers_read))
+        .route("/staff/v1/customers/{party}/history", get(customers_history))
+        .route("/staff/v1/customers/{party}/relationships", get(customers_relationships))
+        .route("/staff/v1/customers/{party}/due-diligence", get(customers_due_diligence))
+        .route("/staff/v1/customers/{party}/commands", post(customers_command))
+        .route("/staff/v1/customers/{party}/export", get(customers_export))
+        .route("/staff/v1/customers/{party}/audit", get(customers_audit))
+        .route("/staff/v1/actors/{actor}/actions", get(customers_actions_by))
         .route("/status.json", get(status_json))
         .route("/status", get(|State(s): State<Shared>| async move { page(&s, crate::ui::STATUS) }))
         .route("/", get(|State(s): State<Shared>| async move { page(&s, crate::ui::INDEX) }))

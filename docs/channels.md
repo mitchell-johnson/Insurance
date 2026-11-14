@@ -404,6 +404,7 @@ The core's own events (issue, billing, lapse, cancellation, cover changes) arriv
 | `IC_LEDGER_PATIENCE_SECS`, `IC_PORTAL_HEARTBEAT_SECS`, `IC_PORTAL_FORWARD_SECS` | Defaults 10, 15 and 15. |
 | `IC_PORTAL_CURRENCY` | The currency of the commission module's balances. Default `NZD`. |
 | `IC_GROUP_URL`, `IC_GROUP_SCOPE` | The group service and its app registration's scope, for employers' membership files, invoices and member records. Set together. |
+| `IC_PUBLIC_URL` | The https origin people reach the portal at, such as `https://portal.example.co.nz`. Required with Entra sign-in: it names the MCP endpoint in its sign-in discovery document and is the one browser origin the MCP endpoint accepts. |
 | `IC_AUTH=dev` | Trust `x-dev-subject` and `x-dev-roles` headers. For a laptop. The service refuses to start with it in Kubernetes. |
 
 **On AKS.** `deploy/k8s/portal.yaml` holds the service account, the settings, the deployment and its network policy; the identity is the `portalClientId` output of `infra/main.bicep`. `deploy/entra/apps.sh workforce` and `apps.sh customers` make these registrations (docs/operations.md, step 4); what they make:
@@ -462,6 +463,40 @@ An attorney under an activated enduring power, a guardian, or a person with a wr
 ### Reviewing vulnerability markers
 
 "Markers to review" on the staff console is for people whose role carries the vulnerability kind (`CareStaff`); anyone else is refused before the master is asked. `GET /staff/v1/care/reviews` lists the master's open `consider_marker` reviews (a marker at its review date, or a prompt after a death or a concern), each with how the person is served now, and the master's lists of kinds and adjustments. `POST /staff/v1/care/reviews/{review}` takes `{party, outcome, kind, review_on, adjustments}` where the outcome is `renew`, `change`, `remove` or `no_marker`. The portal calls the master as `staff` under the purpose `vulnerability_support` with the member of staff as actor, changes the marker first and closes the prompt after, so a refusal leaves the prompt open. A marker has no free text, and the recorded reason is the outcome and the review ID only.
+
+## Staff work in other services
+
+Some work is done by another service, and the portal is where people reach it. The portal asks the four questions (`StaffAct`: the action, the record, who it is about and the case), writes the access log line whether or not it is allowed, and only then sends the work on. Nobody works their own record or that of someone they are connected to. The other service decides again by its own rules.
+
+| Route | Action | Sent to |
+| --- | --- | --- |
+| `POST /staff/v1/new-business/quote` | `new_business.quote` | The core's dry run on the group's partition. Nothing is written. |
+| `POST /staff/v1/new-business/policies` | `new_business.issue` | `IssuePolicy` on the group's partition as the caller `new-business`, keyed `new-business:{person}:{idempotency key}`. |
+| `GET /staff/v1/core/policies/{number}` | `policy.core_view` (insurance-sensitive class) | Every partition's read side. A policy that is not there and one the person may not see are the same refusal. |
+| `POST /staff/v1/customers/search`, `/match`, `POST /staff/v1/customers` | `customers.find`, `customers.create` | The customer master as `staff`, purpose `servicing`. |
+| `GET /staff/v1/customers/{party}` (with `as_of`, `known_at`), `/history`, `/relationships`, `/due-diligence` | `customers.view` | The same. |
+| `POST /staff/v1/customers/{party}/commands` | `customers.change` | The same, with the idempotency key. |
+| `POST /staff/v1/customers/merges`, `/unmerges`, `GET /staff/v1/customers/reviews`, `POST /staff/v1/customers/reviews/{review}/dismiss` | `customers.merge` | As `staff`, purpose `duplicates`. |
+| `GET /staff/v1/customers/{party}/export` | `customers.export` | As `staff`, purpose `subject_access`. |
+| `GET /staff/v1/customers/{party}/audit`, `GET /staff/v1/actors/{actor}/actions` | `customers.audit` | As `privacy`. |
+| `GET /ops/v1/reconciliation` | operations role | Every partition's end-of-day view, joined: breaks, in-transit, unfinished policies. |
+| `GET /ops/v1/customers/index`, `POST /ops/v1/customers/{party}/verify`, `/rewrap`, `/reshred` | operations role | The customer master as `operations`. |
+
+The master is always told who the member of staff is (`x-ic-actor`) and never names a party to act for. For this the portal's identity holds the `staff`, `privacy` and `operations` roles on the customer master (docs/operations.md, step 4), and its node token may name the caller `new-business` (`deploy/cluster-access/grants.json`).
+
+Policy servicing changes are not here: staff enter them for the customer (`POST /staff/v1/requests`) and the customer approves them in the app, as before. The end-of-day close runs on its schedule as a workflow and is not started from the portal; its result is what `/ops/v1/reconciliation` reads.
+
+## The MCP server
+
+`POST /mcp` is a Model Context Protocol server (Streamable HTTP, JSON answers, protocol versions 2025-11-25, 2025-06-18 and 2025-03-26). It lets an AI assistant do anything the person could do in the portal, and nothing more.
+
+**One tool per function.** Every route the portal serves is a tool, except the probes, the pages and their files, device enrolment and challenges, the sync stream and `/internal/v1` (the list is `mcp::EXCLUDED`, each with its reason). A test reads the router and fails the build when a route is neither a tool nor excluded. A tool call is sent through the portal's own router with the caller's own token, so it passes exactly the checks the screens do: the four questions for staff, relationships for customers, advisers and employers, the access log, idempotency. A write is given the idempotency key the caller passes (`idempotency_key`), or a fresh one. Path parameters with a fixed set of values (module questions, commands) are listed as such in the tool's input schema. Files go both ways whole: an upload is `content_base64`, a PDF or extract comes back as an embedded resource.
+
+**Who sees which tools.** `tools/list` shows only what the caller's sign-in reaches: the public tools always; the customer, adviser and employer tools with an External ID token bound to a person; the staff tools with a workforce token bound to a member of staff; the operations tools with the `operations` role. A refusal by a tool is a tool result with `isError` and the service's own reason (`Refused (403 not_authorised): ...`), so the assistant can explain it.
+
+**Sign-in.** The endpoint takes the same bearer tokens as the screens. Without one it answers 401 with `WWW-Authenticate: Bearer resource_metadata=".../.well-known/oauth-protected-resource/mcp"`; that document (RFC 9728) names both tenants as authorization servers and the scopes to ask for, so an MCP client signs the person in itself. Register the client's redirect URI on the staff consoles' or the partner portals' single-page application, as for any other client. A browser may call the endpoint only from `IC_PUBLIC_URL`'s origin.
+
+**What it cannot do.** Anything that needs the customer's own phone to sign (an approval, a payment instruction) can be prepared over MCP but is still signed on the phone, because the proof is made by the device's hardware key. `GET /mcp` (a server-sent event stream) is not offered: every answer is a single JSON reply.
 
 ## How the screens are built
 

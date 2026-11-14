@@ -78,6 +78,52 @@ pub trait Partitions: Send + Sync {
     /// page of policies at a time (pass `next` back as `after`). They imply
     /// health: pass them on for the one purpose asked and keep nothing.
     fn loadings(&self, partition: PartitionId, after: Option<PolicyId>, as_at: chrono::NaiveDate) -> Asked<'_, ic_core::loadings::LoadingsPage>;
+    /// A dry run of an application on one partition: the first period's
+    /// bill, or the core's refusal as (code, message). `None` while the
+    /// partition's business date is not open. Nothing is written.
+    fn quote(&self, partition: PartitionId, application: ic_core::command::IssuePolicy) -> Asked<'_, Option<Result<Value, (String, String)>>>;
+    /// A policy by its number as one partition's read side holds it, if it
+    /// holds it: the policy, its directory entry and its billing.
+    fn policy(&self, partition: PartitionId, number: String) -> Asked<'_, Option<Value>>;
+    /// What the end-of-day run knows about one partition: its date, the
+    /// last close, the policies still to visit and any reconciliation breaks.
+    fn closing(&self, partition: PartitionId) -> Asked<'_, Value>;
+}
+
+/// The partition an application's group lives on, as the core places it.
+pub fn partition_of(group: &ic_core::GroupId, count: PartitionId) -> PartitionId {
+    ic_core::home_partition(group) % count.max(1)
+}
+
+/// The book's reconciliation from each partition's end-of-day view: every
+/// break with its partition, and the in-transit accounts, which net to
+/// nothing across the insurer unless a transfer is still moving. `clean`
+/// only when there is no break anywhere.
+pub fn reconciliation(views: &[Value]) -> Result<Value, String> {
+    let mut breaks: Vec<Value> = views
+        .iter()
+        .flat_map(|v| {
+            v["breaks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|b| json!({ "partition": v["partition"], "check": b["check"], "detail": b["detail"] }))
+        })
+        .collect();
+    let mut in_transit: i128 = 0;
+    for view in views {
+        let amount = view["transfer_in_transit"].as_str().unwrap_or("0");
+        in_transit += amount
+            .parse::<i128>()
+            .map_err(|e| format!("partition {} reported an unreadable in-transit total: {e}", view["partition"]))?;
+    }
+    if in_transit != 0 && !views.iter().any(|v| v["transfer_in_flight"] == true) {
+        breaks.push(json!({ "check": "transfer_in_transit", "detail": format!("in-transit accounts net to {in_transit} with no transfer in flight") }));
+    }
+    let dates: Vec<&str> = views.iter().filter_map(|v| v["business_date"].as_str()).collect();
+    let business_date = if dates.len() == views.len() { dates.into_iter().min() } else { None };
+    let unfinished: usize = views.iter().map(|v| v["unfinished"].as_array().map_or(0, Vec::len)).sum();
+    Ok(json!({ "business_date": business_date, "clean": breaks.is_empty(), "breaks": breaks, "unfinished": unfinished }))
 }
 
 /// The core on the ledger nodes.
@@ -109,6 +155,27 @@ impl Partitions for Hosted {
                 .loadings(partition, after, ic_core::loadings::MAX_PAGE, Some(as_at))
                 .await
                 .map_err(|e| e.to_string())
+        })
+    }
+
+    fn quote(&self, partition: PartitionId, application: ic_core::command::IssuePolicy) -> Asked<'_, Option<Result<Value, (String, String)>>> {
+        Box::pin(async move {
+            let answer = self.client.quote(partition, application).await.map_err(|e| e.to_string())?;
+            Ok(answer.map(|r| r.map(|premium| json!(premium)).map_err(|r| (r.code, r.message))))
+        })
+    }
+
+    fn policy(&self, partition: PartitionId, number: String) -> Asked<'_, Option<Value>> {
+        Box::pin(async move {
+            let found = self.client.policy_by_number(partition, &number).await.map_err(|e| e.to_string())?;
+            Ok(found.map(|view| json!(view)))
+        })
+    }
+
+    fn closing(&self, partition: PartitionId) -> Asked<'_, Value> {
+        Box::pin(async move {
+            let view = self.client.end_of_day_view(partition).await.map_err(|e| e.to_string())?;
+            Ok(json!(view))
         })
     }
 

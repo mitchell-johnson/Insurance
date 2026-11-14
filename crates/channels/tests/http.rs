@@ -161,6 +161,9 @@ fn portal_signed_in_by(
         ("sub-grp1", "grp-1"),
         ("sub-grpview", "grp-view"),
         ("sub-hcs", "hcs-1"),
+        ("sub-nb1", "nb-1"),
+        ("sub-cd1", "cd-1"),
+        ("sub-prv", "prv-1"),
     ] {
         w.dir(
             module("identity"),
@@ -286,6 +289,24 @@ fn portal_signed_in_by(
                 template("group-reader", &[ic_channels::group::actions::VIEW], &[DataClass::Ordinary]),
                 template("commission-reader", &[ic_channels::commission::actions::VIEW], &[DataClass::Ordinary]),
                 template(
+                    "new-business",
+                    &[staff_actions::QUOTE, staff_actions::ISSUE, staff_actions::CORE_POLICY],
+                    &[DataClass::Ordinary, DataClass::Personal, DataClass::InsuranceSensitive],
+                ),
+                template(
+                    "customer-desk",
+                    &[
+                        staff_actions::FIND_CUSTOMER,
+                        staff_actions::VIEW_CUSTOMER,
+                        staff_actions::CREATE_CUSTOMER,
+                        staff_actions::CHANGE_CUSTOMER,
+                        staff_actions::MERGE_CUSTOMERS,
+                        staff_actions::EXPORT_CUSTOMER,
+                    ],
+                    &[DataClass::Ordinary, DataClass::Personal],
+                ),
+                template("privacy", &[staff_actions::AUDIT_CUSTOMERS], &[DataClass::Ordinary, DataClass::Personal]),
+                template(
                     "conduct-officer",
                     &[workbench::actions::VIEW, workbench::actions::APPROVE_CONDUCT],
                     &[DataClass::Ordinary, DataClass::Financial],
@@ -353,6 +374,9 @@ fn portal_signed_in_by(
         ("grp-1", "group-admin"),
         ("grp-view", "group-reader"),
         ("hcs-1", "hardship"),
+        ("nb-1", "new-business"),
+        ("cd-1", "customer-desk"),
+        ("prv-1", "privacy"),
     ] {
         w.send(
             staff("alice"),
@@ -1116,7 +1140,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 39);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 42);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -4852,7 +4876,20 @@ async fn each_caller_is_offered_the_tools_of_their_sign_in() {
     assert!(!customer.contains("staff_policy") && !customer.contains("finance_command") && !customer.contains("regions"));
     assert!(staff.contains("staff_policy") && staff.contains("claims_command") && staff.contains("finance_question"));
     assert!(!staff.contains("regions"));
-    assert_eq!(ops, ["regions", "status"].map(String::from).into());
+    assert_eq!(
+        ops,
+        [
+            "customer_index",
+            "reconciliation",
+            "regions",
+            "reshred_customers",
+            "rewrap_customers",
+            "status",
+            "verify_customer"
+        ]
+        .map(String::from)
+        .into()
+    );
 
     let every = ic_channels::mcp::catalogue();
     assert_eq!(
@@ -5193,4 +5230,333 @@ async fn the_mcp_endpoint_says_where_to_sign_in() {
     };
     assert_eq!(from("https://portal.example.co.nz").await, StatusCode::UNAUTHORIZED);
     assert_eq!(from("http://localhost:6274").await, StatusCode::FORBIDDEN);
+}
+
+/// An application for a test of new business: a term life policy the
+/// portal has not seen, under `product`.
+fn application(n: u64, product: &str) -> Value {
+    let mut app = serde_json::to_value(term_life(
+        n,
+        open(),
+        d(1985, 6, 1),
+        Sex::Male,
+        false,
+        250_000_00,
+        None,
+        Frequency::Monthly,
+        None,
+    ))
+    .unwrap();
+    app["product_code"] = json!(product);
+    app
+}
+
+/// The access log lines a member of staff has written, as (action, record).
+async fn logged(portal: &Portal, subject: &str) -> Vec<(String, String, bool)> {
+    let me = portal.get(subject, "/staff/v1/me").await.1;
+    me["recent"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|l| {
+            (
+                l["action"].as_str().unwrap_or_default().to_string(),
+                l["record"].as_str().unwrap_or_default().to_string(),
+                l["allowed"].as_bool().or_else(|| l["decision"]["allowed"].as_bool()).unwrap_or(false),
+            )
+        })
+        .collect()
+}
+
+/// Purpose: a member of new business staff prices an application and issues the policy through the portal; the core is sent the application as new business, a repeat is a duplicate, and the core's refusal and a closed date come back as such.
+/// Why it matters: issuing a policy had no screen and no tool; without this route an MCP user, or anyone in the portal, could not do the most basic thing an insurer does. It must pass the same staff checks as every other action and be safe to repeat.
+#[tokio::test]
+async fn new_business_quotes_and_issues_a_policy() {
+    let portal = portal();
+    let quote = "/staff/v1/new-business/quote?case=nb-77";
+    let (status, priced) = portal.write("POST", "sub-nb1", quote, application(71, "term-life")).await;
+    assert_eq!(status, StatusCode::OK, "{priced}");
+    assert_eq!(priced["premium"]["total_minor"], 1234);
+    assert_eq!(priced["premium"]["partition"], priced["partition"]);
+    // The core's refusal is its own; a date not yet open is a wait, not a failure.
+    let refused = portal.write("POST", "sub-nb1", quote, application(72, "none")).await;
+    assert_eq!(
+        (refused.0, refused.1["title"].as_str()),
+        (StatusCode::CONFLICT, Some("unknown_product")),
+        "{}",
+        refused.1
+    );
+    assert_eq!(
+        portal.write("POST", "sub-nb1", quote, application(73, "later")).await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    // Something that is not an application is refused before anything is asked.
+    assert_eq!(
+        portal.write("POST", "sub-nb1", quote, json!({ "policy": "x" })).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    // Someone whose role does not include new business may not.
+    assert_eq!(
+        portal.write("POST", "sub-sue", quote, application(71, "term-life")).await.0,
+        StatusCode::FORBIDDEN
+    );
+
+    let issue = "/staff/v1/new-business/policies?case=nb-77";
+    let headers = [("x-dev-subject", "sub-nb1".to_string()), ("idempotency-key", "issue-71".to_string())];
+    let (status, first) = portal.send("POST", issue, &headers, Some(application(71, "term-life"))).await;
+    assert_eq!(
+        (status, first["accepted"].as_bool(), first["duplicate"].as_bool()),
+        (StatusCode::ACCEPTED, Some(true), Some(false)),
+        "{first}"
+    );
+    let again = portal.send("POST", issue, &headers, Some(application(71, "term-life"))).await.1;
+    assert_eq!(again["duplicate"], true, "the same key twice issues one policy");
+    let keyless = [("x-dev-subject", "sub-nb1".to_string())];
+    assert_eq!(
+        portal.send("POST", issue, &keyless, Some(application(74, "term-life"))).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(portal.write("POST", "sub-nb1", issue, application(75, "none")).await.0, StatusCode::CONFLICT);
+    assert_eq!(
+        portal.write("POST", "sub-sue", issue, application(76, "term-life")).await.0,
+        StatusCode::FORBIDDEN
+    );
+
+    // Each was asked by the four questions and is in the access log, refusals too.
+    let lines = logged(&portal, "sub-nb1").await;
+    assert!(
+        lines.iter().any(|(a, r, _)| a == "new_business.issue" && r.starts_with("application:")),
+        "{lines:?}"
+    );
+    assert!(lines.iter().any(|(a, _, _)| a == "new_business.quote"), "{lines:?}");
+}
+
+/// Purpose: the core's own view of a policy is read across the partitions for staff who hold the insurance-sensitive class, is the same refusal for a policy that is not there as for one the person may not see, and the operations reconciliation joins every partition's breaks.
+/// Why it matters: the core's covers, loadings and billing were reachable only through the core API, with app roles no person holds; staff and MCP users need them, under the access log. Operations need the reconciliation the close relies on without logging in to a node.
+#[tokio::test]
+async fn the_core_view_and_reconciliation_are_reached_through_the_portal() {
+    let portal = portal();
+    let (status, view) = portal.get("sub-nb1", "/staff/v1/core/policies/pol-c1?case=nb-77").await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["entry"]["partition"], 1);
+    assert_eq!(
+        portal.get("sub-nb1", "/staff/v1/core/policies/pol-zz?case=nb-77").await.0,
+        StatusCode::NOT_FOUND
+    );
+    // Without the class, refused whether or not the policy exists.
+    assert_eq!(portal.get("sub-sue", "/staff/v1/core/policies/pol-c1?case=c").await.0, StatusCode::FORBIDDEN);
+    assert_eq!(portal.get("sub-sue", "/staff/v1/core/policies/pol-zz?case=c").await.0, StatusCode::FORBIDDEN);
+    assert!(logged(&portal, "sub-nb1")
+        .await
+        .iter()
+        .any(|(a, r, _)| a == "policy.core_view" && r == "policy:pol-c1"));
+
+    let ops = [("x-dev-subject", "sub-ops".to_string()), ("x-dev-roles", "operations".to_string())];
+    let (status, recon) = portal.send("GET", "/ops/v1/reconciliation", &ops, None).await;
+    assert_eq!(status, StatusCode::OK, "{recon}");
+    assert_eq!(
+        (recon["clean"].as_bool(), recon["business_date"].as_str(), recon["unfinished"].as_u64()),
+        (Some(false), Some("2027-11-15"), Some(1))
+    );
+    assert_eq!(
+        recon["breaks"][0],
+        json!({ "partition": 1, "check": "suspense_clear", "detail": "12.00 in suspense" })
+    );
+    assert_eq!(portal.get("sub-sue", "/ops/v1/reconciliation").await.0, StatusCode::FORBIDDEN);
+}
+
+/// Purpose: the reconciliation finds money in transit with no transfer moving, waits on a partition that is not open, and refuses a total it cannot read.
+/// Why it matters: these are the checks the close makes across partitions; a reconciliation that missed the in-transit break, or showed a date before every partition had one, would tell operations the book balanced when it did not.
+#[test]
+fn reconciliation_joins_the_partitions() {
+    use ic_channels::claims::reconciliation;
+    let view = |p: u64, date: Value, transit: &str, moving: bool| json!({ "partition": p, "business_date": date, "breaks": [], "unfinished": [], "transfer_in_transit": transit, "transfer_in_flight": moving });
+    let stuck = reconciliation(&[view(0, json!("2027-11-15"), "500", false), view(1, json!("2027-11-15"), "-200", false)]).unwrap();
+    assert_eq!(stuck["clean"], false);
+    assert_eq!(stuck["breaks"][0]["check"], "transfer_in_transit");
+    let moving = reconciliation(&[view(0, json!("2027-11-15"), "500", true), view(1, Value::Null, "0", false)]).unwrap();
+    assert_eq!((moving["clean"].as_bool(), moving["business_date"].is_null()), (Some(true), true));
+    assert!(reconciliation(&[view(0, json!("2027-11-15"), "lots", false)])
+        .unwrap_err()
+        .contains("unreadable"));
+}
+
+/// Purpose: staff find, read, change and merge people in the customer master through the portal: each is decided by the four questions and logged, then sent to the master in the role and with the purpose the master's own policy expects, naming the person as the actor.
+/// Why it matters: the customer master's staff work had no screen and no tool. Sending it in the wrong role or purpose would be refused by the master or, worse, logged as the wrong kind of access; doing it without the portal's check would let anyone with a staff sign-in search every customer.
+#[tokio::test]
+async fn staff_work_in_the_customer_master() {
+    use ic_channels::customers::Desk;
+    let portal = portal();
+    let asked = |n: usize| portal.master.desks.lock().unwrap()[n].clone();
+
+    let (status, found) = portal
+        .write("POST", "sub-cd1", "/staff/v1/customers/search?case=dup-1", json!({ "family_name": "Ngata" }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    assert_eq!(
+        (found["path"].as_str(), found["as"].as_str(), found["purpose"].as_str()),
+        (Some("/v1/parties/search"), Some("staff"), Some("servicing"))
+    );
+    assert_eq!(asked(0), ("cd-1".to_string(), Desk::Search(json!({ "family_name": "Ngata" }))));
+
+    let read = portal
+        .get(
+            "sub-cd1",
+            "/staff/v1/customers/kiri?case=c-1&as_of=2027-11-01&known_at=2027-11-02T10:00:00%2B13:00",
+        )
+        .await
+        .1;
+    assert_eq!(
+        read["path"],
+        "/v1/parties/kiri?purpose=servicing&as_of=2027-11-01&known_at=2027-11-01T21:00:00Z"
+    );
+    assert_eq!(portal.get("sub-cd1", "/staff/v1/customers/kiri?as_of=soon").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        portal.get("sub-cd1", "/staff/v1/customers/kiri/history?case=c-1").await.1["path"],
+        "/v1/parties/kiri/history?purpose=servicing"
+    );
+    for (path, master) in [
+        ("relationships", "/v1/parties/kiri/relationships"),
+        ("due-diligence", "/v1/parties/kiri/due-diligence"),
+        ("export", "/v1/parties/kiri/export?purpose=subject_access"),
+    ] {
+        let (status, body) = portal.get("sub-cd1", &format!("/staff/v1/customers/kiri/{path}?case=c-1")).await;
+        assert_eq!((status, body["path"].as_str()), (StatusCode::OK, Some(master)), "{path}");
+    }
+    // The master's own refusal is passed on.
+    assert_eq!(portal.get("sub-cd1", "/staff/v1/customers/nobody?case=c-1").await.0, StatusCode::NOT_FOUND);
+
+    // Writes carry the person's key, scoped to staff, to the master.
+    let headers = [("x-dev-subject", "sub-cd1".to_string()), ("idempotency-key", "chg-1".to_string())];
+    let change = json!({ "command": "record", "facts": [] });
+    let changed = portal
+        .send("POST", "/staff/v1/customers/kiri/commands?case=c-1", &headers, Some(change))
+        .await
+        .1;
+    assert_eq!(
+        (changed["path"].as_str(), changed["key"].as_str()),
+        (Some("/v1/parties/kiri/commands"), Some("staff:chg-1"))
+    );
+    let created = portal
+        .write("POST", "sub-cd1", "/staff/v1/customers?case=c-1", json!({ "kind": "person", "facts": [] }))
+        .await
+        .1;
+    assert_eq!(created["path"], "/v1/parties");
+    let merged = portal
+        .write(
+            "POST",
+            "sub-cd1",
+            "/staff/v1/customers/merges?case=dup-1",
+            json!({ "survivor": "a", "absorbed": "b" }),
+        )
+        .await
+        .1;
+    assert_eq!((merged["path"].as_str(), merged["purpose"].as_str()), (Some("/v1/merges"), Some("duplicates")));
+    assert_eq!(
+        portal
+            .write(
+                "POST",
+                "sub-cd1",
+                "/staff/v1/customers/unmerges?case=dup-1",
+                json!({ "survivor": "a", "absorbed": "b" })
+            )
+            .await
+            .1["path"],
+        "/v1/unmerges"
+    );
+    assert_eq!(portal.get("sub-cd1", "/staff/v1/customers/reviews?case=dup-1").await.1["path"], "/v1/reviews");
+    assert_eq!(
+        portal
+            .write("POST", "sub-cd1", "/staff/v1/customers/reviews/r-9/dismiss?case=dup-1", json!({}))
+            .await
+            .1["path"],
+        "/v1/reviews/r-9/dismiss"
+    );
+    assert_eq!(
+        portal
+            .write(
+                "POST",
+                "sub-cd1",
+                "/staff/v1/customers/match?case=c-1",
+                json!({ "source": "claims", "family_name": "Ngata" })
+            )
+            .await
+            .1["path"],
+        "/v1/parties/match"
+    );
+    // A body that is not an object, and a write with no key, are refused here.
+    assert_eq!(
+        portal.write("POST", "sub-cd1", "/staff/v1/customers/search?case=c", json!([1])).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let keyless = [("x-dev-subject", "sub-cd1".to_string())];
+    assert_eq!(
+        portal.send("POST", "/staff/v1/customers/merges?case=c", &keyless, Some(json!({}))).await.0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // Nobody works their own record.
+    assert_eq!(portal.get("sub-cd1", "/staff/v1/customers/cd-1?case=c-1").await.0, StatusCode::FORBIDDEN);
+    // The audit is the privacy officer's, asked as the privacy role.
+    assert_eq!(portal.get("sub-cd1", "/staff/v1/customers/kiri/audit?case=c-1").await.0, StatusCode::FORBIDDEN);
+    let audit = portal.get("sub-prv", "/staff/v1/customers/kiri/audit?case=sar-1").await.1;
+    assert_eq!(
+        (audit["path"].as_str(), audit["as"].as_str()),
+        (Some("/v1/parties/kiri/audit"), Some("privacy"))
+    );
+    assert_eq!(
+        portal.get("sub-prv", "/staff/v1/actors/sue/actions?case=sar-1").await.1["path"],
+        "/v1/actors/sue/actions"
+    );
+    // Someone without these actions is refused before the master is asked.
+    let before = portal.master.desks.lock().unwrap().len();
+    assert_eq!(portal.get("sub-sue", "/staff/v1/customers/kiri?case=c").await.0, StatusCode::FORBIDDEN);
+    assert_eq!(portal.master.desks.lock().unwrap().len(), before);
+    let lines = logged(&portal, "sub-cd1").await;
+    assert!(lines.iter().any(|(a, r, _)| a == "customers.view" && r == "party:kiri"), "{lines:?}");
+    assert!(lines.iter().any(|(a, r, _)| a == "customers.find" && r == "customers"), "{lines:?}");
+
+    // A master that cannot be reached says so.
+    portal.master.down.store(true, Ordering::SeqCst);
+    assert_eq!(
+        portal.get("sub-cd1", "/staff/v1/customers/kiri?case=c-1").await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    portal.master.down.store(false, Ordering::SeqCst);
+}
+
+/// Purpose: operations work in the customer master (index status, chain checks, re-encryption, erasing again after a restore) needs the operations role and is sent to the master as operations; staff work is not reachable that way.
+/// Why it matters: these are maintenance tasks with no person's record as their subject; they belong to operations alone, and the master decides them on the operations role.
+#[tokio::test]
+async fn operations_work_in_the_customer_master() {
+    let portal = portal();
+    let ops = [("x-dev-subject", "sub-ops".to_string()), ("x-dev-roles", "operations".to_string())];
+    let index = portal.send("GET", "/ops/v1/customers/index", &ops, None).await.1;
+    assert_eq!((index["path"].as_str(), index["as"].as_str()), (Some("/v1/admin/index"), Some("operations")));
+    assert_eq!(
+        portal.send("POST", "/ops/v1/customers/kiri/verify", &ops, None).await.1["path"],
+        "/v1/admin/verify/kiri"
+    );
+    let rewrap = portal
+        .send("POST", "/ops/v1/customers/rewrap", &ops, Some(json!({ "current_key_id": "k2" })))
+        .await
+        .1;
+    assert_eq!(
+        (rewrap["path"].as_str(), rewrap["body"]["current_key_id"].as_str()),
+        (Some("/v1/admin/rewrap"), Some("k2"))
+    );
+    assert_eq!(
+        portal
+            .send("POST", "/ops/v1/customers/reshred", &ops, Some(json!({ "since": "2027-11-01" })))
+            .await
+            .1["path"],
+        "/v1/admin/reshred"
+    );
+    assert_eq!(
+        portal.send("POST", "/ops/v1/customers/reshred", &ops, Some(json!("x"))).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(portal.get("sub-cd1", "/ops/v1/customers/index").await.0, StatusCode::FORBIDDEN);
+    // Operations work has no staff action, so the staff desk refuses it outright.
+    assert_eq!(ic_channels::customers::Desk::Index.action(), None);
 }

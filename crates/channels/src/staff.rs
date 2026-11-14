@@ -41,6 +41,26 @@ pub mod actions {
     /// Read why a customer is served with care, not only how: for the
     /// hardship and vulnerable customer specialists, never a general role.
     pub const VULNERABILITY_KIND: &str = "service.vulnerability_kind";
+    /// Price an application before it is issued: a dry run, never written.
+    pub const QUOTE: &str = "new_business.quote";
+    /// Issue a policy from an accepted application.
+    pub const ISSUE: &str = "new_business.issue";
+    /// Read a policy as the core holds it: covers, terms and billing.
+    pub const CORE_POLICY: &str = "policy.core_view";
+    /// Find people in the customer master: search and match.
+    pub const FIND_CUSTOMER: &str = "customers.find";
+    /// Read a person's record, its history, relationships and due diligence.
+    pub const VIEW_CUSTOMER: &str = "customers.view";
+    /// Add a person to the customer master.
+    pub const CREATE_CUSTOMER: &str = "customers.create";
+    /// Change a person's record.
+    pub const CHANGE_CUSTOMER: &str = "customers.change";
+    /// Merge and unmerge duplicate records, and work the duplicate reviews.
+    pub const MERGE_CUSTOMERS: &str = "customers.merge";
+    /// Answer a Privacy Act request with everything held about a person.
+    pub const EXPORT_CUSTOMER: &str = "customers.export";
+    /// Read who did what to a record, and what one person did: for the privacy officer.
+    pub const AUDIT_CUSTOMERS: &str = "customers.audit";
 }
 
 /// A role template: what kind of action a person may take, which data

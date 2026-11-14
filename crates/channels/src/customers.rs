@@ -55,6 +55,8 @@ pub trait Master: Send + Sync {
     /// `party`'s affairs. Asked as the portal for that person, and logged
     /// by the master against them.
     fn represents(&self, representative: &PartyId, party: &PartyId) -> Asked<'_>;
+    /// Staff or operations work in the master, for `actor` ([`Desk`]).
+    fn desk(&self, actor: &PartyId, desk: Desk) -> Asked<'_>;
 }
 
 /// What a member of staff may do with someone who has called about a
@@ -94,6 +96,156 @@ pub enum Care {
     Marker { party: PartyId, key: String, body: Value },
     /// Close a prompt once it is decided.
     Dismiss(String),
+}
+
+/// Staff and operations work done in the customer master itself, through
+/// the portal: the portal decides by the four questions whether the person
+/// may do it, then asks the master in the role the work needs, naming the
+/// person as the actor, and the master decides again by its own policy and
+/// logs it against them.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Desk {
+    /// Score every record against a probe: names, birth date, contact points.
+    Search(Value),
+    /// Find the one record a source's person is, or say there is none.
+    Match(Value),
+    /// Add a person.
+    Create {
+        key: String,
+        body: Value,
+    },
+    /// A record as the master holds it on a date and as known at a time.
+    Read {
+        party: PartyId,
+        query: String,
+    },
+    /// Every version of a record's facts.
+    History {
+        party: PartyId,
+        query: String,
+    },
+    Relationships(PartyId),
+    /// What the anti-money laundering checks hold about a person.
+    DueDiligence(PartyId),
+    /// One of the master's record commands, at the version last seen.
+    Change {
+        party: PartyId,
+        key: String,
+        body: Value,
+    },
+    Merge {
+        key: String,
+        body: Value,
+    },
+    Unmerge {
+        key: String,
+        body: Value,
+    },
+    /// The open reviews: likely duplicates and markers to consider.
+    Reviews,
+    /// Close a duplicate review found not to be one.
+    Dismiss(String),
+    /// Everything held about a person, for a Privacy Act request.
+    Export(PartyId),
+    /// Who read or changed a record.
+    Audit(PartyId),
+    /// What one person (staff or service) did across records.
+    ActionsBy(PartyId),
+    /// Operations: the search index's state.
+    Index,
+    /// Operations: check a record's hash chain is whole.
+    Verify(PartyId),
+    /// Operations: re-encrypt records under the current key.
+    Rewrap(Value),
+    /// Operations: erase again what was shredded, after a restore.
+    Reshred(Value),
+}
+
+impl Desk {
+    /// The role the master is asked in, and the purpose declared to it.
+    pub fn role(&self) -> (&'static str, &'static str) {
+        match self {
+            Desk::Merge { .. } | Desk::Unmerge { .. } | Desk::Reviews | Desk::Dismiss(_) => ("staff", "duplicates"),
+            Desk::Export(_) => ("staff", "subject_access"),
+            Desk::Audit(_) | Desk::ActionsBy(_) => ("privacy", "audit"),
+            Desk::Index | Desk::Verify(_) | Desk::Rewrap(_) | Desk::Reshred(_) => ("operations", "operations"),
+            _ => ("staff", "servicing"),
+        }
+    }
+
+    /// The staff action the four questions are asked about. Operations work
+    /// is decided by the operations role instead, so has none.
+    pub fn action(&self) -> Option<&'static str> {
+        use crate::staff::actions::*;
+        Some(match self {
+            Desk::Search(_) | Desk::Match(_) => FIND_CUSTOMER,
+            Desk::Create { .. } => CREATE_CUSTOMER,
+            Desk::Read { .. } | Desk::History { .. } | Desk::Relationships(_) | Desk::DueDiligence(_) => VIEW_CUSTOMER,
+            Desk::Change { .. } => CHANGE_CUSTOMER,
+            Desk::Merge { .. } | Desk::Unmerge { .. } | Desk::Reviews | Desk::Dismiss(_) => MERGE_CUSTOMERS,
+            Desk::Export(_) => EXPORT_CUSTOMER,
+            Desk::Audit(_) | Desk::ActionsBy(_) => AUDIT_CUSTOMERS,
+            Desk::Index | Desk::Verify(_) | Desk::Rewrap(_) | Desk::Reshred(_) => return None,
+        })
+    }
+
+    /// The person the record is about, where there is one.
+    pub fn about(&self) -> Option<&PartyId> {
+        match self {
+            Desk::Read { party, .. } | Desk::History { party, .. } | Desk::Change { party, .. } => Some(party),
+            Desk::Relationships(p) | Desk::DueDiligence(p) | Desk::Export(p) | Desk::Audit(p) | Desk::Verify(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// The request to the master: method, path, idempotency key and body.
+    pub fn request(&self) -> (reqwest::Method, String, Option<String>, Option<Value>) {
+        use reqwest::Method;
+        let at = |party: &PartyId, rest: &str| format!("/v1/parties/{}{rest}", encode(party));
+        match self {
+            Desk::Search(probe) => (Method::POST, "/v1/parties/search".into(), None, Some(probe.clone())),
+            Desk::Match(probe) => (Method::POST, "/v1/parties/match".into(), None, Some(probe.clone())),
+            Desk::Create { key, body } => (Method::POST, "/v1/parties".into(), Some(key.clone()), Some(body.clone())),
+            Desk::Read { party, query } => (Method::GET, at(party, &format!("?purpose=servicing{query}")), None, None),
+            Desk::History { party, query } => (Method::GET, at(party, &format!("/history?purpose=servicing{query}")), None, None),
+            Desk::Relationships(party) => (Method::GET, at(party, "/relationships"), None, None),
+            Desk::DueDiligence(party) => (Method::GET, at(party, "/due-diligence"), None, None),
+            Desk::Change { party, key, body } => (Method::POST, at(party, "/commands"), Some(key.clone()), Some(body.clone())),
+            Desk::Merge { key, body } => (Method::POST, "/v1/merges".into(), Some(key.clone()), Some(body.clone())),
+            Desk::Unmerge { key, body } => (Method::POST, "/v1/unmerges".into(), Some(key.clone()), Some(body.clone())),
+            Desk::Reviews => (Method::GET, "/v1/reviews".into(), None, None),
+            Desk::Dismiss(review) => (
+                Method::POST,
+                format!("/v1/reviews/{}/dismiss", encode(&PartyId::from(review.as_str()))),
+                None,
+                None,
+            ),
+            Desk::Export(party) => (Method::GET, at(party, "/export?purpose=subject_access"), None, None),
+            Desk::Audit(party) => (Method::GET, at(party, "/audit"), None, None),
+            Desk::ActionsBy(actor) => (Method::GET, format!("/v1/actors/{}/actions", encode(actor)), None, None),
+            Desk::Index => (Method::GET, "/v1/admin/index".into(), None, None),
+            Desk::Verify(party) => (Method::POST, format!("/v1/admin/verify/{}", encode(party)), None, None),
+            Desk::Rewrap(body) => (Method::POST, "/v1/admin/rewrap".into(), None, Some(body.clone())),
+            Desk::Reshred(body) => (Method::POST, "/v1/admin/reshred".into(), None, Some(body.clone())),
+        }
+    }
+}
+
+/// The dates a record or its history is read as at, as the master takes
+/// them (`as_of` a date, `known_at` a time), checked so nothing else rides
+/// along in the query.
+pub fn as_at(as_of: Option<&str>, known_at: Option<&str>) -> Result<String, String> {
+    let mut query = String::new();
+    if let Some(d) = as_of {
+        d.parse::<chrono::NaiveDate>()
+            .map_err(|_| format!("as_of must be a date such as 2027-11-15, not {d:?}"))?;
+        query.push_str(&format!("&as_of={d}"));
+    }
+    if let Some(t) = known_at {
+        let parsed = chrono::DateTime::parse_from_rfc3339(t).map_err(|_| format!("known_at must be a time such as 2027-11-15T09:00:00Z, not {t:?}"))?;
+        query.push_str(&format!("&known_at={}", parsed.to_utc().format("%Y-%m-%dT%H:%M:%SZ")));
+    }
+    Ok(query)
 }
 
 /// The kinds a marker may name and what may be done differently, as the
@@ -359,6 +511,16 @@ impl Master for Hosted {
         Box::pin(async move {
             self.call_as("portal", Some(&who), &who, reqwest::Method::GET, path, "representative", vec![], None)
                 .await
+        })
+    }
+
+    fn desk(&self, actor: &PartyId, desk: Desk) -> Asked<'_> {
+        let actor = actor.clone();
+        Box::pin(async move {
+            let (role, purpose) = desk.role();
+            let (method, path, key, body) = desk.request();
+            let extra = key.map(|k| vec![("idempotency-key", k)]).unwrap_or_default();
+            self.call_as(role, None, &actor, method, path, purpose, extra, body).await
         })
     }
 

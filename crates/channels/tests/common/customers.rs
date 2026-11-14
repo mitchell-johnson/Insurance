@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use ic_channels::customers::{Answered, Care, Master};
+use ic_channels::customers::{Answered, Care, Desk, Master};
 use ic_core::PartyId;
 use serde_json::{json, Value};
 
@@ -42,6 +42,8 @@ pub struct MasterDouble {
     pub authorities: Mutex<BTreeMap<(String, String), &'static str>>,
     /// Who was asked about: (staff, party, caller).
     pub asked_for: Mutex<Vec<(String, String, String)>>,
+    /// Staff and operations work asked of the master, with who for.
+    pub desks: Mutex<Vec<(String, Desk)>>,
 }
 
 impl MasterDouble {
@@ -209,6 +211,28 @@ impl Master for MasterDouble {
             }
             let decision = self.authorities.lock().unwrap().get(&(party.0, caller.0)).cloned().unwrap_or("refuse");
             Ok((200, json!({ "decision": decision })))
+        })
+    }
+
+    /// Answers with the request the master would have been sent, so a
+    /// test sees the path, the role, the purpose and the key. A party
+    /// called `nobody` is not known.
+    fn desk(&self, actor: &PartyId, desk: Desk) -> Asked<'_> {
+        let actor = actor.clone();
+        Box::pin(async move {
+            self.desks.lock().unwrap().push((actor.0.clone(), desk.clone()));
+            if self.down.load(Ordering::SeqCst) {
+                return Err("connection refused".to_string());
+            }
+            if desk.about().is_some_and(|p| p.0 == "nobody") {
+                return Ok((404, json!({ "title": "not_found", "detail": "no such party" })));
+            }
+            let (method, path, key, body) = desk.request();
+            let (role, purpose) = desk.role();
+            Ok((
+                200,
+                json!({ "method": method.as_str(), "path": path, "key": key, "body": body, "as": role, "purpose": purpose }),
+            ))
         })
     }
 

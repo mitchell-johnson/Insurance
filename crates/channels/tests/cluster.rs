@@ -227,6 +227,21 @@ async fn the_portal_service_on_real_nodes() {
         let first = claims.propose(0, envelope.clone()).await.unwrap();
         assert!(first.rejected.is_some() && !first.duplicate, "{first:?}");
         assert!(claims.propose(0, envelope).await.unwrap().duplicate);
+        // New business and the core's own view: a dry run of an application, a policy by number, the end-of-day view.
+        let application = ic_sim::persona::term_life(90, open(), d(1985, 6, 1), Sex::Male, false, 250_000_00, None, Frequency::Monthly, None);
+        assert!(
+            claims.quote(0, application.clone()).await.unwrap().is_some(),
+            "the date is open, so the core prices it"
+        );
+        let mut unknown = application.clone();
+        unknown.product_code = "no-such-product".into();
+        assert!(matches!(claims.quote(0, unknown).await.unwrap(), Some(Err(_))));
+        let held = claims.policy(0, "KTL00000001".into()).await.unwrap().expect("the seeded policy");
+        assert_eq!(held["policy"]["number"], "KTL00000001");
+        assert_eq!(claims.policy(0, "NOPE".into()).await.unwrap(), None);
+        let closing = claims.closing(0).await.unwrap();
+        assert_eq!(closing["partition"], 0);
+        assert!(ic_channels::claims::reconciliation(&[closing]).unwrap()["business_date"].is_string());
         let unreachable = ic_channels::claims::Hosted {
             client: ClusterClient::new(vec![format!("127.0.0.1:{}", free_port())]).with_attempt_timeout(Duration::from_millis(200)),
             partitions: 1,
@@ -236,6 +251,9 @@ async fn the_portal_service_on_real_nodes() {
         assert!(unreachable.locate(0, ic_core::PolicyId::from("pol-00000001")).await.is_err());
         let (_, _, command) = ic_channels::claims::command(&staff, "p", None, json!({ "record_contact": { "claim": "c-1" } })).unwrap();
         assert!(unreachable.propose(0, ic_channels::claims::envelope("k".into(), command)).await.is_err());
+        assert!(unreachable.quote(0, application).await.is_err());
+        assert!(unreachable.policy(0, "KTL00000001".into()).await.is_err());
+        assert!(unreachable.closing(0).await.is_err());
     }
 
     // The consoles' reach into another module on the nodes: a module these nodes do not host refuses, and nodes that
