@@ -184,10 +184,10 @@ test({ id: "E2E-157", area: A, persona: "ST12", story: "US-ST12-2", title: "Ever
     await s.done("#ag-msg", "Classified.");
     await s.sees("individual-life/FY2028/other", "#ag-out");
     text = await s.text("#ag-out");
-    if (/ungrouped/i.test(text) && /(^|\s)0\s*$/.test(text.trim())) return;
+    if (text.includes("Every policy is in a group.")) return;
     await s.wait(500);
   }
-  throw new Error(`after six classifications policies are still ungrouped (a product with no grouping rule in config/finance/close.star stays ungrouped for good); the groups read "${text.slice(0, 200)}"`);
+  throw new Error(`after six classifications policies are still waiting for a group (a product with no grouping rule in config/finance/close.star stays ungrouped for good); the groups read "${text.slice(0, 200)}"`);
 });
 
 test({ id: "E2E-158", area: A, persona: "ST12", story: "US-ST12-2", title: "The actuary can read the accounting groups but cannot reclassify policies",
@@ -261,10 +261,10 @@ test({ id: "E2E-164", area: A, persona: "ST10", story: "US-ST10-1", title: "A re
   purpose: "Look up a regulatory return by a reference that has not been filed.",
   why: "Asked by an auditor whether a return went in, the operator needs a plain no, not a blank page." }, async (t) => {
   const s = await t.open("/finance", cast.st10);
-  await s.tab("Books");
+  await s.tab("Returns");
   await s.fill("#ret-id", "RET-2027-Q3");
   await s.press("Show", "#ret");
-  await s.stopped("#tb-msg", "return RET-2027-Q3 has not been filed", 400);
+  await s.stopped("#ret-msg", "return RET-2027-Q3 has not been filed", 400);
 });
 
 test({ id: "E2E-165", area: A, persona: "ST5", story: "US-ST13-1", title: "A collections officer is refused the finance console", matrix: [],

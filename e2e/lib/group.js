@@ -1,7 +1,7 @@
 // A group scheme, set up the way the insurer sets one up: new business issues
 // the scheme's policy on the core, group administration registers the scheme
 // and the layout of the employer's membership file through the group console's
-// own route, and the employer's first administrator is appointed.
+// own routes, and names the employer's first administrator.
 //
 // The seed uses it for the standing scheme (`kaifresh`) and the tests for the
 // schemes they change. The terms, product and file layout are the shipped
@@ -17,7 +17,7 @@ const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 
 /// Register scheme `id` for an employer, with its founding member E001 (staff, 60,000, Auckland).
 /// Returns `{ id, policy, number }`.
-async function register(sys, id, { employer = cast.e1, by = cast.st7 } = {}) {
+async function register(sys, id, { employer = cast.e1, by = cast.st7, admin = true } = {}) {
   const g = JSON.parse(fs.readFileSync(path.join(sys.stack.run, "shipped.json"), "utf8")).group;
   const policy = `pol-${id}`, number = `WPL-${id.toUpperCase()}`, party = `party-${id}-e001`;
   const issue = JSON.parse(JSON.stringify(g.issue));
@@ -28,15 +28,20 @@ async function register(sys, id, { employer = cast.e1, by = cast.st7 } = {}) {
   const tell = (command, what) => sys.must(sys.portal("POST", COMMANDS, by, command, `scheme-${id}-${what}`), `${by.key} ${what} for scheme ${id}`);
   await tell({ register_scheme: { scheme: id, policy, group: issue.group, employer: employer.party, inception: issue.inception, product: g.product, terms: g.terms, founding: [{ ...g.founder, party }], pools: [] } }, "register_scheme");
   await tell({ set_mapping: { scheme: id, mapping: g.mapping } }, "set_mapping");
-  // The first administrator is appointed by group administration; the portal must first have heard of the policy.
+  const scheme = { id, policy, number, mapping: g.mapping };
+  if (admin) await firstAdministrator(sys, scheme, employer, by);
+  return scheme;
+}
+
+/// Group administration names the scheme's first administrator, by the route the console's form uses. The portal
+/// must first have heard of the policy from the core's feed.
+async function firstAdministrator(sys, scheme, who = cast.e1, by = cast.st7) {
   for (let n = 0; ; n++) {
-    const r = await sys.http("POST", sys.stack.portal, "/internal/v1/commands", { headers: { "x-dev-subject": "svc-group-admin", "x-dev-roles": "group-admin", "x-module": "group-admin", "idempotency-key": `scheme-${id}-admin` },
-      body: { directory: { set_employer_admin: { policy, party: employer.party, admin: true } } } });
-    if (r.ok) break;
-    if (n >= 60 || r.status !== 404) throw new Error(`appoint the administrator of scheme ${id}: ${r.status} ${JSON.stringify(r.data)}`);
+    const r = await sys.portal("PUT", `/staff/v1/group/schemes/${scheme.policy}/first-admin`, by, { party: who.party }, `scheme-${scheme.id}-admin`);
+    if (r.ok) return;
+    if (n >= 60 || r.status !== 404) throw new Error(`name the first administrator of scheme ${scheme.id}: ${r.status} ${JSON.stringify(r.data)}`);
     await pause(250);
   }
-  return { id, policy, number, mapping: g.mapping };
 }
 
 /// A membership file in the layout the schemes are registered with. A row is
@@ -75,4 +80,4 @@ async function applied(sys, scheme, name, rows, who = cast.e1) {
   return reaches(sys, scheme, name, "applied");
 }
 
-module.exports = { register, csv, scan, file, reaches, upload, applied, HEAD };
+module.exports = { register, firstAdministrator, csv, scan, file, reaches, upload, applied, HEAD };

@@ -308,7 +308,7 @@ test({ id: "E2E-316", area: A, persona: "E1", story: "US-E01-1", title: "A file 
 });
 
 test({ id: "E2E-317", area: A, persona: "E1", story: "US-BK1-1", title: "The same file sent twice changes nothing the second time", matrix: ["GRP-003"],
-  purpose: "Apply a file, then send the same content again under a new name and under its own name.",
+  purpose: "Apply a file, then send the same content again under a new name and under its own name, and different content under the used name.",
   why: "Employers resend files when unsure they arrived. A second copy must not add anyone twice or bill twice." }, async (t) => {
   const scheme = await own(t);
   const rows = [FOUNDER, person("E002"), person("E003")];
@@ -316,7 +316,10 @@ test({ id: "E2E-317", area: A, persona: "E1", story: "US-BK1-1", title: "The sam
   const before = await standing(t, scheme);
   const renamed = await group.upload(t.sys, scheme, "nov-again.csv", rows);
   if (renamed.status !== 422 || renamed.data.error.code !== "duplicate_file") throw new Error(`the same content under a new name answered ${renamed.status} ${JSON.stringify(renamed.data)}`);
-  await group.upload(t.sys, scheme, "nov.csv", rows);
+  const again = await group.upload(t.sys, scheme, "nov.csv", rows);
+  if (again.status !== 202 || again.data.status !== "applied") throw new Error(`the same file under its own name answered ${again.status} ${JSON.stringify(again.data)}`);
+  const other = await group.upload(t.sys, scheme, "nov.csv", [...rows, person("E004")]);
+  if (other.status !== 422 || other.data.error.code !== "file_exists") throw new Error(`different content under a used name answered ${other.status} ${JSON.stringify(other.data)}`);
   await new Promise((done) => setTimeout(done, 2500));
   const file = (await group.file(t.sys, scheme, "nov.csv")).data, after = await standing(t, scheme);
   if (file.status !== "applied" || file.applied !== 2) throw new Error(`after the second copy the file reads ${JSON.stringify(file).slice(0, 300)}`);
@@ -439,9 +442,9 @@ test({ id: "E2E-322", area: A, persona: "E1", story: "US-B25-2", title: "A schem
 
 // --- The customer master, behind the group service. -------------------------------------------------------------
 
-test({ id: "E2E-323", area: A, persona: "ST7", story: "US-B10-1", title: "A joiner who may be someone the insurer already knows is put to group administration, with the people they might be", matrix: ["GRP-031"],
-  purpose: "Put the same name and date of birth on two schemes. Read the work waiting on the second, and the member's record, as a group administrator.",
-  why: "Name and birth date alone do not prove two records are one person. The customer master must not merge them on its own; a person decides, and to decide they must be shown who the candidates are." }, async (t) => {
+test({ id: "E2E-323", area: A, persona: "ST7", story: "US-B10-1", title: "A joiner who may be someone the insurer already knows is put to group administration, who are shown the candidates and decide", matrix: ["GRP-031"],
+  purpose: "Put the same name and date of birth on two schemes. As a group administrator read the work waiting on the second, ask who the member might be, and record that they are the same person.",
+  why: "Name and birth date alone do not prove two records are one person. The customer master must not merge them by itself; a person decides, and to decide they must be shown who the candidates are." }, async (t) => {
   const twin = person("E002");
   const first = await own(t), second = await own(t);
   await group.applied(t.sys, first, "nov.csv", [FOUNDER, twin]);
@@ -453,15 +456,53 @@ test({ id: "E2E-323", area: A, persona: "ST7", story: "US-B10-1", title: "A join
   await s.row("#ex", "E777").waitFor({ timeout: 10000 });
   const waiting = await s.row("#ex", "E777").locator("td").allInnerTexts();
   if (!waiting.includes("possible match")) throw new Error(`the work waiting reads ${JSON.stringify(waiting)}`);
-  // The member joined, unlinked, and is on cover meanwhile.
-  await s.tab("Members");
-  await s.fill("#mb-scheme", second.id); await s.fill("#mb-emp", "E777");
-  await s.press("Show", "#mb-form");
-  await s.sees("E777", "#mb");
+  // The member joined, unlinked, and is on cover while the question waits.
   const member = await t.does(cast.st7, "GET", `${G}member?scheme=${second.id}&employee=E777`, undefined, "reads the member");
   if (!member.in_force) throw new Error("the possible match was left without cover while it waits");
-  // To decide, the administrator must be told who the member might be.
-  const candidates = member.possible_matches || member.candidates;
-  if (!Array.isArray(candidates) || !candidates.length) throw new Error("the console gives group administration no way to learn who the member might be: neither the work waiting nor the member's record names the candidate people, and the form to decide the match asks for one");
-  await s.sees(candidates[0], "#mb");
+  // The employer is never told who the insurer thinks their employee might be.
+  const theirs = await t.sys.portal("GET", `/employer/v1/schemes/${second.policy}/group/possible_match?employee=E777`, cast.e1);
+  if (theirs.ok) throw new Error(`the employer was given the candidates: ${JSON.stringify(theirs.data)}`);
+  await s.tab("Members");
+  await s.fill("#rm-scheme", second.id); await s.fill("#rm-emp", "E777");
+  await s.press("Show who they might be");
+  const candidates = s.$("#rm-found").locator("tbody tr");
+  await candidates.first().waitFor({ timeout: 10000 });
+  if (await candidates.count() !== 1) throw new Error(`${await candidates.count()} candidates are shown, expected the one person on the first scheme`);
+  await candidates.first().getByRole("button", { name: "It is this person" }).click();
+  if (!(await s.$("#rm-party").inputValue())) throw new Error("choosing the candidate did not fill in the party");
+  await s.press("Record", "#rm-form");
+  await s.done("#rm-msg", "Recorded.");
+  let after;
+  for (let n = 0; n < 40; n++) { after = await standing(t, second); if (after.possible_matches === 0) break; await s.wait(250); }
+  if (after.possible_matches !== 0) throw new Error("the match was recorded and is still waiting");
+  await s.tab("Work waiting");
+  await s.press("Show", "#ex-form");
+  await s.sees("Nothing is waiting.", "#ex");
+});
+
+test({ id: "E2E-324", area: A, persona: "ST7", story: "US-E01-1", title: "Group administration names a new scheme's first administrator, once", matrix: [],
+  purpose: "Register a scheme with nobody to administer it. Name the employer's administrator from the console, sign in as them, and try to name a second person the same way.",
+  why: "Nobody at the employer can send a file until one person is let in, and only the insurer can let the first one in. After that the list is the employer's own, and staff must not be able to add to it." }, async (t) => {
+  const scheme = await group.register(t.sys, t.ref("sch").toLowerCase(), { admin: false });
+  const before = await t.does(cast.e1, "GET", "/employer/v1/schemes", undefined, "lists schemes");
+  if (before.some((p) => p.policy === scheme.policy && p.relationships.includes("employer_admin"))) throw new Error("the employer administers the scheme before anyone was named");
+  const s = await console_(t, scheme);
+  await s.fill("#fa-policy", scheme.policy);
+  await s.fill("#fa-party", cast.e1.party);
+  // The portal hears of the new policy from the core's feed a moment after it is issued.
+  for (let n = 0; ; n++) {
+    await s.press("Name them", "#fa-form");
+    const o = await s.outcome("#fa-msg");
+    if (o.kind !== "bad") { if (!o.words.includes("Named.")) throw new Error(`the screen said "${o.words}"`); break; }
+    if (n >= 20 || !/no such/i.test(o.words)) throw new Error(`the screen refused: ${o.words}`);
+    s.expect(404); await s.wait(500);
+  }
+  const e = await opened(t, scheme);
+  await e.tab("Files and members");
+  await e.sees("on the group service's record", "#standing");
+  await s.fill("#fa-party", cast.e1b.party);
+  await s.press("Name them", "#fa-form");
+  await s.stopped("#fa-msg", "this scheme already has an administrator", 409);
+  const colleague = await t.does(cast.e1b, "GET", "/employer/v1/schemes", undefined, "lists schemes");
+  if (colleague.some((p) => p.policy === scheme.policy)) throw new Error("staff added a second administrator to a scheme that had one");
 });

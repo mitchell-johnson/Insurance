@@ -113,7 +113,16 @@ async function postgres() {
   return `host=127.0.0.1 port=${ports.postgres} user=postgres dbname=postgres`;
 }
 
+/// The PostgreSQL directory a root-run stack keeps outside the run directory, removed with the run it belonged to.
+function forget() {
+  const note = path.join(run, "postgres-data");
+  if (!fs.existsSync(note)) return;
+  const data = fs.readFileSync(note, "utf8").trim();
+  if (path.basename(data).startsWith("ic-e2e-postgres-")) fs.rmSync(data, { recursive: true, force: true });
+}
+
 async function up() {
+  forget();
   if (fs.existsSync(run)) fs.rmSync(run, { recursive: true, force: true });
   fs.mkdirSync(run, { recursive: true });
   const az = await azure.start({ port: ports.azure, roles });
@@ -165,6 +174,7 @@ async function down() {
   for (const { child } of children.reverse()) child.kill("SIGTERM");
   await new Promise((r) => setTimeout(r, 1500));
   for (const { child } of children) if (child.exitCode === null) child.kill("SIGKILL");
+  forget();
 }
 
 module.exports = { up, down, ports, roles, AUD, TENANT, TOKEN, url };

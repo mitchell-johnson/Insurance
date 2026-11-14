@@ -16,7 +16,8 @@ fn group(opening: chrono::NaiveDate) -> Result<Value, String> {
     use ic_group::terms::{BillingGroup, ContinuationTerms, CoverEnd, Eligibility, ExcessLoading, ExcessPath, MemberBasis, NoAgreement, SchemeTerms};
     let day = |y, m, d| chrono::NaiveDate::from_ymd_opt(y, m, d).ok_or("a date");
     let year_later = opening.checked_add_months(chrono::Months::new(12)).ok_or("a renewal date")?;
-    let product = ic_product::load_product("group_life.star", include_str!("../../../products/group_life.star")).map_err(|e| format!("group_life.star: {e}"))?;
+    let product =
+        ic_product::load_product("group_life.star", include_str!("../../../products/group_life.star")).map_err(|e| format!("group_life.star: {e}"))?;
     let founder = ic_group::record::MemberAttrs {
         date_of_birth: Some(day(1980, 5, 1)?),
         sex: None,
