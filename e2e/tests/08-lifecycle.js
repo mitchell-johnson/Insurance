@@ -141,7 +141,7 @@ test({ id: "E2E-238", area: A, persona: "P2", story: "US-P02-1", title: "A premi
   same("the first notice", seen.notices, [notice(p, 1)]);
 });
 
-test({ id: "E2E-239", area: A, persona: "ST15", story: "US-ST15-1", title: "Quotes across ages, sexes, smoker status, frequencies and sums insured match the independent calculation", matrix: ["SVC-024"], ...date,
+test({ id: "E2E-239", area: A, persona: "ST15", story: "US-ST15-1", title: "Quotes across ages, sexes, smoker status, frequencies and sums insured match the independent calculation", matrix: [], ...date,
   purpose: "Ask the system for 384 quotes on term life and income protection across the rating grid and compare each cover and fee with the calculator.",
   why: "One policy proves one rate; the grid finds the age-band edges, the smoker and sex columns and the rounding cases a single journey misses." }, async (t) => {
   const shipped = JSON.parse(fs.readFileSync(path.join(t.stack.run, "shipped.json"), "utf8"));
@@ -207,7 +207,7 @@ test({ id: "E2E-242", area: A, persona: "P11", story: "US-P11-1", title: "Money 
   same("what is owed after the second month is billed", seen.outstanding, p.premium.total - (200_00 - p.premium.total));
 });
 
-test({ id: "E2E-243", area: A, persona: "P46", story: "US-P46-1", title: "The same receipt sent twice is applied once", matrix: ["LED-002", "BIL-014"], ...date,
+test({ id: "E2E-243", area: A, persona: "P46", story: "US-P46-1", title: "The same receipt sent twice is applied once", matrix: ["LED-002"], ...date,
   purpose: "Send one bank receipt for part of the premium twice, with the same receipt reference, and read what is owed.",
   why: "Bank files are resent; a receipt applied twice hands a customer credit they never paid." }, async (t) => {
   const p = await issued(t, "term_life");
