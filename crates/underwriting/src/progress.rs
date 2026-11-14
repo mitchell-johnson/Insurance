@@ -94,18 +94,30 @@ pub fn rows(p: &Proposal) -> Vec<ProgressRow> {
         }),
     }];
     for (life, f) in &p.lives {
+        let mut body = json!({
+            "proposal": p.id,
+            "life": life,
+            "stage": f.stage.key(),
+            "waiting_on": if open { waiting_on(f.stage) } else { None },
+        });
+        // A replacement shows the life what it gains, for the disclosure
+        // statement they sign: the added cover and the premium quoted.
+        if p.replacement && matches!(p.entry, crate::model::Entry::Increase { .. }) {
+            if let Some(c) = p.covers_on(life).next() {
+                body["replacement"] = json!({
+                    "cover": c.code,
+                    "sum_insured_minor": c.sum_insured_minor,
+                    "premium_minor": p.quote.premium_minor,
+                });
+            }
+        }
         rows.push(ProgressRow {
             key: format!("{}/{MODULE}/{}/{life}", p.policy, p.id),
             policy: p.policy.clone(),
             kind: "proposal_life".into(),
             subject: Some(f.party.clone()),
             sensitive: true,
-            body: json!({
-                "proposal": p.id,
-                "life": life,
-                "stage": f.stage.key(),
-                "waiting_on": if open { waiting_on(f.stage) } else { None },
-            }),
+            body,
         });
     }
     rows
