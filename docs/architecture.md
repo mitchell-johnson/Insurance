@@ -827,26 +827,34 @@ Mitchell asked on 13 November 2026 for 300 end-to-end UI tests based on the pers
 
 ### Decisions taken
 
-- The suite is not part of `ci.yml`. It needs a browser, takes about a quarter of an hour, and a failing journey is a finding about the product, some of which are left failing on purpose until the owner fixes the defect.
+- The suite is not part of `ci.yml`. It needs a browser, takes about a quarter of an hour, and a failing journey is a finding about the product for a person to read, not a reason to stop a commit.
 - `e2e/` is not a workspace member, so it is outside the coverage floor and the test documentation check; its tests carry `purpose` and `why` fields instead.
 - End of day is driven directly, not through Temporal. The workflow's own durability is covered by the failure drill, not here.
 - Where a driver is not part of the stack (bank pump, unit pricing intake, reinsurance driver), the seed or the test sends what the driver would send, through the same internal route, and says so in a comment.
 
-### Defects it found, and who has them
+### Defects it found
 
-| Defect | Tests | Owner | State on 14 Nov 2026 |
+All were reported to the owning thread on 14 November 2026 and fixed on main the same day; the tests named now pass.
+
+| Defect | Tests | Owner | Fixed at |
 |---|---|---|---|
-| Rounding looks only at the first dropped digit: about one premium in twenty is a cent low (`ic_money::round_integer`) | E2E-238, 239 | core | reported |
-| The same fault leaves a unit buy price not rounded up (`crates/pricing/src/strike.rs`) | E2E-232 | unit pricing | reported |
-| No accounting group for `income-protection` in `config/finance/close.star`, so those policies stay ungrouped | E2E-157 | finance | reported |
-| Overpayment memos keyed by reference alone | E2E-143 | commission | fixed on main at e2b3f44 |
-| Payments page: reconciliation view reads the wrong field names; "Send what is unpaid again" sends no date | E2E-205, 186 | portal | reported |
-| Staff console shows its forms to an unregistered sign-in | E2E-009 | portal | reported |
-| Mistyped references answered "No such resource" | E2E-104, 119 | portal | reported |
-| Claims console cannot admit a benefit in payment or enter a health invoice | E2E-105 | portal | reported |
-| Access log drops a second decision on the same record in the same second | none (timing) | portal | reported |
-| Complaints register accepts a period that ends before it starts | E2E-056 | complaints | reported |
-| No deployed tool activates module configuration (payments, complaints, finance, claims, staff); `ic-admin activate-shipped` covers the core only | the seed does it by hand | core | open |
+| Rounding looked only at the first dropped digit: about one premium in twenty was a cent low (`ic_money::round_integer`) | E2E-238, 239 | core | 6c7cb24 |
+| The same fault left a unit buy price not rounded up (`crates/pricing/src/strike.rs`) | E2E-232 | unit pricing | 79f198a, 5821118 |
+| A billing notice was raised on the close that lapsed a policy | found in lifecycle runs | core | 6c7cb24 |
+| No accounting group for `income-protection` in `config/finance/close.star`, so those policies stayed ungrouped | E2E-157 | finance | 603d5f3 |
+| Overpayment memos keyed by reference alone, so two claims overwrote each other | E2E-143 | commission | e2b3f44 |
+| Payments page: reconciliation view read the wrong field names; "Send what is unpaid again" sent no date | E2E-205, 186 | portal | b83b522 |
+| Staff console showed its forms to an unregistered sign-in | E2E-009 | portal | b83b522 |
+| Mistyped references answered "No such resource" | E2E-104, 119 | portal | b83b522 |
+| Claims console could not admit a benefit in payment or enter a health invoice | E2E-105 | portal | b83b522 |
+| Access log dropped a second decision on the same record in the same second | unit test in channels | portal | b83b522 |
+| A customer sign-in could open the adviser portal (and saw an empty book) | E2E-275 | portal | b83b522 |
+| The commission page offered actions its route always refuses | E2E-284 | portal | 36c366f |
+| Complaints register accepted a period that ends before it starts | E2E-056 | complaints | f662518 |
+
+Still open: no deployed tool activates module configuration (payments, complaints, finance, claims, staff). `ic-admin activate-shipped` covers the core only, so the suite's seed does it by hand through each module's routes. A real deployment needs the same, and it belongs to the core's admin tool.
+
+Last full run, 14 November 2026 against main at 5821118: 297 passed, 3 passed on a second attempt (E2E-025, 107, 109), none failed, in about eleven minutes.
 
 ### Not covered
 

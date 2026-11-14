@@ -308,11 +308,14 @@ test({ id: "E2E-283", area: COM, persona: "Distribution", story: "US-D10-1", tit
 });
 
 test({ id: "E2E-284", area: COM, persona: "Distribution", story: "US-D10-1", title: "A policy cannot be given to an adviser from the commission console", matrix: ["ADV-013"],
-  purpose: "Send the module's own appoint-adviser command through the console.",
+  purpose: "Look for the action among those the console offers, then send the module's own appoint-adviser command by hand.",
   why: "Only the policyholder appoints an adviser. The console must not be a way round that, even for an administrator." }, async (t) => {
   const s = await t.open("/commission", cast.dist);
-  await changes(s, "appoint_adviser", { policy: "pol-any", engagement: "eng-d1" }, "trying to assign a policy");
-  await s.stopped("#do-msg", "not a command the console sends", 400);
+  await s.tab("Change something");
+  const offered = await s.$("#a").locator("option").evaluateAll((options) => options.map((o) => o.value));
+  if (offered.includes("appoint_adviser")) throw new Error("the Change something form offers to appoint a policy's adviser");
+  await sends(s, { appoint_adviser: { policy: "pol-any", engagement: "eng-d1", book: null } }, "trying to assign a policy");
+  await s.stopped("#send-msg", "not a command the console sends", 400);
 });
 
 test({ id: "E2E-285", area: COM, persona: "ST13", story: "US-D09-1", title: "Compliance records a licence event and operations cannot", matrix: ["ADV-019"],

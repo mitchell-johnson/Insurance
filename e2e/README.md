@@ -89,5 +89,6 @@ other areas again.
 A failing test is one of three things: the product is wrong (the report says
 what the screen showed and what was expected), the stack is stale (restart
 it), or the test's expectation is wrong. Screenshots of the failing page are
-under `e2e/.run/results/shots`. Tests that fail because of a known product
-defect are left failing on purpose; they pass when the defect is fixed.
+under `e2e/.run/results/shots`. A test that fails because the product is wrong
+is left failing and the owner is told; it passes when the defect is fixed. A
+test reported as flaky failed once and passed on its second attempt.
