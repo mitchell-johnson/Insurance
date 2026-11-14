@@ -514,9 +514,21 @@ const sees = async (page, text) => {
   } });
   await visit(browser, "/commission", { subject: "sub-dadmin" }, { run: async (p) => {
     await sees(p, "distribution admin");
-    await p.getByRole("button", { name: "Ask" }).click();
+    await p.getByRole("button", { name: "Show", exact: true }).click();
     await p.locator("#answer dl, #answer table, #answer span").first().waitFor();
-    await p.fill("#cmd", JSON.stringify({ add_party: { party: "adv-77", kind: "adviser" } }));
+    // A question with fields of its own, asked through its form.
+    await p.selectOption("#q", "held_control"); await p.fill("#q-date", "2027-11-30");
+    await p.getByRole("button", { name: "Show", exact: true }).click();
+    await p.locator("#answer dl, #answer table, #answer span").first().waitFor();
+    // An adviser is added from a form, with no JSON to write.
+    await tab(p, "Change something");
+    await p.selectOption("#a", "add_party"); await p.fill("#a-party", "adv-77"); await p.selectOption("#a-kind", "adviser");
+    await p.fill("#a-purpose", "onboarding");
+    await p.getByRole("button", { name: "Do it" }).click();
+    await p.locator("#do-msg").getByText("Done.").waitFor();
+    // The few commands with no form still go as written.
+    await tab(p, "Another command");
+    await p.fill("#cmd", JSON.stringify({ add_party: { party: "adv-78", kind: "adviser" } }));
     await p.fill("#purpose", "onboarding");
     await p.getByRole("button", { name: "Send" }).click();
     await p.locator("#send-msg").getByText("Done.").waitFor();
