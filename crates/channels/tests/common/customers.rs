@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use ic_channels::customers::{Answered, Master};
+use ic_channels::customers::{Answered, Care, Master};
 use ic_core::PartyId;
 use serde_json::{json, Value};
 
@@ -32,6 +32,12 @@ pub struct MasterDouble {
     pub vulnerable: Mutex<Vec<String>>,
     /// Each party's own spending hold, as the master answers for it.
     holds: Mutex<BTreeMap<String, Value>>,
+    /// Open prompts to review a marker: (review, party, reason).
+    pub reviews: Mutex<Vec<(String, String, String)>>,
+    /// Markers as staff last set them, by party; `false` once removed.
+    pub markers: Mutex<BTreeMap<String, Value>>,
+    /// What trained staff asked, with who asked.
+    pub care: Mutex<Vec<(String, Care)>>,
 }
 
 impl MasterDouble {
@@ -147,7 +153,7 @@ impl Master for MasterDouble {
                 body: None,
             })?;
             let to_person = self.vulnerable.lock().unwrap().contains(&party.0);
-            let adjustments = if to_person { json!(["plain_language"]) } else { json!([]) };
+            let adjustments = if to_person { json!(["plain_language", "more_time"]) } else { json!([]) };
             let mut answer = json!({ "route_to_person": to_person, "adjustments": adjustments, "review_on": null });
             if to_person {
                 answer["kind"] = json!("bereavement");
@@ -168,6 +174,54 @@ impl Master for MasterDouble {
             })?;
             let hold = self.holds.lock().unwrap().get(&party.0).cloned();
             Ok((200, hold.unwrap_or_else(|| json!({ "held": false, "placed_at": null, "removal": null }))))
+        })
+    }
+
+    fn care(&self, staff: &PartyId, call: Care) -> Asked<'_> {
+        let staff = staff.clone();
+        Box::pin(async move {
+            self.care.lock().unwrap().push((staff.0.clone(), call.clone()));
+            if self.down.load(Ordering::SeqCst) {
+                return Err("connection refused".to_string());
+            }
+            Ok(match call {
+                Care::Reviews => {
+                    let open: Vec<Value> = self
+                        .reviews
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .map(|(id, party, reason)| json!({ "id": id, "kind": if reason == "duplicate" { "duplicate" } else { "consider_marker" }, "party": party, "candidates": [], "reason": reason, "status": "open", "created_at": "2027-11-01T00:00:00Z" }))
+                        .collect();
+                    (200, json!({ "reviews": open }))
+                }
+                Care::Routing(party) => match self.markers.lock().unwrap().get(&party.0) {
+                    Some(m) if m.is_object() => (
+                        200,
+                        json!({ "route_to_person": true, "kind": m["kind"], "adjustments": m["adjustments"], "review_on": m["review_on"] }),
+                    ),
+                    _ => (200, json!({ "route_to_person": false, "adjustments": [], "review_on": null })),
+                },
+                Care::Marker { party, body, .. } => {
+                    let value = body["facts"][0]["value"].clone();
+                    // As the master does: a kind outside its list is refused.
+                    if value.is_object() && value["kind"] == "diagnosis" {
+                        return Ok((422, json!({ "title": "invalid", "detail": "kind is not one of the marker kinds" })));
+                    }
+                    self.markers.lock().unwrap().insert(party.0, value);
+                    (200, json!({ "version": 2 }))
+                }
+                Care::Dismiss(review) => {
+                    let mut open = self.reviews.lock().unwrap();
+                    let before = open.len();
+                    open.retain(|(id, _, _)| *id != review);
+                    if open.len() == before {
+                        (404, json!({ "title": "not_found", "detail": "no such review" }))
+                    } else {
+                        (200, json!({ "review": review, "status": "dismissed" }))
+                    }
+                }
+            })
         })
     }
 }

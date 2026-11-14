@@ -55,6 +55,15 @@ pub enum Question {
         staff: PartyId,
         at: At,
     },
+    /// Whether this member of staff is trained to see and review vulnerability markers.
+    CareStaff {
+        staff: PartyId,
+        at: At,
+    },
+    /// How many administrators an employer's scheme has.
+    SchemeAdmins {
+        policy: PolicyId,
+    },
     /// Whether this party is the life on an underwriting proposal, and the
     /// enrolled key of the device they proved, if it stands.
     DisclosureSigner {
@@ -444,6 +453,8 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             .collect::<Vec<_>>()),
         Question::HeldBalance { party } => d.workbench.own_held(&party),
         Question::DocumentsStaff { staff, at } => json!(d.staff.holds_action(&staff, crate::documents::actions::DOWNLOAD, at)),
+        Question::CareStaff { staff, at } => json!(d.staff.holds_action(&staff, crate::staff::actions::VULNERABILITY_KIND, at)),
+        Question::SchemeAdmins { policy } => json!(d.directory.employer_admins.get(&policy).map_or(0, |admins| admins.len())),
         Question::DisclosureSigner { party, device, proposal, life } => {
             let is_life = d.published.values().flat_map(|rows| rows.values()).any(|r| {
                 r.kind == "proposal_life" && r.subject.as_ref() == Some(&party) && r.body["proposal"] == proposal.as_str() && r.body["life"] == life.as_str()
@@ -469,25 +480,29 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 None => Value::Null,
                 Some((_, offer)) if !offer.is_object() => json!({ "replacement": false }),
                 Some((policy, offer)) => {
-                    // The replacement is written as a further layer on the cover held, so what is held stays as it is.
-                    let kept: Vec<Value> = d
+                    // A top-up is a further layer on the cover held, so what is held stays. A new
+                    // policy that replaces another of ours names the old one: its cover is what is lost.
+                    let replaced = offer["replaced_policy"].as_str().map(PolicyId::from).unwrap_or_else(|| policy.clone());
+                    let held: Vec<Value> = d
                         .view
-                        .layers_on_policy(policy)
+                        .layers_on_policy(&replaced)
                         .into_iter()
-                        .filter(|r| r.in_force && r.cover == offer["cover"].as_str().unwrap_or_default() && d.view.party_of(policy, &r.life) == Some(&party))
+                        .filter(|r| r.in_force && d.view.party_of(&replaced, &r.life) == Some(&party))
+                        .filter(|r| &replaced != policy || r.cover == offer["cover"].as_str().unwrap_or_default())
                         .map(|r| json!({ "cover": r.cover, "type": r.cover_type, "layer": r.layer, "sum_insured_minor": r.sum_insured_minor }))
                         .collect();
+                    let (kept, lost) = if &replaced == policy { (held, Vec::new()) } else { (Vec::new(), held) };
                     let old = d
                         .extras
-                        .get(policy)
+                        .get(&replaced)
                         .and_then(|e| e.notices.back())
                         .map(|(_, start, end, total)| json!({ "period_start": start, "period_end": end, "total_minor": total }));
                     json!({
                         "replacement": true,
-                        "replaced_policy": policy,
+                        "replaced_policy": replaced,
                         "kept": kept,
                         "gained": { "cover": offer["cover"], "sum_insured_minor": offer["sum_insured_minor"] },
-                        "lost": [],
+                        "lost": lost,
                         "old_premium": old,
                         "new_premium_minor": offer["premium_minor"],
                     })

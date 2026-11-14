@@ -248,3 +248,12 @@ Mitchell asked on 13 Nov 2026 for open items to carry best-estimate placeholders
   - A member with no status reported counts as Bronze, the status every member starts and resets to.
   - An anniversary status more than a year before the decision is not read again.
   - The Initial Discount runs from the join date, and the core adjusts a bill already raised.
+
+## Cover held on a life's other policies counts towards the AIA Multi-Benefit Discount (14 Nov 2026)
+
+- AIA's terms count a life's cover on its other AIA Living, Cover for Life and Start-Up policies towards the minimums. A benefit category now names that cover as `product/cover` (`elsewhere`). The core keeps, for each named life, what the same party holds in force on their other retail policies in the same group, and counts it towards the category. Only this policy's covers are discounted.
+- **Why `product/cover`:** cover codes are a product's own. Qualifying them keeps another product's `life` from being taken for this policy's `life`, and lets a product say which other products count.
+- **Choices:**
+  - The same benefit held on two other policies counts as one sum: the sums are added. AIA's terms say the minimum "can be on" those policies.
+  - Only policies in the same group count, because a group's policies share a partition.
+  - A change counts from the next bill, as AIA's terms say.

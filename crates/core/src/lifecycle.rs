@@ -297,6 +297,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         split_from: None,
         scheme,
         covers_elsewhere: 0,
+        sums_elsewhere: BTreeMap::new(),
         discount_overrides: Vec::new(),
         continuation_of: cmd.continuation_of,
         payments: BTreeMap::new(),
@@ -347,6 +348,7 @@ pub(crate) fn issue(state: &mut CoreState, ctx: &mut Ctx<'_>, cmd: IssuePolicy) 
     }
     let (mut policy, product) = build_policy(&state.catalog, cmd, ctx.date, ctx.index)?;
     policy.covers_elsewhere = state.covers_elsewhere(&policy);
+    policy.sums_elsewhere = state.sums_elsewhere(&policy);
     // Rate everything before anything is written, so a policy that cannot be
     // priced is refused whole.
     retail_period_premium(&state.catalog, &product, &policy, policy.inception, &mut ctx.work)?;

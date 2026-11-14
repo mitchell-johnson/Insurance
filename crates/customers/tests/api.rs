@@ -1666,3 +1666,51 @@ async fn a_premium_payer_relationship_can_be_checked_by_its_reference() {
     let (_, rel) = w.get(&format!("/v1/parties/{parent}/relationships/pays-mere"), "payments", "payments").await;
     assert_eq!((rel["valid_to"].clone(), rel["in_force"].clone()), (json!("2026-03-01"), json!(false)));
 }
+
+/// Purpose: a member on a working holiday visa who leaves the employer and the country is
+/// recorded as non-resident from the day they left, with their overseas address and tax
+/// residency, while what was true before stays readable as of any earlier date; an unknown
+/// residency status is refused (persona row GRP-037, whose leaver and continuation side is
+/// group's).
+/// Why it matters: continuation cover, tax on payments and where notices go all turn on
+/// residency on a given day, and a claim dated before the move must still see the person
+/// as resident then.
+#[tokio::test]
+async fn a_member_who_leaves_the_country_is_recorded_non_resident_from_that_day() {
+    let w = world_or_skip!();
+    let p = w
+        .person(
+            "Lena",
+            "Weber",
+            "1999-03-03",
+            &[("residency_status", json!("working_holiday_visa")), ("tax_residency", json!(["NZ"]))],
+        )
+        .await;
+    let left = "2026-10-15";
+    let (status, out) = w
+        .command(
+            &p,
+            "staff",
+            json!({ "command": "record", "facts": [
+                { "field": "residency_status", "value": "non_resident", "valid_from": left },
+                { "field": "tax_residency", "value": ["DE"], "valid_from": left },
+                { "field": "residential_address", "value": ["Hauptstr. 5", "10115 Berlin", "Germany"], "valid_from": left }
+            ] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let (status, now) = w.get(&format!("/v1/parties/{p}"), "staff", "servicing").await;
+    assert_eq!(status, StatusCode::OK, "{now}");
+    assert_eq!(now["facts"]["residency_status"]["value"], "non_resident");
+    assert_eq!(now["facts"]["residential_address"]["value"][2], "Germany");
+    let (_, before) = w.get(&format!("/v1/parties/{p}?as_of=2026-10-14"), "staff", "servicing").await;
+    assert_eq!(before["facts"]["residency_status"]["value"], "working_holiday_visa", "{before}");
+    let (status, _) = w
+        .command(
+            &p,
+            "staff",
+            json!({ "command": "record", "facts": [{ "field": "residency_status", "value": "tourist" }] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}

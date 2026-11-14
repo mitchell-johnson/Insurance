@@ -597,7 +597,10 @@ fn a_rate_table_activated_without_a_validation_shows_at_the_close() {
 
 /// Purpose: in March the core bills health premiums with $15.00 of GST and a $2.00 levy,
 /// each under its own posting type, and withholds $30.00 of tax from an income benefit
-/// under `withholding_benefit`, which reconciles to withholding tax payable. In April something credits GST payable under the
+/// under `withholding_benefit`, which reconciles to withholding tax payable. Once March is
+/// closed, $30.00 of benefit withholding is due to Inland Revenue on 20 April; December's
+/// falls due on the working day after 15 January; an open month or an unknown kind is
+/// refused. In April something credits GST payable under the
 /// posting type `premium`, and the levy account moves with no posting type at all.
 /// March's reconciliation shows each account's movement by posting type and product,
 /// nothing unexplained and the check green; April's names both stray postings and the
@@ -687,6 +690,31 @@ fn tax_accounts_reconcile_to_the_posting_types_that_may_move_them() {
     );
     assert!(b.state.blockers(apr).iter().any(|c| c.id == check));
     assert!(b.state.tax_reconciliation(apr.adjustment()).accounts.is_empty());
+
+    // What is owed to Inland Revenue is asked of a closed month only.
+    let due = |b: &Books, kind: &str, p: &str| ic_finance::host::answer(&b.state, serde_json::json!({"q": "withholding_due", "kind": kind, "period": p}));
+    assert!(due(&b, "benefit", "2028-03").unwrap_err().contains("not closed"));
+    let closed = || ic_finance::close::ClosedPeriod {
+        final_seq: 0,
+        final_head: Hash32::ZERO,
+        trial_balance: vec![],
+        trial_balance_hash: Hash32::ZERO,
+        by: None,
+        index: 0,
+    };
+    b.state.periods.get_mut(&mar).unwrap().closed = Some(closed());
+    let owed = due(&b, "benefit", "2028-03").unwrap();
+    assert_eq!(
+        (owed["account"].as_str(), owed["amount_minor"].as_i64(), owed["due"].as_str()),
+        (Some("2220"), Some(30_00), Some("2028-04-20"))
+    );
+    assert_eq!(due(&b, "rwt", "2028-03").unwrap()["amount_minor"], 0);
+    assert!(due(&b, "lottery", "2028-03").unwrap_err().contains("no tax account"));
+    // December's falls on 15 January, a Saturday in 2028, so the Monday after.
+    let dec = period(2027, 12);
+    let march_state = b.state.periods[&mar].clone();
+    b.state.periods.entry(dec).or_insert(march_state).closed = Some(closed());
+    assert_eq!(due(&b, "benefit", "2027-12").unwrap()["due"], "2028-01-17");
 
     let mut config = close_config();
     config.version += 1;

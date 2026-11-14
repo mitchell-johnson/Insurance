@@ -57,10 +57,10 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | AUD Audience scoping, customer app and identity | 12 | 5 | 2 | 5 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
 | UW Underwriting, underwriting operations and delegated authority | 29 | 1 | 0 | 1 |
-| CLM Claims and claims operations | 39 | 2 | 1 | 2 |
+| CLM Claims and claims operations | 40 | 2 | 0 | 2 |
 | RI Reinsurance | 16 | 1 | 1 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 5 | 8 | 3 |
-| GRP Group scheme administration | 27 | 5 | 8 | 2 |
+| GRP Group scheme administration | 32 | 3 | 5 | 1 |
 | JNT Joint lives, ownership, assignments and dependants | 3 | 8 | 20 | 14 |
 | ADV Advisers and commission | 45 | 0 | 0 | 0 |
 | HLT Composable health product | 5 | 3 | 3 | 0 |
@@ -68,7 +68,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | SVC Policy servicing | 6 | 5 | 15 | 4 |
 | ANV The anniversary window | 3 | 2 | 14 | 3 |
 | ANN Annuities | 2 | 2 | 9 | 4 |
-| VUL Vulnerable customers, support people and representatives | 15 | 6 | 0 | 4 |
+| VUL Vulnerable customers, support people and representatives | 16 | 5 | 0 | 4 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
 | STF Staff authorisation and permissions | 18 | 0 | 0 | 0 |
 | PAY Payment runs and bank connectivity | 14 | 0 | 0 | 0 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **360** | **90** | **127** | **94** |
+| **Total** | **367** | **87** | **123** | **93** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 35 | 25 | 9 |
 | B | 110 | 17 | 15 |
-| C | 213 | 45 | 88 |
+| C | 220 | 42 | 84 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -93,7 +93,6 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **XFR** (2): XFR-007, XFR-009
 - **AUD** (1): AUD-012
 - **INV** (2): INV-018, INV-019
-- **GRP** (1): GRP-017
 - **JNT** (10): JNT-002, JNT-003, JNT-004, JNT-005, JNT-006, JNT-014, JNT-016, JNT-018, JNT-019, JNT-022
 - **SVC** (4): SVC-003, SVC-006, SVC-009, SVC-010
 - **ANV** (2): ANV-001, ANV-006
