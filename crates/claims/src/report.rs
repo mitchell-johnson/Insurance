@@ -116,6 +116,9 @@ pub struct Report {
     /// Resident withholding tax kept back from late payment interest, owed to the revenue authority.
     #[serde(default)]
     pub interest_withheld_minor: i64,
+    /// Tax kept back from income benefit periods paid.
+    #[serde(default)]
+    pub benefit_tax_withheld_minor: i64,
     pub workload: BTreeMap<StaffId, u32>,
     pub runs_unreconciled: u32,
 }
@@ -565,6 +568,13 @@ impl ClaimsState {
             r.evidence_cost_minor += c.evidence.iter().map(|e| e.cost_minor).sum::<i64>();
             r.interest_declined_minor += c.payments.iter().map(|p| p.interest_declined_minor).sum::<i64>();
             r.interest_withheld_minor += c.payments.iter().map(|p| p.interest_withheld_minor).sum::<i64>();
+            r.benefit_tax_withheld_minor += c
+                .schedule
+                .iter()
+                .flat_map(|s| s.periods.values())
+                .filter(|p| !p.returned)
+                .map(|p| p.tax_withheld_minor)
+                .sum::<i64>();
         }
         r.workload = self
             .owned

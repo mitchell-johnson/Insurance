@@ -123,11 +123,14 @@ async function show(id) {
     w.waiver_from ? h("p", {}, `Premium waived from ${w.waiver_from}.`) : null);
   put($("c-over"), (w.overpayments || []).length ? table(["Overpayment", "Outstanding", "Recovery status"], w.overpayments.map(([o, out, status]) => [o, money(out), words(status)])) : none("None."));
   // Each definition is named with the version the cover was bound to, and opens at that version.
-  const bound = Array.isArray(w.definitions) ? w.definitions : null;
+  const bound = Array.isArray(w.definitions) ? [...w.definitions] : null;
+  // A decision may rest on a version the cover check did not name; it is listed too, with the decisions that read it.
+  const relied = {};
+  for (const [number, list] of Object.entries(w.decision_definitions || {})) for (const d of list) { (relied[d] = relied[d] || []).push(number); if (bound && !bound.includes(d)) bound.push(d); }
   $("c-defs-head").hidden = $("c-defs").hidden = !bound;
-  put($("c-defs"), !bound ? null : !bound.length ? none("This cover is bound to no definitions.") : table(["Definition", "Version", ""], bound.map((d) => {
+  put($("c-defs"), !bound ? null : !bound.length ? none("The cover has not been checked yet, so no wording is named.") : table(["Wording", "Version", "Relied on by", ""], bound.map((d) => {
     const at = d.lastIndexOf("@"), id = d.slice(0, at), version = d.slice(at + 1);
-    return [(known.find((k) => k.id === id) || {}).title || id, version, h("button", { class: "quiet", type: "button", on: { click: run($("c-msg"), () => read(id, version)) } }, "Read the wording")];
+    return [(known.find((k) => k.id === id) || {}).title || id, version, relied[d] ? relied[d].map((n) => `decision ${n}`).join(", ") : "", h("button", { class: "quiet", type: "button", on: { click: run($("c-msg"), () => read(id, version)) } }, "Read the wording")];
   })));
   put($("c-timers"), table(["Timer", "Due", "Met", "Escalated"], Object.entries(w.timers || {}).map(([kind, [due, met, escalated]]) => [words(kind), due, met || "", cell(escalated)])));
   fields();

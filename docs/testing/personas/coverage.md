@@ -72,18 +72,18 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
 | STF Staff authorisation and permissions | 16 | 0 | 2 | 1 |
 | PAY Payment runs and bank connectivity | 14 | 0 | 0 | 0 |
-| FIN Finance close, statutory funds and regulatory reporting | 17 | 1 | 0 | 0 |
+| FIN Finance close, statutory funds and regulatory reporting | 18 | 0 | 0 | 0 |
 | CFG Configuration operations and the actuary's interface | 6 | 2 | 6 | 2 |
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **343** | **101** | **133** | **99** |
+| **Total** | **344** | **100** | **133** | **99** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 35 | 25 | 9 |
 | B | 107 | 19 | 16 |
-| C | 199 | 54 | 93 |
+| C | 200 | 53 | 93 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area

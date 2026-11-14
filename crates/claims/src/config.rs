@@ -289,6 +289,12 @@ pub struct Rules {
     /// in force on the anniversary is the one applied.
     #[serde(default)]
     pub claim_index_bp: u32,
+    /// Tax kept back from each income benefit period, in basis points of
+    /// the period's benefit. Zero (the default and the placeholder until the
+    /// tax review the design names): benefits are paid gross and taxed in
+    /// the payee's own return.
+    #[serde(default)]
+    pub benefit_withholding_bp: u32,
     /// How often a person paid a benefit is asked to prove they are alive.
     /// Zero: never.
     #[serde(default)]
