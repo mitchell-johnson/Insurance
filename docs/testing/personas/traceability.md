@@ -539,7 +539,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | FIN-011 | full | `finance/tests/returns.rs::any_figure_on_a_filed_return_opens_to_what_is_behind_it` |
 | FIN-012 | full | `finance/tests/edges.rs::a_policy_is_placed_in_its_accounting_group_at_issue_and_never_moved` |
 | FIN-013 | full | `finance/tests/journals.rs::money_moves_between_statutory_funds_only_by_an_approved_transfer` |
-| FIN-014 | part | `finance/tests/edges.rs::tax_accounts_reconcile_to_the_posting_types_that_may_move_them` |
+| FIN-014 | part | `finance/tests/edges.rs::tax_accounts_reconcile_to_the_posting_types_that_may_move_them`<br>`claims/tests/suite/book.rs::tax_is_kept_back_from_an_income_benefit_where_the_rules_set_a_rate`<br>`claims/tests/suite/book.rs::tax_is_withheld_from_late_interest_at_the_payees_rate` |
 | FIN-015 | full | `payments/tests/aml.rs::a_payer_who_is_not_the_owner_is_raised_once`<br>`customers/tests/api.rs::a_premium_payer_relationship_can_be_checked_by_its_reference` |
 | FIN-016 | full | `payments/tests/aml.rs::a_recorded_relationship_stops_the_rule`<br>`payments-service/tests/pump.rs::a_payer_relationship_is_confirmed_with_the_customer_master`<br>`customers/tests/api.rs::a_premium_payer_relationship_can_be_checked_by_its_reference` |
 | FIN-017 | full | `finance/tests/mart.rs::claims_that_leave_the_policy_in_force_are_on_the_experience_extract`<br>`finance/tests/mart.rs::the_real_claims_module_feeds_the_experience_extract`<br>`finance/tests/mart.rs::claims_by_cause_are_categories_with_small_rows_folded_or_withheld` |
