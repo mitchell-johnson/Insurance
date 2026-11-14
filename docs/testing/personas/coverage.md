@@ -59,7 +59,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | UW Underwriting, underwriting operations and delegated authority | 29 | 1 | 0 | 1 |
 | CLM Claims and claims operations | 34 | 7 | 1 | 5 |
 | RI Reinsurance | 15 | 1 | 2 | 0 |
-| INV Unit pricing and the investment ledger | 12 | 4 | 9 | 3 |
+| INV Unit pricing and the investment ledger | 12 | 5 | 8 | 3 |
 | GRP Group scheme administration | 27 | 5 | 8 | 2 |
 | JNT Joint lives, ownership, assignments and dependants | 3 | 8 | 20 | 14 |
 | ADV Advisers and commission | 44 | 1 | 0 | 1 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **344** | **99** | **134** | **99** |
+| **Total** | **344** | **100** | **133** | **99** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 35 | 25 | 9 |
 | B | 107 | 19 | 16 |
-| C | 200 | 52 | 94 |
+| C | 200 | 53 | 93 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
