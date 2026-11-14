@@ -165,6 +165,12 @@ pub enum Command {
         policy: PolicyId,
         replaces: PolicyId,
     },
+    /// New business says who wrote a policy: the module writes its layers
+    /// (see `newbusiness.rs`).
+    AdviseNewBusiness {
+        policy: PolicyId,
+        advice: crate::newbusiness::NewBusiness,
+    },
     /// The writing adviser disputes a match made by the replacement rule.
     /// The initial commission on the matched amount is held until decided.
     DisputeReplacement {
@@ -274,6 +280,7 @@ impl Command {
         match self {
             Command::Ingest(_) | Command::PostingRefused { .. } | Command::PostingDelivered { .. } => &["event-relay"],
             Command::WriteLayer(_) | Command::LinkReplacement { .. } => &["new-business", "policy-servicing", "migration", "group-admin"],
+            Command::AdviseNewBusiness { .. } => &["new-business", "migration"],
             Command::AttributeAlteration { .. } => &["policy-servicing"],
             Command::DisputeReplacement { .. } => &["new-business", "policy-servicing", "adviser-portal"],
             Command::AppointAdviser { .. } => &["customer-app", "policy-servicing"],
@@ -308,7 +315,9 @@ impl Command {
                 InstructionKind::Statutory => ("payee.restricted_instruction", party.0.clone()),
                 InstructionKind::Assignment => ("payee.manage", party.0.clone()),
             },
-            Command::WriteLayer(_) | Command::LinkReplacement { .. } | Command::AttributeAlteration { .. } => ("policy.assign", any()),
+            Command::WriteLayer(_) | Command::LinkReplacement { .. } | Command::AttributeAlteration { .. } | Command::AdviseNewBusiness { .. } => {
+                ("policy.assign", any())
+            }
             Command::ProposeChange { .. } | Command::RejectChange { .. } => ("config.propose", any()),
             Command::CutStatement { payee } => ("statement.cut", payee.0.clone()),
             Command::AttachDocument { party, .. } => ("workbench.document", party.0.clone()),
@@ -752,6 +761,10 @@ pub struct DistributionState {
     /// What has been let go of to keep the state bounded.
     #[serde(default)]
     pub history: crate::history::History,
+    /// What new business said about who wrote a policy the core has not
+    /// issued yet. Taken when the policy arrives.
+    #[serde(default)]
+    pub new_business: BTreeMap<PolicyId, crate::newbusiness::NewBusiness>,
     idempotency: BTreeMap<String, StoredResult>,
 }
 
@@ -813,6 +826,7 @@ impl DistributionState {
             memo: BTreeMap::new(),
             changed: BTreeMap::new(),
             history: Default::default(),
+            new_business: BTreeMap::new(),
             idempotency: BTreeMap::new(),
         }
     }
@@ -1162,6 +1176,7 @@ impl DistributionState {
             }
 
             Command::WriteLayer(w) => self.write_layer(ctx, *w),
+            Command::AdviseNewBusiness { policy, advice } => self.advise_new_business(ctx, policy, advice),
             Command::AppointAdviser { policy, engagement, book } => self.appoint_adviser(ctx, policy, engagement, book),
             Command::LinkReplacement { policy, replaces } => {
                 if !self.policies.contains_key(&replaces) {

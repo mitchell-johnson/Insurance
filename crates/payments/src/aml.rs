@@ -76,7 +76,19 @@ pub struct PayerChecks {
     pub pending: BTreeMap<String, Payer>,
     /// Cases by `{owner}|{payer}`.
     pub cases: BTreeMap<String, PayerCase>,
+    /// Days each owner asked for a refund, within the pattern window.
+    #[serde(default)]
+    pub refunds: BTreeMap<String, Vec<NaiveDate>>,
 }
+
+/// Refunds asked for by one owner within this many days that make a
+/// pattern (VUL-020): overpaying and asking for the money back is how
+/// money is passed through an insurer. A recorded best estimate.
+pub const REFUND_PATTERN_DAYS: i64 = 60;
+pub const REFUND_PATTERN_COUNT: usize = 3;
+
+/// The payer of a refund-pattern case: not a payer at all, the pattern.
+pub const REFUND_PATTERN: &str = "refund-pattern";
 
 fn digits(number: &str) -> String {
     number.chars().filter(char::is_ascii_alphanumeric).collect()
@@ -282,6 +294,58 @@ impl PaymentsState {
                 Some((key.clone(), c.owner.clone(), c.payer.clone(), relationship))
             })
             .collect()
+    }
+
+    /// A refund was asked for on a policy. The third within the window
+    /// for one owner opens a restricted case for compliance, once; staff
+    /// see only that the party needs support (`support_prompt`).
+    pub(crate) fn refund_asked(&mut self, tx: &mut Tx<'_>, policy: &str) {
+        let Some(owner) = self.payer_checks.owners.get(policy).cloned() else { return };
+        let today = tx.now.date();
+        let from = today - Duration::days(REFUND_PATTERN_DAYS);
+        let days = self.payer_checks.refunds.entry(owner.clone()).or_default();
+        days.retain(|d| *d > from);
+        days.push(today);
+        if days.len() < REFUND_PATTERN_COUNT {
+            return;
+        }
+        let key = case_key(&owner, REFUND_PATTERN);
+        let fresh = match self.payer_checks.cases.get(&key) {
+            None => true,
+            // Cleared earlier: a new pattern since then is raised again.
+            Some(case) => case.cleared.as_ref().is_some_and(|c| c.on < from),
+        };
+        if !fresh {
+            return;
+        }
+        self.payer_checks.cases.insert(
+            key.clone(),
+            PayerCase {
+                owner,
+                payer: REFUND_PATTERN.to_string(),
+                policies: vec![policy.to_string()],
+                opened: today,
+                last_paid: today,
+                cleared: None,
+                proposed: None,
+            },
+        );
+        self.push_outbox(OutboxEntry {
+            key: format!("aml-{key}-{today}"),
+            instruction: Instruction::Notify {
+                to: Role::Compliance,
+                subject: "refund_pattern".to_string(),
+                detail: format!("payer case {key}: {REFUND_PATTERN_COUNT} refunds asked for within {REFUND_PATTERN_DAYS} days"),
+            },
+            about: None,
+        });
+        tx.emit(Event::PayerCaseOpened { case: key });
+    }
+
+    /// Whether staff should be prompted to offer the party support: a
+    /// restricted case is open about them. Says nothing of why.
+    pub fn support_prompt(&self, party: &str) -> bool {
+        self.payer_checks.cases.values().any(|c| c.owner == party && c.cleared.is_none())
     }
 
     /// Open cases, oldest first.

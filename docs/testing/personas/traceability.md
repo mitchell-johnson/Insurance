@@ -203,7 +203,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | CLM-005 | full | `claims/tests/suite/intake.rs::a_death_with_no_certificate_is_registered_and_the_coroner_is_chased` |
 | CLM-006 | full | `sim/tests/claims.rs::an_admission_can_end_the_policy_or_take_the_premium_owing`<br>`sim/tests/claims.rs::a_premium_paid_after_the_event_does_not_rewrite_the_event_date` |
 | CLM-007 | full | `sim/tests/claims.rs::the_cover_check_reads_the_policy_as_it_was_on_the_event_date`<br>`claims/tests/suite/intake.rs::doubtful_cover_still_registers_and_a_refused_reserve_leaves_nothing` |
-| CLM-008 | part | `sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme`<br>`claims/tests/suite/covers.rs::a_cover_check_shows_the_event_date_as_known_now_and_as_known_then` |
+| CLM-008 | full | `sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme`<br>`claims/tests/suite/covers.rs::a_cover_check_shows_the_event_date_as_known_now_and_as_known_then`<br>`sim/tests/group_cover.rs::a_cover_check_also_says_what_the_record_showed_on_the_event_date` |
 | CLM-009 | part | `claims/tests/suite/decisions.rs::lump_sums_on_one_cover_never_exceed_the_sum_insured`<br>`claims/tests/suite/covers.rs::joint_and_linked_covers_count_what_the_others_have_paid`<br>`claims/tests/suite/decisions.rs::an_admission_within_authority_takes_effect_and_is_recorded`<br>`core/src/claims.rs::a_lump_sum_reduces_its_cover_and_the_covers_linked_to_it_until_reversed`<br>`product/tests/products.rs::a_cover_can_reduce_another_and_be_joint_on_the_first_event`<br>`documents/tests/lifecycle.rs::a_claim_that_reduces_cover_asks_for_one_new_schedule_a_day` |
 | CLM-010 | full | `claims/tests/suite/intake.rs::health_invoice_goes_straight_through_inside_the_limits`<br>`sim/tests/claims.rs::a_health_invoice_goes_straight_through_to_the_provider` |
 | CLM-011 | full | `claims/tests/suite/intake.rs::pre_approval_is_a_hold_not_a_posting` |
@@ -220,7 +220,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | CLM-023 | full | `claims/tests/suite/intake.rs::escalation_and_identification`<br>`sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
 | CLM-024 | full | `claims/tests/suite/decisions.rs::admission_follows_the_cover_facts`<br>`claims/tests/suite/decisions.rs::a_pool_cover_claim_is_admitted_on_the_employers_evidence_kept_with_it` |
 | CLM-025 | full | `sim/tests/personas_lines.rs::a_pilots_claim_is_checked_on_the_automatic_amount_plus_any_underwritten_layer`<br>`sim/tests/claims.rs::a_member_above_the_automatic_limit_is_paid_the_excess_only_where_it_was_underwritten` |
-| CLM-026 | part | `claims/tests/suite/views.rs::a_continuation_policy_claim_carries_the_scheme_history`<br>`sim/tests/claims.rs::a_continuation_policy_carries_its_scheme_membership_to_the_claim` |
+| CLM-026 | full | `claims/tests/suite/views.rs::a_continuation_policy_claim_carries_the_scheme_history`<br>`sim/tests/claims.rs::a_continuation_policy_carries_its_scheme_membership_to_the_claim` |
 | CLM-027 | full | `claims/tests/suite/views.rs::a_company_owned_income_claim_pays_the_company_and_is_about_the_life` |
 | CLM-028 | part | `claims/tests/suite/book.rs::a_payee_is_verified_before_anything_is_paid` |
 | CLM-029 | full | `claims/tests/suite/book.rs::a_death_benefit_goes_to_the_nomination_in_force_on_the_date_of_death`<br>`sim/tests/claims.rs::a_death_benefit_goes_to_whoever_was_nominated_on_the_date_of_death` |
@@ -257,6 +257,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | RI-013 | full | `reinsurance/tests/replay.rs::reconciliation_notices_damage` |
 | RI-014 | full | `reinsurance/tests/claims.rs::large_claims_are_notified_and_consent_is_tracked`<br>`claims/tests/suite/controls.rs::a_reinsurers_consent_holds_admission_and_a_refusal_goes_to_a_senior` |
 | RI-015 | full | `reinsurance/tests/claims.rs::periodic_and_ex_gratia_payments_follow_the_treaty` |
+| RI-016 | full | `reinsurance/tests/accumulation.rs::replacement_cover_carries_on_the_cession_it_replaces` |
 | RI-017 | full | `reinsurance/tests/statements.rs::a_treaty_comparison_looks_only_at_cover_on_that_treaty`<br>`reinsurance/tests/statements.rs::recapture_and_a_negotiated_move_change_cover_from_a_date` |
 
 ## INV Unit pricing and the investment ledger
@@ -463,7 +464,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | VUL-009 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-010 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-011 | full | `customers/tests/api.rs::a_guardian_gets_a_report_of_their_actions` |
-| VUL-012 | part | `customers/tests/api.rs::a_name_change_reaches_every_relationship_and_groups_stay_apart` |
+| VUL-012 | full | `customers/tests/api.rs::a_name_change_reaches_every_relationship_and_groups_stay_apart`<br>`claims/tests/suite/book.rs::a_benefit_is_paid_to_the_payee_verified_and_their_own_account` |
 | VUL-013 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-014 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-015 | full | `customers/tests/api.rs::a_death_prompts_a_person_to_consider_the_bereaved` |
@@ -471,6 +472,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | VUL-018 | part | `customers/tests/api.rs::a_capacity_question_pauses_representatives` |
 | VUL-016 | part | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not` |
 | VUL-019 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_post_only_customer_and_their_representative_both_get_the_notice`<br>`documents/tests/requested_letters.rs::a_representative_sees_ordinary_letters_and_never_clinical_ones` |
+| VUL-020 | full | `payments/tests/aml.rs::repeated_refunds_raise_a_restricted_case` |
 | VUL-021 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_representative_gets_the_notice_in_their_own_language` |
 
 ## CMP Complaints and disputes

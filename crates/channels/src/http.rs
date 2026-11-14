@@ -165,6 +165,8 @@ pub struct AppState {
     pub commission: Arc<dyn crate::forward::Source>,
     /// The wording of each definition a cover can be bound to, for assessors.
     pub wordings: Arc<crate::wordings::Wordings>,
+    /// The return definitions the finance console may file on.
+    pub returns: Arc<crate::finance::Returns>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -2361,6 +2363,9 @@ async fn finance_question(
     if name == "me" {
         return ok(standing);
     }
+    if name == "return_definitions" {
+        return ok(json!({ "rows": s.returns.list() }));
+    }
     let question = crate::finance::question(&name, &fields).map_err(Problem::bad_request)?;
     let answer = s
         .finance
@@ -2380,7 +2385,7 @@ async fn finance_command(State(s): State<Shared>, headers: HeaderMap, method: Me
         return Err(Problem::forbidden("you may read the finance console but hold no role to act in it"));
     }
     let key = key(&headers, &session.party.0)?;
-    let envelope = crate::finance::envelope(&key, &session.party, &standing["roles"], parse(&body)?).map_err(Problem::bad_request)?;
+    let envelope = crate::finance::envelope(&key, &session.party, &standing["roles"], &s.returns, parse(&body)?).map_err(Problem::bad_request)?;
     let output = s
         .finance
         .tell(envelope)

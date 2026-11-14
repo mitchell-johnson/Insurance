@@ -66,6 +66,10 @@ pub struct Config {
     /// Changed through a change set, like every other business setting.
     #[serde(default)]
     pub release_owed_elsewhere: OwedElsewhere,
+    /// The schedule new business is written under, by product or by
+    /// `product/cover_type` (which wins).
+    #[serde(default)]
+    pub product_schedules: BTreeMap<String, String>,
 }
 
 impl Default for Config {
@@ -81,6 +85,7 @@ impl Default for Config {
             },
             staff_paths: BTreeMap::new(),
             release_owed_elsewhere: OwedElsewhere::default(),
+            product_schedules: BTreeMap::new(),
         }
     }
 }
@@ -176,6 +181,14 @@ pub enum Change {
     CorrectTerms {
         layer: String,
         option: String,
+    },
+    /// Which schedule new business for a product (or one of its cover
+    /// types) is written under. None stops naming one.
+    SetProductSchedule {
+        product: String,
+        #[serde(default)]
+        cover_type: Option<String>,
+        schedule: Option<String>,
     },
 }
 
@@ -411,6 +424,20 @@ impl Config {
             Change::ReleaseOwedElsewhere(o) => {
                 self.release_owed_elsewhere = *o;
                 Ok(())
+            }
+            Change::SetProductSchedule { product, cover_type, schedule } => {
+                let key = crate::newbusiness::schedule_key(product, cover_type.as_deref());
+                match schedule {
+                    Some(s) if !self.schedules.contains_key(s) => reject("unknown_schedule", format!("schedule {s} has not been activated")),
+                    Some(s) => {
+                        self.product_schedules.insert(key, s.clone());
+                        Ok(())
+                    }
+                    None => {
+                        self.product_schedules.remove(&key);
+                        Ok(())
+                    }
+                }
             }
             Change::SetStaffPaths { staff, paths } => {
                 self.staff_paths.insert(staff.clone(), paths.clone());

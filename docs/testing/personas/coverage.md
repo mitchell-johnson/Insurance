@@ -57,8 +57,8 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | AUD Audience scoping, customer app and identity | 12 | 5 | 2 | 5 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
 | UW Underwriting, underwriting operations and delegated authority | 29 | 1 | 0 | 1 |
-| CLM Claims and claims operations | 37 | 4 | 1 | 4 |
-| RI Reinsurance | 15 | 1 | 2 | 0 |
+| CLM Claims and claims operations | 39 | 2 | 1 | 2 |
+| RI Reinsurance | 16 | 1 | 1 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 5 | 8 | 3 |
 | GRP Group scheme administration | 27 | 5 | 8 | 2 |
 | JNT Joint lives, ownership, assignments and dependants | 3 | 8 | 20 | 14 |
@@ -68,7 +68,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | SVC Policy servicing | 6 | 5 | 15 | 4 |
 | ANV The anniversary window | 3 | 2 | 14 | 3 |
 | ANN Annuities | 2 | 2 | 9 | 4 |
-| VUL Vulnerable customers, support people and representatives | 12 | 8 | 1 | 4 |
+| VUL Vulnerable customers, support people and representatives | 14 | 7 | 0 | 4 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
 | STF Staff authorisation and permissions | 17 | 0 | 1 | 0 |
 | PAY Payment runs and bank connectivity | 14 | 0 | 0 | 0 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **352** | **95** | **130** | **97** |
+| **Total** | **357** | **92** | **128** | **95** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 35 | 25 | 9 |
-| B | 108 | 18 | 16 |
-| C | 207 | 49 | 90 |
+| B | 109 | 17 | 16 |
+| C | 211 | 47 | 88 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -113,7 +113,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **AUD** (4): AUD-002, AUD-003, AUD-010, AUD-017
 - **RES** (5): RES-001, RES-002, RES-004, RES-005, RES-011
 - **UW** (1): UW-006
-- **CLM** (4): CLM-008, CLM-009, CLM-026, CLM-028
+- **CLM** (2): CLM-009, CLM-028
 - **INV** (1): INV-015
 - **GRP** (1): GRP-013
 - **JNT** (4): JNT-008, JNT-013, JNT-023, JNT-030

@@ -533,6 +533,7 @@ fn stage(
                         factors: Bitemporal::new(*effective, date, index, life.factors.clone()),
                         joined: *effective,
                         left: None,
+                        left_recorded_on: None,
                     },
                 );
                 Outcome::Joined {
@@ -543,6 +544,7 @@ fn stage(
             MemberChange::Left { life, effective } => {
                 if let Some(l) = scratch.lives.get_mut(life) {
                     l.left = Some(*effective);
+                    l.left_recorded_on = Some(date);
                 }
                 // Dependants are on the scheme through their member.
                 for dependant in scratch.dependants_of(life).filter(|d| d.left.is_none()) {
@@ -579,6 +581,7 @@ fn stage(
                 let mut party = None;
                 if let Some(l) = scratch.lives.get_mut(life) {
                     l.left = None;
+                    l.left_recorded_on = None;
                     party = party_of(&l.kind);
                 }
                 // Dependants who left with the member come back with them.
@@ -1143,6 +1146,7 @@ pub(crate) fn split(
     };
     for mut life in moving {
         life.left = None;
+        life.left_recorded_on = None;
         new.lives.insert(life.id.clone(), life);
     }
     let mut moved = Vec::new();
