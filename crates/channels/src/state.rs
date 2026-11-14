@@ -63,6 +63,25 @@ pub enum Approver {
 /// else on such a policy waits until every owner has signed it.
 pub const EITHER_OWNER: &[&str] = &["notify_claim", "update_contact_details"];
 
+/// What a cover is held at, from the layer's option code, for a person to
+/// read: each axis with the choice made on it (`waiting=4w,benefit=to65`),
+/// or the one level of a flat list such as a health excess. It is what was
+/// bought, not a health fact, so it goes wherever the cover row goes.
+pub fn chosen(code: &str) -> Option<Value> {
+    let code = code.trim();
+    if code.is_empty() {
+        return None;
+    }
+    let mut out = serde_json::Map::new();
+    for part in code.split(',') {
+        match part.split_once('=') {
+            Some((axis, choice)) => out.insert(axis.trim().to_string(), json!(choice.trim())),
+            None => out.insert("level".to_string(), json!(part.trim())),
+        };
+    }
+    Some(Value::Object(out))
+}
+
 /// Requests that move money or change where it goes. A person's own
 /// request of one of these kinds is taken only signed on their enrolled
 /// device, which needs a connection for the challenge: a payment keyed in
@@ -500,7 +519,10 @@ impl ChannelState {
             if only.is_some() && party.as_ref() != only {
                 continue;
             }
-            let body = json!({ "cover": r.cover, "type": r.cover_type, "life": r.life, "layer": r.layer, "sum_insured_minor": r.sum_insured_minor, "in_force": r.in_force });
+            let mut body = json!({ "cover": r.cover, "type": r.cover_type, "life": r.life, "layer": r.layer, "sum_insured_minor": r.sum_insured_minor, "in_force": r.in_force });
+            if let Some(options) = r.option.as_deref().and_then(chosen) {
+                body["options"] = options;
+            }
             if is_member {
                 add(format!("member/{}/{}", r.life, r.cover), "member", party, false, body);
             } else {

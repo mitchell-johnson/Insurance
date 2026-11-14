@@ -237,3 +237,48 @@ impl PaymentsState {
         }
     }
 }
+
+/// What one partition holds of a kind of tax in one fund, as the core
+/// answers it: partition, fund, minor units.
+pub type Held = (u16, Option<String>, i64);
+
+/// Split the period's figure between the partitions and funds holding the
+/// tax. The core keeps a running balance, not one per month, so a month's
+/// payment is taken from each holding in proportion to what it holds; that
+/// is a best estimate until the core can answer by period. Every share is
+/// at most its holding and the shares add up to `due_minor` exactly, the
+/// odd cents going to the largest remainders, ties to the first listed.
+/// Where less is held than is due, the holdings are returned as they are,
+/// and the module stops the payment for treasury.
+pub fn shares_for(due_minor: i64, held: &[Held]) -> Vec<Share> {
+    let held: Vec<&Held> = held.iter().filter(|(_, _, minor)| *minor > 0).collect();
+    let total: i128 = held.iter().map(|(_, _, minor)| i128::from(*minor)).sum();
+    let share = |(partition, fund, _): &Held, amount_minor: i64| Share {
+        partition: *partition,
+        fund: fund.clone(),
+        amount_minor,
+    };
+    if due_minor <= 0 || total <= i128::from(due_minor) {
+        return held.iter().map(|h| share(h, h.2)).collect();
+    }
+    let due = i128::from(due_minor);
+    let mut parts: Vec<(i64, i128)> = held
+        .iter()
+        .map(|(_, _, minor)| {
+            let exact = due * i128::from(*minor);
+            // Below `minor` because due < total, so it fits.
+            ((exact / total) as i64, exact % total)
+        })
+        .collect();
+    let given: i128 = parts.iter().map(|(floor, _)| i128::from(*floor)).sum();
+    let mut order: Vec<usize> = (0..parts.len()).collect();
+    order.sort_by(|a, b| parts[*b].1.cmp(&parts[*a].1).then(a.cmp(b)));
+    for i in order.into_iter().take((due - given) as usize) {
+        parts[i].0 += 1;
+    }
+    held.iter()
+        .zip(parts)
+        .filter(|(_, (amount, _))| *amount > 0)
+        .map(|(h, (amount, _))| share(h, amount))
+        .collect()
+}

@@ -443,6 +443,10 @@ node crates/channels/tests/browser/check.js
 
 When a life comes to answer their disclosure or sign a consent, the portal asks the customer master's routing for them. If the adjustments include `more_time` it sends underwriting `set_more_time {proposal, life, more_time: true}` as `underwriting-console` (key `more-time:{proposal}:{life}`), so a marker placed after the proposal opened is picked up. Underwriting extends the dates once. The person is never told why, and a master or module that cannot answer stops nothing.
 
+### What a cover is held at
+
+A `cover` row's body carries `options` where the cover was bought from a menu: each axis with the choice made on it (`{"waiting": "4w", "benefit": "to65"}`), or `{"level": "500"}` for a flat list such as a health excess. It comes from the layer's option code on the read model and is not a health fact, so it goes wherever the row goes: the customer's device, the adviser's book, the staff console. Formula-driven scheme cover has none.
+
 ### Pricing a proposed rate table against the book
 
 `POST /staff/v1/finance/table_dry_run` (finance lead or appointed actuary) takes `{as_at, covers, per_life, age_at_start, current, proposed}`, where `current` and `proposed` are the text of the two reviewed Starlark table files. The portal loads both as the product loader does, reads the underwriting loadings for the date from every core partition a page at a time, and asks the ledger's `table_dry_run` with them. Loadings imply health: they pass through for this one answer, are kept nowhere, and the answer carries loaded totals only. If the core cannot be read the run is priced without loadings and the answer has `loadings_read: false`, which the page shows as a warning. The "Rate tables" view of the finance console shows the totals, the movement by rating cell and the covers that move most.

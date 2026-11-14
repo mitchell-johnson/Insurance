@@ -48,6 +48,8 @@ struct Local {
     answers_left: Arc<Mutex<Option<u32>>>,
     /// Answers every question with something that is not an answer.
     garbled: Arc<AtomicBool>,
+    /// What finance answers about tax due; unset, it cannot be asked.
+    finance: Arc<Mutex<Option<Result<Value, String>>>>,
 }
 
 impl Module for Local {
@@ -87,6 +89,10 @@ impl Module for Local {
         }
         ic_payments::query::answer(&self.state.lock().unwrap().0, question)
     }
+    async fn ask(&self, module: &str, question: Value) -> Result<Value, String> {
+        assert_eq!((module, &question["q"]), ("finance", &serde_json::json!("withholding_due")));
+        self.finance.lock().unwrap().clone().unwrap_or(Err("no leader".to_string()))
+    }
 }
 
 /// The real core state machine, one partition, behind the pump's seam.
@@ -96,9 +102,28 @@ struct SimCore {
     down: Arc<AtomicBool>,
     /// What cash matching would find: reference to policy.
     known: Arc<Mutex<BTreeMap<String, PolicyId>>>,
+    /// Withheld tax the partitions say they hold, in place of the core's
+    /// own tally.
+    held: Arc<Mutex<Option<Vec<ic_payments::tax::Held>>>>,
 }
 
 impl Core for SimCore {
+    async fn withholding_held(&self, kind: &str) -> Result<Vec<ic_payments::tax::Held>, String> {
+        if self.down.load(Ordering::SeqCst) {
+            return Err("the core cannot be reached".to_string());
+        }
+        if let Some(held) = self.held.lock().unwrap().clone() {
+            return Ok(held);
+        }
+        let cluster = self.cluster.lock().unwrap();
+        Ok((0..cluster.partitions())
+            .flat_map(|p| {
+                ic_core::remittance::held(&cluster.state(p).withheld, kind, NZD)
+                    .into_iter()
+                    .map(move |h| (p, h.statutory_fund, h.minor as i64))
+            })
+            .collect())
+    }
     async fn send_on(&self, partition: u16, key: &str, caller: &str, command: ic_core::Command) -> Result<Option<String>, String> {
         let applied = self.cluster.lock().unwrap().submit_keyed(partition, key, caller, command);
         Ok(applied.result.err().map(|r| r.code))
@@ -238,6 +263,7 @@ impl World {
                 cluster: Arc::new(Mutex::new(cluster)),
                 down: Arc::default(),
                 known: Arc::default(),
+                held: Arc::default(),
             },
             bank,
             api,
@@ -715,7 +741,7 @@ async fn a_module_that_falters_mid_pass_costs_nothing() {
     *world.module.answers_left.lock().unwrap() = Some(1);
     let pass = pump.pass().await;
     assert_eq!(pass.sent, 0);
-    assert_eq!(pass.problems.iter().filter(|p| p.contains("no leader")).count(), 3, "{:?}", pass.problems);
+    assert_eq!(pass.problems.iter().filter(|p| p.contains("no leader")).count(), 4, "{:?}", pass.problems);
     assert_eq!(world.bank.lock().arrivals, 0);
     *world.module.answers_left.lock().unwrap() = None;
 
@@ -2129,4 +2155,66 @@ async fn a_tax_share_is_carried_to_its_partition() {
         "{:?}",
         state.exceptions
     );
+}
+
+/// Purpose: the pump asks finance for a waiting remittance's closed-month
+/// figure and the core for what each partition holds, splits the figure
+/// between the holdings and records it, so the payment can go into a run;
+/// while finance or the core cannot answer, or holds too little, nothing is
+/// paid and the next pass asks again.
+/// Why it matters: the revenue must be paid the figure the books closed on,
+/// taken from the partitions and funds that hold the liability; a payment
+/// priced on a guess would leave tax owing or discharge too much.
+#[tokio::test]
+async fn a_tax_remittance_is_priced_from_finance_and_the_partitions() {
+    use ic_payments::tax::{Share, TaxStatus};
+    let mut world = World::new().await;
+    world.payee("ird", PayeeKind::Authority);
+    let request = Command::RequestTaxRemittance {
+        remittance: "tax-1".to_string(),
+        kind: "rwt".to_string(),
+        period: "2027-10".to_string(),
+        payee: "ird".to_string(),
+    };
+    world.ok(&mia(), request);
+    let pump = world.pump("akl", "a");
+
+    let pass = pump.pass().await;
+    assert_eq!(pass.taxes, 0);
+    assert!(pass.problems.iter().any(|p| p.contains("tax tax-1: finance")), "{:?}", pass.problems);
+
+    *world.module.finance.lock().unwrap() = Some(Ok(serde_json::json!({
+        "kind": "rwt", "period": "2027-10", "account": "2220", "posting_type": "withholding_rwt",
+        "amount_minor": 100_00, "due": "2027-11-22"
+    })));
+    world.core.down.store(true, Ordering::SeqCst);
+    let pass = pump.pass().await;
+    assert_eq!(pass.taxes, 0);
+    world.core.down.store(false, Ordering::SeqCst);
+
+    let pass = pump.pass().await;
+    assert_eq!(pass.taxes, 1, "{:?}", pass.problems);
+    assert_eq!(
+        world.state().tax_remittances["tax-1"].status,
+        TaxStatus::Mismatch {
+            due_minor: 100_00,
+            held_minor: 0
+        },
+        "the core's own tally holds nothing yet"
+    );
+
+    *world.core.held.lock().unwrap() = Some(vec![(0, Some("sf1".to_string()), 150_00), (0, None, 50_00), (1, None, 0)]);
+    world.later(1);
+    let pass = pump.pass().await;
+    assert_eq!(pass.taxes, 1, "{:?}", pass.problems);
+    let t = &world.state().tax_remittances["tax-1"];
+    assert_eq!(t.status, TaxStatus::Priced);
+    assert_eq!(t.due_on, Some(d(2027, 11, 22)));
+    let share = |fund: Option<&str>, amount_minor| Share {
+        partition: 0,
+        fund: fund.map(str::to_string),
+        amount_minor,
+    };
+    assert_eq!(t.shares, [share(Some("sf1"), 75_00), share(None, 25_00)]);
+    assert_eq!(pump.pass().await.taxes, 0, "priced once");
 }
