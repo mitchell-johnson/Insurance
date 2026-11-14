@@ -116,6 +116,9 @@ pub struct Report {
     /// Resident withholding tax kept back from late payment interest, owed to the revenue authority.
     #[serde(default)]
     pub interest_withheld_minor: i64,
+    /// Tax kept back from income benefit periods paid.
+    #[serde(default)]
+    pub benefit_tax_withheld_minor: i64,
     pub workload: BTreeMap<StaffId, u32>,
     pub runs_unreconciled: u32,
 }
@@ -241,6 +244,11 @@ pub struct WorkView {
     /// number: what the assessor read when deciding.
     #[serde(default)]
     pub decision_definitions: BTreeMap<u32, Vec<String>>,
+    /// The cover on the event date as known now and as known then, where
+    /// something recorded later changed it: (in force, life on the policy,
+    /// sum insured) each.
+    #[serde(default)]
+    pub cover_now_and_then: Option<((bool, bool, i64), (bool, bool, i64))>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -406,6 +414,18 @@ impl ClaimsState {
                 })
                 .unwrap_or_default(),
             definitions: c.cover_check.as_ref().map(|k| k.facts.definitions.clone()).unwrap_or_default(),
+            cover_now_and_then: c.cover_check.as_ref().and_then(|k| {
+                let f = &k.facts;
+                f.known_then
+                    .as_ref()
+                    .map(|t| {
+                        (
+                            (f.in_force, f.life_on_policy, f.sum_insured_minor),
+                            (t.in_force, t.life_on_policy, t.sum_insured_minor),
+                        )
+                    })
+                    .filter(|(now, then)| now != then)
+            }),
             decision_definitions: c
                 .decisions
                 .iter()
@@ -565,6 +585,13 @@ impl ClaimsState {
             r.evidence_cost_minor += c.evidence.iter().map(|e| e.cost_minor).sum::<i64>();
             r.interest_declined_minor += c.payments.iter().map(|p| p.interest_declined_minor).sum::<i64>();
             r.interest_withheld_minor += c.payments.iter().map(|p| p.interest_withheld_minor).sum::<i64>();
+            r.benefit_tax_withheld_minor += c
+                .schedule
+                .iter()
+                .flat_map(|s| s.periods.values())
+                .filter(|p| !p.returned)
+                .map(|p| p.tax_withheld_minor)
+                .sum::<i64>();
         }
         r.workload = self
             .owned

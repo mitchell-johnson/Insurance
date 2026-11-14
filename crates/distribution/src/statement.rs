@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use crate::model::*;
 use crate::rules::{portion, Component};
 use crate::state::{reject, CaseKind, Ctx, DistributionState, Event};
+use crate::structure::PartyKind;
 use crate::{BookId, EngagementId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,7 +65,14 @@ pub struct Statement {
     /// Why nothing was paid, where payments to the payee are stopped.
     pub payment_held: Option<String>,
     pub payments: Vec<PaymentPart>,
+    /// Tax withheld from this payment and owed to the revenue authority.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub withheld_minor: i64,
     pub hash: String,
+}
+
+fn is_zero(n: &i64) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +94,26 @@ pub(crate) struct PaymentRecord {
     pub clearing: Vec<(PartitionId, i64)>,
     /// Where a returned item goes back to.
     pub return_to: PartyLedger,
+    /// The tax withheld on each partition, given back in proportion to
+    /// what comes back unpaid.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub withheld: Vec<(PartitionId, i64)>,
+}
+
+/// The kind of withholding on commission: a schedular payment.
+pub const SCHEDULAR: &str = "schedular";
+
+/// The posting kind, which finance's tax reconciliation lists for the account.
+pub const WITHHOLDING_KIND: &str = "withholding_schedular";
+
+fn tax_account() -> CounterpartyAccount {
+    CounterpartyAccount::Internal(InternalLedger::WithholdingTax { kind: SCHEDULAR.to_string() })
+}
+
+/// Tax withheld from a payee's payment: out of clearing, owed to the
+/// revenue authority.
+pub(crate) fn withholding_lines(payee: &PartyId, tax: i64) -> Vec<CounterpartyLine> {
+    two_lines(party(payee, PartyLedger::Clearing), tax_account(), tax)
 }
 
 fn party(p: &PartyId, ledger: PartyLedger) -> CounterpartyAccount {
@@ -247,6 +275,7 @@ impl DistributionState {
             advance_recovered_minor: 0,
             payment_held: payment_held.clone(),
             payments: vec![],
+            withheld_minor: 0,
             hash: String::new(),
         };
         if closing > 0 && payment_held.is_none() {
@@ -280,6 +309,19 @@ impl DistributionState {
                 statement.advance_recovered_minor = recover - left;
                 payable -= recover - left;
             }
+            let withheld = self.withhold(payee_id, payable, &mut clearing);
+            for (partition, tax) in &withheld {
+                let posting = simple_posting(
+                    format!("wht:{id}:{partition}"),
+                    WITHHOLDING_KIND,
+                    currency,
+                    withholding_lines(payee_id, *tax),
+                    &id,
+                );
+                self.request(ctx, *partition, posting, None);
+            }
+            statement.withheld_minor = withheld.iter().map(|(_, t)| t).sum();
+            payable -= statement.withheld_minor;
             // Instructions on the payee decide where the money goes: legal
             // priority first, then assignments, then the payee's own account.
             let mut left = payable;
@@ -326,6 +368,7 @@ impl DistributionState {
                     parts: statement.payments.clone(),
                     clearing,
                     return_to: PartyLedger::CommissionPayable,
+                    withheld,
                 },
             );
         }
@@ -385,6 +428,47 @@ impl DistributionState {
         Ok(())
     }
 
+    /// The rate tax is withheld at from commission paid to a payee, in
+    /// basis points: the payee's declared rate; for a natural person who
+    /// declared nothing, the no-declaration rate; otherwise none.
+    pub fn withholding_bp(&self, payee: &PartyId) -> u32 {
+        if !self.settings.commission_withholding {
+            return 0;
+        }
+        match self.payees.get(payee).map(|p| p.withholding).unwrap_or_default() {
+            Withholding::Rate(bp) => bp,
+            Withholding::Exempt => 0,
+            Withholding::Undeclared => {
+                let person = self.config.structure.parties.get(payee).is_some_and(|p| p.kind == PartyKind::Adviser);
+                if person {
+                    self.settings.no_declaration_withholding_bp
+                } else {
+                    0
+                }
+            }
+        }
+    }
+
+    /// The tax to withhold from `gross` about to be paid out of clearing,
+    /// rounded down, taken from the partitions holding the money; clearing
+    /// is reduced by it. Returns the tax on each partition, which the caller
+    /// posts with [`withholding_lines`] after the money reaches clearing.
+    pub(crate) fn withhold(&self, payee: &PartyId, gross: i64, clearing: &mut [(PartitionId, i64)]) -> Vec<(PartitionId, i64)> {
+        let bp = self.withholding_bp(payee);
+        let mut left = (gross.max(0) as i128 * bp as i128 / 10_000) as i64;
+        let mut taken = vec![];
+        for (partition, amount) in clearing.iter_mut() {
+            let take = left.min(*amount);
+            if take <= 0 {
+                continue;
+            }
+            *amount -= take;
+            left -= take;
+            taken.push((*partition, take));
+        }
+        taken
+    }
+
     fn part_mut(&mut self, reference: &str) -> Result<(String, &mut PaymentRecord), Reject> {
         let key = self
             .payments
@@ -437,6 +521,25 @@ impl DistributionState {
         // Every part is back. Clear each partition's clearing account: what
         // settled goes to cash, what returned goes back where it came from.
         let mut returned: i64 = record.parts.iter().filter(|p| p.settled == Some(false)).map(|p| p.amount_minor).sum();
+        let owner = (record.owner == PaymentOwner::Action).then(|| record.owner_id.clone());
+        // Tax withheld on money that came back was never paid to the payee:
+        // it goes back with it, in proportion, so the next payment withholds
+        // once on the whole.
+        let paid: i64 = record.parts.iter().map(|p| p.amount_minor).sum();
+        let withheld: i64 = record.withheld.iter().map(|(_, t)| t).sum();
+        if returned > 0 && withheld > 0 && paid > 0 {
+            let mut back = (withheld as i128 * returned as i128 / paid as i128) as i64;
+            for (partition, tax) in &record.withheld {
+                let take = back.min(*tax);
+                if take <= 0 {
+                    continue;
+                }
+                back -= take;
+                let lines = two_lines(tax_account(), party(&record.party, record.return_to), take);
+                let posting = simple_posting(format!("whtback:{key}:{partition}"), WITHHOLDING_KIND, record.currency, lines, &key);
+                self.request(ctx, *partition, posting, owner.clone());
+            }
+        }
         for (partition, amount) in record.clearing.iter().filter(|(_, a)| *a != 0) {
             let back = if *amount > 0 { returned.min(*amount) } else { 0 };
             returned -= back;
@@ -457,8 +560,7 @@ impl DistributionState {
                 });
             }
             let posting = simple_posting(format!("settle:{key}:{partition}"), "counterparty_paid", record.currency, lines, &key);
-            let owner = (record.owner == PaymentOwner::Action).then(|| record.owner_id.clone());
-            self.request(ctx, *partition, posting, owner);
+            self.request(ctx, *partition, posting, owner.clone());
         }
         self.payments.remove(&key);
         Ok(())

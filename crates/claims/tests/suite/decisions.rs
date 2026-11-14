@@ -682,3 +682,52 @@ fn benefit_terms_and_exclusion_scope_are_checked() {
         (Status::Ended, OverpaymentCause::LateDeathNotification, 3_000)
     );
 }
+
+/// Purpose: a claim on pool cover, for a member the record does not name and who has no party
+/// yet, is admitted only once the owner records the employer's evidence of eligible membership
+/// on the event date, which must be kept with the claim; the claimant is the new party the
+/// customer master created.
+/// Why it matters: persona test CLM-024. Pool cover names nobody, so the employer's evidence is
+/// the only proof the person was covered. A confirmation with nothing on file could not be
+/// shown to an auditor or a reinsurer.
+#[test]
+fn a_pool_cover_claim_is_admitted_on_the_employers_evidence_kept_with_it() {
+    let mut w = World::new();
+    w.core.cover(
+        "pol-1",
+        "trauma",
+        CoverFacts {
+            life_on_policy: false,
+            life_party: None,
+            ..facts("trauma")
+        },
+    );
+    let mut n = World::notification("p-1", "pol-1", "trauma", ClaimType::Trauma);
+    n.claimant = Some("party-new".into());
+    w.ok(Command::Notify(Box::new(n)));
+    w.ok(Command::Acknowledge {
+        claim: "p-1".into(),
+        delivery_ref: "delivered-1".into(),
+    });
+    w.assign("p-1", "ana");
+    w.assess("p-1", "CC-0003");
+    assert_eq!(w.undecided("p-1", "ana", World::admit_lump(Some(1_000)), "R-OK"), "cover_not_confirmed");
+    w.task("p-1", "member-1", TaskKind::MembershipEvidence, "ana");
+    let without = Command::CompleteTask {
+        claim: "p-1".into(),
+        task: "member-1".into(),
+        outcome: "confirmed".into(),
+        attendees: vec![],
+        vault_ref: None,
+        spend_minor: 0,
+        actor: actor("ana"),
+    };
+    assert_eq!(w.refused(without), "not_authorised");
+    w.complete("p-1", "member-1", "confirmed", "ana").expect("the evidence is on file");
+    let c = w.claim("p-1");
+    let t = c.task(TaskKind::MembershipEvidence).next().expect("recorded");
+    assert_eq!((t.outcome.as_deref(), t.vault_ref.as_deref()), (Some("confirmed"), Some("vault-1")));
+    assert_eq!(c.claimant.as_deref(), Some("party-new"));
+    w.decided("p-1", "ana", World::admit_lump(Some(1_000)), "R-OK");
+    assert_eq!(w.claim("p-1").status, Status::Admitted);
+}

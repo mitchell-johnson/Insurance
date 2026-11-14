@@ -206,7 +206,7 @@ async fn a_part_that_is_down_is_reported_and_caught_up() {
 
     module.down.store(true, Ordering::SeqCst);
     let report = driver.pass(at()).await;
-    assert_eq!(report.errors.len(), 2, "{report:?}");
+    assert_eq!(report.errors.len(), 3, "{report:?}");
     assert!(driver.start(at()).await.is_err());
     module.down.store(false, Ordering::SeqCst);
     assert!(driver.pass(at()).await.errors.is_empty());
@@ -241,4 +241,39 @@ async fn refusals_are_reported() {
     module.state.lock().unwrap().partitions = Some(1);
     let report = driver.pass(at()).await;
     assert!(report.errors.iter().any(|e| e.contains("growth on partition 1")), "{report:?}");
+}
+
+/// Purpose: the driver raises one alert per late price and per refused
+/// valuation file, not again on the next pass; a restarted driver raises
+/// the late price again (it still stands) but not the file refused before
+/// it started; a failing question is reported as an alerts fault.
+/// Why it matters: a late price holds up every order of its date and a
+/// refused file leaves a fund unpriced; operations only learn of either
+/// from these alerts, and an alert repeated every thirty seconds would be
+/// muted and then missed.
+#[tokio::test]
+async fn late_prices_and_refused_files_are_alerted_once() {
+    let (module, core, store) = (FakeModule::default(), FakeCore::default(), FakeStore::default());
+    setup(&module);
+    store.drop_file("valuations/2026-11-03/bad.csv", Scan::Clean, "H,acme,VAL-2\n");
+    let later = Utc.with_ymd_and_hms(2026, 11, 6, 6, 0, 0).unwrap();
+    let driver = Driver::new(&module, &core, &store, &store);
+    driver.start(at()).await.unwrap();
+    let first = driver.pass(later).await;
+    assert!(first.errors.is_empty(), "{first:?}");
+    let alerts = answer(&module.state.lock().unwrap(), serde_json::json!({"q": "alerts", "as_at": "2026-11-06"})).unwrap();
+    let kinds: Vec<&str> = alerts.as_array().unwrap().iter().map(|a| a["kind"].as_str().unwrap()).collect();
+    assert!(kinds.contains(&"late_price") && kinds.contains(&"file_refused"), "{alerts}");
+    assert_eq!(first.alerts_raised, kinds.len());
+    assert_eq!(driver.pass(later).await.alerts_raised, 0, "raised once");
+
+    let restarted = Driver::new(&module, &core, &store, &store);
+    restarted.start(later).await.unwrap();
+    let again = restarted.pass(later).await;
+    let late = kinds.iter().filter(|k| **k == "late_price").count();
+    assert_eq!(again.alerts_raised, late, "late prices again, the old file not");
+
+    module.down.store(true, Ordering::SeqCst);
+    let report = restarted.pass(later).await;
+    assert!(report.errors.iter().any(|e| e.starts_with("alerts")), "{report:?}");
 }
