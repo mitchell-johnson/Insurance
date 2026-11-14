@@ -471,6 +471,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | VUL-018 | part | `customers/tests/api.rs::a_capacity_question_pauses_representatives` |
 | VUL-016 | part | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not` |
 | VUL-019 | part | `customers/tests/api.rs::presentation_preferences_are_per_person` |
+| VUL-020 | full | `payments/tests/aml.rs::repeated_refunds_raise_a_restricted_case` |
 | VUL-021 | part | `customers/tests/api.rs::presentation_preferences_are_per_person` |
 
 ## CMP Complaints and disputes
