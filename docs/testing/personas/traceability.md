@@ -243,7 +243,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | RI-001 | full | `reinsurance/tests/treaties.rs::shipped_treaties_load_and_their_scenarios_pass`<br>`reinsurance/tests/replay.rs::cessions_balance_and_never_over_retain` |
 | RI-002 | full | `reinsurance/tests/accumulation.rs::one_life_on_two_partitions_fills_one_retention`<br>`reinsurance/tests/core.rs::a_life_on_two_partitions_is_ceded_once_and_recorded_on_both` |
 | RI-003 | full | `reinsurance/tests/premiums.rs::a_period_charges_each_reinsurer_its_share_at_its_rate`<br>`reinsurance/tests/core.rs::ceded_premium_reaches_the_ledger_and_the_two_balances_agree` |
-| RI-004 | full | `reinsurance/tests/claims.rs::a_claim_recovers_each_reinsurers_share_as_it_is_paid` |
+| RI-004 | full | `reinsurance/tests/claims.rs::a_claim_recovers_each_reinsurers_share_as_it_is_paid`<br>`reinsurance/tests/claims.rs::money_got_back_on_an_overpaid_claim_reduces_what_the_reinsurers_pay` |
 | RI-005 | full | `reinsurance/tests/accumulation.rs::a_lapse_suspends_the_cession_and_reinstatement_restores_it`<br>`reinsurance/tests/premiums.rs::lapse_and_unwind_take_ceded_premium_back` |
 | RI-006 | full | `reinsurance/tests/accumulation.rs::layers_are_ceded_one_by_one_and_over_limit_cover_is_never_silent`<br>`reinsurance/tests/premiums.rs::a_backdated_change_posts_only_the_difference` |
 | RI-007 | full | `reinsurance/tests/capacity.rs::facultative_terms_follow_the_proposal_to_the_issued_layer`<br>`reinsurance/tests/claims.rs::a_claim_on_facultative_cover_recovers_the_facultative_share` |
