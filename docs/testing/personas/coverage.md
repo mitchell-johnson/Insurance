@@ -57,7 +57,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | AUD Audience scoping, customer app and identity | 12 | 5 | 2 | 5 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
 | UW Underwriting, underwriting operations and delegated authority | 29 | 1 | 0 | 1 |
-| CLM Claims and claims operations | 37 | 4 | 1 | 4 |
+| CLM Claims and claims operations | 38 | 3 | 1 | 3 |
 | RI Reinsurance | 15 | 1 | 2 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 5 | 8 | 3 |
 | GRP Group scheme administration | 27 | 5 | 8 | 2 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **353** | **95** | **129** | **97** |
+| **Total** | **354** | **94** | **129** | **96** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 35 | 25 | 9 |
 | B | 108 | 18 | 16 |
-| C | 208 | 49 | 89 |
+| C | 209 | 48 | 89 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -113,7 +113,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **AUD** (4): AUD-002, AUD-003, AUD-010, AUD-017
 - **RES** (5): RES-001, RES-002, RES-004, RES-005, RES-011
 - **UW** (1): UW-006
-- **CLM** (4): CLM-008, CLM-009, CLM-026, CLM-028
+- **CLM** (3): CLM-008, CLM-009, CLM-028
 - **INV** (1): INV-015
 - **GRP** (1): GRP-013
 - **JNT** (4): JNT-008, JNT-013, JNT-023, JNT-030
