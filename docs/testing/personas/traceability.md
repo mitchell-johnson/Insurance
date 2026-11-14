@@ -1,6 +1,6 @@
 # Traceability: persona tests to built tests
 
-Hand-maintained. Each row says which built tests (paths under `crates/`) carry out a persona test from the matrix, and how far.
+Hand-maintained. Each row says which built tests carry out a persona test from the matrix, and how far. A test is named `file::test` with the file under `crates/`, or `e2e/tests/NN-area.js::E2E-nnn` for an end-to-end test through the screens, which must itself list the row in its `matrix`.
 
 - **full**: the built tests check what the matrix row expects.
 - **part**: the built tests check some of it; the rest is still to write.
@@ -69,7 +69,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 
 | Matrix | Status | Built tests |
 | --- | --- | --- |
-| BIL-001 | part | `sim/tests/year.rs::the_synthetic_insurer_runs_a_year_with_every_reconciliation_clean`<br>`product/src/schedule.rs::every_frequency_steps_by_its_own_period` |
+| BIL-001 | part | `sim/tests/year.rs::the_synthetic_insurer_runs_a_year_with_every_reconciliation_clean`<br>`product/src/schedule.rs::every_frequency_steps_by_its_own_period`<br>`e2e/tests/08-lifecycle.js::E2E-236` |
 | BIL-002 | full | `documents/tests/required_documents.rs::a_bill_gets_a_premium_notice_with_its_discount_lines`<br>`documents/tests/render.rs::a_template_renders_values_lists_and_conditions`<br>`documents/tests/render.rs::money_and_dates_are_written_for_people` |
 | BIL-005 | full | `sim/tests/underwriting_door.rs::an_accepted_increase_is_a_layer_from_today_billed_for_the_days_left` |
 | BIL-007 | full | `sim/tests/scenarios.rs::money_paid_ahead_waits_in_suspense_and_is_consumed_by_billing` |
@@ -89,10 +89,11 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | COL-002 | full | `sim/tests/scenarios.rs::a_dishonour_does_not_reset_the_lapse_clock` |
 | COL-003 | part | `sim/tests/partition_views.rs::merged_partition_candidates_decide_as_one_read_model_does`<br>`payments/tests/recon.rs::a_direct_credit_from_an_authoritys_account_names_its_policy` |
 | COL-004 | part | `sim/tests/partition_views.rs::merged_partition_candidates_decide_as_one_read_model_does`<br>`payments/tests/recon.rs::a_direct_credit_goes_to_cash_matching_and_stays_open_until_identified` |
-| COL-007 | part | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/claims.rs::the_cover_check_reads_the_policy_as_it_was_on_the_event_date` |
+| COL-006 | part | `e2e/tests/08-lifecycle.js::E2E-241` |
+| COL-007 | full | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/claims.rs::the_cover_check_reads_the_policy_as_it_was_on_the_event_date`<br>`sim/tests/personas_spine.rs::paying_the_arrears_while_suspended_restores_the_standing_at_once`<br>`e2e/tests/08-lifecycle.js::E2E-244` |
 | COL-008 | full | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/edges.rs::a_lapse_reverses_the_levy_on_unpaid_premium` |
 | COL-009 | full | `sim/tests/reopen.rs::a_policy_does_not_lapse_before_its_lapse_notice_allows`<br>`documents/tests/delivery.rs::returned_post_makes_the_notice_undeliverable_until_retried`<br>`collections/tests/dunning.rs::an_undeliverable_mandatory_notice_raises_a_task` |
-| COL-010 | part | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/underwriting_door.rs::a_long_lapse_is_reinstated_only_on_underwritings_decision_and_on_its_terms`<br>`collections/tests/cases.rs::an_underwriting_approval_asks_the_core_again` |
+| COL-010 | part | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/underwriting_door.rs::a_long_lapse_is_reinstated_only_on_underwritings_decision_and_on_its_terms`<br>`collections/tests/cases.rs::an_underwriting_approval_asks_the_core_again`<br>`e2e/tests/08-lifecycle.js::E2E-247` |
 | COL-011 | full | `sim/tests/scenarios.rs::reinstatement_window_closes` |
 | COL-012 | full | `collections/tests/sequence.rs::mandatory_notices_cannot_be_configured_away`<br>`collections/tests/dunning.rs::each_step_is_an_event_with_its_notice_or_task`<br>`collections/tests/dunning.rs::a_late_arrival_gets_the_latest_reminder_and_every_mandatory_notice`<br>`collections/tests/sequence.rs::a_sequence_is_checked_before_it_is_used`<br>`documents/tests/collections_notices.rs::dunning_notices_are_issued_once_and_reported_sent` |
 | COL-013 | part | `collections/tests/cases.rs::an_outcome_drives_the_next_step` |
@@ -106,6 +107,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | COL-025 | part | `payments/tests/runs.rs::a_collection_held_up_by_an_outage_goes_next_window_and_is_found`<br>`payments-service/tests/pump.rs::a_bank_that_is_down_or_says_no_leaves_the_money_unpaid_and_known` |
 | COL-026 | full | `collections/tests/dunning.rs::a_customer_with_several_policies_gets_one_notice_and_one_task`<br>`collections/tests/dunning.rs::a_notice_already_taken_is_not_added_to` |
 | COL-027 | full | `documents/tests/interests.rs::a_lapse_notice_must_be_copied_to_the_lender`<br>`documents/tests/interests.rs::a_suspension_notice_is_copied_once_to_each_party` |
+| COL-028 | part | `e2e/tests/08-lifecycle.js::E2E-247` |
 
 ## XFR Policy transfer between groups
 
@@ -270,7 +272,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | INV-010 | full | `pricing/tests/errors.rs::material_error_is_corrected_by_a_new_version`<br>`sim/tests/investment.rs::a_corrected_price_is_replayed_over_the_orders_executed_at_it` |
 | INV-011 | full | `pricing/tests/errors.rs::immaterial_error_is_recorded_not_replayed` |
 | INV-013 | part | `sim/tests/investment.rs::a_withdrawal_is_paid_through_benefit_payable` |
-| INV-014 | part | `pricing/tests/prices.rs::date_order_and_suspension`<br>`sim/tests/investment.rs::orders_that_cannot_be_honoured_are_refused_when_placed` |
+| INV-014 | part | `pricing/tests/prices.rs::date_order_and_suspension`<br>`sim/tests/investment.rs::orders_that_cannot_be_honoured_are_refused_when_placed`<br>`e2e/tests/07-pricing.js::E2E-229`<br>`e2e/tests/07-pricing.js::E2E-230`<br>`e2e/tests/07-pricing.js::E2E-231` |
 | INV-015 | part | `pricing/src/extract.rs::renders_holdings_and_flow`<br>`pricing/tests/errors.rs::movements_build_holdings_and_extracts` |
 | INV-016 | full | `sim/tests/investment.rs::the_book_answers_its_readers_and_reconciles_to_the_ledger` |
 | INV-017 | part | `channels/tests/journeys.rs::units_held_and_orders_waiting_reach_the_policyholder` |
@@ -539,7 +541,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | FIN-011 | full | `finance/tests/returns.rs::any_figure_on_a_filed_return_opens_to_what_is_behind_it` |
 | FIN-012 | full | `finance/tests/edges.rs::a_policy_is_placed_in_its_accounting_group_at_issue_and_never_moved` |
 | FIN-013 | full | `finance/tests/journals.rs::money_moves_between_statutory_funds_only_by_an_approved_transfer` |
-| FIN-014 | part | `finance/tests/edges.rs::tax_accounts_reconcile_to_the_posting_types_that_may_move_them` |
+| FIN-014 | part | `finance/tests/edges.rs::tax_accounts_reconcile_to_the_posting_types_that_may_move_them`<br>`e2e/tests/08-lifecycle.js::E2E-235` |
 | FIN-015 | full | `payments/tests/aml.rs::a_payer_who_is_not_the_owner_is_raised_once`<br>`customers/tests/api.rs::a_premium_payer_relationship_can_be_checked_by_its_reference` |
 | FIN-016 | full | `payments/tests/aml.rs::a_recorded_relationship_stops_the_rule`<br>`payments-service/tests/pump.rs::a_payer_relationship_is_confirmed_with_the_customer_master`<br>`customers/tests/api.rs::a_premium_payer_relationship_can_be_checked_by_its_reference` |
 | FIN-017 | full | `finance/tests/mart.rs::claims_that_leave_the_policy_in_force_are_on_the_experience_extract`<br>`finance/tests/mart.rs::the_real_claims_module_feeds_the_experience_extract`<br>`finance/tests/mart.rs::claims_by_cause_are_categories_with_small_rows_folded_or_withheld` |
