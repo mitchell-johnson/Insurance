@@ -1208,3 +1208,54 @@ async fn an_avoidance_decided_in_review_reaches_the_core() {
     }
     assert_eq!(b.pass().await, Pass::default(), "nothing is left to carry");
 }
+
+/// Refuses everything offered, so it is parked with the reason.
+#[derive(Clone, Default)]
+struct RefusesAll;
+
+impl Forward for RefusesAll {
+    async fn forward(&self, _seq: u64, _effect: &Effect) -> Result<Option<String>, DriverError> {
+        Ok(Some("nobody takes this here".into()))
+    }
+}
+
+/// Purpose: the driver's run loop keeps cycling until told to stop, showing each cycle's
+/// results: a pass that parks effects is reported with what it parked, and a cycle whose
+/// delivery or daily sweep cannot reach the module is reported as failed, and the loop carries
+/// on to the next cycle rather than end.
+/// Why it matters: the service runs this loop for as long as it is up. A loop that stopped on
+/// the first unreachable node would leave every later decision undelivered until someone
+/// restarted it, and parked effects nobody hears of are effects nobody puts back.
+#[tokio::test]
+async fn the_run_loop_reports_parked_and_failed_cycles_and_carries_on() {
+    let b = bench(RefusesAll);
+    b.open("P1", 500_000_00);
+    b.module.with(|w| w.disclose("P1", "L1", &clean()));
+    let mut parked = 0;
+    b.driver
+        .run(
+            std::time::Duration::from_millis(5),
+            10,
+            tokio::time::sleep(std::time::Duration::from_millis(30)),
+            |pass, _| parked += pass.as_ref().map_or(0, |p| p.parked.len()),
+        )
+        .await;
+    assert!(parked > 0, "the staff notices had nowhere to go");
+
+    *b.module.down.lock().unwrap() = true;
+    let (mut cycles, mut failed_passes, mut failed_sweeps) = (0, 0, 0);
+    b.driver
+        .run(
+            std::time::Duration::from_millis(5),
+            10,
+            tokio::time::sleep(std::time::Duration::from_millis(30)),
+            |pass, sweep| {
+                cycles += 1;
+                failed_passes += usize::from(pass.is_err());
+                failed_sweeps += usize::from(matches!(sweep, Some(Err(_))));
+            },
+        )
+        .await;
+    assert!(cycles > 1, "carried on after a failed cycle");
+    assert!(failed_passes > 0 && failed_sweeps > 0, "a cycle that cannot reach the module is reported");
+}
