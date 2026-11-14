@@ -3246,6 +3246,37 @@ async fn an_employer_runs_the_scheme_membership() {
     assert_eq!(bare.oneshot(request).await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
+/// Purpose: every action and question the commission page offers is one the console route accepts.
+/// Why it matters: the page once offered appointing a policy's adviser, which the route always refuses; a form that can only fail teaches staff to distrust the screen.
+#[test]
+fn the_commission_page_offers_only_what_its_route_accepts() {
+    let page = ic_channels::ui::COMMISSION;
+    let offered = |list: &str| -> Vec<String> {
+        let from = page.find(&format!("const {list} = {{")).expect("the list is on the page");
+        page[from..]
+            .lines()
+            .skip(1)
+            .take_while(|line| !line.starts_with("};"))
+            .filter_map(|line| {
+                line.strip_prefix("  ")
+                    .filter(|rest| !rest.starts_with(' '))
+                    .and_then(|rest| rest.split_once(':'))
+                    .map(|(name, _)| name.to_string())
+            })
+            .collect()
+    };
+    let actions = offered("ACTIONS");
+    assert!(actions.len() >= 10, "{actions:?}");
+    for action in &actions {
+        assert!(
+            ic_channels::commission::COMMANDS.contains(&action.as_str()),
+            "the page offers {action}, which the route refuses"
+        );
+    }
+    let questions = offered("QUESTIONS");
+    assert!(questions.contains(&"position".to_string()), "{questions:?}");
+}
+
 /// Purpose: a member of staff whose templates give the commission module's distribution admin role opens the commission console,
 /// asks its questions with the fields each needs, and sends a structure command as themselves with a purpose, which the commission
 /// module's own policy allows; someone who may only look is refused by that module; and commands that have their own paths

@@ -4,7 +4,7 @@
 <main><header class="page"><div><h1>Commission console</h1><p>Advisers, payees, engagements, statements and cases in the commission module.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
 <section data-view="Look up"><h2>Look something up</h2><p class="muted">Advisers, payees, statements, cases and what is waiting.</p>
 <form id="ask"><div class="row"><div><label for="q">Show</label><select id="q"></select></div></div><div class="row" id="q-fields"></div><p><button>Show</button></p></form><div id="ask-msg" aria-live="polite"></div><div id="answer"></div></section>
-<section data-view="Change something"><h2>Change something</h2><p class="muted">The commission module decides whether your roles allow it, and records the decision with your reason. Held balance actions, replacement decisions and commission rules have their own pages or approvals.</p>
+<section data-view="Change something"><h2>Change something</h2><p class="muted">The commission module decides whether your roles allow it, and records the decision with your reason. Held balance actions and replacement decisions have their own pages. A policy's adviser is appointed by its owner, in their app.</p>
 <form id="do"><div class="row"><div><label for="a">Action</label><select id="a"></select></div><div><label for="a-purpose">Why (recorded with the decision)</label><input id="a-purpose" required size="40"></div></div><div class="row" id="a-fields"></div><p><button>Do it</button></p></form><div id="do-msg" aria-live="polite"></div></section>
 <section data-view="Another command"><h2>Another command</h2><p class="muted">For the few commands with no form here (a new engagement, a relation, a proposed change to the rules): one command in the commission module's own JSON, for example <code>{"relate": {...}}</code>.</p>
 <form id="send"><label for="cmd">Command</label><textarea id="cmd" rows="6" required></textarea>
@@ -36,9 +36,6 @@ const ACTIONS = {
   add_payee_account: ["Add a payee's bank account", [PARTY, ["account_ref", "Account reference", "text"], ["name_check_ref", "Name check reference", "text"], ["step_up_ref", "Step-up sign-in reference", "text"], ["appointment_ref", "Appointment document (optional)", "optional"]]],
   set_payment_hold: ["Hold or release a payee's payments", [PARTY, ["reason", "Reason to hold (blank releases)", "optional"]]],
   remove_payment_instruction: ["Remove a payment instruction", [PARTY, ["id", "Instruction", "text"], ["consent_ref", "Consent reference", "text"]]],
-  appoint_adviser: ["Appoint a policy's adviser", [["policy", "Policy", "text"], ["engagement", "Engagement (blank for none)", "optional"], ["book", "Book (optional)", "optional"]]],
-  link_replacement: ["Link a policy to the one it replaces", [["policy", "New policy", "text"], ["replaces", "Policy replaced", "text"]]],
-  attribute_alteration: ["Attribute an alteration to an engagement", [["policy", "Policy", "text"], ["engagement", "Engagement", "text"]]],
   approve_change: ["Approve a proposed change to the rules", [["id", "Change", "text"], ["compliance", "Approving as compliance", "bool"]]],
   reject_change: ["Reject a proposed change to the rules", [["id", "Change", "text"], ["reason", "Reason", "text"]]],
   cut_statement: ["Cut a payee's statement now", [["payee", "Payee", "text"]]],
