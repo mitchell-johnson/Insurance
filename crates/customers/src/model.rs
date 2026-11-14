@@ -135,6 +135,9 @@ fields! {
     // What the person tells us, in their words. Never a rating factor:
     // the rating sex factor is underwriting's, kept apart (docs/decisions.md).
     Gender => "gender", Identity;
+    // Right to live in New Zealand, dated: cover and tax rules turn on it
+    // (`RESIDENCY_STATUSES`). `non_resident` once the person has left.
+    ResidencyStatus => "residency_status", Identity;
     Email => "email", Contact;
     MobilePhone => "mobile_phone", Contact;
     PostalAddress => "postal_address", Contact;

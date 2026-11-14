@@ -320,6 +320,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
 | GRP-035 | full | `group/tests/underwriting.rs::a_scheme_taken_over_keeps_members_cover_without_new_evidence`<br>`underwriting/tests/takeover.rs::a_taken_over_excess_is_accepted_without_evidence_up_to_what_was_accepted`<br>`group/src/benefit.rs::each_eligibility_rule_refuses_its_own_case` |
 | GRP-036 | full | `group/tests/reconcile.rs::the_schemes_record_here_matches_the_core_member_for_member`<br>`group/tests/split.rs::a_split_moves_members_with_their_cover_to_a_new_scheme` |
+| GRP-037 | full | `customers/tests/api.rs::a_member_who_leaves_the_country_is_recorded_non_resident_from_that_day`<br>`group/tests/leavers.rs::a_leaver_can_continue_their_cover_as_an_individual_policy` |
 | GRP-038 | full | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date`<br>`group/tests/driver.rs::the_driver_asks_for_a_members_letter_and_reports_a_refusal`<br>`group/tests/cluster.rs::a_members_letter_is_a_command_the_documents_module_accepts`<br>`documents/tests/requested_letters.rs::group_asks_for_the_leave_of_absence_letters` |
 
 ## HLT Composable health product
@@ -471,9 +472,9 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | VUL-013 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-014 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-015 | full | `customers/tests/api.rs::a_death_prompts_a_person_to_consider_the_bereaved` |
-| VUL-017 | part | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due` |
+| VUL-017 | full | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due`<br>`channels/tests/http.rs::a_trained_person_reviews_vulnerability_markers`<br>`channels/tests/customers.rs::the_master_is_asked_about_markers_as_the_trained_person` |
 | VUL-018 | part | `customers/tests/api.rs::a_capacity_question_pauses_representatives` |
-| VUL-016 | full | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not`<br>`underwriting/tests/more_time.rs::a_customer_who_needs_more_time_gets_longer_to_answer_an_offer` |
+| VUL-016 | full | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not`<br>`underwriting/tests/more_time.rs::a_customer_who_needs_more_time_gets_longer_to_answer_an_offer`<br>`channels/tests/http.rs::the_life_gives_their_own_consents` |
 | VUL-019 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_post_only_customer_and_their_representative_both_get_the_notice`<br>`documents/tests/requested_letters.rs::a_representative_sees_ordinary_letters_and_never_clinical_ones` |
 | VUL-020 | full | `payments/tests/aml.rs::repeated_refunds_raise_a_restricted_case` |
 | VUL-021 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_representative_gets_the_notice_in_their_own_language` |

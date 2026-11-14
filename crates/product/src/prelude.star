@@ -134,6 +134,11 @@ def built_in(code, name, kind, max = None, percent_of_cover = None, multiple_of_
         "definitions": definitions,
     }
 
+def cover_suspension(max_months, min_months_in_force):
+    """The owner may suspend the policy, premium and cover both, for up to this many months
+    in all, once it has been in force this long."""
+    return {"max_months": max_months, "min_months_in_force": min_months_in_force}
+
 def paid_up_option(min_share_of_term, factor):
     """A limited-pay cover may stop paying after this share of its premium term and keep
     the share of the sum insured paid for, times the factor."""
@@ -257,9 +262,10 @@ def cooling_off(days):
     return {"kind": "cooling_off", "days": days}
 
 def product(code, name, version, effective_from, line, currency, statutory_fund, covers, features,
-            rounding = "half_even", event_cap = None):
+            rounding = "half_even", event_cap = None, cover_suspension = None):
     return {
         "event_cap_minor": event_cap,
+        "cover_suspension": cover_suspension,
         "code": code,
         "name": name,
         "version": version,

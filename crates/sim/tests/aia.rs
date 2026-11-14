@@ -531,3 +531,146 @@ fn a_limited_pay_cover_is_made_paid_up_for_the_share_of_the_term_paid() {
     );
     assert_eq!(p.outstanding_minor(), 0);
 }
+
+/// Purpose: an AIA Living policy a year old is suspended at the owner's request for dated
+/// days: nothing is billed for them and premium billed ahead comes back, a claim's cover
+/// check answers not in force for an event inside them and in force the day before and the
+/// day cover returns, the owner can come back early and is billed from that day, and only
+/// the days used count against the twelve months the product allows. A product without the
+/// right, a policy with premium owing or under a year old, a request for more than the
+/// allowance, and collections trying to end it as a hardship override are each refused.
+/// Why it matters: suspension is a promise in the wording with a price on both sides. Bill
+/// through it and an owner out of work is put into arrears the insurer said they would not
+/// have; answer a claim for an event inside it as covered and the insurer pays for risk it
+/// took no premium for; count the planned days after an early return and the owner loses
+/// months of an allowance they never used.
+#[test]
+fn a_policy_is_suspended_without_premium_or_cover_and_comes_back_early() {
+    use chrono::{Duration, Months};
+    use ic_core::suspension::SuspendCover;
+    let mut c = cluster();
+    let living = product("aia_living.star");
+    let id = issue(
+        &mut c,
+        policy(1, "aia-living", d(1987, 6, 1), &[("life", 400_000_00, Some(pick(&living, "life", &[])))]),
+    )
+    .unwrap();
+    let cfl = product("aia_cover_for_life.star");
+    let to_65 = pick(&cfl, "life", &[("pay-to", "to-65")]);
+    let other = issue(&mut c, policy(2, "aia-cover-for-life", d(1966, 6, 1), &[("life", 100_000_00, Some(to_65))])).unwrap();
+    let ask = |policy: &PolicyId, reference: &str, from: NaiveDate, to: NaiveDate| {
+        Command::SuspendCover(Box::new(SuspendCover {
+            policy: policy.clone(),
+            reference: reference.to_string(),
+            from,
+            to,
+        }))
+    };
+    let resume = |reference: &str| Command::ResumeCover {
+        policy: PolicyId("pol-00000001".to_string()),
+        reference: reference.to_string(),
+    };
+    let send = |c: &mut Cluster, command: Command| c.submit(0, "policy-servicing", command);
+    let refused = |r: Result<(), Reject>| r.unwrap_err().code;
+    let today = |c: &Cluster| c.state(0).business_date.unwrap();
+    let covered = |c: &Cluster, on: NaiveDate| {
+        let facts = ic_core::cover_facts(c.state(0), &id.0, "life", Some("life-1"), on).unwrap();
+        (facts.in_force, facts.standing)
+    };
+
+    let soon = start() + Duration::days(30);
+    assert_eq!(
+        refused(send(&mut c, ask(&other, "sus-1", soon, soon + Duration::days(60)))),
+        "no_suspension_option"
+    );
+    assert_eq!(refused(send(&mut c, ask(&id, "sus-1", soon, soon + Duration::days(60)))), "premium_owing");
+    days(&mut c, 1);
+    assert_eq!(refused(send(&mut c, ask(&id, "sus-1", soon, soon + Duration::days(60)))), "suspended_too_early");
+    days(&mut c, 366); // the second year's premium is billed and paid
+    let year = *c.state(0).policies[&id]
+        .receivables
+        .iter()
+        .map(|r| r.total_minor)
+        .collect::<Vec<_>>()
+        .last()
+        .unwrap();
+    assert!(year > 0);
+
+    let from = today(&c) + Duration::days(10);
+    let to = from + Duration::days(180);
+    assert_eq!(refused(send(&mut c, ask(&id, "sus 1", from, to))), "invalid_request");
+    let yesterday = today(&c) - Duration::days(1);
+    assert_eq!(refused(send(&mut c, ask(&id, "sus-1", yesterday, to))), "invalid_request");
+    assert_eq!(
+        refused(send(&mut c, ask(&id, "sus-1", from, from + Duration::days(367)))),
+        "suspension_too_long"
+    );
+    c.take_events();
+    send(&mut c, ask(&id, "sus-1", from, to)).unwrap();
+    send(&mut c, ask(&id, "sus-1", from, to)).unwrap();
+    let announced = c.take_events();
+    assert_eq!(
+        announced
+            .iter()
+            .filter(|e| matches!(&e.event, Event::CoverSuspended { reference, .. } if reference == "sus-1"))
+            .count(),
+        1
+    );
+    assert_eq!(refused(send(&mut c, ask(&id, "sus-1", from, to + Duration::days(1)))), "duplicate_request");
+    assert_eq!(refused(send(&mut c, ask(&id, "sus-2", to, to + Duration::days(30)))), "hardship_exists");
+    let end_as_hardship = Command::EndHardship {
+        policy: id.clone(),
+        hardship: "sus-1".to_string(),
+    };
+    assert_eq!(refused(c.submit(0, "collections", end_as_hardship)), "cover_suspended");
+    assert_eq!(refused(send(&mut c, resume("sus-9"))), "unknown_suspension");
+
+    // 180 of the year's 365 days came back as credit.
+    let credit = c.state(0).policies[&id]
+        .receivables
+        .iter()
+        .map(|r| r.total_minor)
+        .filter(|t| *t < 0)
+        .sum::<i64>();
+    let expected = year * 180 / 365;
+    assert!((-credit - expected).abs() <= 2, "{credit} against {expected} of {year}");
+    assert_eq!(covered(&c, from - Duration::days(1)), (true, Some("paid".to_string())));
+    assert_eq!(covered(&c, from), (false, Some("suspended".to_string())));
+    assert!(!covered(&c, to - Duration::days(1)).0);
+    assert!(covered(&c, to).0);
+
+    // Seventy days on, sixty days into the suspension, the owner is back at work.
+    days(&mut c, 70);
+    let back = today(&c);
+    assert_eq!(back, from + Duration::days(60));
+    send(&mut c, resume("sus-1")).unwrap();
+    send(&mut c, resume("sus-1")).unwrap();
+    assert!(c
+        .take_events()
+        .iter()
+        .any(|e| matches!(&e.event, Event::CoverResumed { on, planned_to, .. } if *on == back && *planned_to == to)));
+    assert!(!covered(&c, back - Duration::days(1)).0);
+    assert!(covered(&c, back).0);
+    let p = &c.state(0).policies[&id];
+    assert_eq!((p.suspensions["sus-1"].to, p.suspensions["sus-1"].planned_to), (back, Some(to)));
+    // The 120 days not used are billed again.
+    let charged = p.receivables.iter().map(|r| r.total_minor).rfind(|t| *t > 0).unwrap();
+    assert!((charged - year * 120 / 365).abs() <= 2, "{charged} of {year}");
+
+    // Sixty days are used; what is left of twelve months can be taken later, and no more.
+    days(&mut c, 5);
+    let again = today(&c) + Duration::days(1);
+    let left = (again.checked_add_months(Months::new(12)).unwrap() - again).num_days() - 60;
+    assert_eq!(
+        refused(send(&mut c, ask(&id, "sus-2", again, again + Duration::days(left + 1)))),
+        "suspension_too_long"
+    );
+    send(&mut c, ask(&id, "sus-2", again, again + Duration::days(left))).unwrap();
+    // Through the rest of it and out the other side: in force, nothing owing, books clean.
+    days(&mut c, u32::try_from(left).unwrap() + 40);
+    let p = &c.state(0).policies[&id];
+    assert_eq!((p.status, p.covers["life"].status), (PolicyStatus::InForce, CoverStatus::InForce));
+    assert_eq!(covered(&c, today(&c)), (true, Some("paid".to_string())));
+    let now = today(&c);
+    assert_eq!(refused(send(&mut c, ask(&id, "sus-3", now, now + Duration::days(1)))), "suspension_too_long");
+}

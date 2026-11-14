@@ -53,7 +53,7 @@ async function group() {
   try {
     const s = await api(R, "GET", G("scheme"));
     $("group").hidden = false;
-    put($("standing"), h("p", {}, `${s.members} members on the group service's record` + (s.outstanding_minor ? `, ${money(s.outstanding_minor)} outstanding.` : ".")));
+    put($("standing"), h("p", {}, `${s.members} ${s.members === 1 ? "member" : "members"} on the group service's record` + (s.outstanding_minor ? `, ${money(s.outstanding_minor)} outstanding.` : ".")));
     const inv = await api(R, "GET", G("invoices"));
     put($("invoices"), inv.invoices.length ? portal.details(inv.invoices) : h("p", { class: "muted" }, "No invoices yet."));
   } catch (e) { if (e.status === 404) { $("group").hidden = true; return; } throw e; }
