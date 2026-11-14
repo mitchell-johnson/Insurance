@@ -223,7 +223,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | CLM-025 | full | `sim/tests/personas_lines.rs::a_pilots_claim_is_checked_on_the_automatic_amount_plus_any_underwritten_layer`<br>`sim/tests/claims.rs::a_member_above_the_automatic_limit_is_paid_the_excess_only_where_it_was_underwritten` |
 | CLM-026 | full | `claims/tests/suite/views.rs::a_continuation_policy_claim_carries_the_scheme_history`<br>`sim/tests/claims.rs::a_continuation_policy_carries_its_scheme_membership_to_the_claim` |
 | CLM-027 | full | `claims/tests/suite/views.rs::a_company_owned_income_claim_pays_the_company_and_is_about_the_life` |
-| CLM-028 | part | `claims/tests/suite/book.rs::a_payee_is_verified_before_anything_is_paid` |
+| CLM-028 | full | `claims/tests/suite/book.rs::a_payee_is_verified_before_anything_is_paid`<br>`payments/tests/abroad.rs::an_account_abroad_is_checked_before_it_is_taken`<br>`payments/tests/abroad.rs::a_payment_abroad_goes_over_the_cross_border_channel` |
 | CLM-029 | full | `claims/tests/suite/book.rs::a_death_benefit_goes_to_the_nomination_in_force_on_the_date_of_death`<br>`sim/tests/claims.rs::a_death_benefit_goes_to_whoever_was_nominated_on_the_date_of_death` |
 | CLM-030 | full | `claims/tests/suite/decisions.rs::an_exclusion_stops_admission_unless_overridden_with_authority` |
 | CLM-031 | full | `claims/tests/suite/decisions.rs::a_closed_claim_reopens_under_independent_review` |

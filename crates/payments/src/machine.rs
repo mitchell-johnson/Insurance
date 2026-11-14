@@ -119,6 +119,16 @@ pub enum Command {
         account: AccountDetails,
         name_check: NameCheck,
     },
+    /// A payee whose account is abroad (CLM-028): paid through the route's
+    /// cross-border channel, the bank converting from the run's currency.
+    RegisterForeignPayee {
+        payee: Id,
+        party: String,
+        kind: PayeeKind,
+        account: AccountDetails,
+        foreign: crate::model::ForeignAccount,
+        name_check: NameCheck,
+    },
     /// New account details for a payee. Every control starts again and the
     /// cooling-off period runs from now.
     ChangePayeeAccount {
@@ -921,7 +931,15 @@ impl PaymentsState {
                 kind,
                 account,
                 name_check,
-            } => self.register_payee(tx, payee, party, kind, account, name_check),
+            } => self.register_payee(tx, payee, party, kind, account, name_check, None),
+            Command::RegisterForeignPayee {
+                payee,
+                party,
+                kind,
+                account,
+                foreign,
+                name_check,
+            } => self.register_payee(tx, payee, party, kind, account, name_check, Some(foreign)),
             Command::ChangePayeeAccount { payee, account, name_check } => self.change_payee_account(tx, &payee, account, name_check),
             Command::ConfirmPayee { payee } => self.confirm_payee(tx, &payee),
             Command::ScreenPayee { payee, clear } => self.screen_payee(tx, &payee, clear),
