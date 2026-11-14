@@ -1113,3 +1113,30 @@ fn members_moved_by_a_scheme_split_keep_their_cession() {
     assert!(b.ri.cession(&moved, d(2027, 8, 31)).is_some());
     b.assert_reconciles();
 }
+
+/// Purpose: a joint cover, which the core writes as one layer on each life it covers, counts
+/// in full against each life's retention: each life keeps the retention and cedes the rest of
+/// its own layer, as if the cover were held on that life alone.
+/// Why it matters: the design's default for joint cover (persona test RI-008). Counting it
+/// once, or half against each life, would keep more than the retention on whichever life dies
+/// first. A treaty that declares another basis is not built: the core's layer events do not
+/// yet say which layers share a joint cover.
+#[test]
+fn a_joint_cover_counts_in_full_against_each_life() {
+    let mut b = Bench::new();
+    b.issue(
+        1,
+        "P1",
+        "couple",
+        vec![
+            layer("joint", "life", 1, "L1", 800 * K, d(2027, 2, 1)),
+            layer("joint", "life", 2, "L2", 800 * K, d(2027, 2, 1)),
+        ],
+    );
+    let one = b.ri.cession(&key("P1", "joint", 1, "L1"), d(2027, 2, 1)).unwrap().clone();
+    let two = b.ri.cession(&key("P1", "joint", 2, "L2"), d(2027, 2, 1)).unwrap().clone();
+    assert_eq!((one.retained_minor, one.treaty_ceded()), (two.retained_minor, two.treaty_ceded()));
+    assert_eq!(one.retained_minor + one.treaty_ceded(), 800 * K);
+    assert!(one.treaty_ceded() > 0);
+    b.assert_reconciles();
+}

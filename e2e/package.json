@@ -1,0 +1,14 @@
+{
+  "name": "insurance-core-e2e",
+  "private": true,
+  "description": "Persona end-to-end tests of the insurance core, driven through its web pages.",
+  "license": "UNLICENSED",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "stack": "node stack/stack.js",
+    "test": "node run.js"
+  },
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}

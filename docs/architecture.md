@@ -30,6 +30,7 @@ This document is shared by every area of the build. The sections above the line 
 | Unit pricing | `pricing` | `unit-pricing.md` | its own section |
 | Customer master | `customers` | `customers.md` | its own section |
 | Persona test pack (matrix, stories, traceability) | none; `tools/persona_matrix.py` | `testing/personas/README.md` | "How far the build reaches" in that README |
+| Persona end-to-end suite (300 journeys through the web pages) | none; top-level `e2e/` | `../e2e/README.md` | "Persona end-to-end suite" at the end |
 
 ### Checks every area shares
 
@@ -514,7 +515,7 @@ None of these is started unless it says so. They are ordered by how much they ma
 13. **Replacement of cover on the same life (persona RI-016).** The cession on the replaced amount should carry on from the old policy's treaty version and inception date. Nothing tells this module that a new policy replaces an old one: the link exists only in distribution (`LinkReplacement`), and the core's issue command has none. Today the old cover's cession ends when it is cancelled and the new cover is ceded from its own start on the current treaty version; the per-life accumulation is right either way. To finish: whoever learns of the replacement (underwriting at new business) sends the module the old and new policy, and a risk is split into a continued part and a new part when the new sum is larger.
 14. **Built: a group loading moved to the member keeps its cession.** The core's `add_excess_layer` now names the layer it continues (core ea85024, group 738cae7), and the feed carries the cession over whichever of the two layer events comes first (test `a_change_of_underwriting_terms_keeps_the_cover_s_place_in_the_retention`).
 15. **A listing is rendered inside the module.** Statements and listing parts are built when the statement is cut and wait in the module's state until the driver files them. Fine at tens of thousands of covers per treaty; at several hundred thousand the cut command and the state between cut and filing grow large, and the listing should be rendered by the driver from a query instead.
-16. **Not built because the core has nothing to cede:** joint-life cover (the design counts it in full against each life) and longevity reinsurance for annuities.
+16. **Not built because the core has nothing to cede:** a treaty basis other than the default for joint cover (the default, in full against each life, holds because the core writes a layer per life: test `a_joint_cover_counts_in_full_against_each_life`; another basis needs the core's layer events to say which layers share a joint cover) and longevity reinsurance for annuities.
 
 ### Open questions for Mitchell
 
@@ -549,7 +550,7 @@ Owned by the thread "Build underwriting and new business". The full module descr
 5. Profiles naming each underwriter's party (supported, none set yet), portal pages that render the progress rows underwriting now publishes (kinds `proposal`, `proposal_life`; portal work). An interim accident product is shipped (`interim-accident`); turning it on is a settings activation with the business's approvers, and its amount and wording need product and legal sign-off.
 6. A scheme member's loading can move to them (`reoffer_excess_terms`, agreed with group 13 Nov, both sides on main). Reinsurance carries the cession over from the core's `LayerAdded.continues`, which the core's `add_excess_layer` does not yet set (group thread asked to add it, 13 Nov). Takeover amounts are honoured (an excess within the amount is accepted without evidence) and reinsurance's reference goes back on the capacity request as `excess_reference`.
 7. Terms refused for `billing_behind` are retried by the daily sweep, up to five attempts, then left to a person.
-8. Persona rows (13 Nov): all underwriting rows are traced; partial ones and why. UW-006: a cover declined beside an offer now has its own decline notice, but the letter wording (reasons and how to ask for review) is documents' template, not written. JNT-001 (joint first-event cover with terms per life inside one cover) needs a core cover type that does not exist. UW-030 is full (14 Nov): an option request is checked by a person and sent to the core's `ExerciseOption`. ADV-028: a replacement waits for the life's signed replacement disclosure; its wording is not written.
+8. Persona rows (13 Nov): all underwriting rows are traced; partial ones and why. UW-006: a cover declined beside an offer now has its own decline notice, but the letter wording (reasons and how to ask for review) is documents' template, not written. JNT-001 is full (14 Nov): on a joint first-event cover (the core's `joint_first_event`, 13 Nov) each life is decided on its own and the core holds a layer per life on that life's terms; capacity is reserved per life, which is the design's default of counting a joint cover in full against each life's retention (confirmed by reinsurance, 14 Nov). UW-030 is full (14 Nov): an option request is checked by a person and sent to the core's `ExerciseOption`. ADV-028: a replacement waits for the life's signed replacement disclosure; its wording is not written.
 9. Added 13 Nov: rule ids are opaque codes (`UR-0001`, with what each is about in the rule set) because the fired rules travel in the log; Flex Health and income protection are in the rules and authority profiles; an alteration carries the life's new occupation class to the core; a replacement with a top-up is an increase marked `replacement`; the customer app may record the life's own consents (caller `customer-app`). A scheme leaver may continue underwritten cover above the automatic limit (`group_continuation`, agreed with group 13 Nov); a layer taken up after the continuation's inception waits for the core to take a start date on `AddUnderwrittenLayer` (asked 13 Nov). Health cover priced per life is underwritten on an amount (the largest annual benefit limit, by contract with whoever opens the proposal); whether the core should hold zero for it is the core's call.
 10. Added 13 Nov, with group administration: a scheme whose broker underwrites under a delegated authority has each member's excess put to the delegate (`request_delegated_decision` on the delegates hub) when it is within the authority's product and per-life ceiling; the member does not disclose to us meanwhile, and a decision outside the authority comes to our queue. A leaver's continued cover is backdated to its inception through the core's `UnderwrittenLayer.start`, so a late take-up no longer waits. Not built: the delegate's adapter that reads the hub (the broker's own integration).
 
@@ -818,3 +819,56 @@ Of the 40 group rows in `docs/testing/personas/`, 26 are carried out in full and
 ### Known failing checks
 
 None known. When last run locally on 13 November, format, clippy for the crate, the test documentation check and all the crate's tests passed. Things that catch people out: the crate's tests now build `ic-finance`, which needs `protoc` (`apt-get install protobuf-compiler` in the cloud container); `tests/entra_app.rs` needs `jq`; the customer master test in `tests/driver.rs` skips unless `IC_TEST_POSTGRES_URL` is set (CI sets it); the crate's `clippy.toml` forbids `Instant::now`, `SystemTime::now`, `HashMap` and `HashSet`, in tests too, so waits are counted loops; the `ic-group` binary must install its signal handlers before its first pass, or the SIGTERM test in `tests/cluster.rs` fails; and underwriting does not store a refusal under its key, so a refused `open_proposal` (for example `no_rules`) leaves the request waiting and is sent again.
+
+## Persona end-to-end suite (`e2e/`): state and hand-over
+
+Mitchell asked on 13 November 2026 for 300 end-to-end UI tests based on the personas, and on 14 November that some follow whole policy lifecycles with separately written code checking the maths. Both are built. How to run it, how it is put together and what it leaves out are in [`e2e/README.md`](../e2e/README.md); this section is the state and what to do next.
+
+### What is built
+
+- 300 tests (E2E-001 to E2E-300) in 13 areas: platform and access, complaints and conduct, claims, staff console, finance, payments, unit pricing, policy lifecycle, reinsurance, adviser portal, commission console, replacement matches, underwriting. Each names its persona, story and the matrix rows it bears on, with its purpose and why it is worth having.
+- A stack of the real binaries (three ledger nodes, API, portal, a stand-in for Azure sign-in and storage), seeded through the system's own routes.
+- An independent calculator (`e2e/lib/oracle.js`) for premiums, billing periods, grace, suspension and lapse days, reinstatement arrears, claim payable after unpaid premium, and unit prices. It reads `products/` as text and shares no code with the system.
+- `ic-e2e-close` (in `e2e/seed`), which closes a business day by calling `ic_workflows::run_end_of_day` over the real nodes, so lifecycle tests can move through months and years in seconds without Temporal.
+- A manually started workflow, `.github/workflows/e2e.yml`. It has not yet been run on the Mac mini runners: their image has no Node or Chromium, and the workflow installs both. The first run there is the test of it.
+
+### Decisions taken
+
+- The suite is not part of `ci.yml`. It needs a browser, takes about a quarter of an hour, and a failing journey is a finding about the product for a person to read, not a reason to stop a commit.
+- `e2e/` is not a workspace member, so it is outside the coverage floor and the test documentation check; its tests carry `purpose` and `why` fields instead.
+- End of day is driven directly, not through Temporal. The workflow's own durability is covered by the failure drill, not here.
+- Where a driver is not part of the stack (bank pump, unit pricing intake, reinsurance driver), the seed or the test sends what the driver would send, through the same internal route, and says so in a comment.
+
+### Defects it found
+
+All were reported to the owning thread on 14 November 2026 and fixed on main the same day; the tests named now pass.
+
+| Defect | Tests | Owner | Fixed at |
+|---|---|---|---|
+| Rounding looked only at the first dropped digit: about one premium in twenty was a cent low (`ic_money::round_integer`) | E2E-238, 239 | core | 6c7cb24 |
+| The same fault left a unit buy price not rounded up (`crates/pricing/src/strike.rs`) | E2E-232 | unit pricing | 79f198a, 5821118 |
+| A billing notice was raised on the close that lapsed a policy | found in lifecycle runs | core | 6c7cb24 |
+| No accounting group for `income-protection` in `config/finance/close.star`, so those policies stayed ungrouped | E2E-157 | finance | 603d5f3 |
+| Overpayment memos keyed by reference alone, so two claims overwrote each other | E2E-143 | commission | e2b3f44 |
+| Payments page: reconciliation view read the wrong field names; "Send what is unpaid again" sent no date | E2E-205, 186 | portal | b83b522 |
+| Staff console showed its forms to an unregistered sign-in | E2E-009 | portal | b83b522 |
+| Mistyped references answered "No such resource" | E2E-104, 119 | portal | b83b522 |
+| Claims console could not admit a benefit in payment or enter a health invoice | E2E-105 | portal | b83b522 |
+| Access log dropped a second decision on the same record in the same second | unit test in channels | portal | b83b522 |
+| A customer sign-in could open the adviser portal (and saw an empty book) | E2E-275 | portal | b83b522 |
+| The commission page offered actions its route always refuses | E2E-284 | portal | 36c366f |
+| Complaints register accepted a period that ends before it starts | E2E-056 | complaints | f662518 |
+
+Still open: no deployed tool activates module configuration (payments, complaints, finance, claims, staff). `ic-admin activate-shipped` covers the core only, so the suite's seed does it by hand through each module's routes. A real deployment needs the same, and it belongs to the core's admin tool.
+
+Last full run, 14 November 2026 against main at 5821118: 297 passed, 3 passed on a second attempt (E2E-025, 107, 109), none failed, in about eleven minutes.
+
+### Not covered
+
+The customer app (no screens exist to drive), group schemes and the customer master (their services are not started by this stack), the underwriting intake, the document service, and the drivers between modules. Adding `ic-group` and `ic-customers` (with PostgreSQL) to `e2e/stack/stack.js` is the next step that would widen coverage most; the employer portal and group console tests would then have real schemes to work on.
+
+### Working notes
+
+- Restart the stack after any run that included the policy lifecycle area: those tests move the business date and every other test assumes the opening date.
+- A matrix reference on a test was checked to exist in `test-matrix.csv`; it means the test bears on the row, and `traceability.md` is still the record of what proves a row.
+- When a defect above is fixed its test should pass unchanged. If it does not, the test's expectation is the first thing to check.
