@@ -69,6 +69,7 @@ impl UnderwritingState {
         if open.replacement && (!matches!(open.entry, crate::model::Entry::Increase { .. }) || open.adviser.is_none()) {
             return reject("replacement", "a replacement is advised more cover on a policy in force");
         }
+        crate::option::door(&open, cx)?;
         let continued = crate::continuation::earlier_terms(self, &open)?;
         if let crate::model::Entry::GroupExcess {
             delegated_authority: Some(authority),
@@ -155,6 +156,7 @@ impl UnderwritingState {
         if let Some(terms) = continued {
             crate::continuation::decide(self, &mut p, terms, cx)?;
         }
+        crate::option::start(&mut p, cx)?;
         self.store(p);
         Ok(())
     }

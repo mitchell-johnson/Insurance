@@ -60,6 +60,8 @@ REASONS = reason_library(
         reason("RC-0970", "source", True, "Decision made under your scheme's underwriting arrangement."),
         reason("RC-0971", "source", False, ""),
         reason("RC-0976", "source", True, "Cover you held under your employer's scheme, continued on the terms it was accepted on."),
+        reason("RC-0977", "source", True, "More cover under your policy's option to increase it after a life event, with no health questions."),
+        reason("RC-0978", "closure", True, "We could not accept the proof of the life event for your option to increase your cover."),
         reason("RC-0975", "source", True, "Cover your previous insurer accepted, carried over under your scheme's takeover terms."),
         reason("RC-0980", "routing", False, ""),
     ],

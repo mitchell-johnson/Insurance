@@ -335,6 +335,8 @@ pub mod reason {
     pub const DELEGATED: &str = "RC-0970";
     pub const TAKEOVER: &str = "RC-0975";
     pub const CONTINUATION: &str = "RC-0976";
+    pub const INSURABILITY_OPTION: &str = "RC-0977";
+    pub const OPTION_EVIDENCE_REFUSED: &str = "RC-0978";
     pub const DELEGATED_REJECTED: &str = "RC-0971";
     pub const NON_DISCLOSURE_REVIEW: &str = "RC-0980";
     pub const QUOTE_SUPERSEDED: &str = "RC-0990";
@@ -359,6 +361,8 @@ pub mod reason {
         DELEGATED,
         TAKEOVER,
         CONTINUATION,
+        INSURABILITY_OPTION,
+        OPTION_EVIDENCE_REFUSED,
         DELEGATED_REJECTED,
         NON_DISCLOSURE_REVIEW,
         QUOTE_SUPERSEDED,

@@ -90,6 +90,19 @@ pub enum Entry {
         /// when they left.
         earlier: Vec<ProposalId>,
     },
+    /// A future insurability option exercised on a life event: more cover
+    /// on a policy in force with no underwriting. A person checks the proof
+    /// of the event; the core checks the option's limits and writes the
+    /// layer on the terms of the life's original cover.
+    InsurabilityOption {
+        policy: PolicyId,
+        /// One of the product's events for the option, such as `marriage`.
+        event: String,
+        event_date: NaiveDate,
+        /// Where the proof of the event is kept (the certificate, the loan
+        /// documents).
+        evidence: String,
+    },
 }
 
 impl Entry {
@@ -100,7 +113,8 @@ impl Entry {
             | Entry::Alteration { policy }
             | Entry::Reinstatement { policy }
             | Entry::GroupExcess { policy, .. }
-            | Entry::GroupContinuation { policy, .. } => Some(policy),
+            | Entry::GroupContinuation { policy, .. }
+            | Entry::InsurabilityOption { policy, .. } => Some(policy),
         }
     }
 }
@@ -285,6 +299,12 @@ pub enum DecisionSource {
     /// a scheme, for cover they continue after leaving it.
     Continuation {
         earlier: Vec<String>,
+    },
+    /// More cover under a future insurability option, once a person
+    /// accepted the proof of the life event. Nothing is underwritten.
+    InsurabilityOption {
+        event: String,
+        checked_by: String,
     },
     /// Terms that arrived as data from a legacy system.
     Migrated {

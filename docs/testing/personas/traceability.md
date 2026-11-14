@@ -186,7 +186,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | UW-027 | full | `underwriting/tests/intake.rs::a_sampled_delegated_decision_brings_the_file_in_under_the_lifes_key`<br>`underwriting/tests/special.rs::a_delegated_decision_is_bound_only_inside_its_authority` |
 | UW-028 | full | `underwriting/tests/journey.rs::an_offer_can_be_declined_expire_or_be_countered` |
 | UW-029 | full | `underwriting/tests/lifecycle.rs::the_log_of_an_underwriting_run_holds_ids_and_references_only`<br>`underwriting/tests/lifecycle.rs::a_capacity_request_carries_the_risk_codes_declared_and_nothing_clinical` |
-| UW-030 | part | `sim/tests/edges.rs::an_insurability_option_adds_cover_without_evidence_inside_the_products_limits` |
+| UW-030 | full | `sim/tests/edges.rs::an_insurability_option_adds_cover_without_evidence_inside_the_products_limits`<br>`underwriting/tests/option.rs::an_option_is_exercised_once_a_person_accepts_the_proof_of_the_event`<br>`underwriting/tests/driver.rs::an_accepted_option_is_exercised_on_the_policy_in_force` |
 
 ## CLM Claims and claims operations
 

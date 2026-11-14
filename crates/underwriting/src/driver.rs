@@ -636,7 +636,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
             Effect::ApplyTerms {
                 key,
                 proposal,
-                entry: entry @ (Entry::Increase { .. } | Entry::Alteration { .. } | Entry::GroupContinuation { .. }),
+                entry: entry @ (Entry::Increase { .. } | Entry::Alteration { .. } | Entry::GroupContinuation { .. } | Entry::InsurabilityOption { .. }),
                 policy,
                 covers,
                 ..
@@ -645,6 +645,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                 let what = match entry {
                     Entry::Increase { .. } => "increase",
                     Entry::GroupContinuation { .. } => "continuation",
+                    Entry::InsurabilityOption { .. } => "option",
                     _ => "alteration",
                 };
                 // A continued amount covers the leaver from the continuation's inception,
@@ -665,7 +666,23 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                     };
                     // Keyed by the proposal and cover, not the attempt: a cover the core has
                     // written is not written again when the rest is tried again.
-                    let layer = if increase {
+                    let layer = if let Entry::InsurabilityOption {
+                        event, event_date, evidence, ..
+                    } = entry
+                    {
+                        // The core checks the option's window, age, uses and limits, and
+                        // writes the layer on the terms of the life's original cover.
+                        ic_core::Command::ExerciseOption(Box::new(ic_core::command::OptionExercise {
+                            policy: policy.clone(),
+                            cover: cover.code.clone(),
+                            life: life.clone(),
+                            event: event.clone(),
+                            event_date: *event_date,
+                            sum_insured_minor: cover.sum_insured_minor,
+                            evidence: evidence.clone(),
+                            reference: key.clone(),
+                        }))
+                    } else if increase {
                         ic_core::Command::AddUnderwrittenLayer(Box::new(ic_core::command::UnderwrittenLayer {
                             start,
                             policy: policy.clone(),

@@ -38,6 +38,7 @@ mod continuation;
 mod external;
 mod flow;
 mod intake;
+mod option;
 pub mod reinstatement;
 mod reoffer;
 
