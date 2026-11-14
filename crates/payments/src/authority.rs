@@ -213,4 +213,21 @@ impl PaymentsState {
         self.reroute_refunds_after_death(tx, policy, claim);
         Ok(())
     }
+
+    /// A scheme member's own collection ended in the core. Their authorities
+    /// on the policy end with the core's reason; anyone else's, the
+    /// employer's included, are left alone. Said twice, it changes nothing.
+    pub(crate) fn member_collection_ended(&mut self, tx: &mut Tx<'_>, policy: &PolicyId, life: &ic_core::LifeId, reason: &str) -> Result<(), Reject> {
+        tx.need(Role::Service)?;
+        let ending: Vec<Id> = self
+            .authorities
+            .iter()
+            .filter(|(_, a)| &a.policy == policy && a.life.as_ref() == Some(life) && a.status != AuthorityStatus::Cancelled)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ending {
+            self.end_authority(tx, &id, reason);
+        }
+        Ok(())
+    }
 }

@@ -202,6 +202,15 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
             policy: policy.clone(),
             claim: claim.clone(),
         },
+        ic_core::Event::PaymentAuthorityCancelled {
+            policy,
+            claim,
+            life: Some(life),
+        } => crate::Command::MemberCollectionEnded {
+            policy: policy.clone(),
+            life: life.clone(),
+            reason: claim.clone(),
+        },
         ic_core::Event::ReceiptApplied {
             policy,
             receipt,
