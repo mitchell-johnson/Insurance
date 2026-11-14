@@ -106,6 +106,9 @@ pub enum Question {
     /// smoker status, a loading, an exclusion, or why underwriting decided
     /// as it did.
     Member { scheme: String, employee: String },
+    /// The people a member might be, for staff deciding a possible match.
+    /// Never served to the employer.
+    PossibleMatch { scheme: String, employee: String },
 }
 
 /// A file the driver has work to do on.
@@ -159,6 +162,7 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
                 .ok_or_else(|| format!("file {file} is not known for scheme {id}"))?;
             json!({
                 "file": f.id,
+                "content_hash": f.content_hash,
                 "status": f.status,
                 "received": f.received,
                 "summary": f.summary,
@@ -203,6 +207,15 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
             let today = state.today();
             let compared = compare(s, today, kind, today, &rows, rejected);
             json!({ "summary": compared.summary, "rejected": compared.rejected, "ambiguities": compared.ambiguities, "would_be_held": compared.held })
+        }
+        Question::PossibleMatch { scheme: id, employee } => {
+            let s = scheme(&id)?;
+            let candidates = s
+                .possible
+                .get(&employee)
+                .ok_or_else(|| format!("{employee} has no possible match waiting on scheme {id}"))?;
+            let life = s.membership.members.get(&employee).map(|m| m.life.clone());
+            json!({ "scheme": s.id, "employee": employee, "life": life, "candidates": candidates })
         }
         Question::SchemeOf { policy } => {
             let schemes: Vec<&String> = state.by_policy.get(&policy).into_iter().collect();
