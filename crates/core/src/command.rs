@@ -442,6 +442,8 @@ pub enum Command {
     /// Suspend the whole policy for a dated period where the product
     /// allows it: no premium, and no cover for what happens meanwhile.
     SuspendCover(Box<crate::suspension::SuspendCover>),
+    /// The owner changes the billing frequency, the billing day, or both.
+    ChangeBilling(Box<crate::billing_change::ChangeBilling>),
     /// Bring a suspended policy back on cover today, ahead of the day agreed.
     ResumeCover {
         policy: PolicyId,
@@ -722,7 +724,9 @@ impl Command {
             | Command::VaryForNonDisclosure { .. } => &["underwriting"],
             Command::ReduceCover(_) => &["policy-servicing"],
             Command::AddCover(_) | Command::ExerciseOption(_) => &["underwriting", "policy-servicing"],
-            Command::ChangeExcess(_) | Command::MakePaidUp(_) | Command::SuspendCover(_) | Command::ResumeCover { .. } => &["policy-servicing"],
+            Command::ChangeExcess(_) | Command::MakePaidUp(_) | Command::SuspendCover(_) | Command::ResumeCover { .. } | Command::ChangeBilling(_) => {
+                &["policy-servicing"]
+            }
             Command::RecordReplacement(_) => &["underwriting", "new-business"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::Claims(command) => command.allowed_callers(),
@@ -782,6 +786,7 @@ impl Command {
             Command::ChangeExcess(_) => "change_excess",
             Command::MakePaidUp(_) => "make_paid_up",
             Command::SuspendCover(_) => "suspend_cover",
+            Command::ChangeBilling(_) => "change_billing",
             Command::ResumeCover { .. } => "resume_cover",
             Command::RecordReplacement(_) => "record_replacement",
             Command::AlterUnderwrittenTerms(_) => "alter_underwritten_terms",

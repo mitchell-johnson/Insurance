@@ -6,7 +6,6 @@ use std::ops::Bound;
 
 use chrono::{Days, NaiveDate};
 use ic_ledger::{Dimensions, Ledger};
-use ic_product::schedule::period_start;
 use ic_product::ProductDefinition;
 
 use serde::{Deserialize, Serialize};
@@ -255,12 +254,7 @@ pub(crate) fn end_member_paid_layers(
 /// Billed periods a change effective on `effective` reaches into.
 fn affected_periods(policy: &Policy, effective: NaiveDate) -> Vec<(NaiveDate, NaiveDate)> {
     (0..policy.periods_billed)
-        .filter_map(|n| {
-            Some((
-                period_start(policy.inception, policy.frequency, n)?,
-                period_start(policy.inception, policy.frequency, n + 1)?,
-            ))
-        })
+        .filter_map(|n| Some((policy.period_start(n)?, policy.period_start(n + 1)?)))
         .filter(|(_, end)| *end > effective)
         .collect()
 }
@@ -1002,7 +996,7 @@ pub(crate) fn split(
         return Err(Reject::new("invalid_split", "the new scheme has its own ID and a plain number"));
     }
     // The period that starts on the effective date: billed already, or next.
-    let period = (0..=policy.periods_billed).find(|n| period_start(policy.inception, policy.frequency, *n) == Some(spec.effective));
+    let period = (0..=policy.periods_billed).find(|n| policy.period_start(*n) == Some(spec.effective));
     let Some(period) = period else {
         return Err(Reject::new(
             "effective",
@@ -1138,6 +1132,7 @@ pub(crate) fn split(
                 payee_debts: Default::default(),
                 paid_up: Default::default(),
                 suspensions: Default::default(),
+                billing_changes: Vec::new(),
                 member_accounts: Default::default(),
                 member_standing: Default::default(),
                 interests: Default::default(),

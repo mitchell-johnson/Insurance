@@ -410,8 +410,7 @@ impl CoreState {
                 p.status == PolicyStatus::InForce
                     && !p.is_frozen()
                     && p.unwind.is_none()
-                    && (p.pending_invoice.is_some()
-                        || ic_product::schedule::period_start(p.inception, p.frequency, p.periods_billed).is_some_and(|s| s <= today))
+                    && (p.pending_invoice.is_some() || p.period_start(p.periods_billed).is_some_and(|s| s <= today))
             })
             .map(|p| p.id.clone())
             .chain(claims::policies_with_work_due(self, today))
@@ -656,6 +655,10 @@ impl CoreState {
                 self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
                     crate::suspension::suspend(&mut s.ledger, &s.catalog, p, ctx, *spec)
                 })
+            }
+            Command::ChangeBilling(spec) => {
+                let policy = spec.policy.clone();
+                self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| crate::billing_change::change(&s.catalog, p, ctx, *spec))
             }
             Command::ResumeCover { policy, reference } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
                 crate::suspension::resume(&mut s.ledger, &s.catalog, p, ctx, &reference)

@@ -170,11 +170,52 @@ pub(crate) fn retail_premium_with(
         overrides: &overrides,
         covers: covers.len() as u32,
         lives: lives.len() as u32,
-        frequency: policy.frequency,
+        frequency: policy.frequency_on(period_start),
         entitlements: &held,
         sums_insured: &sums,
     };
-    Ok(modal_premium_by_line(product, &annual, &state)?)
+    let premium = modal_premium_by_line(product, &annual, &state)?;
+    Ok(match policy.short_period(period_start) {
+        Some((days, whole)) => for_days(&premium, days, whole),
+        None => premium,
+    })
+}
+
+/// A whole period's premium cut down to `days` of the `whole` days of the
+/// period: the short period before a new billing day. Each line is rounded
+/// half-even; a cent the discount lines no longer account for goes on the
+/// largest of them, so that gross less discounts is still the premium.
+fn for_days(m: &ModalPremium, days: i64, whole: i64) -> ModalPremium {
+    use crate::postings::div_half_even;
+    let part = |v: &ic_money::Money| ic_money::Money::new(div_half_even(v.minor as i128 * days as i128, whole as i128) as i64, v.currency);
+    let map = |from: &BTreeMap<String, ic_money::Money>| from.iter().map(|(k, v)| (k.clone(), part(v))).collect::<BTreeMap<_, _>>();
+    let mut out = ModalPremium {
+        by_cover: map(&m.by_cover),
+        policy_fee: part(&m.policy_fee),
+        gst: map(&m.gst),
+        levies: map(&m.levies),
+        gross_by_cover: map(&m.gross_by_cover),
+        discounts: m
+            .discounts
+            .iter()
+            .map(|d| ic_product::rating::DiscountLine {
+                amount: part(&d.amount),
+                ..d.clone()
+            })
+            .collect(),
+    };
+    if !out.gross_by_cover.is_empty() {
+        let discounted: i64 = out
+            .gross_by_cover
+            .iter()
+            .map(|(k, gross)| gross.minor - out.by_cover.get(k).map_or(0, |net| net.minor))
+            .sum();
+        let lines: i64 = out.discounts.iter().map(|d| d.amount.minor).sum();
+        if let Some(largest) = out.discounts.iter_mut().max_by_key(|d| d.amount.minor) {
+            largest.amount.minor += discounted - lines;
+        }
+    }
+    out
 }
 
 /// Formula-driven sum insured for a scheme member: a multiple of salary, to

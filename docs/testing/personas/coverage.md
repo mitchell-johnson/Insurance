@@ -48,10 +48,10 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 
 | Area | Full | Part | None | Priority 1 not full |
 | --- | ---: | ---: | ---: | ---: |
-| POL Policy model and lifecycle | 7 | 7 | 1 | 5 |
+| POL Policy model and lifecycle | 8 | 7 | 0 | 5 |
 | LED Ledger mapping and invariants | 11 | 5 | 2 | 4 |
 | PRD Products, rating and quotes | 7 | 4 | 1 | 2 |
-| BIL Billing and earning | 7 | 4 | 4 | 4 |
+| BIL Billing and earning | 10 | 4 | 1 | 2 |
 | COL Collection, cash matching, standing and dunning | 16 | 9 | 3 | 7 |
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
 | AUD Audience scoping, customer app and identity | 14 | 5 | 0 | 3 |
@@ -65,7 +65,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | ADV Advisers and commission | 45 | 0 | 0 | 0 |
 | HLT Composable health product | 5 | 3 | 3 | 0 |
 | DSC Discounts and pricing components | 9 | 2 | 0 | 1 |
-| SVC Policy servicing | 6 | 5 | 15 | 4 |
+| SVC Policy servicing | 8 | 5 | 13 | 4 |
 | ANV The anniversary window | 3 | 2 | 14 | 3 |
 | ANN Annuities | 2 | 2 | 9 | 4 |
 | VUL Vulnerable customers, support people and representatives | 17 | 4 | 0 | 3 |
@@ -77,18 +77,17 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **377** | **84** | **116** | **88** |
+| **Total** | **383** | **84** | **110** | **86** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
-| A | 35 | 26 | 8 |
-| B | 114 | 15 | 13 |
-| C | 226 | 40 | 80 |
+| A | 37 | 26 | 6 |
+| B | 115 | 15 | 12 |
+| C | 229 | 40 | 77 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
 
-- **BIL** (2): BIL-003, BIL-010
 - **COL** (2): COL-005, COL-023
 - **XFR** (2): XFR-007, XFR-009
 - **INV** (2): INV-018, INV-019

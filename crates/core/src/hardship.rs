@@ -61,8 +61,8 @@ pub(crate) fn reduced(policy: &Policy, bill: Bill, period: (NaiveDate, NaiveDate
 /// The period already billed that today falls in, if billing has got there.
 fn current_period(policy: &Policy, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
     let n = policy.periods_billed.checked_sub(1)?;
-    let start = ic_product::schedule::period_start(policy.inception, policy.frequency, n)?;
-    let end = ic_product::schedule::period_start(policy.inception, policy.frequency, n + 1)?;
+    let start = policy.period_start(n)?;
+    let end = policy.period_start(n + 1)?;
     (start <= today && today < end).then_some((start, end))
 }
 

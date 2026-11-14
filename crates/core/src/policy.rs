@@ -662,6 +662,10 @@ pub struct Policy {
     /// Each use of a cover's insurability option, by its reference.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub option_uses: BTreeMap<String, OptionUse>,
+    /// Changes to the billing frequency or day, in the order they take
+    /// effect. `frequency` is the one of the period last billed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub billing_changes: Vec<crate::billing_change::BillingChange>,
     /// Each suspension of the policy at the owner's request, by its reference.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub suspensions: BTreeMap<String, crate::suspension::CoverSuspension>,

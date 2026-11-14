@@ -7,7 +7,6 @@ use chrono::NaiveDate;
 use ic_ledger::{Dimensions, Ledger};
 use ic_money::FINE_PER_MINOR;
 use ic_product::rating::ModalPremium;
-use ic_product::schedule::period_start;
 use ic_product::ProductDefinition;
 
 use crate::accounts::{self, dims};
@@ -280,10 +279,8 @@ pub(crate) fn bill_due_periods(
             break;
         }
         let n = policy.periods_billed;
-        let (Some(start), Some(end)) = (
-            period_start(policy.inception, policy.frequency, n),
-            period_start(policy.inception, policy.frequency, n + 1),
-        ) else {
+        policy.enter_period(n);
+        let (Some(start), Some(end)) = (policy.period_start(n), policy.period_start(n + 1)) else {
             return Err(Reject::new("date", "billing period out of range"));
         };
         if start > ctx.date {

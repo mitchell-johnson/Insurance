@@ -687,6 +687,12 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             from: NaiveDate::from_ymd_opt(2028, 1, 1).unwrap(),
             to: NaiveDate::from_ymd_opt(2028, 4, 1).unwrap(),
         })),
+        Command::ChangeBilling(Box::new(ic_core::billing_change::ChangeBilling {
+            policy: p.clone(),
+            reference: "bill-1".into(),
+            frequency: Some(ic_product::Frequency::Yearly),
+            billing_day: None,
+        })),
         Command::ResumeCover {
             policy: p.clone(),
             reference: "sus-1".into(),
@@ -760,7 +766,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 63, "{names:?}");
+    assert_eq!(names.len(), 64, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail

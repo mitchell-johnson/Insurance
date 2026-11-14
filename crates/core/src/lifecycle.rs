@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{Days, NaiveDate};
 use ic_ledger::{Dimensions, Ledger};
 use ic_money::{round_to_money, AccrualAmount, Dec, FINE_PER_MINOR};
-use ic_product::schedule::{age_on, anniversary, period_start};
+use ic_product::schedule::{age_on, anniversary};
 use ic_product::{PremiumType, ProductDefinition};
 
 use crate::accounts::{self, dims};
@@ -297,6 +297,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         payee_debts: BTreeMap::new(),
         paid_up: BTreeMap::new(),
         suspensions: BTreeMap::new(),
+        billing_changes: Vec::new(),
         member_accounts: BTreeSet::new(),
         member_standing: BTreeMap::new(),
         interests: BTreeMap::new(),
@@ -778,7 +779,7 @@ pub(crate) fn reinstate(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
     let mut missed: i64 = 0;
     if !policy.is_scheme() {
         let mut n = policy.periods_billed;
-        while let Some(start) = period_start(policy.inception, policy.frequency, n) {
+        while let Some(start) = policy.period_start(n) {
             if start > ctx.date {
                 break;
             }
@@ -809,7 +810,7 @@ pub(crate) fn reinstate(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
     policy.status = PolicyStatus::InForce;
     ctx.emit(Event::PolicyReinstated { policy: policy.id.clone() });
     cash::apply_suspense(ledger, policy, ctx)?;
-    while period_start(policy.inception, policy.frequency, policy.periods_billed).is_some_and(|s| s <= ctx.date) {
+    while policy.period_start(policy.periods_billed).is_some_and(|s| s <= ctx.date) {
         if !billing::bill_due_periods(ledger, catalog, &product, policy, ctx)? {
             break;
         }

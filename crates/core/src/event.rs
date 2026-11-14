@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 use ic_ledger::{AccountClass, AccountUnit, Dimensions, EntryId, Hash32, PartitionId};
-use ic_product::Sex;
+use ic_product::{Frequency, Sex};
 use serde::{Deserialize, Serialize};
 
 use crate::payments::PayableKind;
@@ -507,6 +507,17 @@ pub enum Event {
         amount_minor: i64,
         bank_account: String,
         outstanding_minor: i128,
+    },
+    /// The owner changed how often or on which day premium falls due. The
+    /// new schedule starts on `first_day`; where the billing day moved, the
+    /// days up to `first_full_period` are one short period billed for its
+    /// days. Nothing billed before `first_day` changes.
+    BillingChanged {
+        policy: PolicyId,
+        reference: String,
+        frequency: Frequency,
+        first_day: NaiveDate,
+        first_full_period: NaiveDate,
     },
     /// The owner suspended the policy: no premium for the days from `from`
     /// up to `to`, and nothing that happens in them is covered. The premium

@@ -12,7 +12,6 @@
 use chrono::NaiveDate;
 use ic_ledger::Ledger;
 use ic_product::rating::ModalPremium;
-use ic_product::schedule::period_start;
 
 use crate::billing::{raise_receivable, Bill};
 use crate::cash;
@@ -514,12 +513,12 @@ pub(crate) fn add_cover(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
 /// be priced for a change made today.
 fn billed_period(policy: &Policy, effective: NaiveDate) -> Result<Option<(NaiveDate, NaiveDate)>, Reject> {
     let date = || Reject::new("date", "billing period out of range");
-    let next = period_start(policy.inception, policy.frequency, policy.periods_billed).ok_or_else(date)?;
+    let next = policy.period_start(policy.periods_billed).ok_or_else(date)?;
     if effective > next {
         return Err(Reject::new("billing_behind", "billing has not caught up to today; retry after the end of day"));
     }
     match policy.periods_billed.checked_sub(1) {
-        Some(n) if effective < next => Ok(Some((period_start(policy.inception, policy.frequency, n).ok_or_else(date)?, next))),
+        Some(n) if effective < next => Ok(Some((policy.period_start(n).ok_or_else(date)?, next))),
         _ => Ok(None),
     }
 }

@@ -47,6 +47,8 @@ PRODUCT = product(
             frequencies = ["fortnightly", "monthly", "yearly"],
             policy_fee_annual = "72.00",
             modal_loading = {"fortnightly": "0.04", "monthly": "0.04"},
+            frequency_change = "anniversary",
+            billing_day_change = True,
         ),
         earning(),
         arrears(grace_days = 30, lapse_days = 90, suspend_after_grace = True, reinstatement_days = 180, reinstatement_evidence_free_days = 60),
