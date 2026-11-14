@@ -217,3 +217,7 @@ Mitchell answered the four group questions in the group thread.
 - The premium basis can come from the option: stepped, level to an age, level for blocks of years, or limited pay. Limited pay stops billing at its age and keeps the cover in force.
 - Entry ages are checked at issue and when a cover is added (reject code `entry_age`).
 - Two cover types were added for underwriting and claims: `tpd` and `accidental_injury`.
+
+## AIA material may be used (14 Nov 2026)
+
+- Mitchell confirmed the system is built for AIA ("Yes it's for Aia so can use everything from them"). The AIA products keep AIA's product and benefit names, and they may use AIA's published wordings and material.
