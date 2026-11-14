@@ -637,6 +637,9 @@ pub struct Policy {
     /// bank has settled it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub payouts: BTreeMap<String, crate::invest::Payout>,
+    /// Cover on other policies that cover on this one replaces.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaces: Vec<crate::command::Replacement>,
     /// Each use of a cover's insurability option, by its reference.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub option_uses: BTreeMap<String, OptionUse>,

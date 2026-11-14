@@ -162,6 +162,30 @@ pub struct UnderwrittenLayer {
     pub start: Option<NaiveDate>,
 }
 
+/// A new policy takes the place of cover a life already had, on this
+/// insurer's books: what new business learned from the replacement
+/// disclosure. Recorded on the new policy, for reinsurance and commission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Replacement {
+    /// The new policy.
+    pub policy: PolicyId,
+    /// The policy it replaces. It may be on another partition; the core
+    /// records the ID and does not look it up.
+    pub replaced_policy: PolicyId,
+    /// The life on the new policy whose cover is replaced.
+    pub life: LifeId,
+    /// The same person's life ID on the replaced policy.
+    pub replaced_life: LifeId,
+    /// The cover on the new policy that takes the old cover's place.
+    pub cover: String,
+    /// The cover on the replaced policy.
+    pub replaced_cover: String,
+    /// How much of the old cover the new cover replaces, in minor units.
+    pub replaced_sum_insured_minor: i64,
+    /// Where the signed replacement disclosure is kept.
+    pub evidence: String,
+}
+
 /// A life uses its cover's insurability option: more cover on the terms it
 /// already has, with no underwriting, after an event the product names.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -412,6 +436,8 @@ pub enum Command {
     AddUnderwrittenLayer(Box<UnderwrittenLayer>),
     /// A life uses its cover's future insurability option.
     ExerciseOption(Box<OptionExercise>),
+    /// Record that cover on this policy replaces cover on another.
+    RecordReplacement(Box<Replacement>),
     /// Give a life a cover from the product's menu that it does not hold.
     AddCover(Box<AddedCover>),
     /// Move a life's cover to another of the excess levels the cover offers.
@@ -675,6 +701,7 @@ impl Command {
             Command::ReduceCover(_) => &["policy-servicing"],
             Command::AddCover(_) | Command::ExerciseOption(_) => &["underwriting", "policy-servicing"],
             Command::ChangeExcess(_) => &["policy-servicing"],
+            Command::RecordReplacement(_) => &["underwriting", "new-business"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::Claims(command) => command.allowed_callers(),
             Command::Investment(command) => command.allowed_callers(),
@@ -730,6 +757,7 @@ impl Command {
             Command::AddCover(_) => "add_cover",
             Command::ExerciseOption(_) => "exercise_option",
             Command::ChangeExcess(_) => "change_excess",
+            Command::RecordReplacement(_) => "record_replacement",
             Command::AlterUnderwrittenTerms(_) => "alter_underwritten_terms",
             Command::ApproveReinstatement(_) => "approve_reinstatement",
             Command::AvoidPolicy { .. } => "avoid_policy",
