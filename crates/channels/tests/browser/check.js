@@ -100,6 +100,8 @@ async function visit(browser, path, who, steps) {
     await say(page, `${persona}: ${doing}`, 3000);
     await steps.run(page);
     await say(page, `${persona}: ${doing}`, 2000);
+    // What a screen reader needs of every page, in every view, shown or not (persona row AUD-018).
+    for (const fault of await page.evaluate(audit)) problems.push("accessibility: " + fault);
   } catch (e) {
     problems.push(String(e.message).split("\n").slice(0, 3).join(" / "));
   }
@@ -108,6 +110,32 @@ async function visit(browser, path, who, steps) {
   console.log(`${problems.length ? "FAIL" : "ok  "} ${path}`);
   await context.close();
   if (video) require("fs").writeFileSync(`${video}/${name}/caption.txt`, `${persona}\n${doing}\n`);
+}
+// Runs in the page. Every control has a name a screen reader can say, every table has headers,
+// the page has a language, a title, one main heading and a main region, and no ID is used twice.
+function audit() {
+  const faults = [];
+  const where = (el) => `<${el.tagName.toLowerCase()}${el.id ? ` id="${el.id}"` : ""}${el.name ? ` name="${el.name}"` : ""}>`;
+  const named = (el) => (el.getAttribute("aria-label") || "").trim() || (el.getAttribute("aria-labelledby") || "").split(/\s+/).some((id) => id && document.getElementById(id) && document.getElementById(id).textContent.trim());
+  for (const el of document.querySelectorAll("input, select, textarea")) {
+    if (el.type === "hidden" || el.closest("#demo-bar")) continue;
+    const label = (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`)) || el.closest("label");
+    if (!(label && label.textContent.trim()) && !named(el)) faults.push(`${where(el)} has no label`);
+  }
+  for (const el of document.querySelectorAll("button, a[href], [role=tab]")) {
+    if (el.closest("#demo-bar")) continue;
+    if (!el.textContent.trim() && !named(el) && !(el.getAttribute("title") || "").trim()) faults.push(`${where(el)} has no name`);
+  }
+  for (const t of document.querySelectorAll("table")) if (t.rows.length && !t.querySelector("th")) faults.push("a table has no header cells");
+  for (const svg of document.querySelectorAll("svg")) if (svg.getAttribute("aria-hidden") !== "true" && !named(svg)) faults.push("an icon is neither named nor hidden from the accessibility tree");
+  const ids = [...document.querySelectorAll("[id]")].map((el) => el.id);
+  for (const id of new Set(ids.filter((id, i) => ids.indexOf(id) !== i))) faults.push(`id "${id}" is used more than once`);
+  if (!document.documentElement.lang) faults.push("the page names no language");
+  if (!document.title.trim()) faults.push("the page has no title");
+  if (document.querySelectorAll("h1").length !== 1) faults.push(`the page has ${document.querySelectorAll("h1").length} main headings, not one`);
+  if (!document.querySelector("main")) faults.push("the page has no main region");
+  for (const live of document.querySelectorAll("[role=alert], .banner.bad")) if (!live.closest("[aria-live], [role=alert]")) faults.push("a refusal is not announced: it sits outside a live region");
+  return [...new Set(faults)];
 }
 // Move to one of a page's views by its tab.
 const tab = (page, name) => page.getByRole("tab", { name, exact: true }).click();

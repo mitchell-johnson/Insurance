@@ -395,7 +395,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | ADV-025 | full | `distribution/tests/personas.rs::a_referral_partners_fixed_fee_is_its_own_line_and_is_clawed_back`<br>`distribution/tests/commission.rs::a_shared_fragment_pays_overrides_and_a_one_off_fee_on_top_of_base` |
 | ADV-026 | full | `distribution/tests/commission.rs::replacement_cover_earns_trail_only_and_the_house_book_earns_nothing`<br>`distribution/tests/lifecycle.rs::a_replaced_policys_clawback_carries_to_the_replacement` |
 | ADV-027 | full | `underwriting/tests/driver.rs::a_replacement_with_a_top_up_underwrites_only_the_increase_on_the_same_cover` |
-| ADV-028 | part | `underwriting/tests/replacement.rs::a_replacement_waits_for_the_signed_replacement_disclosure` |
+| ADV-028 | full | `underwriting/tests/replacement.rs::a_replacement_waits_for_the_signed_replacement_disclosure`<br>`underwriting/tests/replacement.rs::a_new_policy_replaces_only_the_cover_it_names`<br>`underwriting/tests/replacement.rs::a_replacements_progress_shows_what_it_adds` |
 | ADV-029 | full | `distribution/tests/replacement.rs::cover_rewritten_inside_the_group_after_a_cancellation_is_treated_as_a_replacement`<br>`distribution/tests/replacement.rs::the_rule_matches_the_same_life_the_same_cover_and_a_related_adviser_or_the_same_amount` |
 | ADV-030 | full | `distribution/tests/personas.rs::a_scheme_changing_broker_mid_year_moves_its_book_with_a_dated_handover_split` |
 | ADV-031 | full | `channels/tests/journeys.rs::an_incoming_broker_sees_the_scheme_from_the_appointment_day` |
@@ -470,7 +470,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | VUL-015 | full | `customers/tests/api.rs::a_death_prompts_a_person_to_consider_the_bereaved` |
 | VUL-017 | part | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due` |
 | VUL-018 | part | `customers/tests/api.rs::a_capacity_question_pauses_representatives` |
-| VUL-016 | part | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not` |
+| VUL-016 | full | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not`<br>`underwriting/tests/more_time.rs::a_customer_who_needs_more_time_gets_longer_to_answer_an_offer` |
 | VUL-019 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_post_only_customer_and_their_representative_both_get_the_notice`<br>`documents/tests/requested_letters.rs::a_representative_sees_ordinary_letters_and_never_clinical_ones` |
 | VUL-020 | full | `payments/tests/aml.rs::repeated_refunds_raise_a_restricted_case` |
 | VUL-021 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_representative_gets_the_notice_in_their_own_language` |

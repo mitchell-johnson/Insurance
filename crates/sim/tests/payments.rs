@@ -456,3 +456,115 @@ fn old_settled_payments_are_pruned_from_state() {
     assert_eq!(code(c.submit(0, "payments", back)), "unknown_payment");
     clean(&c);
 }
+
+/// Purpose: a refund that settled into the wrong account is put right in three steps. Raising
+/// the debt makes the refund owed again to the right person and records what the holder owes
+/// back; a recovery brings money in against the debt; the rest is written off to its own
+/// expense account; and the right person can then be paid. Every refusal leaves the ledger
+/// alone: a payment that never settled, more than the payment, a different debt under a used
+/// ID, more recovered or written off than is outstanding, a receipt already used, and the
+/// bank's ordinary return of a payment that has a debt against it. The books reconcile at
+/// every step.
+/// Why it matters: money sent to the wrong person is owed twice over, once by the insurer to
+/// the customer who never got it and once by the stranger who did. With no account for the
+/// second, the first can only be paid again by pretending the payment never settled, and
+/// what was lost, recovered or written off is nowhere on the books.
+#[test]
+fn a_payment_to_the_wrong_person_is_owed_again_and_owed_back() {
+    use ic_core::payee_debt::PayeeDebtCommand;
+    let mut c = cluster(1);
+    let id = overpaid(&mut c);
+    let nzd = |minor| Money::new(minor, NZD);
+    let send = |c: &mut Cluster, command: PayeeDebtCommand| c.submit(0, "payments", Command::PayeeDebt(Box::new(command)));
+    let raise_debt = |debt: &str, payment: &str, minor: i64| PayeeDebtCommand::Raise {
+        policy: id.clone(),
+        debt: debt.to_string(),
+        payment: payment.to_string(),
+        amount: nzd(minor),
+        party: Some(ic_core::PartyId("party-stranger".to_string())),
+    };
+    let recover = |debt: &str, receipt: &str, minor: i64| PayeeDebtCommand::Recover {
+        policy: id.clone(),
+        debt: debt.to_string(),
+        receipt: receipt.to_string(),
+        amount: nzd(minor),
+    };
+    let write_off = |debt: &str, minor: i64| PayeeDebtCommand::WriteOff {
+        policy: id.clone(),
+        debt: debt.to_string(),
+        amount: nzd(minor),
+        reason: "holder_untraceable".to_string(),
+    };
+    let debt_account = |c: &Cluster| c.state(0).ledger.balance(&accounts::payee_debt(&id, NZD).id);
+    let refund_owed = |c: &Cluster| c.state(0).ledger.natural_balance(&accounts::refund_payable(&id, NZD).id);
+
+    assert_eq!(code(send(&mut c, raise_debt("debt-1", "pay-1", 100_00))), "unknown_payment");
+    c.submit(0, "payments", raise(&id, "ref-1", 100_00)).unwrap();
+    c.submit(0, "payments", settle(&id, "pay-1", Some("ref-1"), 100_00)).unwrap();
+    assert_eq!(refund_owed(&c), 0);
+    let head = c.state(0).ledger.head();
+    assert_eq!(code(send(&mut c, raise_debt("debt-1", "pay-1", 100_01))), "over_payment");
+    assert_eq!(code(send(&mut c, raise_debt("debt 1", "pay-1", 100_00))), "invalid_debt");
+    assert_eq!(code(send(&mut c, raise_debt("debt-1", "pay-1", 0))), "invalid_amount");
+    assert_eq!(
+        code(c.submit(0, "cash-matching", Command::PayeeDebt(Box::new(raise_debt("debt-1", "pay-1", 100_00))))),
+        "caller_not_allowed"
+    );
+    assert_eq!(c.state(0).ledger.head(), head, "a refusal posts nothing");
+
+    // The whole payment went astray: owed again to the customer, owed back by the holder.
+    send(&mut c, raise_debt("debt-1", "pay-1", 100_00)).unwrap();
+    send(&mut c, raise_debt("debt-1", "pay-1", 100_00)).unwrap();
+    assert_eq!((refund_owed(&c), debt_account(&c)), (100_00, 100_00));
+    assert_eq!(c.state(0).policies[&id].refunds_raised["ref-1"], 100_00);
+    clean(&c);
+    assert_eq!(code(send(&mut c, raise_debt("debt-1", "pay-1", 50_00))), "duplicate_debt");
+    assert_eq!(code(send(&mut c, raise_debt("debt-2", "pay-1", 1))), "over_payment");
+    assert_eq!(
+        code(c.submit(
+            0,
+            "payments",
+            Command::ReturnPayment {
+                policy: id.clone(),
+                payment: "pay-1".into()
+            }
+        )),
+        "payment_has_debt"
+    );
+
+    // The bank's recall brings back 60.00.
+    assert_eq!(code(send(&mut c, recover("debt-9", "recall-1", 60_00))), "unknown_debt");
+    assert_eq!(code(send(&mut c, recover("debt-1", "r1", 60_00))), "duplicate_receipt");
+    assert_eq!(code(send(&mut c, recover("debt-1", "recall-1", 100_01))), "over_recovery");
+    send(&mut c, recover("debt-1", "recall-1", 60_00)).unwrap();
+    send(&mut c, recover("debt-1", "recall-1", 60_00)).unwrap();
+    assert_eq!(code(send(&mut c, recover("debt-1", "recall-1", 10_00))), "duplicate_receipt");
+    assert_eq!(debt_account(&c), 40_00);
+    clean(&c);
+
+    // The rest will not come back.
+    assert_eq!(code(send(&mut c, write_off("debt-1", 40_01))), "over_recovery");
+    send(&mut c, write_off("debt-1", 40_00)).unwrap();
+    assert_eq!(debt_account(&c), 0);
+    let lost = c.state(0).ledger.balance(&accounts::payee_debt_written_off("term-life", NZD).id);
+    assert_eq!(lost, 40_00);
+    let record = &c.state(0).policies[&id].payee_debts["debt-1"];
+    assert_eq!((record.raised_minor, record.outstanding_minor, record.written_off_minor), (100_00, 0, 40_00));
+    clean(&c);
+
+    // And the customer is paid, this time to the right account.
+    c.submit(0, "payments", settle(&id, "pay-2", Some("ref-1"), 100_00)).unwrap();
+    assert_eq!(refund_owed(&c), 0);
+    clean(&c);
+    let outstanding: Vec<i64> = c.nodes[&0]
+        .outbox
+        .iter()
+        .filter_map(|e| match &e.event {
+            Event::PayeeDebtRaised { outstanding_minor, .. }
+            | Event::PayeeDebtRecovered { outstanding_minor, .. }
+            | Event::PayeeDebtWrittenOff { outstanding_minor, .. } => Some(*outstanding_minor),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(outstanding, vec![100_00, 40_00, 0]);
+}

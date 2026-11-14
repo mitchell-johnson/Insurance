@@ -898,6 +898,16 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                     Some(r) => Step::Park(format!("the core refused the remedy: {}: {}", r.code, r.message)),
                 }
             }
+            Effect::RecordReplacement { key, group, command, .. } => {
+                let answer = self
+                    .core
+                    .send(home_partition(group), key, "underwriting", ic_core::Command::RecordReplacement(command.clone()))
+                    .await?;
+                match answer.refused {
+                    None => Step::Delivered,
+                    Some(r) => Step::Park(format!("the core refused the replacement: {}: {}", r.code, r.message)),
+                }
+            }
             other => match self.forward.forward(seq, other).await? {
                 None => Step::Delivered,
                 Some(reason) => Step::Park(reason),

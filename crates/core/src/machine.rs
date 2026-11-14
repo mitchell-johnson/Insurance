@@ -805,6 +805,10 @@ impl CoreState {
                     crate::discount_override::apply(&mut s.ledger, &s.catalog, p, ctx, *command)
                 })
             }
+            Command::PayeeDebt(command) => {
+                let id = command.policy().clone();
+                self.with_policy(&id, false, |s, p| crate::payee_debt::apply(&mut s.ledger, p, ctx, *command))
+            }
             Command::Loan(command) => {
                 let id = command.policy().clone();
                 self.with_policy(&id, true, |s, p| match *command {

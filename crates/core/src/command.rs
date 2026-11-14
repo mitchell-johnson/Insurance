@@ -574,6 +574,9 @@ pub enum Command {
     /// The owner borrows against the policy's value, or repays.
     #[serde(rename = "policy_loan")]
     Loan(Box<crate::loan::LoanCommand>),
+    /// A settled payment went to the wrong person: raise what they owe
+    /// back, record what is recovered, write off the rest.
+    PayeeDebt(Box<crate::payee_debt::PayeeDebtCommand>),
     /// An approved, per-policy discount is given, or its end brought forward.
     SetDiscountOverride(Box<crate::discount_override::SetDiscountOverride>),
     // --- payments: money leaving through a payable ---
@@ -712,6 +715,7 @@ impl Command {
             Command::SplitScheme(command) => command.allowed_callers(),
             Command::SetMemberCovers(command) => command.allowed_callers(),
             Command::Loan(command) => command.allowed_callers(),
+            Command::PayeeDebt(_) => &["payments"],
             Command::SetDiscountOverride(command) => command.allowed_callers(),
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
             Command::ApplyMemberReceipt { .. } => &["cash-matching"],
@@ -781,6 +785,7 @@ impl Command {
             Command::SplitScheme(_) => "split_scheme",
             Command::SetMemberCovers(_) => "set_member_covers",
             Command::Loan(_) => "policy_loan",
+            Command::PayeeDebt(_) => "payee_debt",
             Command::SetDiscountOverride(_) => "set_discount_override",
             Command::RecordCession { .. } => "record_cession",
             Command::PostReinsurance { .. } => "post_reinsurance",

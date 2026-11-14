@@ -229,6 +229,11 @@ pub(crate) fn return_payment(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut
     if rec.returned {
         return Err(Reject::new("already_returned", format!("payment {payment} has already been returned")));
     }
+    // Money a wrong payee owes back is recovered against the debt, not by
+    // reversing the settlement a second time.
+    if policy.payee_debts.values().any(|d| d.payment == payment) {
+        return Err(Reject::new("payment_has_debt", format!("payment {payment} has a payee debt raised against it")));
+    }
     let c = policy.currency;
     let dims = accounts::dims(policy, None, rec.payable.posting_type());
     let mut set = PostingSet::new();

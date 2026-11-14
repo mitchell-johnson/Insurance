@@ -24,6 +24,8 @@ pub mod role {
     pub const POLICY_LOAN_INTEREST: &str = "policy_loan_interest";
     /// Loans lost where a policy ended worth less than it owed.
     pub const POLICY_LOAN_WRITTEN_OFF: &str = "policy_loan_written_off";
+    pub const PAYEE_DEBT: &str = "payee_debt";
+    pub const PAYEE_DEBT_WRITTEN_OFF: &str = "payee_debt_written_off";
 
     /// Case estimates for claims notified and not yet admitted or closed.
     pub const CLAIM_RESERVE: &str = "claim_reserve";
@@ -151,6 +153,18 @@ pub fn unit_account(p: &PolicyId, fund: &FundId) -> Account {
 pub fn policy_loan(p: &PolicyId, c: Currency) -> Account {
     acct(format!("pol/{p}/policy_loan"), AccountUnit::Minor(c), AccountClass::Asset, role::POLICY_LOAN)
 }
+/// What someone paid by mistake owes back. Opened on first use.
+pub fn payee_debt(p: &PolicyId, c: Currency) -> Account {
+    acct(format!("pol/{p}/payee_debt"), AccountUnit::Minor(c), AccountClass::Asset, role::PAYEE_DEBT)
+}
+pub fn payee_debt_written_off(product: &str, c: Currency) -> Account {
+    acct(
+        format!("int/payee_debt_written_off/{product}/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Expense,
+        role::PAYEE_DEBT_WRITTEN_OFF,
+    )
+}
 pub fn policy_loan_interest(product: &str, c: Currency) -> Account {
     acct(
         format!("int/policy_loan_interest/{product}/{c}"),
@@ -247,6 +261,8 @@ pub fn transferable_accounts(p: &PolicyId, c: Currency) -> Vec<Account> {
     all.push(claim_recovery_receivable(p, c));
     // So does what the owner has borrowed against it.
     all.push(policy_loan(p, c));
+    // And what a wrong payee owes back on it.
+    all.push(payee_debt(p, c));
     all
 }
 
