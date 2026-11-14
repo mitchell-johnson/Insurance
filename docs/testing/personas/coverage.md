@@ -61,7 +61,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | RI Reinsurance | 15 | 0 | 3 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 4 | 9 | 3 |
 | GRP Group scheme administration | 27 | 5 | 8 | 2 |
-| JNT Joint lives, ownership, assignments and dependants | 2 | 9 | 20 | 15 |
+| JNT Joint lives, ownership, assignments and dependants | 3 | 8 | 20 | 14 |
 | ADV Advisers and commission | 44 | 1 | 0 | 1 |
 | HLT Composable health product | 5 | 3 | 3 | 0 |
 | DSC Discounts and pricing components | 9 | 2 | 0 | 1 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **341** | **99** | **137** | **101** |
+| **Total** | **342** | **98** | **137** | **100** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 34 | 25 | 10 |
 | B | 107 | 19 | 16 |
-| C | 198 | 52 | 96 |
+| C | 199 | 51 | 96 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -117,7 +117,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **CLM** (5): CLM-003, CLM-008, CLM-009, CLM-026, CLM-028
 - **INV** (1): INV-015
 - **GRP** (1): GRP-013
-- **JNT** (5): JNT-001, JNT-008, JNT-013, JNT-023, JNT-030
+- **JNT** (4): JNT-008, JNT-013, JNT-023, JNT-030
 - **ADV** (1): ADV-028
 - **DSC** (1): DSC-005
 - **ANV** (1): ANV-016
