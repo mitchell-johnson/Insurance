@@ -37,6 +37,8 @@ pub trait Core: Send + Sync {
             }
         }
     }
+    /// Send a command that names no policy to one partition.
+    fn send_on(&self, partition: u16, key: &str, caller: &str, command: Command) -> impl Future<Output = Result<Option<String>, String>> + Send;
     /// Send a command to the partition that holds `policy`.
     fn send_to(&self, policy: &PolicyId, key: &str, caller: &str, command: Command) -> impl Future<Output = Result<Option<String>, String>> + Send;
     /// Hand an unexpected credit to cash matching. `Ok(Some(reason))` means
@@ -134,6 +136,10 @@ impl ClusterCore {
 }
 
 impl Core for ClusterCore {
+    async fn send_on(&self, partition: u16, key: &str, caller: &str, command: Command) -> Result<Option<String>, String> {
+        self.propose(partition, key, caller, command).await
+    }
+
     async fn send_to(&self, policy: &PolicyId, key: &str, caller: &str, command: Command) -> Result<Option<String>, String> {
         let partitions = self.client.partitions(Duration::from_secs(20)).await?;
         for partition in 0..partitions {

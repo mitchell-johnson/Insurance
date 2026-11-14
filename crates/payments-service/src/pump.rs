@@ -349,6 +349,7 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
                 Instruction::Core { caller, command } => self.core.send(&work.key, &caller, *command).await,
                 Instruction::Module { module, command } => self.module.tell(&module, command).await.map(|answer| crate::ports::refusal(&answer)),
                 Instruction::CoreAt { policy, caller, command } => self.core.send_to(&policy, &work.key, &caller, *command).await,
+                Instruction::CorePartition { partition, caller, command } => self.core.send_on(partition, &work.key, &caller, *command).await,
                 Instruction::Match {
                     amount_minor,
                     currency,

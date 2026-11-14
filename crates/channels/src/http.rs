@@ -784,6 +784,71 @@ async fn policy(State(s): State<Shared>, headers: HeaderMap, method: Method, uri
     ok(view)
 }
 
+impl AppState {
+    /// The authority the person signed in holds to view `party`'s affairs,
+    /// as the customer master has it today. With none in force the answer
+    /// is the same as for a person who does not exist. Where the master
+    /// says a person must decide (capacity is in question) the
+    /// representative is told their authority is under review, which they
+    /// already know they hold, and sees nothing.
+    async fn authority_over(&self, session: &Session, party: &PartyId) -> Result<Value, Problem> {
+        let Some(master) = &self.master else { return Err(Problem::not_found()) };
+        match master.represents(&session.party, party).await {
+            Ok((200, answer)) => match answer["decision"].as_str() {
+                Some("allow") => Ok(answer["relationship"].clone()),
+                Some("route") => Err(Problem::new(
+                    StatusCode::FORBIDDEN,
+                    "authority_under_review",
+                    "your authority to act is being reviewed; we will be in touch",
+                )),
+                _ => Err(Problem::not_found()),
+            },
+            Ok((400 | 404, _)) => Err(Problem::not_found()),
+            _ => Err(Problem::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "customer_master_unavailable",
+                "we could not check your authority just now; try again shortly",
+            )),
+        }
+    }
+}
+
+/// The policies of someone the person signed in acts for under an
+/// authority in force: an attorney under an activated enduring power, a
+/// guardian, a written authority that covers viewing.
+async fn represented(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(party): Path<String>) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    let party = PartyId::from(party.as_str());
+    let authority = s.authority_over(&session, &party).await?;
+    let policies = s
+        .ask(Question::Policies {
+            party: party.clone(),
+            at: session.at,
+        })
+        .await?;
+    ok(json!({ "party": party, "authority": authority, "policies": policies }))
+}
+
+/// One of those policies, as the person themselves sees it but without
+/// their health information: viewing a policy is not authority to read
+/// what was disclosed about their health.
+async fn represented_policy(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path((party, policy)): Path<(String, String)>) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    let party = PartyId::from(party.as_str());
+    s.authority_over(&session, &party).await?;
+    let view = s
+        .ask(Question::PolicyFor {
+            represented: party,
+            policy: PolicyId::from(policy.as_str()),
+            at: session.at,
+        })
+        .await?;
+    if view.is_null() {
+        return Err(Problem::not_found());
+    }
+    ok(view)
+}
+
 async fn requests(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
     let session = s.customer(&headers, &method, &uri, b"").await?;
     ok(s.ask(Question::Requests { party: session.party }).await?)
@@ -2517,6 +2582,64 @@ async fn finance_question(
     ok(answer)
 }
 
+/// Price a proposed rate table against the book in force on a date,
+/// beside the current one. For the finance lead and the appointed
+/// actuary. The loadings are read from every core partition for that date
+/// and handed to the ledger for this one answer; they are not kept here or
+/// there, and the answer carries totals only. If the core cannot be read
+/// the run still answers, without loaded totals, and says so.
+async fn finance_dry_run(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let (_, standing) = s.finance_standing(&headers, &method, &uri, &body).await?;
+    let held = |role: &&str| standing["roles"].as_array().is_some_and(|r| r.iter().any(|h| h == role));
+    if !crate::finance::DRY_RUN_ROLES.iter().any(held) {
+        return Err(Problem::forbidden(
+            "pricing a proposed table against the book is for the finance lead and the appointed actuary",
+        ));
+    }
+    let body: Value = parse(&body)?;
+    // Checked before the core is read, so a mistake in the form costs nothing.
+    crate::finance::dry_run(&body, vec![]).map_err(Problem::bad_request)?;
+    let as_at = body["as_at"]
+        .as_str()
+        .and_then(|d| d.parse::<chrono::NaiveDate>().ok())
+        .ok_or_else(|| Problem::bad_request("give the date"))?;
+    let mut loadings = Vec::new();
+    let mut unread = None;
+    'book: for partition in 0..s.claims.count() {
+        let mut after = None;
+        loop {
+            match s.claims.loadings(partition, after, as_at).await {
+                Ok(page) => {
+                    loadings.extend(
+                        page.rows
+                            .into_iter()
+                            .map(|r| json!({ "partition": partition, "policy": r.policy, "cover": r.cover, "layer": r.layer, "loadings": r.loadings })),
+                    );
+                    match page.next {
+                        Some(next) => after = Some(next),
+                        None => break,
+                    }
+                }
+                Err(e) => {
+                    unread = Some(e);
+                    break 'book;
+                }
+            }
+        }
+    }
+    if unread.is_some() {
+        loadings.clear();
+    }
+    let question = crate::finance::dry_run(&body, loadings).map_err(Problem::bad_request)?;
+    let mut answer = s
+        .finance
+        .ask(question)
+        .await
+        .map_err(|e| module_problem("finance", StatusCode::BAD_REQUEST, e))?;
+    answer["loadings_read"] = json!(unread.is_none());
+    ok(answer)
+}
+
 /// One person's command to the finance ledger, as that person with the
 /// roles they hold. That module decides what each role may do, keeps maker
 /// and checker apart, and records who did what.
@@ -3002,6 +3125,8 @@ pub fn router(state: Shared) -> Router {
         )
         .route("/app/v1/sync", get(sync))
         .route("/app/v1/policies/{policy}", get(policy))
+        .route("/app/v1/represented/{party}", get(represented))
+        .route("/app/v1/represented/{party}/policies/{policy}", get(represented_policy))
         .route("/app/v1/policies/{policy}/advisers", post(appoint_adviser))
         .route("/app/v1/policies/{policy}/advisers/{adviser}", delete(remove_adviser))
         .route("/app/v1/policies/{policy}/consent", put(family_consent))
@@ -3064,6 +3189,10 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/claims/{question}", get(claims_question))
         .route("/staff/v1/claims/definitions/{id}/{version}", get(claims_definition))
         .route("/staff/v1/finance/commands", post(finance_command))
+        .route(
+            "/staff/v1/finance/table_dry_run",
+            post(finance_dry_run).layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
         .route("/staff/v1/finance/{question}", get(finance_question))
         .route("/staff/v1/unit-pricing/commands", post(pricing_command))
         .route("/staff/v1/unit-pricing/{question}", get(pricing_question))

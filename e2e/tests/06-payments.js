@@ -540,7 +540,7 @@ test({ id: "E2E-201", area: A, persona: "Payments", story: "US-ST17-1", title: "
   if (!cells.includes(p.id) || !cells.includes("active") || cells[6] !== "yes") throw new Error(`the authority row reads ${JSON.stringify(cells)}`);
 });
 
-test({ id: "E2E-202", area: A, persona: "ST5", story: "US-ST05-1", title: "The collections officer cannot set up or suspend a direct debit authority", matrix: ["COL-020"],
+test({ id: "E2E-202", area: A, persona: "ST5", story: "US-ST05-1", title: "The collections officer cannot set up or suspend a direct debit authority", matrix: [],
   purpose: "As the collections officer, send a command suspending an authority.",
   why: "Bank authorities are maintained by the payee team; collections works with them but does not change whose account is debited." }, async (t) => {
   const s = await t.open("/payments", cast.st5);
@@ -580,7 +580,9 @@ test({ id: "E2E-204", area: A, persona: "ST10", story: "US-ST10-1", title: "A cr
   const m = await mystery(t, "refunds", 123_45);
   const s = await t.open("/payments", cast.recon);
   await s.tab("Reconciliation");
-  const cells = await s.row("#exceptions", m.exception).locator("td").allInnerTexts();
+  const row = s.row("#exceptions", m.exception);
+  await row.waitFor({ timeout: 10000 });
+  const cells = await row.locator("td").allInnerTexts();
   if (!cells.includes("unexplained credit") || !cells.includes("123.45") || !cells.includes(m.reference)) throw new Error(`the exception row reads ${JSON.stringify(cells)}`);
 });
 
@@ -621,7 +623,7 @@ test({ id: "E2E-207", area: A, persona: "ST10", story: "US-ST10-1", title: "The 
   await s.stopped("#raw-msg", "reconciler", 403);
 });
 
-test({ id: "E2E-208", area: A, persona: "ST13", story: "US-ST13-1", title: "Compliance sees the cases of premiums paid by someone else; the maker does not", matrix: ["INV-019"],
+test({ id: "E2E-208", area: A, persona: "ST13", story: "US-ST13-1", title: "Compliance sees the cases of premiums paid by someone else; the maker does not", matrix: [],
   purpose: "Open the Controls view as the compliance investigator and as the maker.",
   why: "Third-party payers are a money laundering signal worked by compliance alone; nobody else should see who is being looked at." }, async (t) => {
   const s = await t.open("/payments", cast.st13);

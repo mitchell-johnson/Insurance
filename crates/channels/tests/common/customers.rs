@@ -181,6 +181,25 @@ impl Master for MasterDouble {
         })
     }
 
+    fn represents(&self, representative: &PartyId, party: &PartyId) -> Asked<'_> {
+        let (who, party) = (representative.clone(), party.clone());
+        Box::pin(async move {
+            if self.down.load(Ordering::SeqCst) {
+                return Err("connection refused".to_string());
+            }
+            if party.0 == "nobody" {
+                return Ok((404, json!({ "title": "not_found" })));
+            }
+            Ok(match self.authorities.lock().unwrap().get(&(party.0, who.0)) {
+                Some(decision) => (
+                    200,
+                    json!({ "decision": decision, "relationship": { "kind": "attorney", "basis": "enduring_power_of_attorney", "scope": ["view"], "valid_from": "2027-10-01", "valid_to": null } }),
+                ),
+                None => (200, json!({ "decision": "refuse", "relationship": null })),
+            })
+        })
+    }
+
     fn speaks_for(&self, staff: &PartyId, party: &PartyId, caller: &PartyId) -> Asked<'_> {
         let (staff, party, caller) = (staff.clone(), party.clone(), caller.clone());
         Box::pin(async move {

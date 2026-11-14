@@ -285,6 +285,7 @@ impl PaymentsState {
     /// A reinsurer settlement is paid: the reinsurance module records it
     /// against the statement, in that module's own command.
     pub(crate) fn origin_settled(&mut self, n: &NewItem, on: NaiveDate, bank_account: &str) {
+        self.tax_settled(n, bank_account);
         let Some(number) = statement_number(&n.source) else { return };
         self.push_outbox(OutboxEntry {
             key: format!("reinsurance-settled-{}", n.item),
@@ -304,6 +305,7 @@ impl PaymentsState {
     /// A reinsurer settlement was refused or sent back by the bank, before
     /// or after it settled: the statement is owed again.
     pub(crate) fn origin_returned(&mut self, n: &NewItem, on: NaiveDate, reason: &str) {
+        self.tax_returned(n);
         let Some(number) = statement_number(&n.source) else { return };
         self.push_outbox(OutboxEntry {
             key: format!("reinsurance-returned-{}", n.item),

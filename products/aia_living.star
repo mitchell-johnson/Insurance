@@ -64,9 +64,11 @@ def trauma_built_ins():
 
 # The special events that allow more cover without evidence of health, and the
 # limits AIA Living sets on each increase: half the original cover or $250,000,
-# whichever is less, within 12 months of the event, up to age 55. The wording
-# also caps all increases at the original cover or $750,000; two uses at the
-# per-event limit stay inside that cap.
+# whichever is less, within 12 months of the event, up to age 55. All increases
+# together are at most the original cover or $750,000, whichever is less, and
+# only one increase without evidence (this or Life Future Insurability) is made
+# in any 12 months. The wording sets no count of uses: the money and the 12
+# months bound them.
 SPECIAL_EVENTS = ["marriage", "birth_or_adoption", "separation", "death_of_partner", "child_secondary_school",
                   "child_tertiary", "mortgage", "salary_increase"]
 
@@ -75,9 +77,12 @@ def special_events():
         events = SPECIAL_EVENTS,
         max_percent_of_original = "50",
         max_increase = dollars(250000),
-        max_uses = 2,
+        max_uses = 99,
         within_days = 365,
         to_age = 55,
+        max_total_percent_of_original = "100",
+        max_total_increase = dollars(750000),
+        once_in_days = 365,
     )
 
 # ---- Lump sum benefits ---------------------------------------------------------
@@ -393,6 +398,21 @@ PRODUCT = product(
             max_entry_age = 70,
             min_sum_insured = dollars(10000),  # PH: AIA publishes no minimum or maximum
             insurability_option = special_events(),
+            # Optional Life Future Insurability (1101 AL-LIFE, sections 13 and 16): at each third
+            # anniversary, the greater of 20% of the original cover and $100,000, accepted within
+            # 60 days after it, before age 60, at most the lower of twice the original cover and
+            # $1,000,000 in all, and not within 12 months of another increase without evidence.
+            anniversary_option = anniversary_option(
+                every_years = 3,
+                max_percent_of_original = "20",
+                at_least = dollars(100000),
+                max_total_percent_of_original = "200",
+                max_total_increase = dollars(1000000),
+                within_days = 60,
+                to_age = 60,
+                requires = "future-insurability",
+                once_in_days = 365,
+            ),
             option_axes = [
                 premium_axis(),
                 waiver_axis(),

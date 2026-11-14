@@ -129,6 +129,8 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         )),
         "repayment_reference" => found(state.repayables.references.get(text(&question, "overpayment")?)),
         "hold_watch" => found(Some(state.hold_watch())),
+        "tax_remittances_to_price" => found(Some(state.tax_remittances_to_price())),
+        "tax_remittance" => found(state.tax_remittances.get(text(&question, "remittance")?)),
         "erasure_watch" => {
             let now = question.get("now").cloned().and_then(|v| serde_json::from_value(v).ok());
             found(Some(state.erasure_watch(now)))

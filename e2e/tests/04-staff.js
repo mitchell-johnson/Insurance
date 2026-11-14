@@ -145,7 +145,7 @@ test({ id: "E2E-120", area: A, persona: "ST5", story: "US-ST05-1", title: "The c
   for (const word of ["trauma claim", "cancer", "cause", "diagnos", c.claim.toLowerCase()]) if (text.includes(word)) throw new Error(`the collections officer's view mentions "${word}"`);
 });
 
-test({ id: "E2E-121", area: A, persona: "ST5", story: "US-ST05-1", title: "A change is entered for the customer and goes to their app for approval", matrix: ["SVC-004"],
+test({ id: "E2E-121", area: A, persona: "ST5", story: "US-ST05-1", title: "A change is entered for the customer and goes to their app for approval", matrix: [],
   purpose: "On an open policy, enter a change of payment frequency with the reason, and send it.",
   why: "Staff enter changes on a customer's behalf but never approve them for the customer; the screen must say where the request goes next." }, async (t) => {
   const p = await t.policy("term_life", "cust-p18");
@@ -171,7 +171,7 @@ test({ id: "E2E-122", area: A, persona: "ST5", story: "US-ST05-1", title: "A cha
   if (!(await s.page.locator("#creason").evaluate((el) => !el.validity.valid))) throw new Error("the reason is not marked as needed");
 });
 
-test({ id: "E2E-123", area: A, persona: "ST17", story: "US-ST17-1", title: "The officer who entered a change cannot be its second approver", matrix: ["SVC-005"],
+test({ id: "E2E-123", area: A, persona: "ST17", story: "US-ST17-1", title: "The officer who entered a change cannot be its second approver", matrix: [],
   purpose: "Enter a change that moves more than the officer's $500 limit, then try to agree it yourself.",
   why: "A change above an officer's limit needs a second person; the same person agreeing it twice is no second person." }, async (t) => {
   const p = await t.policy("term_life", "cust-p18");
@@ -183,7 +183,7 @@ test({ id: "E2E-123", area: A, persona: "ST17", story: "US-ST17-1", title: "The 
   await s.stopped("#second-msg", "the person who entered a change is not its second approver", 422);
 });
 
-test({ id: "E2E-124", area: A, persona: "ST5", story: "US-ST17-1", title: "A team lead agrees a colleague's over-limit change, once", matrix: ["SVC-005"],
+test({ id: "E2E-124", area: A, persona: "ST5", story: "US-ST17-1", title: "A team lead agrees a colleague's over-limit change, once", matrix: [],
   purpose: "As the service team lead, agree a change a service officer entered above their limit; then agree it again.",
   why: "The second approval is what releases the change to the customer; it must work for the right person and only once." }, async (t) => {
   const p = await t.policy("term_life", "cust-p18");
@@ -221,7 +221,7 @@ test({ id: "E2E-126", area: A, persona: "ST5", story: "US-ST17-1", title: "A cha
   await s.stopped("#second-msg", "that request is not waiting for a second member of staff", 409);
 });
 
-test({ id: "E2E-127", area: A, persona: "ST5", story: "US-ST05-1", title: "A backdated change waits for a second member of staff", matrix: ["SVC-006"],
+test({ id: "E2E-127", area: A, persona: "ST5", story: "US-ST05-1", title: "A backdated change waits for a second member of staff", matrix: [],
   purpose: "Enter a change dated a month in the past and agree it as the team lead.",
   why: "Backdating changes what the customer was covered for and what they owed; it always needs a second person." }, async (t) => {
   const p = await t.policy("term_life", "cust-p18");

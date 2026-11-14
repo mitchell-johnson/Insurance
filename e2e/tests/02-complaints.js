@@ -6,8 +6,11 @@ const { test } = require("../lib/suite");
 const { cast } = require("../lib/cast");
 
 const A = "Complaints and conduct";
-const today = () => new Date().toISOString().slice(0, 10);
-const plus = (days) => new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+// The complaints module dates what happens by the calendar in Auckland, so the tests do too:
+// for half of every day the date there is a day ahead of the date in UTC.
+const auckland = new Intl.DateTimeFormat("en-CA", { timeZone: "Pacific/Auckland" });
+const today = () => auckland.format(new Date());
+const plus = (days) => new Date(Date.parse(`${today()}T00:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
 const COMMANDS = "/staff/v1/complaints/commands";
 
 /// A complaint as frontline staff record it, sent by the same route the screen uses.
@@ -95,7 +98,7 @@ test({ id: "E2E-033", area: A, persona: "ST14", story: "US-ST14-1", title: "The 
   await junior.never("trained to work with vulnerable customers", "#seats");
 });
 
-test({ id: "E2E-034", area: A, persona: "ST14", story: "US-ST14-1", title: "A vulnerable complainant is at the top of the queue with the adjustments they need", matrix: ["VUL-012"],
+test({ id: "E2E-034", area: A, persona: "ST14", story: "US-ST14-1", title: "A vulnerable complainant is at the top of the queue with the adjustments they need", matrix: [],
   purpose: "Record an ordinary complaint and then a vulnerable complainant's, and read the queue's order and columns.",
   why: "The queue is how the team chooses what to work next; vulnerable complainants come first and the handler must see the adjustments before they call." }, async (t) => {
   const plain = await heard(t, t.ref("CMP"));
@@ -152,7 +155,7 @@ test({ id: "E2E-037", area: A, persona: "ST14", story: "US-ST14-1", title: "Reco
   await s.stopped("#act-msg", "already acknowledged", 409);
 });
 
-test({ id: "E2E-038", area: A, persona: "ST14", story: "US-ST06-1", title: "A vulnerable complainant's file cannot be given to an untrained handler", matrix: ["VUL-012"],
+test({ id: "E2E-038", area: A, persona: "ST14", story: "US-ST06-1", title: "A vulnerable complainant's file cannot be given to an untrained handler", matrix: [],
   purpose: "Try to assign a complaint with a vulnerability marker to the junior handler, who is not trained, then to the trained reviewer.",
   why: "The training requirement is read from staff records, not typed; an untrained handler on a vulnerable complainant's file is a conduct breach." }, async (t) => {
   const id = await heard(t, t.ref("CMP"), { vulnerable: true, adjustments: ["speak_slowly"] });
@@ -483,7 +486,7 @@ test({ id: "E2E-061", area: A, persona: "ST14", story: "US-ST14-1", title: "A re
   await s.sees("daughter", "#file-raw");
 });
 
-test({ id: "E2E-062", area: A, persona: "ST14", story: "US-ST06-1", title: "A vulnerability marker added later changes who may handle the complaint", matrix: ["VUL-012"],
+test({ id: "E2E-062", area: A, persona: "ST14", story: "US-ST06-1", title: "A vulnerability marker added later changes who may handle the complaint", matrix: [],
   purpose: "As the trained reviewer, mark an owned complaint's complainant as vulnerable with adjustments and read the queue.",
   why: "Vulnerability is often learned mid-complaint; from that moment the queue must show the adjustments and require a trained handler." }, async (t) => {
   const id = await owned(t);

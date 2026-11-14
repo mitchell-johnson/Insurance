@@ -1,7 +1,8 @@
 name: e2e
 
 # The persona end-to-end suite: 300 journeys through the web pages of a real
-# stack (three ledger nodes, the API, the portal). It is started by hand and
+# stack (three ledger nodes, the API, the portal, the group service and the
+# customer master). It is started by hand and
 # is not part of `ci.yml`: it tests the system as a person uses it rather than
 # gating a commit, it needs a browser, and its policy lifecycle area closes
 # several years of business days. See e2e/README.md.
@@ -39,6 +40,22 @@ jobs:
         run: |
           npm ci
           npx playwright install --with-deps chromium
+      # The customer master keeps its records in PostgreSQL. As in ci.yml, the
+      # server shares the Docker machine's network with the runner and listens
+      # on the loopback only, at a port free when the job starts.
+      - name: Start a PostgreSQL server
+        run: |
+          name=e2e-postgres-${{ github.run_id }}-${{ github.run_attempt }}
+          port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+          docker run -d --name "$name" --label "insurance-ci.runner=$RUNNER_NAME" --network host -e POSTGRES_HOST_AUTH_METHOD=trust \
+            postgres:16 -c listen_addresses=127.0.0.1 -c port="$port" -c fsync=off
+          echo "IC_E2E_POSTGRES_URL=host=127.0.0.1 port=$port user=postgres dbname=postgres" >> "$GITHUB_ENV"
+          for _ in $(seq 1 60); do
+            if docker exec "$name" pg_isready -U postgres -h 127.0.0.1 -p "$port" >/dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          docker logs "$name"
+          exit 1
       - name: Start the stack
         run: |
           nohup node e2e/stack/stack.js > e2e-stack.log 2>&1 &
@@ -56,4 +73,6 @@ jobs:
         run: tail -n 200 e2e-stack.log || true
       - name: Stop the stack
         if: always()
-        run: pkill -f "e2e/stack/stack.js" || true; pkill -f "target/debug/ic-" || true
+        run: |
+          pkill -f "e2e/stack/stack.js" || true; pkill -f "target/debug/ic-" || true
+          docker rm -f "e2e-postgres-${{ github.run_id }}-${{ github.run_attempt }}" || true
