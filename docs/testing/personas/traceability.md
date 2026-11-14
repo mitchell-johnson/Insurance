@@ -463,7 +463,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | VUL-009 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-010 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-011 | full | `customers/tests/api.rs::a_guardian_gets_a_report_of_their_actions` |
-| VUL-012 | part | `customers/tests/api.rs::a_name_change_reaches_every_relationship_and_groups_stay_apart` |
+| VUL-012 | full | `customers/tests/api.rs::a_name_change_reaches_every_relationship_and_groups_stay_apart`<br>`claims/tests/suite/book.rs::a_benefit_is_paid_to_the_payee_verified_and_their_own_account` |
 | VUL-013 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-014 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-015 | full | `customers/tests/api.rs::a_death_prompts_a_person_to_consider_the_bereaved` |
