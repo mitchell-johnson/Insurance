@@ -233,6 +233,14 @@ pub struct WorkView {
     /// member's claims there: ID, type, status and event date.
     pub continued_from: Option<crate::port::Continuation>,
     pub scheme_claims: Vec<(ClaimId, ClaimType, Status, NaiveDate)>,
+    /// The wordings the cover is bound to, as `id@version`, from the cover
+    /// check. Empty until the cover is checked.
+    #[serde(default)]
+    pub definitions: Vec<String>,
+    /// The wordings each decision relied on, as `id@version`, by decision
+    /// number: what the assessor read when deciding.
+    #[serde(default)]
+    pub decision_definitions: BTreeMap<u32, Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -397,6 +405,13 @@ impl ClaimsState {
                         .collect()
                 })
                 .unwrap_or_default(),
+            definitions: c.cover_check.as_ref().map(|k| k.facts.definitions.clone()).unwrap_or_default(),
+            decision_definitions: c
+                .decisions
+                .iter()
+                .filter(|d| !d.definitions.is_empty())
+                .map(|d| (d.no, d.definitions.clone()))
+                .collect(),
         })
     }
 
