@@ -540,6 +540,25 @@ pub struct Payee {
     pub statements: u32,
     /// Advances are recovered at no more than this share of a statement.
     pub advance_recovery_ppm: u32,
+    /// How tax is withheld from commission paid to the payee.
+    #[serde(default)]
+    pub withholding: Withholding,
+}
+
+/// A payee's tax position for withholding on commission (schedular
+/// payments). What the payee has declared, recorded by payee
+/// administration or the customer master.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Withholding {
+    /// Nothing declared. A natural person is withheld from at the
+    /// no-declaration rate; a business is not withheld from.
+    #[default]
+    Undeclared,
+    /// The rate the payee declared, in basis points.
+    Rate(u32),
+    /// A certificate of exemption, or the payee is outside the rules.
+    Exempt,
 }
 
 impl Payee {

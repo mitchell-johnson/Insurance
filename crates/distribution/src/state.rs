@@ -134,6 +134,11 @@ pub enum Command {
         party: PartyId,
         reason: Option<String>,
     },
+    /// What the payee declared for withholding tax on commission.
+    SetWithholding {
+        party: PartyId,
+        withholding: Withholding,
+    },
     SetAccrualHold {
         party: PartyId,
         hold: Option<(NaiveDate, HeldReason, String)>,
@@ -276,6 +281,7 @@ impl Command {
             Command::DescribePosition { .. } => &["claims", "reinsurance", "group-admin", "collections", "payments"],
             Command::RecordDailyControl => &["end-of-day"],
             Command::RecordLicence { .. } => &["regulator-register"],
+            Command::SetWithholding { .. } => &["customer-master"],
             Command::AddParty { .. } | Command::Relate(_) | Command::StartEngagement { .. } => &["migration", "customer-master"],
             _ => &[],
         }
@@ -295,6 +301,7 @@ impl Command {
             Command::RegisterPayee { party, .. }
             | Command::AddPayeeAccount { party, .. }
             | Command::SetPaymentHold { party, .. }
+            | Command::SetWithholding { party, .. }
             | Command::SetAccrualHold { party, .. }
             | Command::RemovePaymentInstruction { party, .. } => ("payee.manage", party.0.clone()),
             Command::AddPaymentInstruction { party, instruction } => match instruction.kind {
@@ -636,6 +643,18 @@ pub struct Settings {
     /// reach is let go once a month (see `history.rs`). Zero keeps all of it.
     #[serde(default = "seven_years")]
     pub history_days: u32,
+    /// Tax is withheld from commission when it is paid, at the payee's
+    /// declared rate (`SetWithholding`). A placeholder until the tax review
+    /// the design names; see docs/distribution.md, "Withholding tax".
+    #[serde(default = "yes")]
+    pub commission_withholding: bool,
+    /// The rate for a natural person who has declared nothing, in basis points.
+    #[serde(default = "no_declaration_rate")]
+    pub no_declaration_withholding_bp: u32,
+}
+
+fn no_declaration_rate() -> u32 {
+    4_500
 }
 
 fn seven_years() -> u32 {
@@ -671,6 +690,8 @@ impl Default for Settings {
             replacement_amount_tolerance_ppm: five_percent(),
             rule_examples_required: true,
             history_days: seven_years(),
+            commission_withholding: true,
+            no_declaration_withholding_bp: no_declaration_rate(),
         }
     }
 }
@@ -1066,6 +1087,17 @@ impl DistributionState {
                 ctx.emit(Event::PayeeChanged {
                     party,
                     what: "payment_hold".into(),
+                });
+                Ok(())
+            }
+            Command::SetWithholding { party, withholding } => {
+                if matches!(withholding, Withholding::Rate(bp) if bp > 10_000) {
+                    return reject("invalid_rate", "a withholding rate is between 0 and 10,000 basis points");
+                }
+                self.payee_mut(&party)?.withholding = withholding;
+                ctx.emit(Event::PayeeChanged {
+                    party,
+                    what: "withholding".into(),
                 });
                 Ok(())
             }
