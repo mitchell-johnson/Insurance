@@ -1,0 +1,5 @@
+# Pinned so every machine and CI build with the same compiler. rustup
+# installs it automatically on first use. fastnum needs at least 1.94.
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]
