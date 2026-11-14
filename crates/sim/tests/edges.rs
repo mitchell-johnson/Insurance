@@ -550,6 +550,28 @@ fn a_cancelled_policy_takes_no_new_money_and_no_automatic_reversal() {
 }
 
 /// A copy of the shipped term life product whose life cover carries a 10% levy.
+/// Purpose: a policy cancelled after its cooling-off period with nothing ever paid owes
+/// nothing and is owed nothing, whichever day of the billed period it is cancelled on: the
+/// unearned premium goes against the unpaid receivable, the rest of the receivable is
+/// written off, policy suspense stays at zero and the partition reconciles.
+/// Why it matters: unearned premium is held to a fraction of a cent. Compared in whole
+/// cents with what was owed, the fraction was rounded up and handed back, so a customer who
+/// never paid was left with one cent to refund, a refund item for payments and a suspense
+/// balance on a closed policy for finance to explain.
+#[test]
+fn cancelling_a_policy_nobody_paid_for_leaves_nothing_to_refund() {
+    for after in 15..46 {
+        let mut c = cluster(1);
+        let id = standard(&mut c, 1);
+        days(&mut c, after);
+        c.submit(0, "policy-servicing", Command::CancelPolicy { policy: id.clone() }).unwrap();
+        let suspense = c.state(0).ledger.natural_balance(&accounts::policy_suspense(&id, NZD).id);
+        assert_eq!(suspense, 0, "cancelled {after} days in");
+        assert_eq!(outstanding(&c, &id), 0);
+        assert!(c.reconcile().is_empty(), "{after} days in: {:?}", c.reconcile());
+    }
+}
+
 fn levied_product(c: &mut Cluster) {
     let source = include_str!("../../../products/term_life.star")
         .replace("code = \"term-life\"", "code = \"term-life-levied\"")

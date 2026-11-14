@@ -649,16 +649,18 @@ pub(crate) fn close_out(
         // First against what is still owed on this receivable, the rest back
         // to the policyholder. Premium owed for cover already given is
         // written off: nothing is chased after a cancellation.
+        // The comparison is in fine units: a fraction of a cent of unearned
+        // premium on a receivable nobody paid is not money to hand back.
         let outstanding = r.outstanding_minor.max(0) as i128;
-        let returned_minor_floor = returned.div_euclid(FINE_PER_MINOR);
-        let against = outstanding.min(returned_minor_floor + credit_minor);
+        let handed_back = returned + credit_minor * FINE_PER_MINOR;
+        let against = (outstanding * FINE_PER_MINOR).min(handed_back);
         set.credit(accounts::premium_receivable(&policy.id, c), outstanding, dims(policy, None, "cancellation"));
         set.debit(
             accounts::lapse_write_off(&policy.product_code, c),
-            (outstanding - against) * FINE_PER_MINOR,
+            outstanding * FINE_PER_MINOR - against,
             dims(policy, None, "cancellation"),
         );
-        refund_fine += returned + (credit_minor - against) * FINE_PER_MINOR;
+        refund_fine += handed_back - against;
     }
     let (refund, rem) = AccrualAmount::new(refund_fine, c).round_to_money(product.rounding)?;
     set.credit(accounts::policy_suspense(&policy.id, c), refund.minor as i128, Dimensions::default());
