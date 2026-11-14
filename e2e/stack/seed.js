@@ -20,6 +20,7 @@ function shipped() {
   if (r.status !== 0) throw new Error(`ic-e2e-config failed: ${r.stderr}`);
   return JSON.parse(r.stdout);
 }
+const Journey_before = (date, days) => new Date(Date.parse(`${date}T00:00:00Z`) - days * 86400000).toISOString().slice(0, 10);
 const refused = (reply) => reply && reply.result && reply.result.Err ? reply.result.Err : reply && reply.refused ? reply.refused : null;
 
 async function seed(stack) {
@@ -99,7 +100,33 @@ async function seed(stack) {
     if (!r.ok || (r.data && r.data.rejected)) throw new Error(`claims configuration ${key}: ${r.status} ${JSON.stringify(r.data)}`);
   }
   log("claims rules and authority book active on every partition");
+  // --- Payments: the banks, channels, accounts, routes and control rules. No bank is named in the design, so these are
+  // two stand-in banks; the pump that talks to a bank is not part of this stack, and tests report its part as the driver.
+  const regions = ["akl", "syd", "mel"];
+  const endpoint = (channel, region) => ({ url: `https://${channel}.bank.test/${region}`, credential: `${channel}-${region}-credential`, signing_key: `${channel}-${region}-signing`,
+    certificate_expires: "2028-06-30", egress_address: "203.0.113.3", whitelisted: true });
+  const channel = (id, bank, kind, hour) => [id, { bank, kind, cutoff: `${hour}:00:00`, endpoints: Object.fromEntries(regions.map((r) => [r, endpoint(id, r)])) }];
+  const purposes = { collection: "premium_collection", claims: "claims_disbursement", third: "third_party_disbursement", refunds: "refunds", operating: "operating" };
+  const accounts = {};
+  for (const bank of ["anz", "bnz"]) for (const [code, purpose] of Object.entries(purposes)) accounts[`${bank}-sf1-${code}`] = { bank, fund: "sf1", purpose, currency: "NZD" };
+  const runTypes = ["collection", "lump_sum_claims", "benefit_payments", "provider_payments", "premium_refunds", "commission", "reinsurer", "fund_settlement", "tax_and_levies", "unclaimed_money", "fund_transfer", "ex_gratia"];
+  const payments = {
+    banks: { anz: "ANZ", bnz: "BNZ" },
+    channels: Object.fromEntries([channel("anz-file", "anz", "file", 16), channel("anz-api", "anz", "api", 22), channel("bnz-file", "bnz", "file", 15)]),
+    accounts,
+    routes: Object.fromEntries(runTypes.map((t) => [t, { primary: "anz-file", secondary: "bnz-file", urgent: "anz-api", approvals: t === "ex_gratia" ? 2 : 1,
+      item_limit_minor: 100_000_00, run_limit_minor: 500_000_00, day_limit_minor: 800_000_00 }])),
+    funds: ["sf1"],
+    rules: { cooling_off_hours: 24, duplicate_window_days: 3, dishonours_before_suspension: 2, pre_advice_threshold_minor: 250_000_00, on_call: [cast.st17.party],
+      drill_max_age_days: 90, drill_account: { name: "Insurer Operating", number: "0100000001" }, drill_amount_minor: 1_00, voter_regions: regions, holidays: ["2027-12-27", "2027-12-28"] },
+  };
+  await told("payments", { key: "seed-payments-config-1", actor: { id: "connectivity-admin", roles: ["connectivity_admin"] }, at: `${opening}T08:00:00`, command: { type: "activate_config", version: 1, config: payments } }, "its configuration");
+  // The bank driver reads a statement for every account each morning; without one no run can be approved, because the balance is unknown.
+  for (const code of Object.keys(accounts)) await told("payments", { key: `seed-statement-${code}`, actor: { id: "bank-driver", roles: ["service"] }, at: `${opening}T08:05:00`,
+    command: { type: "record_statement", account: code, date: Journey_before(opening, 3), opening_minor: 10_000_000_00, closing_minor: 10_000_000_00, lines: [] } }, `the statement of ${code}`);
+  log("payments banks, channels, routes and rules active; a statement read for every account");
 }
+
 
 module.exports = { seed, shipped };
 
