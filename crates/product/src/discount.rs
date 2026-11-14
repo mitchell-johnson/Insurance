@@ -108,8 +108,9 @@ pub struct BenefitCategory {
 
 impl BenefitCategory {
     fn held_by(&self, sums: &BTreeMap<Line, i64>, life: &str) -> bool {
-        sums.iter()
-            .any(|(line, si)| line.life == life && (self.covers.contains(&line.cover) || self.elsewhere.contains(&line.cover)) && *si >= self.min_sum_insured_minor)
+        sums.iter().any(|(line, si)| {
+            line.life == life && (self.covers.contains(&line.cover) || self.elsewhere.contains(&line.cover)) && *si >= self.min_sum_insured_minor
+        })
     }
 }
 

@@ -339,7 +339,7 @@ pub fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&s
         // Scheme cover moves with the member's details as they were on the date.
         let factors = record.filter(|_| life_on_policy).and_then(|r| r.factors.as_of(on));
         let amount = match (product, life_id.as_ref(), factors) {
-            (Some(pr), Some(id), Some(f)) => lifecycle::member_covers(pr, p, id, f)
+            (Some(pr), Some(id), Some(f)) => lifecycle::member_covers_on(pr, p, id, f, Some(on))
                 .into_iter()
                 .find(|m| m.cover == cover)
                 .map(|m| m.sum_insured_minor),
@@ -396,7 +396,7 @@ pub fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&s
             .collect();
         let (sum_then, covered_then) = if c.formula_driven {
             let amount = match (product, factors_then.filter(|_| on_policy_then)) {
-                (Some(pr), Some(f)) => lifecycle::member_covers(pr, p, id, f)
+                (Some(pr), Some(f)) => lifecycle::member_covers_on(pr, p, id, f, Some(on))
                     .into_iter()
                     .find(|m| m.cover == cover)
                     .map(|m| m.sum_insured_minor),

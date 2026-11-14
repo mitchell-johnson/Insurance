@@ -1360,6 +1360,7 @@ pub(crate) fn set_member_covers(ledger: &mut Ledger, catalog: &Catalog, policy: 
             definitions,
             layers: vec![],
             formula_driven: false,
+            ended_on: None,
         });
     }
     let d = deltas(catalog, &product, policy, &spec.life, effective, same_details(&record), &before, &after)?;

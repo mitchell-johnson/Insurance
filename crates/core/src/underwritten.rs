@@ -344,6 +344,7 @@ pub(crate) fn add_cover(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
         definitions: bindings,
         layers: vec![],
         formula_driven: false,
+        ended_on: None,
     });
     let cover_type = cover.cover_type.clone();
     let id = cover.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;

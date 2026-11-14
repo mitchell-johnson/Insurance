@@ -674,3 +674,33 @@ fn a_policy_is_suspended_without_premium_or_cover_and_comes_back_early() {
     let now = today(&c);
     assert_eq!(refused(send(&mut c, ask(&id, "sus-3", now, now + Duration::days(1)))), "suspension_too_long");
 }
+
+/// Purpose: after a retail policy is cancelled, the cover check for an event while it was
+/// in force still answers in force with the sum insured of that day, and for an event on or
+/// after the day it ended answers not covered.
+/// Why it matters: a death the day before the owner's cancellation took effect was insured.
+/// Reading cover from the policy's status today would decline every claim notified after a
+/// policy ended, however clearly the event fell inside it.
+#[test]
+fn an_event_before_a_policy_was_cancelled_is_still_covered() {
+    let mut c = cluster();
+    let living = product("aia_living.star");
+    let id = issue(
+        &mut c,
+        policy(1, "aia-living", d(1987, 6, 1), &[("life", 400_000_00, Some(pick(&living, "life", &[])))]),
+    )
+    .unwrap();
+    days(&mut c, 60);
+    let before = c.state(0).business_date.unwrap();
+    days(&mut c, 2);
+    c.submit(0, "policy-servicing", Command::CancelPolicy { policy: id.clone() }).unwrap();
+    let ended = c.state(0).business_date.unwrap();
+    days(&mut c, 3);
+    assert_eq!(c.state(0).policies[&id].status, PolicyStatus::Cancelled);
+    let facts = |on: NaiveDate| {
+        let f = ic_core::cover_facts(c.state(0), &id.0, "life", Some("life-1"), on).unwrap();
+        (f.in_force, f.sum_insured_minor)
+    };
+    assert_eq!(facts(before), (true, 400_000_00));
+    assert_eq!(facts(ended), (false, 0));
+}
