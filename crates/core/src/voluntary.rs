@@ -210,6 +210,12 @@ pub(crate) fn close_all(ledger: &mut Ledger, product: &ProductDefinition, policy
     Ok(())
 }
 
+/// The purpose under which documents records delivery of a member's lapse
+/// notice (`RecordNoticeDelivery`).
+pub fn member_lapse_notice(life: &LifeId) -> String {
+    format!("member_lapse:{life}")
+}
+
 /// Tell payments that nothing more is to be collected from this member.
 pub(crate) fn end_collection(policy: &Policy, ctx: &mut Ctx<'_>, life: LifeId, reason: &str) {
     ctx.emit(Event::PaymentAuthorityCancelled {
@@ -284,6 +290,9 @@ pub(crate) fn run_arrears(
     for life in members {
         match arrears::derive_from(policy.member_oldest_unpaid_due(&life), rules, ctx.date) {
             Derived::Standing(s) => announce(policy, ctx, &life, Some(s)),
+            // As a policy waits for its lapse notice, a member's own cover waits
+            // for theirs, recorded by documents under `member_lapse:<life>`.
+            Derived::Lapse if policy.notices.get(&member_lapse_notice(&life)).is_some_and(|n| n.earliest_effect > ctx.date) => {}
             Derived::Lapse => {
                 ctx.work += 40;
                 let (layers, effective) = crate::group::end_member_paid_layers(ledger, catalog, product, policy, ctx, &life)?;

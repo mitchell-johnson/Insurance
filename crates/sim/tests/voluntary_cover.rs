@@ -582,3 +582,40 @@ fn a_members_credit_moves_with_the_scheme_to_another_partition() {
     assert_eq!(owes, 25_38 - 4_62);
     assert_eq!(credit(&c, dst, &id), 0);
 }
+
+/// Purpose: a member's own cover does not lapse before the earliest effect of the lapse
+/// notice documents last proved delivered to them (purpose `member_lapse:<life>`): past
+/// the lapse period it is held until that day and lapses on it.
+/// Why it matters: a policy's lapse already waits for its proven notice, because cover
+/// must not end before the person was told it would. A member paying for their own cover
+/// is owed the same warning; without it the member's cover could end on a notice that
+/// reached them late, or not at all.
+#[test]
+fn a_members_cover_waits_for_their_proven_lapse_notice() {
+    let mut c = cluster();
+    let (p, id) = scheme(&mut c);
+    c.submit(p, "group-admin", layer(&id, None, MemberPays::All)).unwrap();
+    let employer_pays = Command::ApplyReceipt {
+        policy: id.clone(),
+        receipt: "emp-1".into(),
+        amount: Money::new(12 * (11_00 + 90_62), NZD),
+    };
+    c.submit(p, "cash-matching", employer_pays).unwrap();
+    days(&mut c, 100);
+    let today = c.business_date().unwrap();
+    let notice = Command::RecordNoticeDelivery {
+        policy: id.clone(),
+        purpose: ic_core::voluntary::member_lapse_notice(&exec()),
+        notice: "doc-77".into(),
+        delivered_on: today,
+        earliest_effect: today + chrono::Days::new(40),
+    };
+    c.submit(p, "documents", notice).unwrap();
+    let ended = |c: &Cluster| c.state(p).policies[&id].covers["group-life"].layers[0].end;
+    // The lapse period runs out about 22 days from here; the notice holds it to day 40.
+    days(&mut c, 39);
+    assert_eq!(ended(&c), None, "held by the notice");
+    assert_eq!(c.state(p).policies[&id].member_standing.get(&exec()).copied(), Some(Standing::InGrace));
+    days(&mut c, 2);
+    assert_eq!(ended(&c), Some(today + chrono::Days::new(40)), "lapses on the notice's earliest effect");
+}
