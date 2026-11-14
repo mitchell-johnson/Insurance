@@ -253,15 +253,21 @@ fn header(headers: &HeaderMap, name: &str) -> Option<String> {
     headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_string)
 }
 
-/// When the caller's token was issued. The token has already been verified;
-/// this reads its `iat`. A token that does not say is treated as the oldest
-/// possible, so any revocation refuses it.
-fn issued(headers: &HeaderMap, now: At) -> At {
+/// When the caller's token was issued, for checking it against a
+/// revocation. Under Entra this is the verified token's `iat`; a token that
+/// does not say is treated as the oldest possible, so any revocation
+/// refuses it. Nothing the caller sends beside the token can change it.
+///
+/// Under development identity there is no verified token: `x-dev-issued`
+/// stands in for it, else the `iat` of any bearer token sent, else now.
+fn issued(auth: &Auth, caller: &Caller, headers: &HeaderMap, now: At) -> At {
+    if !matches!(auth, Auth::Dev) {
+        return caller.issued.unwrap_or(0);
+    }
     if let Some(dev) = header(headers, "x-dev-issued") {
         return dev.parse().unwrap_or(0);
     }
     let Some(token) = header(headers, "authorization").and_then(|v| v.strip_prefix("Bearer ").map(str::to_string)) else {
-        // Development identity carries no token: the session starts now.
         return now;
     };
     token
@@ -329,7 +335,7 @@ impl AppState {
         let answer = self
             .ask(Question::Session {
                 subject: caller.subject.clone(),
-                issued: issued(headers, at),
+                issued: issued(auth, &caller, headers, at),
                 at,
                 device,
             })

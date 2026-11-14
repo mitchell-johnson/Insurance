@@ -87,6 +87,15 @@ fn portal() -> Portal {
 
 /// The portal, calling the group service `group_service` makes from the employer's double.
 fn portal_with(group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Arc<dyn ic_channels::group::Group>) -> Portal {
+    portal_signed_in_by(group_service, Auth::Dev, Auth::Dev)
+}
+
+/// The portal, checking callers with `customers` and `workforce`.
+fn portal_signed_in_by(
+    group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Arc<dyn ic_channels::group::Group>,
+    customers: Auth,
+    workforce: Auth,
+) -> Portal {
     let mut w = World::new();
     let retail = w.issue(term_life(
         1,
@@ -391,8 +400,8 @@ fn portal_with(group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Ar
     let tick = clock.clone();
     let app = router(Arc::new(AppState {
         channel: local.clone(),
-        customers: Auth::Dev,
-        workforce: Auth::Dev,
+        customers,
+        workforce,
         clock: Arc::new(move || tick.load(Ordering::SeqCst)),
         regions: regions.clone(),
         ui: UiConfig::Dev,
@@ -524,6 +533,71 @@ async fn callers_are_identified_before_anything_else() {
         ("authorization", format!("Bearer a.{}.c", b64url(&json!({ "iat": now + 1 }).to_string()))),
     ];
     assert_eq!(portal.send("GET", "/app/v1/me", &dated, None).await.0, StatusCode::OK);
+}
+
+/// Purpose: under Entra sign-in, when a token was issued comes only from the verified token:
+/// a token issued before the identity service closed the person's sessions is refused even
+/// when the request also carries `x-dev-issued` with a later time, and a token issued after
+/// is accepted. A token that does not say when it was issued counts as the oldest possible.
+/// Why it matters: "sign out everywhere", staff offboarding and recovering from a lost phone
+/// all work by refusing tokens issued before a moment. If a header the caller writes could
+/// move a token's issue time, anyone holding a stolen token could walk past all three.
+#[tokio::test]
+async fn under_entra_only_the_token_says_when_it_was_issued() {
+    use ic_entra::testing::{sign, Tenant};
+    let tenant = Tenant::start("customer-tenant", "api://insurance-portal").await;
+    let entra = || Auth::entra_at(&tenant.authority, &tenant.tenant, &tenant.audience);
+    let portal = portal_signed_in_by(|employer| employer, entra(), entra());
+    let token = |issued: Option<i64>| {
+        let mut claims = tenant.claims("sub-kiri", &[]);
+        match issued {
+            Some(at) => claims["iat"] = json!(at),
+            None => drop(claims.as_object_mut().unwrap().remove("iat")),
+        }
+        format!("Bearer {}", sign(&claims))
+    };
+    let now = portal.now();
+    let old = token(Some(now - 5));
+    assert_eq!(
+        portal.send("GET", "/app/v1/me", &[("authorization", old.clone())], None).await.0,
+        StatusCode::OK
+    );
+
+    portal.local.with(|state| {
+        use ic_log::StateMachine;
+        let output = state.apply(
+            10_000,
+            ic_channels::Envelope {
+                key: "revoke".into(),
+                at: now,
+                actor: module("identity"),
+                command: Command::Identity(IdentityCommand::RevokeSessions { party: p(KIRI) }),
+            },
+        );
+        assert!(output.result.is_ok());
+    });
+    let revoked = |problem: (StatusCode, Value)| (problem.0, problem.1["title"].as_str().map(str::to_string));
+    let refused = (StatusCode::UNAUTHORIZED, Some("session_revoked".to_string()));
+    assert_eq!(
+        revoked(portal.send("GET", "/app/v1/me", &[("authorization", old.clone())], None).await),
+        refused
+    );
+    let lying = [
+        ("authorization", old),
+        ("x-dev-issued", (now + 60).to_string()),
+        ("x-dev-subject", "sub-kiri".to_string()),
+    ];
+    assert_eq!(revoked(portal.send("GET", "/app/v1/me", &lying, None).await), refused);
+    assert_eq!(
+        revoked(portal.send("GET", "/app/v1/me", &[("authorization", token(None))], None).await),
+        refused
+    );
+    assert_eq!(
+        portal.send("GET", "/app/v1/me", &[("authorization", token(Some(now + 1)))], None).await.0,
+        StatusCode::OK
+    );
+    // Development headers alone are no sign-in at all.
+    assert_eq!(portal.get("sub-kiri", "/app/v1/me").await.0, StatusCode::UNAUTHORIZED);
 }
 
 fn b64url(text: &str) -> String {
