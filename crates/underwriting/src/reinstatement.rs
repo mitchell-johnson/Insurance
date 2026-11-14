@@ -3,6 +3,8 @@
 //! `Reinstate` with `underwriting_required`: it reads the policy from the
 //! core and sends what this returns as `open_proposal`, caller `collections`.
 
+use std::collections::BTreeMap;
+
 use chrono::NaiveDate;
 use ic_core::policy::{LifeKind, Policy, PolicyStatus};
 
@@ -71,11 +73,13 @@ pub fn reinstatement_proposal(policy: &Policy, today: NaiveDate) -> Option<OpenP
             rate_tables: vec![],
             premium_minor: 0,
             quoted_on: today,
+            cover_premiums_minor: BTreeMap::new(),
         },
         lives,
         covers,
         legacy_received_on: None,
         replacement: false,
         replaces: vec![],
+        commission_option: None,
     })
 }

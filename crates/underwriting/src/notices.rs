@@ -55,6 +55,13 @@ pub fn notice_id(seq: u64) -> String {
 pub trait Letters: Send + Sync {
     /// Send one `request_letter` command. `key` is the same on every try.
     fn request(&self, key: &str, at: DateTime<Utc>, command: Value) -> impl Future<Output = Result<Result<(), Refusal>, DriverError>> + Send;
+
+    /// Send one `advise_new_business` command to the commission module.
+    /// `key` is the same on every try. With no commission module the advice
+    /// is parked with the reason.
+    fn advise(&self, _key: &str, _at: DateTime<Utc>, _command: Value) -> impl Future<Output = Result<Result<(), Refusal>, DriverError>> + Send {
+        async { Ok(Err(Refusal::new("not_connected", "commission is not connected to underwriting"))) }
+    }
 }
 
 /// No documents module: letters are parked with the reason.
@@ -88,7 +95,40 @@ pub struct Notices<S, L> {
     pub clock: fn() -> DateTime<Utc>,
 }
 
+/// The commission module's `advise_new_business` for an adviser's new
+/// policy, as it reads one.
+pub fn advice_command(effect: &Effect) -> Option<Value> {
+    let Effect::AdviseNewBusiness {
+        policy,
+        adviser,
+        provider,
+        option,
+        replacement,
+        premiums,
+        ..
+    } = effect
+    else {
+        return None;
+    };
+    Some(json!({"advise_new_business": {
+        "policy": policy,
+        "advice": {"adviser": adviser, "provider": provider, "option": option, "replacement": replacement, "premiums": premiums},
+    }}))
+}
+
 impl<S: StaffFeed, L: Letters> Notices<S, L> {
+    /// Delivered when the commission module takes it, or already had it
+    /// from an earlier try whose answer was lost; parked with any other
+    /// refusal, which no resend would change.
+    async fn advise(&self, key: &str, command: Value) -> Result<Option<String>, DriverError> {
+        Ok(match self.letters.advise(key, (self.clock)(), command).await? {
+            Ok(()) => None,
+            Err(r) if r.code == "already_advised" => None,
+            Err(r) if r.code == "not_connected" => Some(r.message),
+            Err(r) => Some(format!("commission refused the new business: {}: {}", r.code, r.message)),
+        })
+    }
+
     /// `recipient` is in the documents module's shape, which names the variant outside.
     async fn letter(&self, seq: u64, recipient: Value, effect: &Effect) -> Result<Option<String>, DriverError> {
         let Effect::Notify {
@@ -162,6 +202,9 @@ impl<S: StaffFeed, L: Letters> Forward for Notices<S, L> {
         };
         if !kind.is_empty() {
             return publish(&self.evidence, "evidence", "order", &order_id(seq), &kind, body).await;
+        }
+        if let (Effect::AdviseNewBusiness { key, .. }, Some(command)) = (effect, advice_command(effect)) {
+            return self.advise(key, command).await;
         }
         let Effect::Notify { to, kind, proposal, life, .. } = effect else {
             return NothingConnected.forward(seq, effect).await;
