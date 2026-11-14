@@ -324,6 +324,37 @@ TRAUMA = ["critical-conditions", "critical-conditions-accelerated", "progressive
           "severe-trauma", "severe-trauma-accelerated"]
 TPD = ["tpd-own-occupation", "tpd-own-occupation-accelerated", "tpd-any-occupation", "tpd-any-occupation-accelerated"]
 
+# ---- The published wordings each cover is bound to ---------------------------------
+
+# Each cover names the AIA wordings that govern it (products/definitions/
+# aia_wordings.star, the text as published), beside the summaries above. A
+# cover missing from this map fails to load.
+WORDINGS = {
+    "life": ["aia-wording-1100-al-umb", "aia-wording-1101-al-life", "aia-wording-1114-alp-wop"],
+    "family-protection": ["aia-wording-1100-al-umb", "aia-wording-1103-al-fp", "aia-wording-1114-alp-wop"],
+    "accidental-death": ["aia-wording-1100-al-umb", "aia-wording-1102-al-ad"],
+    "critical-conditions": ["aia-wording-1100-al-umb", "aia-wording-1105-al-cc", "aia-wording-1114-alp-wop"],
+    "critical-conditions-accelerated": ["aia-wording-1100-al-umb", "aia-wording-1105-al-cc", "aia-wording-1114-alp-wop"],
+    "progressive-care": ["aia-wording-1100-al-umb", "aia-wording-1106-al-pc", "aia-wording-1114-alp-wop"],
+    "progressive-care-accelerated": ["aia-wording-1100-al-umb", "aia-wording-1106-al-pc", "aia-wording-1114-alp-wop"],
+    "severe-trauma": ["aia-wording-1100-al-umb", "aia-wording-1119-al-st", "aia-wording-1114-alp-wop"],
+    "severe-trauma-accelerated": ["aia-wording-1100-al-umb", "aia-wording-1119-al-st", "aia-wording-1114-alp-wop"],
+    "tpd-own-occupation": ["aia-wording-1100-al-umb", "aia-wording-1104-al-tpd", "aia-wording-1114-alp-wop"],
+    "tpd-own-occupation-accelerated": ["aia-wording-1100-al-umb", "aia-wording-1104-al-tpd", "aia-wording-1114-alp-wop"],
+    "tpd-any-occupation": ["aia-wording-1100-al-umb", "aia-wording-1104-al-tpd", "aia-wording-1114-alp-wop"],
+    "tpd-any-occupation-accelerated": ["aia-wording-1100-al-umb", "aia-wording-1104-al-tpd", "aia-wording-1114-alp-wop"],
+    "income-agreed-value": ["aia-wording-1100-al-umb", "aia-wording-1108-al-ip", "aia-wording-1113-al-red", "aia-wording-1114-alp-wop"],
+    "income-indemnity": ["aia-wording-1100-al-umb", "aia-wording-1115-al-ind", "aia-wording-1113-al-red", "aia-wording-1114-alp-wop"],
+    "income-loss-of-earnings": ["aia-wording-1100-al-umb", "aia-wording-1109-al-loe", "aia-wording-1113-al-red", "aia-wording-1114-alp-wop"],
+    "mortgage-income-rent": ["aia-wording-1100-al-umb", "aia-wording-1117-al-mirc", "aia-wording-1113-al-red", "aia-wording-1114-alp-wop"],
+    "retirement-protection": ["aia-wording-1100-al-umb", "aia-wording-1111-al-rp"],
+    "specified-accidental-injury": ["aia-wording-1100-al-umb", "aia-wording-1116-al-saic"],
+    "specialist-testing": ["aia-wording-1100-al-umb", "aia-wording-1118-al-sts"],
+}
+
+def with_wordings(covers):
+    return [dict(c, definitions = c["definitions"] + WORDINGS[c["code"]]) for c in covers]
+
 PRODUCT = product(
     code = "aia-living",
     name = "AIA Living",
@@ -334,7 +365,7 @@ PRODUCT = product(
     # The umbrella wording: Statutory Fund Number 1.
     statutory_fund = "SF1-life",
     rounding = "half_even",
-    covers = [
+    covers = with_wordings([
         cover(
             code = "life",
             cover_type = "life",
@@ -482,7 +513,7 @@ PRODUCT = product(
             min_entry_age = 0,
             max_entry_age = 74,  # PH
         ),
-    ],
+    ]),
     features = [
         composition(
             # Every life holds at least one main benefit: the add-ons cannot

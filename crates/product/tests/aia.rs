@@ -62,6 +62,7 @@ const TABLES: [(&str, &str); 19] = [
     ("aia_trauma.star", include_str!("../../../products/rates/aia_trauma.star")),
 ];
 const DEFINITIONS: &str = include_str!("../../../products/definitions/aia.star");
+const WORDINGS: &str = include_str!("../../../products/definitions/aia_wordings.star");
 
 fn living() -> ProductDefinition {
     load_product(PRODUCTS[0].0, PRODUCTS[0].1).unwrap()
@@ -92,7 +93,8 @@ fn pick(c: &CoverDefinition, chosen: &[(&str, &str)]) -> String {
 /// time rather than at the first quote, for all ten products at once.
 #[test]
 fn every_aia_product_table_and_definition_loads_and_fits_together() {
-    let defs: BTreeSet<String> = load_definitions("aia.star", DEFINITIONS).unwrap().into_iter().map(|d| d.id).collect();
+    let mut defs: BTreeSet<String> = load_definitions("aia.star", DEFINITIONS).unwrap().into_iter().map(|d| d.id).collect();
+    defs.extend(load_definitions("aia_wordings.star", WORDINGS).unwrap().into_iter().map(|d| d.id));
     let mut tables: BTreeSet<String> = TABLES.iter().map(|(f, s)| load_rate_table(f, s).unwrap().id).collect();
     tables.insert("no-premium".to_string());
     assert_eq!(tables.len(), TABLES.len() + 1, "table ids are distinct");
@@ -113,6 +115,37 @@ fn every_aia_product_table_and_definition_loads_and_fits_together() {
         }
     }
     assert_eq!(codes.len(), PRODUCTS.len());
+}
+
+/// Purpose: every AIA wording loads as a definition whose text is the wording in full, with
+/// a title naming its document code and version; every cover of every product AIA publishes
+/// a wording for is bound to at least one of them (Corporate Solutions schemes have their own
+/// policy each, and AIA's online Essentials Life wording has no text layer to load, so
+/// Essentials stays on its summaries until AIA supplies the text); and every wording is bound
+/// by some cover.
+/// Why it matters: a cover is bound to a definition's text by hash, so this is what fixes
+/// which published words a claim is assessed against; a cover bound to none, or a wording no
+/// cover uses, means the contract text and the product have drifted apart.
+#[test]
+fn every_aia_cover_is_bound_to_the_wordings_that_govern_it() {
+    let wordings = load_definitions("aia_wordings.star", WORDINGS).unwrap();
+    assert!(wordings.len() >= 34, "{}", wordings.len());
+    for w in &wordings {
+        assert!(w.id.starts_with("aia-wording-") && w.title.contains(": AIA"), "{}: {}", w.id, w.title);
+        assert!(w.text.len() > 2_000, "{} holds {} characters", w.id, w.text.len());
+    }
+    let mut used = BTreeSet::new();
+    for (file, source) in PRODUCTS {
+        let p = load_product(file, source).unwrap();
+        for c in &p.covers {
+            let bound: Vec<&String> = c.definitions.iter().filter(|d| d.starts_with("aia-wording-")).collect();
+            let unbound = matches!(p.code.as_str(), "aia-corporate" | "aia-essentials-life");
+            assert_eq!(bound.is_empty(), unbound, "{file}: {}", c.code);
+            used.extend(bound.into_iter().cloned());
+        }
+    }
+    let all: BTreeSet<String> = wordings.into_iter().map(|w| w.id).collect();
+    assert_eq!(used, all, "every wording is bound by a cover");
 }
 
 /// Purpose: an income cover's selection resolves to the product of each choice's premium

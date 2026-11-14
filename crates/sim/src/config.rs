@@ -95,6 +95,7 @@ const FUNDS: [(&str, &str); 3] = [
 ];
 const DEFINITIONS: &str = include_str!("../../../products/definitions/library.star");
 const AIA_DEFINITIONS: &str = include_str!("../../../products/definitions/aia.star");
+const AIA_WORDINGS: &str = include_str!("../../../products/definitions/aia_wordings.star");
 
 /// The funds shipped in this repository. The unit pricing module activates
 /// the same definitions on its own side.
@@ -119,6 +120,9 @@ pub fn shipped_activations() -> Result<Vec<Command>, LoadError> {
     }];
     out.push(Command::ActivateDefinitions {
         definitions: load_definitions("definitions/aia.star", AIA_DEFINITIONS)?,
+    });
+    out.push(Command::ActivateDefinitions {
+        definitions: load_definitions("definitions/aia_wordings.star", AIA_WORDINGS)?,
     });
     for (file, source) in RATES {
         out.push(Command::ActivateRateTable {

@@ -11,9 +11,19 @@ publish its rates. Every placeholder is marked `PH` in the product file and list
 
 Every AIA premium is also checked, to the cent, against an integer recalculation (`crates/product/tests/recalculation.rs`): each option choice's factor, every frequency, the policy fee, GST, each premium type's rating age, and the Multi-Benefit Discount. That check found a fault: a premium that is exactly half a cent per period was rounded up. Dividing by the number of periods last fixed it.
 
-Wording is not copied. Each definition in `products/definitions/aia.star` describes the
-claim event in this system's own words and names the AIA appendix that governs it. A claim
-is assessed against the published wording, not against the summary.
+Each definition in `products/definitions/aia.star` summarises a claim event and names the AIA appendix that governs it. Since 14 Nov 2026 the published wordings themselves are loaded too (see "The full wordings" below), and each cover is bound to both, so a claim is assessed against AIA's own words.
+
+## The full wordings
+
+- **Where they are:** `products/wordings/aia/<code>.txt`, one file per published document (34). Each starts with a header (title, document code and version, source URL, date retrieved), then the text in full.
+- **How they were read:** AIA's online editions at documents.aia.co.nz, page by page, with `[page k of N]` markers. Text laid out side by side appears in the order the edition holds it. Interim Cover and the Starter Plan came from the adviser PDFs. AIA's own published document governs; the copy is what claims reads beside it.
+- **How they reach the system:** `python3 tools/aia_wordings.py` turns the files into `products/definitions/aia_wordings.star`: one definition `aia-wording-<code>` each, titled with the document code and version. The sim config activates it after `aia.star`. Each AIA product file has a `WORDINGS` map that binds every cover to the umbrella wording, its own appendix and any wording that applies to it (waiver of premium, redundancy, business income support). A cover then holds the hash of that text, so a claim is assessed against the exact words in force when the cover started.
+- **When AIA changes a wording:** replace the file, set the new version in its header, rerun the tool and add the definition version; existing covers keep the hash they were bound to.
+- **Gaps:**
+  - **Essentials Life:** AIA's online edition has no text layer, so it is not loaded. Essentials covers stay on their summaries until AIA supplies the text.
+  - **Assessor screens:** the core keeps only the hash of a definition, so claims and documents have no route yet that serves the wording text.
+  - **Corporate Solutions:** each scheme has its own policy document, so none is loaded.
+- **Test:** `crates/product/tests/aia.rs::every_aia_cover_is_bound_to_the_wordings_that_govern_it`.
 
 ## The range
 
@@ -47,7 +57,7 @@ Every AIA wording is at `https://documents.aia.co.nz/<slug>/`. Versions current 
 - **Waiver of premium:** 1114 ALP-WOP v1.
 - **Add-ons:** 1116 AL-SAIC v1 (1 Nov 2024), 1118 AL-STS v2 (1 Nov 2026).
 - **Business:** 1151 ALB-LIFE v4, 1155 ALB-CC v8, 1156 ALB-PC v7, 1166 ALB-ST v2, 1154 ALB-TPD v2 (all 12 May 2026), 1158 ALB-BC v3, 1159 ALB-RC v4, 1160 ALB-BI v3, 1164 ALB-WOP v1, 1165 ALB-SAIC v1, 1180 A-SU IP v3.
-- **Other life:** 1400 A-CFL v1 (20 Mar 2026), Essentials Life Cover wording, AIA Starter Plan v1, and Interim Cover X00066 002a 2512.
+- **Other life:** 1400 A-CFL v1 (20 Mar 2026), Essentials Life Cover wording (online edition has no text layer), AIA Starter Plan v1, and Interim Cover X00066 002a 2512.
 - **Health:** 1300 APH-UMB v8 (1 Nov 2026; renewals from 23 Oct 2026), 1301 APH-WOP v1, 1304 AIA Cancer Care-UMB v5 (1 Nov 2026).
 - **Group:** the Corporate Solutions brochures for life and TPD, critical illness and income protection. AIA does not publish scheme policies.
 - **Product pages and brochures** on aia.co.nz for life, trauma, TPD, income protection, business, rural, health, and the Multi-Benefit Discount and AIA Vitality.

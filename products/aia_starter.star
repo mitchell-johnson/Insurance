@@ -7,6 +7,20 @@
 # Built from AIA's product pages and wording as at November 2026
 # (docs/aia-products.md). Rates and factors are placeholders marked PH.
 
+# ---- The published wordings each cover is bound to ---------------------------------
+
+# Each cover names the AIA wordings that govern it (products/definitions/
+# aia_wordings.star, the text as published), beside the summaries above. A
+# cover missing from this map fails to load.
+WORDINGS = {
+    "life": ["aia-wording-starter"],
+    "rent-mortgage": ["aia-wording-starter"],
+    "specialist-testing": ["aia-wording-starter"],
+}
+
+def with_wordings(covers):
+    return [dict(c, definitions = c["definitions"] + WORDINGS[c["code"]]) for c in covers]
+
 PRODUCT = product(
     code = "aia-starter",
     name = "AIA Starter Plans",
@@ -16,7 +30,7 @@ PRODUCT = product(
     currency = "NZD",
     statutory_fund = "SF1-life",
     rounding = "half_even",
-    covers = [
+    covers = with_wordings([
         cover(
             code = "life",
             cover_type = "life",
@@ -77,7 +91,7 @@ PRODUCT = product(
             definitions = ["aia-specialist-testing"],
             gst_rate = "0.15",
         ),
-    ],
+    ]),
     features = [
         composition(core = ["life", "rent-mortgage"]),
         billing(frequencies = ["fortnightly", "monthly"], policy_fee_annual = "0"),

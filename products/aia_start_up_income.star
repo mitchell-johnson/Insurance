@@ -7,6 +7,18 @@
 # Built from AIA's published wording and business brochure as at November
 # 2026 (docs/aia-products.md). Rates and factors are placeholders marked PH.
 
+# ---- The published wordings each cover is bound to ---------------------------------
+
+# Each cover names the AIA wordings that govern it (products/definitions/
+# aia_wordings.star, the text as published), beside the summaries above. A
+# cover missing from this map fails to load.
+WORDINGS = {
+    "start-up-income": ["aia-wording-1180-a-su-ip"],
+}
+
+def with_wordings(covers):
+    return [dict(c, definitions = c["definitions"] + WORDINGS[c["code"]]) for c in covers]
+
 PRODUCT = product(
     code = "aia-start-up-income",
     name = "AIA Start-Up Income Protection",
@@ -16,7 +28,7 @@ PRODUCT = product(
     currency = "NZD",
     statutory_fund = "SF1-life",
     rounding = "half_even",
-    covers = [
+    covers = with_wordings([
         cover(
             code = "start-up-income",
             cover_type = "income_protection",
@@ -47,7 +59,7 @@ PRODUCT = product(
                 built_in("move-to-business-continuity", "Move to Business Continuity after three years of trading", "facility"),
             ],
         ),
-    ],
+    ]),
     features = [
         billing(
             frequencies = ["fortnightly", "monthly", "yearly"],

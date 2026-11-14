@@ -14,6 +14,18 @@
 
 PAY_TO = {65: "2.10", 70: "1.85", 75: "1.70", 80: "1.60", 85: "1.55"}  # PH: factor on the entry-age rate
 
+# ---- The published wordings each cover is bound to ---------------------------------
+
+# Each cover names the AIA wordings that govern it (products/definitions/
+# aia_wordings.star, the text as published), beside the summaries above. A
+# cover missing from this map fails to load.
+WORDINGS = {
+    "life": ["aia-wording-1400-a-cfl"],
+}
+
+def with_wordings(covers):
+    return [dict(c, definitions = c["definitions"] + WORDINGS[c["code"]]) for c in covers]
+
 PRODUCT = product(
     code = "aia-cover-for-life",
     name = "AIA Cover for Life",
@@ -23,7 +35,7 @@ PRODUCT = product(
     currency = "NZD",
     statutory_fund = "SF1-life",
     rounding = "half_even",
-    covers = [
+    covers = with_wordings([
         cover(
             code = "life",
             cover_type = "life",
@@ -62,7 +74,7 @@ PRODUCT = product(
                 built_in("non-smoker-review", "Smoker to non-smoker rates after 12 months without smoking", "facility"),
             ],
         ),
-    ],
+    ]),
     features = [
         billing(
             frequencies = ["fortnightly", "monthly", "yearly"],

@@ -252,6 +252,32 @@ def with_safeguard(c):
     c["built_in"] = c["built_in"] + [SAFEGUARD]
     return c
 
+# ---- The published wordings each cover is bound to ---------------------------------
+
+# Each cover names the AIA wordings that govern it (products/definitions/
+# aia_wordings.star, the text as published), beside the summaries above. A
+# cover missing from this map fails to load.
+WORDINGS = {
+    "life": ["aia-wording-1100-al-umb", "aia-wording-1151-alb-life", "aia-wording-1164-alb-wop"],
+    "critical-conditions": ["aia-wording-1100-al-umb", "aia-wording-1155-alb-cc", "aia-wording-1164-alb-wop"],
+    "critical-conditions-accelerated": ["aia-wording-1100-al-umb", "aia-wording-1155-alb-cc", "aia-wording-1164-alb-wop"],
+    "progressive-care": ["aia-wording-1100-al-umb", "aia-wording-1156-alb-pc", "aia-wording-1164-alb-wop"],
+    "progressive-care-accelerated": ["aia-wording-1100-al-umb", "aia-wording-1156-alb-pc", "aia-wording-1164-alb-wop"],
+    "severe-trauma": ["aia-wording-1100-al-umb", "aia-wording-1166-alb-st", "aia-wording-1164-alb-wop"],
+    "severe-trauma-accelerated": ["aia-wording-1100-al-umb", "aia-wording-1166-alb-st", "aia-wording-1164-alb-wop"],
+    "tpd-own-occupation": ["aia-wording-1100-al-umb", "aia-wording-1154-alb-tpd", "aia-wording-1164-alb-wop"],
+    "tpd-own-occupation-accelerated": ["aia-wording-1100-al-umb", "aia-wording-1154-alb-tpd", "aia-wording-1164-alb-wop"],
+    "tpd-any-occupation": ["aia-wording-1100-al-umb", "aia-wording-1154-alb-tpd", "aia-wording-1164-alb-wop"],
+    "tpd-any-occupation-accelerated": ["aia-wording-1100-al-umb", "aia-wording-1154-alb-tpd", "aia-wording-1164-alb-wop"],
+    "business-continuity-agreed-value": ["aia-wording-1100-al-umb", "aia-wording-1158-alb-bc", "aia-wording-1164-alb-wop"],
+    "business-continuity-indemnity": ["aia-wording-1100-al-umb", "aia-wording-1158-alb-bc", "aia-wording-1164-alb-wop"],
+    "rural-continuity": ["aia-wording-1100-al-umb", "aia-wording-1159-alb-rc", "aia-wording-1160-alb-bi", "aia-wording-1164-alb-wop"],
+    "specified-accidental-injury": ["aia-wording-1100-al-umb", "aia-wording-1165-alb-saic"],
+}
+
+def with_wordings(covers):
+    return [dict(c, definitions = c["definitions"] + WORDINGS[c["code"]]) for c in covers]
+
 PRODUCT = product(
     code = "aia-living-business",
     name = "AIA Living Business",
@@ -261,7 +287,7 @@ PRODUCT = product(
     currency = "NZD",
     statutory_fund = "SF1-life",
     rounding = "half_even",
-    covers = [
+    covers = with_wordings([
         with_safeguard(cover(
             code = "life",
             cover_type = "life",
@@ -337,7 +363,7 @@ PRODUCT = product(
                 built_in("category-e", "Category E injuries", "additional", multiple_of_cover = "12"),
             ],
         ),
-    ],
+    ]),
     features = [
         composition(
             core = ["life"] + TRAUMA + TPD + INCOME,

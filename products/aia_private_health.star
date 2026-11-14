@@ -14,6 +14,19 @@
 
 EXCESSES = [(0, "1.55"), (250, "1.32"), (500, "1.18"), (750, "1.09"), (1000, "1.00"), (2000, "0.84"), (4000, "0.68"), (10000, "0.47")]  # PH factors
 
+# ---- The published wordings each cover is bound to ---------------------------------
+
+# Each cover names the AIA wordings that govern it (products/definitions/
+# aia_wordings.star, the text as published), beside the summaries above. A
+# cover missing from this map fails to load.
+WORDINGS = {
+    "private-health": ["aia-wording-1300-aph-umb", "aia-wording-1301-aph-wop"],
+    "private-health-plus": ["aia-wording-1300-aph-umb", "aia-wording-1301-aph-wop"],
+}
+
+def with_wordings(covers):
+    return [dict(c, definitions = c["definitions"] + WORDINGS[c["code"]]) for c in covers]
+
 PRODUCT = product(
     code = "aia-private-health",
     name = "AIA Private Health",
@@ -22,7 +35,7 @@ PRODUCT = product(
     line = "health",
     currency = "NZD",
     statutory_fund = "SF2-health",
-    covers = [
+    covers = with_wordings([
         cover(
             code = "private-health",
             cover_type = "health",
@@ -76,7 +89,7 @@ PRODUCT = product(
             definitions = ["aia-private-health"],
             gst_rate = "0.15",
         ),
-    ],
+    ]),
     features = [
         composition(core = ["private-health"], requires = {"private-health-plus": ["private-health"]}),
         billing(frequencies = ["fortnightly", "monthly", "quarterly", "half_yearly", "yearly"], policy_fee_annual = "0"),

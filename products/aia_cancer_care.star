@@ -3,6 +3,18 @@
 # 2026. Built from the published wording as at November 2026
 # (docs/aia-products.md); rates and factors are placeholders marked PH.
 
+# ---- The published wordings each cover is bound to ---------------------------------
+
+# Each cover names the AIA wordings that govern it (products/definitions/
+# aia_wordings.star, the text as published), beside the summaries above. A
+# cover missing from this map fails to load.
+WORDINGS = {
+    "cancer-care": ["aia-wording-1304-cancer-care"],
+}
+
+def with_wordings(covers):
+    return [dict(c, definitions = c["definitions"] + WORDINGS[c["code"]]) for c in covers]
+
 PRODUCT = product(
     code = "aia-cancer-care",
     name = "AIA Cancer Care",
@@ -11,7 +23,7 @@ PRODUCT = product(
     line = "health",
     currency = "NZD",
     statutory_fund = "SF2-health",
-    covers = [
+    covers = with_wordings([
         cover(
             code = "cancer-care",
             cover_type = "health",
@@ -48,7 +60,7 @@ PRODUCT = product(
                 built_in("suspension", "Suspension of Cover Benefit", "facility"),
             ],
         ),
-    ],
+    ]),
     features = [
         billing(frequencies = ["fortnightly", "monthly", "quarterly", "half_yearly", "yearly"], policy_fee_annual = "0"),
         earning(),

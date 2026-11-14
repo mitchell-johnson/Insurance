@@ -764,6 +764,7 @@ Written 12 November 2026 by the thread "Build claims operations". The full descr
   - The AIA NZ range as ten products: AIA Living personal and business, Start-Up IP, Cover for Life, Essentials Life, Starter, Interim Cover, Private Health (with Plus), Cancer Care, and Corporate Solutions.
   - 19 placeholder rate tables, each with a finance schema.
   - AIA definitions citing each wording (`products/definitions/aia.star`), accounting groups in `close.star`, and underwriting rules and authority grades that include them.
+  - AIA's 34 published wordings in full (`products/wordings/aia/`), loaded by `tools/aia_wordings.py` as definitions (`products/definitions/aia_wordings.star`) that every AIA cover is bound to, apart from Essentials and Corporate. The wording text has no serving route to assessor screens yet; the core keeps only the hash.
   - Everything is shipped through `crates/sim/src/config.rs`.
   - Sources, the mapping to system constructs, every placeholder and the gaps are in `docs/aia-products.md`.
 - **Engine features added for them**, in `ic-product` (design in docs/decisions.md, 14 Nov):
@@ -777,7 +778,7 @@ Written 12 November 2026 by the thread "Build claims operations". The full descr
     - Each life's sums insured are passed to the discount chain.
 - **Tests:** `crates/product/tests/aia.rs` (products, menus, loader refusals, discount) and `crates/sim/tests/aia.rs` (issue, five years of billing and expiry, limited pay, discount on the bill, claim facts).
 - **Left for other owners:** see "Not built yet" in `docs/aia-products.md`. This covers claims enforcing the option terms and built-in benefits, the underwriting occupation and age tests, a Vitality wellness module, Cover for Life paid-up and premium suspension in the core. The reinsurance thread has already added treaty entries for the AIA products.
-- **Needs Mitchell:** the real rates and factors, and the right to use AIA's names.
+- **Needs Mitchell:** the real rates and factors, and AIA's Essentials Life wording as text. Use of AIA's names is settled.
 
 ## Area: group scheme administration (`ic-group`)
 

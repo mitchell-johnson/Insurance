@@ -221,3 +221,10 @@ Mitchell answered the four group questions in the group thread.
 ## AIA material may be used (14 Nov 2026)
 
 - Mitchell confirmed the system is built for AIA ("Yes it's for Aia so can use everything from them"). The AIA products keep AIA's product and benefit names, and they may use AIA's published wordings and material.
+
+## AIA covers are bound to AIA's full published wordings (14 Nov 2026)
+
+- Mitchell asked for the full published wordings to be loaded for claims to assess against ("Yes do that"). Each published document is one definition, `aia-wording-<code>`, and its text is the wording in full. A cover is bound to its umbrella wording, its own appendix and any wording that applies to it, beside the existing summaries.
+- **Why:** a cover holds the hash of each definition it is bound to, so the exact words in force when the cover started are fixed, and a later AIA version does not change an existing contract.
+- **Source of the text:** the files in `products/wordings/aia/` are the source; `tools/aia_wordings.py` generates the definitions from them, so the text is edited in one place.
+- **Not loaded:** Essentials Life, whose online edition has no text layer, and Corporate Solutions, whose schemes each have their own policy.

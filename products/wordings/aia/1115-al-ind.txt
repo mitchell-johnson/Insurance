@@ -1,0 +1,753 @@
+Title: AIA Living Personal Income Protection, indemnity
+Document: 1115 AL-IND version 5, effective 12 May 2026
+Source: https://documents.aia.co.nz/view/862380995/
+Retrieved: 2026-11-14
+Text: the text layer of AIA's online edition, read page by page; passages laid out side by side appear in the order the edition holds them. AIA's own published document governs; this copy is what claims reads beside it.
+---
+[page 1 of 12]
+AIA Living Personal IP Indemnity Policy Wording
+AIA Living Personal IP Indemnity Policy Wording
+1115 AL-IND version 4 Effective 4 August 2023
+AIA LIVING - PERSONAL PERSONAL OPTIONAL BENEFIT APPENDIX
+Income Protection Benefit Indemnity
+This appendix only applies if cover under the schedule for your policy includes the Income Protection Benefit on an indemnity basis. This appendix forms part of and is incorporated into your AIA Living policy, the terms of which apply to this appendix .
+This is an Indemnity Income Protection Benefit. Details of the benefit and the life/lives assured are shown in the schedule .
+This Income Protection Benefit has two cover options, the Base Cover Option and the Premier Cover Option. The Premier Cover Option applies only if it is shown in the schedule . Otherwise, the Base Cover Option applies. The benefits set out in this appendix apply to both the Base Cover Option and the Premier Cover Option, except where those benefits are modified for the Premier Cover Option or are stated to be extra benefits for the Premier Cover Option only. The table below shows the benefits that are applicable to each option.
+Features
+Base Cover Option
+Premier Cover Option
+Built in
+✓
+✓✓
+Total Disability Income Benefit
+✓
+✓✓
+Partial Disability Income Benefit
+✓
+✓
+Partial Disability Bridging Benefit
+✓
+✓
+Enhanced Partial Disability Income Benefit
+✓
+✓
+Recurrent Disablement Benefit
+✓
+✓
+Rehabilitation and Support
+✓
+✓
+Vocational Assistance
+✓
+✓
+Home Modification and Equipment Expenses Benefit
+✓
+✓✓
+Bed Confinement Benefit
+✓
+✓
+Home Care Benefit
+✓
+✓
+Suspension of Cover
+✓
+✓
+Future Insurability Benefit *
+✓
+✓
+Back to Work Payment
+✓
+✓
+Pregnancy Premium Waiver
+✓
+✓
+Return Home Benefit
+✓
+✓
+Childcare Support Benefit
+✓
+✓
+Waiting Period Reduction Benefit
+✓
+✓
+Concurrent Waiting Period Benefit
+Optional
+✓
+✓
+Mental Health Limitation
+✓
+✓
+Claim Indexation Benefit *
+Extra Benefits for Premier Cover Option
+✓
+Extra Cash Benefit
+-
+✓
+Permanent Disablement Benefit
+-
+✓
+Bereavement Grant
+-
+* If the optional Claim Indexation Benefit is not selected, then the Future Insurability Benefit is built in for both the Base Cover Option and the Premier Cover Option. The Future Insurability Benefit is not available if the optional Claim Indexation Benefit is selected. - Not covered ✓ Covered ✓✓ Includes extra features
+1115 AL-IND version 5 Effective 12 May 2026
+Page 1 of 12
+1.
+When will AIA pay a Total Disability Income Benefit?
+replacement or mortgage protection benefits held with more than one provider, AIA will negotiate with the other provider(s) to determine the amount to be offset. AIA will not seek to apply offsets under this sub-clause in respect of income replacement or mortgage protection benefits held with other providers which were accurately disclosed in your application, and provided that your or the life assured’s circumstances have not changed.
+AIA will pay a Total Disability Income Benefit if in AIA’s opinion, at any time during the benefit term , the life assured : > has been totally disabled or partially disabled during the waiting period ; and
+> is totally disabled at the end of the waiting period.
+We will pay you the monthly benefit less offsets monthly in advance from the end of the waiting period until the earliest of:
+–
+Benefits payable under an AIA Key Person Disability Income policy will not be offset.
+> the life assured is no longer totally disabled ; or
+– If the life assured is entitled to receive a benefit from ACC but is not receiving that benefit because the life assured has either not applied for the benefit, or has not provided all of the requirements necessary to assess the benefit, or the benefit has been stopped due to any non-compliance with ACC requirements, AIA will offset the full ACC entitlement regardless of whether the life assured is receiving a payment or not. – Where the life assured receives or is entitled to receive a benefit from ACC , AIA will offset the gross entitlement amount  Any income before income tax, as a result of the life assured being actively involved in or actively carrying on business, other than passive income such as investment income, rental income or income earned by the business which cannot be attributed to the active involvement of the life assured .  The life assured’s sick leave payments, subject to a maximum of 10 days’ sick leave payments for all claims resulting from the same or a related disability. If you have chosen the Premier Cover Option then the life assured’s sick leave payments are not included in offsets.
+> the benefit term ends; or
+> the cover ends.
+Any payment for a period of less than one month is calculated on a pro-rata basis.
+Where the life assured has a waiting period of 8 weeks or less, is totally disabled due to injury and the nature of the injury is such that the life assured is expected to recover within a set period of time, AIA may choose to make a lump sum payment of up to 3 monthly benefit payments (after the waiting period and any offsets have been taken into account) and close the claim. This payment may be made during the waiting period . If the life assured is still totally disabled or partially disabled at the end of the expected recovery period corresponding with the lump sum payment, then AIA will reopen the claim and pay either the Total Disability Income Benefit or a Partial Disability Income Benefit in accordance with this appendix .
+2.
+What amount will AIA pay for a Total Disability Income Benefit?
+The amount that AIA will pay monthly is worked out in the following way:
+3.
+What does totally disabled mean?
+The lowest of:
+The definition of totally disabled that applies for a life assured depends on the life assured’s occupation class. The occupation class for each life assured is shown in the schedule . However, if a life assured has been on leave without pay for more than 12 months or was unemployed for three months or more immediately before becoming totally disabled , that life assured is automatically classed as occupation class five. For each occupation class, the degree of incapacity which constitutes total disablement is as follows: For occupation classes other than occupation class five: In AIA’s opinion, the life assured is totally disabled , if as a direct result of sickness or injury, he or she is: > under the regular and personal care of a registered medical practitioner ; and > unable to:
+ 1/12 th of the benefit amount shown in the schedule less offsets shown below;
+ (75% x pre-disability income ) less offsets shown below.
+If the life assured has been on parental leave for 12 months or less or on a work sabbatical when the life assured becomes totally disabled , then pre-disability income is based on the life assured’s income immediately before the life assured went on leave, as set out in Section 31 “Key Terms”.
+Offsets
+ Any other income replacement or mortgage protection benefits that any person receives or is entitled to receive from any sources in relation to the life assured and in respect of the same or a related disability (for example payments from ACC , or another insurer), other than Work and Income New Zealand (WINZ) payments, with the following provisions:
+perform at least one important income producing duty of the role they were involved in immediately before the disablement date and is not working in
+-
+–
+Where the life assured is covered by income
+1115 AL-IND version 5 Effective 12 May 2026
+Page 2 of 12
+that role; or
+direct result of sickness or injury he or she:
+- engage in the occupation they were involved in immediately before the disablement date for more than 10 hours per week; and > not working or engaged in any other occupation or business.
+> has a reduction in earning capacity resulting from the continuation of the disability; and > because of the reduction in earning capacity, the life assured :
+-
+is unable to work for more than 75% of their average weekly pre-disability hours; or
+For occupation class five:
+In AIA’s opinion, the life assured is totally disabled , if as a direct result of sickness or injury, he or she is: > disabled to such an extent that necessitates confinement to the home under medical supervision or to a recognised medical institution and necessitates receiving regular medical care; or > unable to perform at least two of the Activities of Daily Living without the assistance of an adult; and > not working in any gainful occupation or engaged in voluntary work.
+-
+earns less than 75% of pre-disability income .
+6.
+What is the amount of the Partial Disability Income Benefit?
+The amount that AIA will pay monthly is the lower of:
+> 1/12 th of the benefit amount shown in the schedule less offsets shown below; or
+> (75% x ( pre-disability income less post-disability income )) less offsets shown below.
+If the life assured was on parental leave for 12 months or less or on a work sabbatical when the life assured became totally disabled , then pre-disability income will be based on the life assured’s income immediately before the life assured went on leave, as set out in Section 31 “Key Terms” .
+4.
+When will AIA pay a Partial Disability Income Benefit?
+AIA will pay a Partial Disability Income Benefit if in AIA’s opinion, at any time during the benefit term , the life assured : > is in an occupation class other than occupation class five at the time of becoming totally disabled or partially disabled ; and > has been partially disabled during the waiting period, and is partially disabled at the end of the waiting period ; or > becomes partially disabled, following a period of receiving a Total Disability Income Benefit under this appendix and the life assured is no longer totally disabled, provided:
+Offsets:
+> Any other income replacement or mortgage protection benefits that any person receives or is entitled to receive from any sources in relation to the life assured and in respect of the same or a related disability (for example payments from ACC , or another insurer), other than Work and Income New Zealand (WINZ) payments, with the following provisions:
+–
+Where the life assured is covered by income replacement or mortgage protection benefits held with more than one provider, AIA will negotiate with the other provider(s) to determine the amount to be offset. AIA will not seek to apply offsets under this sub-clause in respect of income replacement or mortgage protection benefits held with other providers which were accurately disclosed in your application, and provided that your or the life assured’s circumstances have not changed.
+-
+the period in respect of which a Total Disability Income Benefit has been paid in advance has expired; and/or where a lump sum payment has been made in lieu of monthly benefit payments as set out in Section 1, the benefit period to which the lump sum corresponds has expired.
+-
+The Partial Disability Income Benefit will be paid monthly in arrears until, in AIA’s opinion, after considering the advice of a registered medical practitioner and other relevant information, the disability is no longer preventing the life assured from earning at least 75% of pre-disability income, or until the end of the benefit payment period , whichever is earlier. A Partial Disability Bridging Benefit (as set out in Section 7) will also be paid if you have been receiving a Total Disability Income Benefit under this appendix before you commence receiving a Partial Disability Income Benefit.
+–
+Benefits payable under an AIA Key Person Disability Income policy will not be offset.
+– If the life assured is entitled to receive a benefit from ACC but is not receiving that benefit because the life assured has either not applied for the benefit, or has not provided all of the requirements necessary to assess the benefit, or the benefit has been stopped due to any non-compliance with ACC requirements, AIA will offset the full ACC entitlement regardless of whether the life assured is receiving a payment or not. – Where the life assured receives or is entitled to receive a benefit from ACC , AIA will offset the gross entitlement amount.
+5.
+What does partially disabled mean?
+In AIA’s opinion, the life assured is partially disabled, if as a
+ The life assured’s sick leave payments, subject to a
+1115 AL-IND version 5 Effective 12 May 2026
+Page 3 of 12
+maximum of 10 days’ sick leave payments for all claims resulting from the same or a related disability. If you have chosen the Premier Cover Option then the life assured’s sick leave payments are not included in offsets.
+AIA will pay you an Enhanced Partial Disability Income Benefit if: > you have been receiving a Total Disability Income Benefit under this appendix ; and
+> the life assured is no longer totally disabled ; and
+For example:
+> you are entitled to a Partial Disability Income Benefit as set out in Section 4 for that life assured . The Enhanced Partial Disability Income Benefit is the lower of: > 25% of the monthly Partial Disability Income Benefit as calculated in Section 6; or > 1/12 th of the benefit amount shown in the schedule less the monthly Partial Disability Income Benefit as calculated in Section 6. This benefit is paid monthly in arrears for a maximum period of 12 months per claim. AIA will cease paying this benefit if you are no longer entitled to a Partial Disability Income Benefit for the life assured .
+Pre-disability income
+$5,000 per month
+Post-disability income
+$3,000 per month
+Benefit amount shown in the schedule
+$45,000 per annum ($3,750 per month)
+Offsets ( ACC entitlements for the same disability)
+$1,000 per month
+Calculation:
+Lower of:
+> (1/12 x $45,000) less offsets = $3,750 - $1,000 = $2,750 per month; or > (75% x ($5,000 - $3,000)) less offsets = $1,500 - $1000 = $500 per month Therefore, the amount payable in this example is $500 per month ($6,000 per annum).
+9.
+What is the Recurrent Disablement Benefit?
+The waiting period will be waived if not later than 12 months after the benefit payments related to the original claim ceased, the life assured becomes disabled again and, in AIA’s opinion, after considering the advice of a registered medical practitioner and other relevant information, this is caused by the same or a related illness or injury as the original period of total or partial disablement . The provisions of Sections 1, 2, 3, 4, 5 and 6 of this appendix will apply to any benefit claimed. If the benefit payment period is one, two or five years, all claims resulting from the same or a related illness or injury will be considered to be the same claim in respect of the benefit payment period .
+7.
+What is the Partial Disability Bridging Benefit and when will AIA pay it?
+AIA will pay you a Partial Disability Bridging Benefit if:
+> you have been receiving a Total Disability Income Benefit under this appendix ; and
+> the life assured is no longer totally disabled ; and
+> based on the information provided to, and requested by AIA , we reasonably expect that a Partial Disability Income Benefit (as set out in Section 4) will be payable for that life assured for the first month after the life assured ceased to be totally disabled. The Partial Disability Bridging Benefit is a lump-sum payment equivalent to 1/3 rd (33.3%) of the final monthly Total Disability Income Benefit paid before the life assured ceased to be totally disabled. The Partial Disability Bridging Benefit is paid at the end of the final month in respect of which a Total Disability Income Benefit was paid for the life assured . Payment of the Partial Disability Bridging Benefit does not affect the amount of the Partial Disability Income Benefit (as set out in Section 6) and does not affect the amount of the Enhanced Partial Disability Income Benefit (as set out in Section 8). The Partial Disability Bridging Benefit is payable once for all claims resulting from the same or a related injury or illness. The Partial Disability Bridging Benefit is not payable where a lump sum payment has been made in lieu of monthly benefit payments, as set out in Section 1. 8. What is the Enhanced Partial Disability Income Benefit and when will AIA pay it?
+10.
+What is the Optional Claim Indexation Benefit?
+The Optional Claim Indexation Benefit applies only if “CPI Linked” is specified in the schedule . Where the Optional Claim Indexation Benefit is selected, the Income Protection Benefit sum assured shown in the schedule will increase at the start of each policy year by an amount we determine with reference to the annual percentage increase in the consumers price index , subject to any maximum benefit amounts allowable under the benefit. If the consumers price index falls in any year, the Income Protection Benefit sum assured will not decrease.
+11.
+Rehabilitation and Support
+On receiving notification of a new or potential claim, we will appoint the life assured a Case Manager, who will work with
+1115 AL-IND version 5 Effective 12 May 2026
+Page 4 of 12
+the life assured to understand their personal situation and assist them with the claims process. They will work with the life assured to consider what rehabilitation or functional support could assist the life assured’s return to work or improve their capacity to work, either during or after the waiting period as appropriate in the opinion of AIA . Acceptance of any costs associated with the agreed rehabilitation and functional support by AIA does not mean that we will accept liability for any other benefit under this appendix .
+any other source.
+14.
+What is the Bed Confinement Benefit and when will AIA pay it?
+If, at any time during the waiting period the life assured is confined to bed under full-time care for more than three days and is in an occupation class other than five, then AIA will pay a Bed Confinement Benefit for each complete 24 hour period after the first 72 hours of bed confinement. This benefit will be a daily benefit equivalent to 1/365 th of the benefit amount shown in the schedule , which you would be entitled to if the life assured was totally disabled and the waiting period was over. AIA will continue to pay the benefit until the waiting period is over, or until the life assured is no longer confined to bed under full-time care , whichever is the earlier. If you have chosen the Premier Cover Option and at any time during the waiting period the life assured is confined to bed under full-time care for more than three days, then AIA will also pay the Bed Confinement Benefit for each complete 24 hour period within the first 72 hours of bed confinement.
+12.
+What is Vocational Assistance and when will AIA pay it?
+AIA may agree to pay for vocational assistance for the life assured if, in AIA’s opinion, the life assured is unlikely to return to paid work in their pre-disability occupation without assistance. The Case Manager appointed to the life assured’s claim will work to understand their personal situation and consider what assistance could aid the life assured’s return to gainful employment at an earlier date than would otherwise be possible. In all cases: > the assistance must be approved in advance by AIA , and reviewed regularly; and > the life assured must actively participate and comply with the assistance as agreed with AIA ; and > the total amount which AIA will pay for any vocational assistance is limited to a maximum of 12 times the monthly benefit amount as calculated in Section 2, except if the benefit payment period is one, two or five years, where the total amount is limited to 6 times the monthly benefit amount as calculated in Section 2; and > the life assured must be receiving a Total Disability Income Benefit or Partial Disability Income Benefit when the assistance begins. Any benefit which AIA may agree to pay is to be reduced by any vocational assistance costs you or the life assured recover, or are entitled to recover, from any other source
+15.
+Home Care Benefit
+If the life assured is totally disabled , AIA will pay a Home Care Benefit monthly in arrears in addition to the Total Disability Income Benefit. The Home Care Benefit is a payment for the services of the person providing care to the life assured and is payable to the person providing care, not the policy owner named in the schedule . The person providing the care will not be acting as an employee, contractor or agent of AIA . A registered medical practitioner must certify that the life assured requires full-time care at home or in a hospital because of the life assured’s disability. The full-time care must be provided by either: > a person whose profession it is to provide nursing or similar services; or > a direct family member who is in paid work for at least 28 hours per week immediately before the life assured became totally disabled and who has given up that work to care for the life assured . The amount of the Home Care Benefit each month will be the lowest of:
+13.
+What is the Home Modification or Equipment Expenses Benefit and when will AIA pay it?
+> 1/12 th of the benefit amount shown in the schedule ; or
+AIA may agree to pay you an additional lump sum payment of up to 12 times the monthly benefit amount calculated in Section 2. This payment is to cover the costs of buying specialised equipment or completing home alterations that, because of the life assured’s total disability , have become necessary, in AIA’s opinion after considering the recommendation of an occupational therapist or an appropriate specialist approved by AIA . You must apply in writing to AIA before incurring these costs. Any benefit that AIA may agree to pay for the specialised equipment or home alterations will be reduced by any costs of buying specialised equipment or completing home alterations you or the life assured recover, or are entitled to recover from
+> $2,500; or
+> the cost of the care, if it is provided by a person whose profession it is to provide nursing or similar services; or > if the care is provided by a direct family member, 75% of the pre-tax income we determine that family member has lost because he or she has given up work to care for the life assured . Where the Home Care Benefit is payable for an incomplete month, payment will be at the rate of 1/30 th (one-thirtieth) of the monthly amount per day.
+1115 AL-IND version 5 Effective 12 May 2026
+Page 5 of 12
+The Home Care Benefit starts from the expiry of the first 3 successive days of the life assured receiving full-time care and ends when: > a registered medical practitioner no longer certifies that full-time care is required; or > we have paid the Home Care Benefit for 6 consecutive months; or
+reinstatement.
+If the life assured becomes entitled to a Total Disability Income Benefit or a Partial Disability Income Benefit within 12 months following the reinstatement of cover under this benefit appendix , then the amount of benefit payable will be calculated using Section 2 or Section 6 (respectively) of this benefit appendix , provided that the 12 month period used for calculating the life assured’s pre-disability income will be a combination of:  the period from the date of reinstatement to the date of disablement ; and  the period immediately prior to the commencement of the suspension event that is needed to make up the balance of the 12 month period.
+> the benefit payment period ends;
+whichever comes first.
+For any period where the life assured is entitled to a Permanent Disablement Benefit, the Home Care Benefit will not be payable.
+16.
+When can you suspend cover and when will AIA reinstate cover?
+17.
+What is the Future Insurability Benefit?
+A life assured can suspend their cover under this benefit appendix for up to 12 months if they:
+The Future Insurability Benefit is a built-in benefit for a life assured unless you have selected the Optional Claim Indexation Benefit (specified in the schedule as CPI linked). If you have selected the Optional Claim Indexation Benefit, the Future Insurability Benefit is not available. The Future Insurability Benefit will only apply for a life assured if the Income Protection Benefit sum assured shown in the schedule for the life assured together with any previous Future Insurability Benefit increases for the life assured is less than $240,000 per annum. Future Insurability Benefit increases cannot be used to increase the Income Protection Benefit sum assured to more than $240,000 per annum, or to be in excess of the agreed replacement ratio disclosed in your application. If the Future Insurability Benefit applies for a life assured , then the Income Protection Benefit sum assured for the life assured may be increased without the need to provide further medical evidence, subject to the following conditions: > The Income Protection Benefit sum assured for the life assured may be increased by up to the lower of $12,000 per annum or 10% of the Income Protection Benefit sum assured for the life assured set out in the schedule . > You can only apply for an increase in cover under this Future Insurability Benefit for a life assured once every three years or in the case relating to an increase in income once per year, and you must apply to AIA in writing within 60 days either side of the applicable policy anniversary date . > If the increase is related to your increase in income you must apply in writing to AIA and provide evidence satisfactory to AIA of the life assured’s increased income within 60 days of the increase in income. This evidence is either:
+> go on parental leave;
+> go on leave without pay for any reason;
+> become unemployed or redundant;
+> experience at least a 20% reduction in pay (comparing the most recent payslip against a previous payslip from the same year); or > if self-employed, experience a 30% reduction in revenue (by comparing one month’s revenue against the same month for the previous year),
+provided that:
+> you notify AIA within three months of one of the above listed suspension events occurring and provide evidence to AIA of the suspension event; and
+> AIA acknowledges in writing receipt of that notification.
+Cover for the life assured will be suspended from the date set out in AIA’s written acknowledgment. No premium will be payable during the period that the cover is suspended. No claim under this benefit appendix will be payable during, or for any disability that occurs during, the period that the cover is suspended. A claim may only be payable if the life assured first meets the criteria for an eligible claim under this policy after their cover is reinstated. Cover under this benefit appendix may be reinstated at the end of the suspension period in accordance with this Section without the need to provide further medical evidence, provided that the benefit has been suspended for no longer than 12 months. At the end of the suspension period, the benefit will be automatically reinstated for the life assured. Cover for the life assured will be reinstated from the date set out in AIA’s written acknowledgement. The premium payable for the reinstated benefit will be based on AIA’s premium rates at the time of the
+-
+confirmation of the increase in salary from the life assured’s employer; or In the case of a life assured who is self-employed, the life assured’s annual accounts showing an increase in the Net Profit amount before tax, less expenses.
+-
+1115 AL-IND version 5 Effective 12 May 2026
+Page 6 of 12
+> The total of all Future Insurability Benefit increases for a life assured cannot exceed 100% of the original Income Protection Benefit sum assured for the life assured . > AIA will increase the Income Protection Benefit sum assured for the life assured from the date we accept your request. > AIA will not accept an application under this Future Insurability Benefit to increase cover for a life assured if you are entitled to or are receiving payment of a claim for a disability that the life assured suffered on or before the date of the application. > A life assured over the age of 55 is not eligible for Future Insurability Benefit increases. > Any exercise of the Future Insurability Benefit will require an increase in premium . The premium increase will be based on AIA’s premium rates applicable at the time the Future Insurability Benefit is exercised.
+-
+the risk commencement date ; or
+-
+the most recent reinstatement of this Income Protection Benefit; and
+the life assured is on maternity leave .
+
+You must notify AIA in writing when the premium is to be waived. This Pregnancy Premium Waiver will cease when six consecutive months premium have been waived.
+20. What is the Return Home Benefit?
+If the life assured is outside of New Zealand and suffers, for the first time a total disability , upon acceptance of the claim AIA will pay the lesser of:
+ three times the monthly benefit specified in the schedule ; or
+ a single standard economy flight back to New Zealand for the life assured and one support person. In total the maximum AIA will pay over the life of the Policy under the Return Home Benefit is $10,000. No payment will be made if the life assured is covered for the same event with a travel insurance provider.
+18.
+What is the Back to Work Payment and when will AIA pay it?
+AIA will pay you a Back to Work Payment if:
+> a Total or Partial Disability Income Benefit has been paid for a life assured for a continuous period of longer than 12 months but less than 24 months; and > the life assured engages in work or carries on business; and > the life assured is no longer totally disabled or partially disabled ; and
+21. What is the Childcare Support Benefit?
+AIA will pay a Childcare Support Benefit in the following circumstances:  the life assured is totally disabled or partially disabled and is receiving a monthly benefit; and  as a direct result of the life assured’s disability, additional childcare costs are incurred over and above any childcare arrangements which existed prior to the life assured becoming totally disabled or partially disabled , in respect of any dependent child who is under the age of 14 years old; and  the additional childcare services are not being provided by you or an immediate family member, in AIA ‘s sole opinion. The amount AIA will reimburse under the Childcare Support Benefit is the lesser of:
+> the life assured has ceased to be on claim with AIA .
+The Back to Work Payment is a lump-sum payment equivalent to 3 times the life assured’s monthly disability benefit for the last full month immediately before the claim ceased, as calculated in accordance with Section 2 for a total disability and Section 6 and (if applicable) Section 7 for a partial disability . AIA will only pay the Back to Work Payment once per claim across all AIA policies, and will not be paid where the benefit payment period is one or two years. If the life assured suffers a recurrence of the same or a related illness or injury within 12 months of a Total or Partial Disability Income Benefit ceasing, then any Back to Work Payment made in respect of that claim will be deducted from the amount of the Total or Partial Disability Income Benefit payable.
+the actual additional childcare costs; or
+
+ $800 per month per dependent child under the age of 14 years old.
+This Childcare Support Benefit is payable until the earlier of:
+19. What is the Pregnancy Premium Waiver?
+ the life assured no longer being totally disabled or partially disabled ; or  six monthly Childcare Support Benefit payments have been made; or
+AIA will waive the premium for this Income Protection Benefit for six consecutive months at any stage between the second trimester and six months after the life assured’s pregnancy finishes if the life assured becomes pregnant while this Income Protection Benefit is in force provided:  the life assured provides AIA with a confirmation of pregnancy from an appropriate registered medical practitioner ; and
+ the end of the benefit payment period is reached; or
+the end of the benefit term is reached.
+
+You will need to provide evidence satisfactory to AIA each month of the additional childcare fees that have been paid
+ the birth of the child occurs at least 12 months after:
+1115 AL-IND version 5 Effective 12 May 2026
+Page 7 of 12
+before AIA will make a payment under the Childcare Support Benefit.
+ the payment of premiums must be up to date and are not being waived for any reason. If AIA agrees to reduce the waiting period , the following applies:  premiums will increase with any reduction in waiting period ;  only one reduction in waiting period under this benefit is allowed without evidence of health;  any loadings, exclusions or special terms on the cancelled policy will be applied to the reduced waiting period benefit.
+This payment is in addition to the monthly benefit.
+22. What is the Waiting Period Reduction Benefit? If this Income Protection Benefit has a waiting period of 26, 52 or 104 weeks the life assured can reduce this waiting period , without providing any further medical evidence, if the life assured’s Business Overheads, Business Continuity, Rural Continuity or Locum Cover is cancelled due to:  the life assured no longer being actively engaged in the business; or
+23.
+What is the Concurrent Waiting Period Benefit?
+the business is sold; or
+
+If the life assured is disabled and able to receive an Income Protection Benefit under this policy, and they also hold a Business Overheads, Business Continuity, Rural Continuity or Locum Cover policy, then the waiting periods applicable to the life assured under each policy will be served concurrently from the disablement date . If during the waiting period under this policy, the life assured is able to claim the Recurrent Disablement under a Business Overheads, Business Continuity, Rural Continuity or Locum Cover policy, the portion of their waiting period for their Income Protection under this policy will be considered to have been continuous and only the remaining period will apply.
+the business is no longer actively trading .
+
+The waiting period for this Income Protection Benefit will reduce to align with the waiting period on the cancelled Benefit. The reduced waiting period on this Income Protection will apply to the lesser of:  the monthly benefit for the Business Overheads, Business Continuity, Rural Continuity or Locum Cover at the time it was cancelled; or
+ the monthly benefit for this Income Protection Benefit.
+For example:
+A life assured has the following:
+24.
+What is the Optional Mental Health Limitation?
+ Disability Income Protection with a $2,500 per month benefit and a 52 week waiting period ; and  Business Continuity with a $1,000 per month benefit with a 13 week waiting period . When Business Continuity is cancelled the Disability Income Protection Benefit waiting period would be reduced to a:  13 week waiting period with a $1,000 per month benefit; and
+The Optional Mental Health Limitation applies only if it is shown in the schedule and if no mental health exclusion applies for this appendix . If the Optional Mental Health Limitation applies, AIA will only pay a claim due to a mental health disorder for a maximum of two years throughout the life of this appendix . The Optional Mental Health Limitation payment period will commence if in AIA’s opinion, after considering the advice of a registered medical practitioner and other relevant information, the life assured is deemed to be totally disabled or partially disabled as a result of a mental health disorder .
+ 52 week waiting period with a $1,500 per month benefit.
+The following conditions apply:
+25.
+Extra Benefits for the Premier Cover Option
+ Within 60 days of the cancellation of cover the life assured must notify AIA in writing with supporting evidence that the life assured is no longer actively engaged in the business or the business has been sold or the business is no longer actively trading ;  the life assured is no longer actively engaged in the business due to reasons other than retirement, redundancy, ill health or incapacity;
+If you have chosen the Premier Cover Option, then the following extra benefits also apply:
+a) Extra Cash Benefit
+The Extra Cash Benefit will be paid monthly in advance and in addition to the Total Disability Income Benefit, for the first three months after the waiting period while the Total Disability Income Benefit is being paid. The Extra Cash Benefit is equivalent to 1/3 rd (33.3%) of the Total Disability Income Benefit for each month. Where applicable and only in respect of the period for which the Extra Cash Benefit is payable, the Extra Cash Benefit
+ the life assured must be under the age of 60;
+ if the life assured has had a claim paid or is entitled to be paid a claim under any policy with us or any other insurance company the request will be referred to a AIA underwriter and full underwriting terms and conditions may apply;
+1115 AL-IND version 5 Effective 12 May 2026
+Page 8 of 12
+will be included together with the Total Disability Income Benefit in the calculation of the lump sum payment AIA may choose to make in lieu of up to 3 monthly benefit payments, as set out in Section 1.
+life assured’s registered medical practitioner or a registered medical practitioner approved by AIA considers necessary; and
+> any other information that AIA may deem relevant to the assessment of the claim.
+This benefit is only payable once for a life assured .
+b) Permanent Disablement Benefit
+27.
+Ongoing Claim Requirements
+A Permanent Disablement Benefit will be paid if:
+For ongoing claims AIA will require:
+> a Total Disability Income Benefit has been paid for 24 consecutive months in respect of a life assured ; and
+> Completion of a monthly medical certificate by a registered medical practitioner (at your expense) in a form from time to time approved by AIA for the purposes of determining ongoing entitlement to payment of an Income Protection Benefit. > Completion of a monthly individual declaration by the life assured in a form from time to time approved by AIA , which may include completion of daily activity logs detailing the life assured’s functional activities for the purposes of determining ongoing entitlement to payment of an Income Protection Benefit. > Proof of any remunerated or non-remunerated work completed during the claim period. > Any other information that AIA may deem relevant to the ongoing assessment of the claim.
+> in AIA’s opinion that life assured is permanently disabled .
+The benefit is a monthly payment equivalent to 1/3 rd (33.3%) of the life assured’s monthly Total Disability Income Benefit as calculated in Section 2. The additional monthly payment will commence from the date when the Permanent Disablement Benefit claim is accepted by AIA . The benefit will cease when the earliest of the following occurs:
+> the benefit payment period ends; or
+> the life assured dies; or
+> the life assured is no longer permanently disabled .
+c) Bereavement Grant
+28.
+When will AIA cease paying a benefit?
+If the life assured dies while AIA is paying a Total Disability Income Benefit for that life assured , then AIA will pay a Bereavement Grant of three times the Total Disability Income Benefit as calculated in Section 2.
+AIA will cease paying a benefit if:
+(a) The life assured fails to undergo and complete:
+any surgical operation; and/or
+−
+No Bereavement Grant will be paid if:
+any medical rehabilitation; and/or
+−
+> the life assured dies as a direct or indirect result of deliberately injuring himself or herself or attempting to do so; or
+any social rehabilitation; and/or
+−
+any vocational rehabilitation,
+−
+> the life assured dies during the waiting period .
+which a registered medical practitioner approved by AIA considers reasonably necessary.
+AIA will only pay one Bereavement Grant for each life assured across all AIA policies .
+(b) The life assured fails to undertake any medical examinations that AIA requires the life assured to have, at our expense. (c) The life assured fails to comply with the requirements of Section 27 above. (d) AIA determines that the life assured is no longer totally disabled or partially disabled . (e) The benefit payment period expires in relation to the life assured . (f) The life assured or anyone acting on behalf of the life assured makes a false or fraudulent statement in respect of a claim or supports any claim with false evidence. (g) The life assured is in prison or sentenced to home detention for any reason.
+26.
+How to make a claim
+To make a claim, the relevant procedures in the section of your AIA Living policy entitled ‘How to make a claim’ must be followed. In addition, for a Disability Income Protection Benefit claim, AIA will require: > the life assured to be examined by a registered medical practitioner acceptable to AIA , before accepting liability for a claim; and > a AIA claims form completed by the life assured and a registered medical practitioner (at your expense); and > other information which AIA may reasonably request to help assess the claim, which may include evidence of monthly earnings, taxable income, business accounts, ACC details or similar; and > the life assured to undergo medical and/or surgical treatment (including any operation or vocational, medical and/or social rehabilitation) at your expense which the
+(h) The life assured dies.
+If AIA ceases paying a benefit in accordance with paragraphs (a), (b) or (c) and the life assured subsequently complies with the relevant requirement(s), then:
+1115 AL-IND version 5 Effective 12 May 2026
+Page 9 of 12
+> The date that the life assured complied with the relevant requirement(s) will, subject to the provisions of this appendix, be treated as the disablement date for a new claim.
+Activities of Daily Living
+Activities of Daily Living are:
+> Bathing and showering.
+> Dressing and undressing.
+> The waiting period will be waived for the new claim.
+> Eating and drinking.
+> If the benefit payment period is one, two or five years, the original claim and the new claim will be considered to be the same claim in respect of the benefit payment period . > No monthly benefit payments will be payable retrospectively for any period of time before the date that the life assured subsequently complies with the relevant requirement(s).
+> Using a toilet.
+> Moving from place to place by walking, in a wheelchair or with a walking aid. The term for which the life assured is insured for the Income Protection Benefit as stated in the schedule . The maximum term for which the Income Protection Benefit is payable as stated in the schedule . For benefit payment periods of one, two or five years: a) the benefit payment period commences at the end of the waiting period and ceases either one year, two years or five years (whichever is stated in the schedule ) later or when the life assured turns 65, whichever is earlier; and b) the one year, two year or five year period (whichever is stated in the schedule ) is the total period for which benefits will be payable for all claims arising from the same or a related illness or injury. The date the life assured became totally disabled or partially disabled . Care for 16 hours per day or more, provided by a nursing service approved by AIA whose profession it is to provide nursing services or provided by a registered medical practitioner . Any income that the life assured receives or is entitled to receive from his or her current or former employment or business/es. This includes:
+benefit term
+29.
+When will this appendix terminate for a life assured ?
+benefit payment period
+This appendix will terminate and eligibility for the Income Protection Benefit will cease for a life assured : > At the expiry of the benefit term as shown in the schedule .
+> When the life assured dies.
+> When the benefit is cancelled.
+30.
+Exclusions – When AIA won’t pay a benefit
+AIA will not pay any of the benefits listed in this appendix where any of the following directly or indirectly cause or contribute to the disability: > The life assured deliberately injures himself or herself or attempts to do so. > The life assured engages in or is part of any conduct that is criminal. > Pregnancy of, or childbirth by, the life assured , unless the disability lasts for more than 90 days after the end of pregnancy, in which case the waiting period will start from the 91 st day. > The life assured does not comply with the treatment recommended by the attending treatment providers. If the life assured is imprisoned or sentenced to home detention for any reason, no monthly benefit will be payable during the term of imprisonment or home detention.
+disablement date
+full-time care
+income
+31.
+Key terms
+actively engaged
+Working an average of more than 30 hours per week in the six months prior to cancellation of Business Overheads, Business Continuity, Rural Continuity or Locum Cover. Undertaking any activity carried on for the production of income from selling goods or performing services.
+a)
+Life assured’s share of profits of the business (and/or any associated entities), after the
+actively trading
+deduction of business expenses, which are
+determined in line with the usual manner that profits and/or losses of the business
+1115 AL-IND version 5 Effective 12 May 2026
+Page 10 of 12
+(and/or associated entities) are divided between the life assured and any co-owners, partners, shareholders or beneficiaries of the business (and/or associated entities); and b) Any other remuneration, whether in the form of salary or wages, superannuation, director’s fees, allowances or any other monetary or nonmonetary benefit, the life assured receives or is entitled to receive directly or indirectly from his or her employment or the business. The current year’s taxation liability excludes any tax losses which have been brought forward from previous years. For the purposes of this definition, the life assured is deemed to be in business rather than employment if he or she derives income (either realised or unrealised) from a company or other legal entity, and he or she has effective control, either directly or indirectly (e.g. through a trust, partnership or other legal structure) of more than 25% of the shares or ownership in that company or other legal entity. His or her income will be assessed in accordance with the amounts referred to in both (a) and (b) above. A mental health disorder including but not limited to anxiety disorders, chronic fatigue syndrome, depression, stress, fatigue, exhaustion, psychiatric complications of physical disorders, behavioural or any other mental or functional nervous disorder and/or the treatment or complications of that disorder.
+disability (if the life assured can perform the activity on his or her own by using special equipment, then AIA will treat the life assured as being able to perform that activity). Alternatively, the life assured is unlikely to ever be able to perform again, at least one of the Activities of Daily Living which, together with a reduction in the life assured’s intellectual capacity, means that the life assured will likely always require full-time care .
+An individual, employer, company, partnership, association, organisation or trust.
+person
+post-disability income
+The last month’s income .
+pre-disability income
+The average monthly income during a continuous 12 month period chosen by the life assured from the 36 months immediately before the disablement date .
+However, if the life assured becomes totally disabled or
+partially disabled when the life assured has been on parental leave for 12 months or less or on a work sabbatical , then the pre- disability income is the average monthly income during a continuous 12 month period chosen by the life assured from the 36 months immediately before the life assured went on leave.
+mental health disorder
+totally disabled
+See Section 3 of this appendix for the meaning of this key term.
+Total disablement has a corresponding meaning.
+unemployed
+A person who is not engaged in remunerated work or business activities, for 10 hours or more a week. This definition does not include a person on leave without pay, parental, study, long service or sabbatical leave. The period stated as such in the schedule for which no Total or Partial Disability Income Benefit is payable.
+partially disabled
+See Section 5 of this appendix for the meaning of this key term.
+permanently disabled
+In the opinion of AIA , the life assured cannot and is unlikely to ever be able to perform again, at least two of the five Activities of Daily Living without assistance from another person because of the effects of an illness or injury which caused the life assured’s
+waiting period
+work sabbatical
+Voluntary leave without pay, approved by the employer, and
+1115 AL-IND version 5 Effective 12 May 2026
+Page 11 of 12
+
+[page 2 of 12]
+AIA Living Personal IP Indemnity Policy Wording
+1.
+When will AIA pay a Total Disability Income Benefit?
+replacement or mortgage protection benefits held with more than one provider, AIA will negotiate with the other provider(s) to determine the amount to be offset. AIA will not seek to apply offsets under this sub-clause in respect of income replacement or mortgage protection benefits held with other providers which were accurately disclosed in your application, and provided that your or the life assured’s circumstances have not changed.
+AIA will pay a Total Disability Income Benefit if in AIA’s opinion, at any time during the benefit term , the life assured : > has been totally disabled or partially disabled during the waiting period ; and
+> is totally disabled at the end of the waiting period.
+We will pay you the monthly benefit less offsets monthly in advance from the end of the waiting period until the earliest of:
+–
+Benefits payable under an AIA Key Person Disability Income policy will not be offset.
+> the life assured is no longer totally disabled ; or
+– If the life assured is entitled to receive a benefit from ACC but is not receiving that benefit because the life assured has either not applied for the benefit, or has not provided all of the requirements necessary to assess the benefit, or the benefit has been stopped due to any non-compliance with ACC requirements, AIA will offset the full ACC entitlement regardless of whether the life assured is receiving a payment or not. – Where the life assured receives or is entitled to receive a benefit from ACC , AIA will offset the gross entitlement amount  Any income before income tax, as a result of the life assured being actively involved in or actively carrying on business, other than passive income such as investment income, rental income or income earned by the business which cannot be attributed to the active involvement of the life assured .  The life assured’s sick leave payments, subject to a maximum of 10 days’ sick leave payments for all claims resulting from the same or a related disability. If you have chosen the Premier Cover Option then the life assured’s sick leave payments are not included in offsets.
+> the benefit term ends; or
+> the cover ends.
+Any payment for a period of less than one month is calculated on a pro-rata basis.
+Where the life assured has a waiting period of 8 weeks or less, is totally disabled due to injury and the nature of the injury is such that the life assured is expected to recover within a set period of time, AIA may choose to make a lump sum payment of up to 3 monthly benefit payments (after the waiting period and any offsets have been taken into account) and close the claim. This payment may be made during the waiting period . If the life assured is still totally disabled or partially disabled at the end of the expected recovery period corresponding with the lump sum payment, then AIA will reopen the claim and pay either the Total Disability Income Benefit or a Partial Disability Income Benefit in accordance with this appendix .
+2.
+What amount will AIA pay for a Total Disability Income Benefit?
+The amount that AIA will pay monthly is worked out in the following way:
+3.
+What does totally disabled mean?
+The lowest of:
+The definition of totally disabled that applies for a life assured depends on the life assured’s occupation class. The occupation class for each life assured is shown in the schedule . However, if a life assured has been on leave without pay for more than 12 months or was unemployed for three months or more immediately before becoming totally disabled , that life assured is automatically classed as occupation class five. For each occupation class, the degree of incapacity which constitutes total disablement is as follows: For occupation classes other than occupation class five: In AIA’s opinion, the life assured is totally disabled , if as a direct result of sickness or injury, he or she is: > under the regular and personal care of a registered medical practitioner ; and > unable to:
+ 1/12 th of the benefit amount shown in the schedule less offsets shown below;
+ (75% x pre-disability income ) less offsets shown below.
+If the life assured has been on parental leave for 12 months or less or on a work sabbatical when the life assured becomes totally disabled , then pre-disability income is based on the life assured’s income immediately before the life assured went on leave, as set out in Section 31 “Key Terms”.
+Offsets
+ Any other income replacement or mortgage protection benefits that any person receives or is entitled to receive from any sources in relation to the life assured and in respect of the same or a related disability (for example payments from ACC , or another insurer), other than Work and Income New Zealand (WINZ) payments, with the following provisions:
+perform at least one important income producing duty of the role they were involved in immediately before the disablement date and is not working in
+-
+–
+Where the life assured is covered by income
+1115 AL-IND version 5 Effective 12 May 2026
+Page 2 of 12
+
+[page 3 of 12]
+AIA Living Personal IP Indemnity Policy Wording
+that role; or
+direct result of sickness or injury he or she:
+- engage in the occupation they were involved in immediately before the disablement date for more than 10 hours per week; and > not working or engaged in any other occupation or business.
+> has a reduction in earning capacity resulting from the continuation of the disability; and > because of the reduction in earning capacity, the life assured :
+-
+is unable to work for more than 75% of their average weekly pre-disability hours; or
+For occupation class five:
+In AIA’s opinion, the life assured is totally disabled , if as a direct result of sickness or injury, he or she is: > disabled to such an extent that necessitates confinement to the home under medical supervision or to a recognised medical institution and necessitates receiving regular medical care; or > unable to perform at least two of the Activities of Daily Living without the assistance of an adult; and > not working in any gainful occupation or engaged in voluntary work.
+-
+earns less than 75% of pre-disability income .
+6.
+What is the amount of the Partial Disability Income Benefit?
+The amount that AIA will pay monthly is the lower of:
+> 1/12 th of the benefit amount shown in the schedule less offsets shown below; or
+> (75% x ( pre-disability income less post-disability income )) less offsets shown below.
+If the life assured was on parental leave for 12 months or less or on a work sabbatical when the life assured became totally disabled , then pre-disability income will be based on the life assured’s income immediately before the life assured went on leave, as set out in Section 31 “Key Terms” .
+4.
+When will AIA pay a Partial Disability Income Benefit?
+AIA will pay a Partial Disability Income Benefit if in AIA’s opinion, at any time during the benefit term , the life assured : > is in an occupation class other than occupation class five at the time of becoming totally disabled or partially disabled ; and > has been partially disabled during the waiting period, and is partially disabled at the end of the waiting period ; or > becomes partially disabled, following a period of receiving a Total Disability Income Benefit under this appendix and the life assured is no longer totally disabled, provided:
+Offsets:
+> Any other income replacement or mortgage protection benefits that any person receives or is entitled to receive from any sources in relation to the life assured and in respect of the same or a related disability (for example payments from ACC , or another insurer), other than Work and Income New Zealand (WINZ) payments, with the following provisions:
+–
+Where the life assured is covered by income replacement or mortgage protection benefits held with more than one provider, AIA will negotiate with the other provider(s) to determine the amount to be offset. AIA will not seek to apply offsets under this sub-clause in respect of income replacement or mortgage protection benefits held with other providers which were accurately disclosed in your application, and provided that your or the life assured’s circumstances have not changed.
+-
+the period in respect of which a Total Disability Income Benefit has been paid in advance has expired; and/or where a lump sum payment has been made in lieu of monthly benefit payments as set out in Section 1, the benefit period to which the lump sum corresponds has expired.
+-
+The Partial Disability Income Benefit will be paid monthly in arrears until, in AIA’s opinion, after considering the advice of a registered medical practitioner and other relevant information, the disability is no longer preventing the life assured from earning at least 75% of pre-disability income, or until the end of the benefit payment period , whichever is earlier. A Partial Disability Bridging Benefit (as set out in Section 7) will also be paid if you have been receiving a Total Disability Income Benefit under this appendix before you commence receiving a Partial Disability Income Benefit.
+–
+Benefits payable under an AIA Key Person Disability Income policy will not be offset.
+– If the life assured is entitled to receive a benefit from ACC but is not receiving that benefit because the life assured has either not applied for the benefit, or has not provided all of the requirements necessary to assess the benefit, or the benefit has been stopped due to any non-compliance with ACC requirements, AIA will offset the full ACC entitlement regardless of whether the life assured is receiving a payment or not. – Where the life assured receives or is entitled to receive a benefit from ACC , AIA will offset the gross entitlement amount.
+5.
+What does partially disabled mean?
+In AIA’s opinion, the life assured is partially disabled, if as a
+ The life assured’s sick leave payments, subject to a
+1115 AL-IND version 5 Effective 12 May 2026
+Page 3 of 12
+
+[page 4 of 12]
+AIA Living Personal IP Indemnity Policy Wording
+maximum of 10 days’ sick leave payments for all claims resulting from the same or a related disability. If you have chosen the Premier Cover Option then the life assured’s sick leave payments are not included in offsets.
+AIA will pay you an Enhanced Partial Disability Income Benefit if: > you have been receiving a Total Disability Income Benefit under this appendix ; and
+> the life assured is no longer totally disabled ; and
+For example:
+> you are entitled to a Partial Disability Income Benefit as set out in Section 4 for that life assured . The Enhanced Partial Disability Income Benefit is the lower of: > 25% of the monthly Partial Disability Income Benefit as calculated in Section 6; or > 1/12 th of the benefit amount shown in the schedule less the monthly Partial Disability Income Benefit as calculated in Section 6. This benefit is paid monthly in arrears for a maximum period of 12 months per claim. AIA will cease paying this benefit if you are no longer entitled to a Partial Disability Income Benefit for the life assured .
+Pre-disability income
+$5,000 per month
+Post-disability income
+$3,000 per month
+Benefit amount shown in the schedule
+$45,000 per annum ($3,750 per month)
+Offsets ( ACC entitlements for the same disability)
+$1,000 per month
+Calculation:
+Lower of:
+> (1/12 x $45,000) less offsets = $3,750 - $1,000 = $2,750 per month; or > (75% x ($5,000 - $3,000)) less offsets = $1,500 - $1000 = $500 per month Therefore, the amount payable in this example is $500 per month ($6,000 per annum).
+9.
+What is the Recurrent Disablement Benefit?
+The waiting period will be waived if not later than 12 months after the benefit payments related to the original claim ceased, the life assured becomes disabled again and, in AIA’s opinion, after considering the advice of a registered medical practitioner and other relevant information, this is caused by the same or a related illness or injury as the original period of total or partial disablement . The provisions of Sections 1, 2, 3, 4, 5 and 6 of this appendix will apply to any benefit claimed. If the benefit payment period is one, two or five years, all claims resulting from the same or a related illness or injury will be considered to be the same claim in respect of the benefit payment period .
+7.
+What is the Partial Disability Bridging Benefit and when will AIA pay it?
+AIA will pay you a Partial Disability Bridging Benefit if:
+> you have been receiving a Total Disability Income Benefit under this appendix ; and
+> the life assured is no longer totally disabled ; and
+> based on the information provided to, and requested by AIA , we reasonably expect that a Partial Disability Income Benefit (as set out in Section 4) will be payable for that life assured for the first month after the life assured ceased to be totally disabled. The Partial Disability Bridging Benefit is a lump-sum payment equivalent to 1/3 rd (33.3%) of the final monthly Total Disability Income Benefit paid before the life assured ceased to be totally disabled. The Partial Disability Bridging Benefit is paid at the end of the final month in respect of which a Total Disability Income Benefit was paid for the life assured . Payment of the Partial Disability Bridging Benefit does not affect the amount of the Partial Disability Income Benefit (as set out in Section 6) and does not affect the amount of the Enhanced Partial Disability Income Benefit (as set out in Section 8). The Partial Disability Bridging Benefit is payable once for all claims resulting from the same or a related injury or illness. The Partial Disability Bridging Benefit is not payable where a lump sum payment has been made in lieu of monthly benefit payments, as set out in Section 1. 8. What is the Enhanced Partial Disability Income Benefit and when will AIA pay it?
+10.
+What is the Optional Claim Indexation Benefit?
+The Optional Claim Indexation Benefit applies only if “CPI Linked” is specified in the schedule . Where the Optional Claim Indexation Benefit is selected, the Income Protection Benefit sum assured shown in the schedule will increase at the start of each policy year by an amount we determine with reference to the annual percentage increase in the consumers price index , subject to any maximum benefit amounts allowable under the benefit. If the consumers price index falls in any year, the Income Protection Benefit sum assured will not decrease.
+11.
+Rehabilitation and Support
+On receiving notification of a new or potential claim, we will appoint the life assured a Case Manager, who will work with
+1115 AL-IND version 5 Effective 12 May 2026
+Page 4 of 12
+
+[page 5 of 12]
+AIA Living Personal IP Indemnity Policy Wording
+the life assured to understand their personal situation and assist them with the claims process. They will work with the life assured to consider what rehabilitation or functional support could assist the life assured’s return to work or improve their capacity to work, either during or after the waiting period as appropriate in the opinion of AIA . Acceptance of any costs associated with the agreed rehabilitation and functional support by AIA does not mean that we will accept liability for any other benefit under this appendix .
+any other source.
+14.
+What is the Bed Confinement Benefit and when will AIA pay it?
+If, at any time during the waiting period the life assured is confined to bed under full-time care for more than three days and is in an occupation class other than five, then AIA will pay a Bed Confinement Benefit for each complete 24 hour period after the first 72 hours of bed confinement. This benefit will be a daily benefit equivalent to 1/365 th of the benefit amount shown in the schedule , which you would be entitled to if the life assured was totally disabled and the waiting period was over. AIA will continue to pay the benefit until the waiting period is over, or until the life assured is no longer confined to bed under full-time care , whichever is the earlier. If you have chosen the Premier Cover Option and at any time during the waiting period the life assured is confined to bed under full-time care for more than three days, then AIA will also pay the Bed Confinement Benefit for each complete 24 hour period within the first 72 hours of bed confinement.
+12.
+What is Vocational Assistance and when will AIA pay it?
+AIA may agree to pay for vocational assistance for the life assured if, in AIA’s opinion, the life assured is unlikely to return to paid work in their pre-disability occupation without assistance. The Case Manager appointed to the life assured’s claim will work to understand their personal situation and consider what assistance could aid the life assured’s return to gainful employment at an earlier date than would otherwise be possible. In all cases: > the assistance must be approved in advance by AIA , and reviewed regularly; and > the life assured must actively participate and comply with the assistance as agreed with AIA ; and > the total amount which AIA will pay for any vocational assistance is limited to a maximum of 12 times the monthly benefit amount as calculated in Section 2, except if the benefit payment period is one, two or five years, where the total amount is limited to 6 times the monthly benefit amount as calculated in Section 2; and > the life assured must be receiving a Total Disability Income Benefit or Partial Disability Income Benefit when the assistance begins. Any benefit which AIA may agree to pay is to be reduced by any vocational assistance costs you or the life assured recover, or are entitled to recover, from any other source
+15.
+Home Care Benefit
+If the life assured is totally disabled , AIA will pay a Home Care Benefit monthly in arrears in addition to the Total Disability Income Benefit. The Home Care Benefit is a payment for the services of the person providing care to the life assured and is payable to the person providing care, not the policy owner named in the schedule . The person providing the care will not be acting as an employee, contractor or agent of AIA . A registered medical practitioner must certify that the life assured requires full-time care at home or in a hospital because of the life assured’s disability. The full-time care must be provided by either: > a person whose profession it is to provide nursing or similar services; or > a direct family member who is in paid work for at least 28 hours per week immediately before the life assured became totally disabled and who has given up that work to care for the life assured . The amount of the Home Care Benefit each month will be the lowest of:
+13.
+What is the Home Modification or Equipment Expenses Benefit and when will AIA pay it?
+> 1/12 th of the benefit amount shown in the schedule ; or
+AIA may agree to pay you an additional lump sum payment of up to 12 times the monthly benefit amount calculated in Section 2. This payment is to cover the costs of buying specialised equipment or completing home alterations that, because of the life assured’s total disability , have become necessary, in AIA’s opinion after considering the recommendation of an occupational therapist or an appropriate specialist approved by AIA . You must apply in writing to AIA before incurring these costs. Any benefit that AIA may agree to pay for the specialised equipment or home alterations will be reduced by any costs of buying specialised equipment or completing home alterations you or the life assured recover, or are entitled to recover from
+> $2,500; or
+> the cost of the care, if it is provided by a person whose profession it is to provide nursing or similar services; or > if the care is provided by a direct family member, 75% of the pre-tax income we determine that family member has lost because he or she has given up work to care for the life assured . Where the Home Care Benefit is payable for an incomplete month, payment will be at the rate of 1/30 th (one-thirtieth) of the monthly amount per day.
+1115 AL-IND version 5 Effective 12 May 2026
+Page 5 of 12
+
+[page 6 of 12]
+AIA Living Personal IP Indemnity Policy Wording
+The Home Care Benefit starts from the expiry of the first 3 successive days of the life assured receiving full-time care and ends when: > a registered medical practitioner no longer certifies that full-time care is required; or > we have paid the Home Care Benefit for 6 consecutive months; or
+reinstatement.
+If the life assured becomes entitled to a Total Disability Income Benefit or a Partial Disability Income Benefit within 12 months following the reinstatement of cover under this benefit appendix , then the amount of benefit payable will be calculated using Section 2 or Section 6 (respectively) of this benefit appendix , provided that the 12 month period used for calculating the life assured’s pre-disability income will be a combination of:  the period from the date of reinstatement to the date of disablement ; and  the period immediately prior to the commencement of the suspension event that is needed to make up the balance of the 12 month period.
+> the benefit payment period ends;
+whichever comes first.
+For any period where the life assured is entitled to a Permanent Disablement Benefit, the Home Care Benefit will not be payable.
+16.
+When can you suspend cover and when will AIA reinstate cover?
+17.
+What is the Future Insurability Benefit?
+A life assured can suspend their cover under this benefit appendix for up to 12 months if they:
+The Future Insurability Benefit is a built-in benefit for a life assured unless you have selected the Optional Claim Indexation Benefit (specified in the schedule as CPI linked). If you have selected the Optional Claim Indexation Benefit, the Future Insurability Benefit is not available. The Future Insurability Benefit will only apply for a life assured if the Income Protection Benefit sum assured shown in the schedule for the life assured together with any previous Future Insurability Benefit increases for the life assured is less than $240,000 per annum. Future Insurability Benefit increases cannot be used to increase the Income Protection Benefit sum assured to more than $240,000 per annum, or to be in excess of the agreed replacement ratio disclosed in your application. If the Future Insurability Benefit applies for a life assured , then the Income Protection Benefit sum assured for the life assured may be increased without the need to provide further medical evidence, subject to the following conditions: > The Income Protection Benefit sum assured for the life assured may be increased by up to the lower of $12,000 per annum or 10% of the Income Protection Benefit sum assured for the life assured set out in the schedule . > You can only apply for an increase in cover under this Future Insurability Benefit for a life assured once every three years or in the case relating to an increase in income once per year, and you must apply to AIA in writing within 60 days either side of the applicable policy anniversary date . > If the increase is related to your increase in income you must apply in writing to AIA and provide evidence satisfactory to AIA of the life assured’s increased income within 60 days of the increase in income. This evidence is either:
+> go on parental leave;
+> go on leave without pay for any reason;
+> become unemployed or redundant;
+> experience at least a 20% reduction in pay (comparing the most recent payslip against a previous payslip from the same year); or > if self-employed, experience a 30% reduction in revenue (by comparing one month’s revenue against the same month for the previous year),
+provided that:
+> you notify AIA within three months of one of the above listed suspension events occurring and provide evidence to AIA of the suspension event; and
+> AIA acknowledges in writing receipt of that notification.
+Cover for the life assured will be suspended from the date set out in AIA’s written acknowledgment. No premium will be payable during the period that the cover is suspended. No claim under this benefit appendix will be payable during, or for any disability that occurs during, the period that the cover is suspended. A claim may only be payable if the life assured first meets the criteria for an eligible claim under this policy after their cover is reinstated. Cover under this benefit appendix may be reinstated at the end of the suspension period in accordance with this Section without the need to provide further medical evidence, provided that the benefit has been suspended for no longer than 12 months. At the end of the suspension period, the benefit will be automatically reinstated for the life assured. Cover for the life assured will be reinstated from the date set out in AIA’s written acknowledgement. The premium payable for the reinstated benefit will be based on AIA’s premium rates at the time of the
+-
+confirmation of the increase in salary from the life assured’s employer; or In the case of a life assured who is self-employed, the life assured’s annual accounts showing an increase in the Net Profit amount before tax, less expenses.
+-
+1115 AL-IND version 5 Effective 12 May 2026
+Page 6 of 12
+
+[page 7 of 12]
+AIA Living Personal IP Indemnity Policy Wording
+> The total of all Future Insurability Benefit increases for a life assured cannot exceed 100% of the original Income Protection Benefit sum assured for the life assured . > AIA will increase the Income Protection Benefit sum assured for the life assured from the date we accept your request. > AIA will not accept an application under this Future Insurability Benefit to increase cover for a life assured if you are entitled to or are receiving payment of a claim for a disability that the life assured suffered on or before the date of the application. > A life assured over the age of 55 is not eligible for Future Insurability Benefit increases. > Any exercise of the Future Insurability Benefit will require an increase in premium . The premium increase will be based on AIA’s premium rates applicable at the time the Future Insurability Benefit is exercised.
+-
+the risk commencement date ; or
+-
+the most recent reinstatement of this Income Protection Benefit; and
+the life assured is on maternity leave .
+
+You must notify AIA in writing when the premium is to be waived. This Pregnancy Premium Waiver will cease when six consecutive months premium have been waived.
+20. What is the Return Home Benefit?
+If the life assured is outside of New Zealand and suffers, for the first time a total disability , upon acceptance of the claim AIA will pay the lesser of:
+ three times the monthly benefit specified in the schedule ; or
+ a single standard economy flight back to New Zealand for the life assured and one support person. In total the maximum AIA will pay over the life of the Policy under the Return Home Benefit is $10,000. No payment will be made if the life assured is covered for the same event with a travel insurance provider.
+18.
+What is the Back to Work Payment and when will AIA pay it?
+AIA will pay you a Back to Work Payment if:
+> a Total or Partial Disability Income Benefit has been paid for a life assured for a continuous period of longer than 12 months but less than 24 months; and > the life assured engages in work or carries on business; and > the life assured is no longer totally disabled or partially disabled ; and
+21. What is the Childcare Support Benefit?
+AIA will pay a Childcare Support Benefit in the following circumstances:  the life assured is totally disabled or partially disabled and is receiving a monthly benefit; and  as a direct result of the life assured’s disability, additional childcare costs are incurred over and above any childcare arrangements which existed prior to the life assured becoming totally disabled or partially disabled , in respect of any dependent child who is under the age of 14 years old; and  the additional childcare services are not being provided by you or an immediate family member, in AIA ‘s sole opinion. The amount AIA will reimburse under the Childcare Support Benefit is the lesser of:
+> the life assured has ceased to be on claim with AIA .
+The Back to Work Payment is a lump-sum payment equivalent to 3 times the life assured’s monthly disability benefit for the last full month immediately before the claim ceased, as calculated in accordance with Section 2 for a total disability and Section 6 and (if applicable) Section 7 for a partial disability . AIA will only pay the Back to Work Payment once per claim across all AIA policies, and will not be paid where the benefit payment period is one or two years. If the life assured suffers a recurrence of the same or a related illness or injury within 12 months of a Total or Partial Disability Income Benefit ceasing, then any Back to Work Payment made in respect of that claim will be deducted from the amount of the Total or Partial Disability Income Benefit payable.
+the actual additional childcare costs; or
+
+ $800 per month per dependent child under the age of 14 years old.
+This Childcare Support Benefit is payable until the earlier of:
+19. What is the Pregnancy Premium Waiver?
+ the life assured no longer being totally disabled or partially disabled ; or  six monthly Childcare Support Benefit payments have been made; or
+AIA will waive the premium for this Income Protection Benefit for six consecutive months at any stage between the second trimester and six months after the life assured’s pregnancy finishes if the life assured becomes pregnant while this Income Protection Benefit is in force provided:  the life assured provides AIA with a confirmation of pregnancy from an appropriate registered medical practitioner ; and
+ the end of the benefit payment period is reached; or
+the end of the benefit term is reached.
+
+You will need to provide evidence satisfactory to AIA each month of the additional childcare fees that have been paid
+ the birth of the child occurs at least 12 months after:
+1115 AL-IND version 5 Effective 12 May 2026
+Page 7 of 12
+
+[page 8 of 12]
+AIA Living Personal IP Indemnity Policy Wording
+before AIA will make a payment under the Childcare Support Benefit.
+ the payment of premiums must be up to date and are not being waived for any reason. If AIA agrees to reduce the waiting period , the following applies:  premiums will increase with any reduction in waiting period ;  only one reduction in waiting period under this benefit is allowed without evidence of health;  any loadings, exclusions or special terms on the cancelled policy will be applied to the reduced waiting period benefit.
+This payment is in addition to the monthly benefit.
+22. What is the Waiting Period Reduction Benefit? If this Income Protection Benefit has a waiting period of 26, 52 or 104 weeks the life assured can reduce this waiting period , without providing any further medical evidence, if the life assured’s Business Overheads, Business Continuity, Rural Continuity or Locum Cover is cancelled due to:  the life assured no longer being actively engaged in the business; or
+23.
+What is the Concurrent Waiting Period Benefit?
+the business is sold; or
+
+If the life assured is disabled and able to receive an Income Protection Benefit under this policy, and they also hold a Business Overheads, Business Continuity, Rural Continuity or Locum Cover policy, then the waiting periods applicable to the life assured under each policy will be served concurrently from the disablement date . If during the waiting period under this policy, the life assured is able to claim the Recurrent Disablement under a Business Overheads, Business Continuity, Rural Continuity or Locum Cover policy, the portion of their waiting period for their Income Protection under this policy will be considered to have been continuous and only the remaining period will apply.
+the business is no longer actively trading .
+
+The waiting period for this Income Protection Benefit will reduce to align with the waiting period on the cancelled Benefit. The reduced waiting period on this Income Protection will apply to the lesser of:  the monthly benefit for the Business Overheads, Business Continuity, Rural Continuity or Locum Cover at the time it was cancelled; or
+ the monthly benefit for this Income Protection Benefit.
+For example:
+A life assured has the following:
+24.
+What is the Optional Mental Health Limitation?
+ Disability Income Protection with a $2,500 per month benefit and a 52 week waiting period ; and  Business Continuity with a $1,000 per month benefit with a 13 week waiting period . When Business Continuity is cancelled the Disability Income Protection Benefit waiting period would be reduced to a:  13 week waiting period with a $1,000 per month benefit; and
+The Optional Mental Health Limitation applies only if it is shown in the schedule and if no mental health exclusion applies for this appendix . If the Optional Mental Health Limitation applies, AIA will only pay a claim due to a mental health disorder for a maximum of two years throughout the life of this appendix . The Optional Mental Health Limitation payment period will commence if in AIA’s opinion, after considering the advice of a registered medical practitioner and other relevant information, the life assured is deemed to be totally disabled or partially disabled as a result of a mental health disorder .
+ 52 week waiting period with a $1,500 per month benefit.
+The following conditions apply:
+25.
+Extra Benefits for the Premier Cover Option
+ Within 60 days of the cancellation of cover the life assured must notify AIA in writing with supporting evidence that the life assured is no longer actively engaged in the business or the business has been sold or the business is no longer actively trading ;  the life assured is no longer actively engaged in the business due to reasons other than retirement, redundancy, ill health or incapacity;
+If you have chosen the Premier Cover Option, then the following extra benefits also apply:
+a) Extra Cash Benefit
+The Extra Cash Benefit will be paid monthly in advance and in addition to the Total Disability Income Benefit, for the first three months after the waiting period while the Total Disability Income Benefit is being paid. The Extra Cash Benefit is equivalent to 1/3 rd (33.3%) of the Total Disability Income Benefit for each month. Where applicable and only in respect of the period for which the Extra Cash Benefit is payable, the Extra Cash Benefit
+ the life assured must be under the age of 60;
+ if the life assured has had a claim paid or is entitled to be paid a claim under any policy with us or any other insurance company the request will be referred to a AIA underwriter and full underwriting terms and conditions may apply;
+1115 AL-IND version 5 Effective 12 May 2026
+Page 8 of 12
+
+[page 9 of 12]
+AIA Living Personal IP Indemnity Policy Wording
+will be included together with the Total Disability Income Benefit in the calculation of the lump sum payment AIA may choose to make in lieu of up to 3 monthly benefit payments, as set out in Section 1.
+life assured’s registered medical practitioner or a registered medical practitioner approved by AIA considers necessary; and
+> any other information that AIA may deem relevant to the assessment of the claim.
+This benefit is only payable once for a life assured .
+b) Permanent Disablement Benefit
+27.
+Ongoing Claim Requirements
+A Permanent Disablement Benefit will be paid if:
+For ongoing claims AIA will require:
+> a Total Disability Income Benefit has been paid for 24 consecutive months in respect of a life assured ; and
+> Completion of a monthly medical certificate by a registered medical practitioner (at your expense) in a form from time to time approved by AIA for the purposes of determining ongoing entitlement to payment of an Income Protection Benefit. > Completion of a monthly individual declaration by the life assured in a form from time to time approved by AIA , which may include completion of daily activity logs detailing the life assured’s functional activities for the purposes of determining ongoing entitlement to payment of an Income Protection Benefit. > Proof of any remunerated or non-remunerated work completed during the claim period. > Any other information that AIA may deem relevant to the ongoing assessment of the claim.
+> in AIA’s opinion that life assured is permanently disabled .
+The benefit is a monthly payment equivalent to 1/3 rd (33.3%) of the life assured’s monthly Total Disability Income Benefit as calculated in Section 2. The additional monthly payment will commence from the date when the Permanent Disablement Benefit claim is accepted by AIA . The benefit will cease when the earliest of the following occurs:
+> the benefit payment period ends; or
+> the life assured dies; or
+> the life assured is no longer permanently disabled .
+c) Bereavement Grant
+28.
+When will AIA cease paying a benefit?
+If the life assured dies while AIA is paying a Total Disability Income Benefit for that life assured , then AIA will pay a Bereavement Grant of three times the Total Disability Income Benefit as calculated in Section 2.
+AIA will cease paying a benefit if:
+(a) The life assured fails to undergo and complete:
+any surgical operation; and/or
+−
+No Bereavement Grant will be paid if:
+any medical rehabilitation; and/or
+−
+> the life assured dies as a direct or indirect result of deliberately injuring himself or herself or attempting to do so; or
+any social rehabilitation; and/or
+−
+any vocational rehabilitation,
+−
+> the life assured dies during the waiting period .
+which a registered medical practitioner approved by AIA considers reasonably necessary.
+AIA will only pay one Bereavement Grant for each life assured across all AIA policies .
+(b) The life assured fails to undertake any medical examinations that AIA requires the life assured to have, at our expense. (c) The life assured fails to comply with the requirements of Section 27 above. (d) AIA determines that the life assured is no longer totally disabled or partially disabled . (e) The benefit payment period expires in relation to the life assured . (f) The life assured or anyone acting on behalf of the life assured makes a false or fraudulent statement in respect of a claim or supports any claim with false evidence. (g) The life assured is in prison or sentenced to home detention for any reason.
+26.
+How to make a claim
+To make a claim, the relevant procedures in the section of your AIA Living policy entitled ‘How to make a claim’ must be followed. In addition, for a Disability Income Protection Benefit claim, AIA will require: > the life assured to be examined by a registered medical practitioner acceptable to AIA , before accepting liability for a claim; and > a AIA claims form completed by the life assured and a registered medical practitioner (at your expense); and > other information which AIA may reasonably request to help assess the claim, which may include evidence of monthly earnings, taxable income, business accounts, ACC details or similar; and > the life assured to undergo medical and/or surgical treatment (including any operation or vocational, medical and/or social rehabilitation) at your expense which the
+(h) The life assured dies.
+If AIA ceases paying a benefit in accordance with paragraphs (a), (b) or (c) and the life assured subsequently complies with the relevant requirement(s), then:
+1115 AL-IND version 5 Effective 12 May 2026
+Page 9 of 12
+
+[page 10 of 12]
+AIA Living Personal IP Indemnity Policy Wording
+> The date that the life assured complied with the relevant requirement(s) will, subject to the provisions of this appendix, be treated as the disablement date for a new claim.
+Activities of Daily Living
+Activities of Daily Living are:
+> Bathing and showering.
+> Dressing and undressing.
+> The waiting period will be waived for the new claim.
+> Eating and drinking.
+> If the benefit payment period is one, two or five years, the original claim and the new claim will be considered to be the same claim in respect of the benefit payment period . > No monthly benefit payments will be payable retrospectively for any period of time before the date that the life assured subsequently complies with the relevant requirement(s).
+> Using a toilet.
+> Moving from place to place by walking, in a wheelchair or with a walking aid. The term for which the life assured is insured for the Income Protection Benefit as stated in the schedule . The maximum term for which the Income Protection Benefit is payable as stated in the schedule . For benefit payment periods of one, two or five years: a) the benefit payment period commences at the end of the waiting period and ceases either one year, two years or five years (whichever is stated in the schedule ) later or when the life assured turns 65, whichever is earlier; and b) the one year, two year or five year period (whichever is stated in the schedule ) is the total period for which benefits will be payable for all claims arising from the same or a related illness or injury. The date the life assured became totally disabled or partially disabled . Care for 16 hours per day or more, provided by a nursing service approved by AIA whose profession it is to provide nursing services or provided by a registered medical practitioner . Any income that the life assured receives or is entitled to receive from his or her current or former employment or business/es. This includes:
+benefit term
+29.
+When will this appendix terminate for a life assured ?
+benefit payment period
+This appendix will terminate and eligibility for the Income Protection Benefit will cease for a life assured : > At the expiry of the benefit term as shown in the schedule .
+> When the life assured dies.
+> When the benefit is cancelled.
+30.
+Exclusions – When AIA won’t pay a benefit
+AIA will not pay any of the benefits listed in this appendix where any of the following directly or indirectly cause or contribute to the disability: > The life assured deliberately injures himself or herself or attempts to do so. > The life assured engages in or is part of any conduct that is criminal. > Pregnancy of, or childbirth by, the life assured , unless the disability lasts for more than 90 days after the end of pregnancy, in which case the waiting period will start from the 91 st day. > The life assured does not comply with the treatment recommended by the attending treatment providers. If the life assured is imprisoned or sentenced to home detention for any reason, no monthly benefit will be payable during the term of imprisonment or home detention.
+disablement date
+full-time care
+income
+31.
+Key terms
+actively engaged
+Working an average of more than 30 hours per week in the six months prior to cancellation of Business Overheads, Business Continuity, Rural Continuity or Locum Cover. Undertaking any activity carried on for the production of income from selling goods or performing services.
+a)
+Life assured’s share of profits of the business (and/or any associated entities), after the
+actively trading
+deduction of business expenses, which are
+determined in line with the usual manner that profits and/or losses of the business
+1115 AL-IND version 5 Effective 12 May 2026
+Page 10 of 12
+
+[page 11 of 12]
+AIA Living Personal IP Indemnity Policy Wording
+(and/or associated entities) are divided between the life assured and any co-owners, partners, shareholders or beneficiaries of the business (and/or associated entities); and b) Any other remuneration, whether in the form of salary or wages, superannuation, director’s fees, allowances or any other monetary or nonmonetary benefit, the life assured receives or is entitled to receive directly or indirectly from his or her employment or the business. The current year’s taxation liability excludes any tax losses which have been brought forward from previous years. For the purposes of this definition, the life assured is deemed to be in business rather than employment if he or she derives income (either realised or unrealised) from a company or other legal entity, and he or she has effective control, either directly or indirectly (e.g. through a trust, partnership or other legal structure) of more than 25% of the shares or ownership in that company or other legal entity. His or her income will be assessed in accordance with the amounts referred to in both (a) and (b) above. A mental health disorder including but not limited to anxiety disorders, chronic fatigue syndrome, depression, stress, fatigue, exhaustion, psychiatric complications of physical disorders, behavioural or any other mental or functional nervous disorder and/or the treatment or complications of that disorder.
+disability (if the life assured can perform the activity on his or her own by using special equipment, then AIA will treat the life assured as being able to perform that activity). Alternatively, the life assured is unlikely to ever be able to perform again, at least one of the Activities of Daily Living which, together with a reduction in the life assured’s intellectual capacity, means that the life assured will likely always require full-time care .
+An individual, employer, company, partnership, association, organisation or trust.
+person
+post-disability income
+The last month’s income .
+pre-disability income
+The average monthly income during a continuous 12 month period chosen by the life assured from the 36 months immediately before the disablement date .
+However, if the life assured becomes totally disabled or
+partially disabled when the life assured has been on parental leave for 12 months or less or on a work sabbatical , then the pre- disability income is the average monthly income during a continuous 12 month period chosen by the life assured from the 36 months immediately before the life assured went on leave.
+mental health disorder
+totally disabled
+See Section 3 of this appendix for the meaning of this key term.
+Total disablement has a corresponding meaning.
+unemployed
+A person who is not engaged in remunerated work or business activities, for 10 hours or more a week. This definition does not include a person on leave without pay, parental, study, long service or sabbatical leave. The period stated as such in the schedule for which no Total or Partial Disability Income Benefit is payable.
+partially disabled
+See Section 5 of this appendix for the meaning of this key term.
+permanently disabled
+In the opinion of AIA , the life assured cannot and is unlikely to ever be able to perform again, at least two of the five Activities of Daily Living without assistance from another person because of the effects of an illness or injury which caused the life assured’s
+waiting period
+work sabbatical
+Voluntary leave without pay, approved by the employer, and
+1115 AL-IND version 5 Effective 12 May 2026
+Page 11 of 12
+
+[page 12 of 12]
+AIA Living Personal IP Indemnity Policy Wording
+where the life assured has the employer’s agreement to return to the same role within 12 months or less.
+1115 AL-IND version 5 Effective 12 May 2026
+Page 12 of 12
