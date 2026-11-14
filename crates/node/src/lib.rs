@@ -23,5 +23,6 @@ pub fn modules() -> Result<Vec<ModuleSpec>, String> {
         ic_pricing::module_spec()?,            //
         ic_reinsurance::host::module_spec()?,  //
         ic_underwriting::module_spec()?,       //
+        ic_wellness::module_spec()?,           //
     ])
 }

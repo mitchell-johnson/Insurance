@@ -778,7 +778,8 @@ Written 12 November 2026 by the thread "Build claims operations". The full descr
     - The premium basis comes from the option, and limited pay stops billing.
     - Each life's sums insured are passed to the discount chain.
 - **Tests:** `crates/product/tests/aia.rs` (products, menus, loader refusals, discount) and `crates/sim/tests/aia.rs` (issue, five years of billing and expiry, limited pay, discount on the bill, claim facts). `crates/underwriting/tests/aia_journeys.rs` takes each of the ten products from quote through underwriting, reinsurance capacity, issue, three months billed as quoted and paid, to a paid claim.
-- **Left for other owners:** see "Not built yet" in `docs/aia-products.md`. This covers claims enforcing the option terms and built-in benefits, the underwriting occupation and age tests, a Vitality wellness module, Cover for Life paid-up and premium suspension in the core. The reinsurance thread has already added treaty entries for the AIA products.
+- **Wellness (AIA Vitality):** `crates/wellness`, hosted on the nodes as module `wellness`. It sends `SetEntitlement` for `aia-vitality` at the discount each member holds (docs/wellness.md). The Vitality programme's feed into it is not built: AIA has not given the format.
+- **Left for other owners:** see "Not built yet" in `docs/aia-products.md`. The core is building Cover for Life paid-up and premium suspension. The AIA thread is building the multi-benefit discount across policies, money-capped special events increases and the Life Future Insurability option.
 - **Needs Mitchell:** the real rates and factors, and AIA's Essentials Life wording as text. Use of AIA's names is settled.
 
 ## Area: group scheme administration (`ic-group`)
