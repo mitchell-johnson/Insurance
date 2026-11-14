@@ -6,12 +6,16 @@
 
 use std::collections::BTreeMap;
 
-use ic_core::{Event, EventRecord, PolicyStatus};
+use ic_core::{Event, EventRecord, PolicyStatus, Standing};
 use serde_json::json;
 
 use crate::kinds::DocumentKind;
 use crate::model::Trigger;
 use crate::state::standing_notice;
+
+/// The detail naming the scheme member a document is for. Such a document
+/// goes to the member, about their own cover only.
+pub const MEMBER: &str = "member";
 
 /// The purpose of the notice that a discount is lost.
 pub const DISCOUNT_CHANGE: &str = "discount_change";
@@ -70,6 +74,43 @@ pub fn triggers(record: &EventRecord) -> Vec<Trigger> {
             })
             .into_iter()
             .collect(),
+        // A scheme member's own cover going into grace is warned to the
+        // member, as a notice whose delivery the core waits on before that
+        // cover lapses (`member_lapse:<life>`).
+        Event::MemberStandingChanged {
+            policy,
+            life,
+            to: Some(Standing::InGrace),
+            oldest_unpaid_due,
+            ..
+        } => {
+            let purpose = ic_core::voluntary::member_lapse_notice(life);
+            let mut t = trigger(record, policy, DocumentKind::LapseNotice, Some(&purpose));
+            t.detail.insert(MEMBER.into(), json!(life.0));
+            if let Some(due) = oldest_unpaid_due {
+                t.detail.insert("oldest_unpaid_due".into(), json!(due.to_string()));
+            }
+            vec![t]
+        }
+        // The member's cover written back: they are told what is restored
+        // and what they were billed for the time it was off.
+        Event::MemberCoverReinstated {
+            policy,
+            life,
+            reference,
+            effective,
+            arrears_minor,
+            billed_minor,
+            ..
+        } => {
+            let mut t = trigger(record, policy, DocumentKind::Endorsement, None);
+            t.detail.insert(MEMBER.into(), json!(life.0));
+            t.detail.insert("reference".into(), json!(reference));
+            t.detail.insert("effective".into(), json!(effective.to_string()));
+            t.detail.insert("arrears".into(), json!(arrears_minor));
+            t.detail.insert("billed".into(), json!(billed_minor));
+            vec![t]
+        }
         Event::PolicyStatusChanged {
             policy,
             to: to @ (PolicyStatus::Lapsed | PolicyStatus::Cancelled | PolicyStatus::Expired | PolicyStatus::Surrendered | PolicyStatus::Matured),

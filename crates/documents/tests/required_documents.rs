@@ -46,6 +46,8 @@ struct Core {
     down: Arc<Mutex<bool>>,
     /// Cover code to the sum its layers now hold, as a claim leaves them.
     cut: Arc<Mutex<std::collections::BTreeMap<String, i64>>>,
+    /// Further changes to the policy as the core holds it.
+    edit: Arc<Mutex<Option<Box<dyn Fn(&mut ic_core::policy::Policy) + Send>>>>,
 }
 
 impl Policies for Core {
@@ -63,6 +65,9 @@ impl Policies for Core {
                     layer.sum_insured_minor = *sum;
                 }
             }
+            if let Some(edit) = self.edit.lock().unwrap().as_ref() {
+                edit(&mut p);
+            }
             PolicyRecord {
                 policy: p,
                 outstanding_minor: Some(0),
@@ -77,6 +82,7 @@ const WORDING: &str = "This policy pays the sum insured.";
 const LAPSE: &str = "Dear {{name}}. Policy {{policy}} is unpaid since {{oldest_unpaid_due|date}}.";
 const PREMIUM: &str = "Premium for {{policy}}, {{period_start|date}} to {{period_end|date}}: {{base|money}}.{{#each discounts}} {{name}} -{{amount|money}}.{{/each}} Premium {{net_premium|money}}, charges {{charges|money}}, total {{total|money}}.";
 const DISCOUNT: &str = "Dear {{name}}. Your {{tier}} discount on {{policy}} ends on {{from|date}}.";
+const REINSTATED: &str = "Dear {{name}}. Your cover on {{policy}} is back from {{effective|date}}.{{#each covers}} {{cover}} {{sum_insured|money}}.{{/each}} Billed {{billed|money}}.";
 const RECEIPT: &str = "Dear {{name}}. We received {{allocated|money}} for policy {{policy}} (receipt {{receipt}}).";
 
 fn sample() -> Value {
@@ -86,7 +92,7 @@ fn sample() -> Value {
         "oldest_unpaid_due": "2027-11-15", "allocated": 12345, "receipt": "rc-1",
         "period_start": "2027-11-15", "period_end": "2027-12-14", "base": 5000,
         "discounts": [{ "name": "Multi-policy", "amount": 500 }], "net_premium": 4500, "charges": 0, "total": 4500,
-        "tier": "gold", "from": "2028-01-15"
+        "tier": "gold", "from": "2028-01-15", "effective": "2027-12-01", "billed": 1200
     })
 }
 
@@ -192,6 +198,7 @@ impl World {
             cluster: Arc::new(Mutex::new(cluster)),
             down: Default::default(),
             cut: Default::default(),
+            edit: Default::default(),
         };
         let mut world = Self { driver, core, next_seq: 1 };
         world.relay().await;
@@ -336,6 +343,104 @@ async fn a_partial_trauma_payment_brings_one_new_schedule_with_the_cover_left() 
     assert_eq!(
         w.driver.read(&document.id).await.unwrap().text,
         "Schedule KTL00000001 for Aroha Ngata, term-life from 15 November 2027. life $475,000.00. trauma $75,000.00."
+    );
+}
+
+/// Purpose: a scheme member whose own cover goes into grace is sent the
+/// lapse notice themselves, as a notice whose purpose names their life
+/// (`member_lapse:<life>`), with no copy to the scheme's lender; when the
+/// cover is reinstated they are sent a confirmation showing their own
+/// cover and nobody else's; a member linked to no person is left for one.
+/// Why it matters: the core holds a member's cover until this notice is
+/// proven delivered, so it must reach the member, not the employer; and
+/// one member's letter must never show another member's cover.
+#[tokio::test]
+async fn a_scheme_member_is_warned_and_told_of_reinstatement_themselves() {
+    let w = World::new(&[
+        ("lapse", DocumentKind::LapseNotice, LAPSE),
+        ("reinstated", DocumentKind::Endorsement, REINSTATED),
+    ])
+    .await;
+    *w.core.edit.lock().unwrap() = Some(Box::new(|p: &mut ic_core::policy::Policy| {
+        let mut record = p.lives.values().next().unwrap().clone();
+        for (id, linked) in [("life-7", Some("member-7")), ("life-8", None)] {
+            record.id = ic_core::LifeId(id.into());
+            record.kind = ic_core::policy::LifeKind::UnnamedMember {
+                member_ref: id.into(),
+                linked_party: linked.map(|l| ic_core::PartyId(l.into())),
+            };
+            p.lives.insert(record.id.clone(), record.clone());
+        }
+        let life = p.covers.get_mut("life").unwrap();
+        let mut layer = life.layers[0].clone();
+        layer.id = 9;
+        layer.life = ic_core::LifeId("life-7".into());
+        layer.sum_insured_minor = 20_000_000;
+        life.layers.push(layer);
+    }));
+    w.driver.directory.set("member-7", Channel::Email, "Mere Tipene", "mere@example.nz");
+    let lender = CoreEvent::Interest(InterestEvent::Recorded {
+        owner: None,
+        kind: Default::default(),
+        policy: the_policy(),
+        interest: "i-1".into(),
+        party: party("lender"),
+        notice_received: open(),
+        extent_minor: None,
+        effective_from: open(),
+    });
+    let grace = |seq: u64, life: &str| {
+        event(
+            seq,
+            CoreEvent::MemberStandingChanged {
+                policy: the_policy(),
+                life: ic_core::LifeId(life.into()),
+                from: Some(Standing::Paid),
+                to: Some(Standing::InGrace),
+                oldest_unpaid_due: Some(open()),
+            },
+        )
+    };
+    let reinstated = event(
+        4,
+        CoreEvent::MemberCoverReinstated {
+            policy: the_policy(),
+            life: ic_core::LifeId("life-7".into()),
+            reference: "ri-7".into(),
+            layers: vec![("life".into(), 9)],
+            effective: NaiveDate::from_ymd_opt(2027, 12, 1).unwrap(),
+            arrears_minor: 3_000,
+            billed_minor: 1_200,
+        },
+    );
+    w.observe(9, vec![event(1, lender), grace(2, "life-7"), grace(3, "life-8"), reinstated]).await;
+    let pass = w.pass().await;
+    assert_eq!(pass.issued, 2, "{pass:?}");
+    assert!(pass.errors.iter().any(|e| e.contains("member life-8 is linked to no person")), "{pass:?}");
+
+    let notice = w.driver.document("required:9-2:LapseNotice").await.unwrap();
+    assert_eq!(notice.owner, party("member-7"));
+    assert_eq!(notice.notice.as_ref().unwrap().purpose, "member_lapse:life-7");
+    assert_eq!(notice.lives, ["life-7"]);
+    let to: Vec<_> = notice
+        .deliveries
+        .iter()
+        .map(|d| (d.recipient.party.0.clone(), d.recipient.relationship.clone()))
+        .collect();
+    assert_eq!(
+        to,
+        vec![("member-7".to_string(), Some("member".to_string()))],
+        "the scheme's lender is not copied"
+    );
+    assert_eq!(
+        w.driver.read(&notice.id).await.unwrap().text,
+        "Dear Mere Tipene. Policy KTL00000001 is unpaid since 15 November 2027."
+    );
+    let letter = w.driver.document("required:9-4:Endorsement").await.unwrap();
+    assert_eq!(letter.owner, party("member-7"));
+    assert_eq!(
+        w.driver.read(&letter.id).await.unwrap().text,
+        "Dear Mere Tipene. Your cover on KTL00000001 is back from 1 December 2027. life $200,000.00. Billed $12.00."
     );
 }
 

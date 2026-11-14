@@ -139,6 +139,8 @@ pub const PLACEHOLDERS: &[Placeholder] = &[
         "Premium change",
         Some(30)
     ),
+    // A scheme member's own cover written back after it lapsed.
+    placeholder!("member-cover-reinstated", "member-cover-reinstated", Endorsement, "Cover reinstated", None),
 ];
 
 impl Placeholder {

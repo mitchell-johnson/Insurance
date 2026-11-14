@@ -66,6 +66,7 @@ fn sample(id: &str) -> Value {
         "lapse-notice" | "suspension-notice" => policy(json!({ "outstanding": 4_635, "oldest_unpaid_due": "2027-11-15" })),
         "policy-schedule" | "avoidance-notice" => policy(json!({})),
         "policy-ended" => policy(json!({ "ended": "lapsed" })),
+        "member-cover-reinstated" => policy(json!({ "member": "life-7", "reference": "ri-7", "effective": "2027-12-01", "arrears": 3_000, "billed": 1_200 })),
         "premium-receipt" => policy(json!({ "receipt": "rc-1", "allocated": 4_635, "to_suspense": 0 })),
         "premium-notice" => policy(json!({
             "receivable": 2, "period_start": "2027-11-15", "period_end": "2027-12-14", "base": 5_000,
@@ -104,6 +105,7 @@ fn every_template_the_service_issues_from_has_a_placeholder() {
         DocumentKind::PremiumReceipt,
         DocumentKind::Invoice,
         DocumentKind::PremiumChangeNotice,
+        DocumentKind::Endorsement,
     ] {
         assert!(kinds.contains(&kind), "{kind:?}");
     }

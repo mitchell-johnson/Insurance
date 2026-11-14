@@ -21,8 +21,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::NaiveDate;
-use ic_core::policy::{Policy, ReceivableKind};
-use ic_core::PolicyId;
+use ic_core::policy::{LifeKind, Policy, ReceivableKind};
+use ic_core::{LifeId, PartyId, PolicyId};
 use ic_raft::ClusterClient;
 use serde_json::{json, Value};
 
@@ -35,6 +35,7 @@ use crate::kinds::{DataClass, DocumentKind};
 use crate::model::{Channel, Recipient, RecipientRole, Trigger};
 use crate::module::Query;
 use crate::template::{AlternateFormat, TemplateRef};
+use crate::triggers::MEMBER;
 use crate::vault::ObjectStore;
 
 /// A policy as the partition that holds it has it, with what billing says
@@ -97,27 +98,56 @@ fn text<T: serde::Serialize>(value: &T) -> Value {
 /// owed, and the facts of the event. Never a loading, an exclusion or
 /// anything else about health.
 pub fn policy_data(record: &PolicyRecord, on: NaiveDate) -> Value {
+    data_for(record, on, None)
+}
+
+/// What a template is given for one scheme member's own cover: as
+/// [`policy_data`], with only the covers and layers on the member's life,
+/// each cover's sum the member's own, and nothing of the scheme's bill.
+/// Never another member's cover.
+pub fn member_data(record: &PolicyRecord, on: NaiveDate, life: &LifeId) -> Value {
+    data_for(record, on, Some(life))
+}
+
+fn data_for(record: &PolicyRecord, on: NaiveDate, member: Option<&LifeId>) -> Value {
     let p = &record.policy;
     let covers: Vec<Value> = p
         .covers
         .values()
-        .map(|c| {
-            let layers: Vec<Value> = c
-                .layers
+        .filter_map(|c| {
+            let layers: Vec<_> = c.layers.iter().filter(|l| l.in_force_on(on) && member.is_none_or(|m| l.life == *m)).collect();
+            if member.is_some() && layers.is_empty() {
+                return None;
+            }
+            let sum = match member {
+                Some(_) => layers.iter().map(|l| l.sum_insured_minor).sum(),
+                None => c.sum_insured_on(on),
+            };
+            let layers: Vec<Value> = layers
                 .iter()
-                .filter(|l| l.in_force_on(on))
                 .map(|l| json!({ "layer": l.id, "life": l.life.0, "start": l.start.to_string(), "sum_insured": l.sum_insured_minor }))
                 .collect();
-            json!({
+            Some(json!({
                 "cover": c.code,
                 "type": c.cover_type,
                 "status": text(&c.status),
                 "start": c.start.to_string(),
-                "sum_insured": c.sum_insured_on(on),
+                "sum_insured": sum,
                 "layers": layers,
-            })
+            }))
         })
         .collect();
+    if let Some(life) = member {
+        return json!({
+            "policy": p.number,
+            "product": p.product_code,
+            "status": text(&p.status),
+            "inception": p.inception.to_string(),
+            "currency": text(&p.currency),
+            "member": life.0,
+            "covers": covers,
+        });
+    }
     let premium = p.receivables.iter().rev().find(|r| r.kind == ReceivableKind::Period).map(|r| r.total_minor);
     json!({
         "policy": p.number,
@@ -151,6 +181,16 @@ fn class_of(kind: DocumentKind) -> DataClass {
         | DocumentKind::Invoice
         | DocumentKind::PremiumChangeNotice => DataClass::Financial,
         _ => DataClass::Personal,
+    }
+}
+
+/// The person a life is, where it is linked to one.
+fn person_of(kind: &LifeKind) -> Option<PartyId> {
+    match kind {
+        LifeKind::Named { party } => Some(party.clone()),
+        LifeKind::UnnamedMember { linked_party, .. } => linked_party.clone(),
+        LifeKind::Dependant { party, .. } => party.clone(),
+        LifeKind::Pool { .. } => None,
     }
 }
 
@@ -206,14 +246,29 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
         } else {
             vec![]
         };
-        let holder = record.policy.policyholder.clone();
+        // A document about a scheme member's own cover goes to the member.
+        let member = trigger.detail.get(MEMBER).and_then(Value::as_str).map(|l| LifeId(l.to_string()));
+        let (holder, relationship) = match &member {
+            None => (record.policy.policyholder.clone(), "policyholder"),
+            Some(life) => match record.policy.lives.get(life).and_then(|l| person_of(&l.kind)) {
+                Some(party) => (party, "member"),
+                None => {
+                    return Ok(Err(Left::Said(format!(
+                        "member {life} is linked to no person; the document is left for a person"
+                    ))))
+                }
+            },
+        };
         let contact = match Letters::person(self, &holder).await {
             Ok(Some(contact)) if !contact.deceased => contact,
             Ok(Some(_)) => return Ok(Err(Left::Said(format!("{holder} has died; the document is left for a person")))),
             Ok(None) => return Ok(Err(Left::Said(format!("{holder} has no contact point; the document is left for a person")))),
             Err(e) => return Err(DriverError::Unavailable(e.to_string())),
         };
-        let mut data = policy_data(&record, on);
+        let mut data = match &member {
+            None => policy_data(&record, on),
+            Some(life) => member_data(&record, on, life),
+        };
         data["name"] = json!(contact.name);
         data["date"] = json!(on.to_string());
         for (key, value) in &trigger.detail {
@@ -225,7 +280,7 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
             relationship: Some(relationship.to_string()),
             channels: vec![Channel::Email, Channel::Post],
         };
-        let mut recipients = vec![to(&holder, RecipientRole::Addressee, "policyholder")];
+        let mut recipients = vec![to(&holder, RecipientRole::Addressee, relationship)];
         let mut seen = BTreeSet::from([holder.clone()]);
         for party in trigger.copy_to.iter().filter(|p| seen.insert((*p).clone())) {
             recipients.push(to(party, RecipientRole::InterestedParty, "interested_party"));
@@ -238,7 +293,7 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
             policy: Some(trigger.policy.clone()),
             other_policies: vec![],
             data_class: class_of(trigger.kind),
-            lives: vec![],
+            lives: member.iter().map(|l| l.0.clone()).collect(),
             prove_delivery: false,
             owner: holder,
             recipients,

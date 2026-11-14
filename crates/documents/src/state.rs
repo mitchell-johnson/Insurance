@@ -917,7 +917,8 @@ impl DocumentsState {
                 .as_ref()
                 .and_then(|event| self.triggers.get(&format!("{event}:{:?}", issue.kind)))
                 .is_some_and(|t| !t.copy_to.is_empty());
-            if from_trigger || matches!(issue.kind, DocumentKind::LapseNotice | DocumentKind::SuspensionNotice) {
+            let members_own = issue.notice.as_ref().is_some_and(|n| n.purpose.starts_with("member_lapse:"));
+            if !members_own && (from_trigger || matches!(issue.kind, DocumentKind::LapseNotice | DocumentKind::SuspensionNotice)) {
                 // A lender the policy is assigned to must hear that it is
                 // in arrears, suspended or ended as the owner does.
                 let owed = self.interested_parties(policy, ctx.today);
@@ -1777,7 +1778,9 @@ impl DocumentsState {
                     }
                     self.schedules_raised.insert(trigger.policy.clone(), trigger.business_date);
                 }
-                if copied_to_interests(trigger.kind) {
+                // A member's own notice is theirs: the scheme's lender
+                // hears of the scheme, not of each member.
+                if copied_to_interests(trigger.kind) && !trigger.detail.contains_key(crate::triggers::MEMBER) {
                     trigger.copy_to = self.interested_parties(&trigger.policy, trigger.business_date);
                 }
                 ctx.events.push(Event::DocumentRequired {

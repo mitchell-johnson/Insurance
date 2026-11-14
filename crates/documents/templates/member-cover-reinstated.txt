@@ -1,0 +1,13 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+Good news. Your own cover under the scheme on policy {{policy}} has been put back in place from {{effective|date}} (reference {{reference}}).
+
+Your cover now:{{#each covers}}
+- {{cover}}: {{sum_insured|money}}{{/each}}
+
+We have billed you {{billed|money}} for the time since your cover stopped. Please pay this to keep your cover.
+
+Yours sincerely,
+Group Schemes

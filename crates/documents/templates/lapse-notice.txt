@@ -4,7 +4,7 @@ Dear {{name}},
 
 Your premium on policy {{policy}} is overdue{{#if oldest_unpaid_due}} since {{oldest_unpaid_due|date}}{{/if}}.{{#if outstanding}} The amount owed is {{outstanding|money}}.{{/if}}
 
-Your policy is now in its grace period. If we do not receive payment, your policy will lapse and your cover will end. Please pay now to keep your cover.
+{{#if member}}This is about your own cover under the scheme, which you pay for yourself. {{/if}}Your {{#if member}}cover{{/if}}{{#unless member}}policy{{/unless}} is now in its grace period. If we do not receive payment, your policy will lapse and your cover will end. Please pay now to keep your cover.
 
 If you are finding it hard to pay, call us. You may be able to pause or reduce your cover.
 
