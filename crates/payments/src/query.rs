@@ -115,6 +115,7 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "payer_cases" => Ok(json_cases(state.open_payer_cases())),
         "payer_relationships_to_check" => found(Some(state.relationships_to_check())),
         "payer_case" => found(state.payer_checks.cases.get(text(&question, "case")?)),
+        "loan_repayment_reference" => found(state.repayables.references.get(&format!("loan:{}", text(&question, "policy")?))),
         "repayment_reference" => found(state.repayables.references.get(text(&question, "overpayment")?)),
         "hold_watch" => found(Some(state.hold_watch())),
         "open_runs" => Ok(state.open_runs()),
@@ -209,6 +210,17 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
             }
             return both;
         }
+        // What is owed on a policy loan, for its repayment reference.
+        ic_core::Event::PolicyLoanDrawn { policy, outstanding_minor, .. } | ic_core::Event::PolicyLoanRepaid { policy, outstanding_minor, .. } => {
+            crate::Command::LoanChanged {
+                policy: policy.to_string(),
+                outstanding_minor: *outstanding_minor,
+            }
+        }
+        ic_core::Event::PolicyLoanWrittenOff { policy, .. } => crate::Command::LoanChanged {
+            policy: policy.to_string(),
+            outstanding_minor: 0,
+        },
         ic_core::Event::PolicyIssued { policy, policyholder, .. } => crate::Command::PolicyOwner {
             policy: policy.to_string(),
             owner: policyholder.to_string(),

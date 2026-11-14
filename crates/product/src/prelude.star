@@ -111,6 +111,9 @@ def indexation(rate_code, opt_out = True, pays_step_applied_after_event = False)
         "pays_step_applied_after_event": pays_step_applied_after_event,
     }
 
+def policy_loans(max_percent_of_value, rate_code):
+    return {"kind": "policy_loans", "max_percent_of_value": max_percent_of_value, "rate_code": rate_code}
+
 def multi_cover_discount(min_covers, percent):
     return {"kind": "multi_cover_discount", "min_covers": min_covers, "percent": percent}
 

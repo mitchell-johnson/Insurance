@@ -18,6 +18,7 @@ pub mod ids;
 pub mod interest;
 pub mod invest;
 pub mod loadings;
+pub mod loan;
 pub mod machine;
 pub mod nomination;
 pub mod owner_hold;

@@ -12,6 +12,13 @@
 //! claim's policy; the core then moves the receivable to cash. Until claims
 //! records it the money is an unidentified receipt, and it stays one for a
 //! person if claims refuses it or it is more than is owed.
+//!
+//! A policy loan is repaid the same way. While the core says anything is
+//! owed on a policy's loan (`PolicyLoanDrawn`, `PolicyLoanRepaid`), the loan
+//! has a reference `LN` and six digits (question `loan_repayment_reference
+//! {policy}`), and a credit quoting it is sent to the core as cash
+//! matching's `LoanCommand::Repay`. Interest accrues daily, so the core, not
+//! this module, decides whether the amount is more than is owed.
 
 use std::collections::BTreeMap;
 
@@ -23,7 +30,11 @@ use crate::model::{Reject, Role};
 /// Outbox key prefix of a repayment sent to claims.
 pub(crate) const REPAID: &str = "claims-repaid-";
 
-/// An overpayment still owed, under its payment reference.
+/// Outbox key prefix of a policy loan repayment sent to the core.
+pub(crate) const LOAN_REPAID: &str = "loan-repaid-";
+
+/// An overpayment or a policy loan still owed, under its payment
+/// reference. A loan has no claim, and its `overpayment` is `loan:{policy}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Repayable {
     pub claim: String,
@@ -50,6 +61,28 @@ fn words(reference: &str) -> Vec<String> {
 }
 
 impl Repayables {
+    /// Hold a reference for what is owed while anything is, under the
+    /// prefix given; forget it once nothing is.
+    fn hold(&mut self, prefix: &str, owed: Repayable) {
+        let key = owed.overpayment.clone();
+        if owed.outstanding_minor <= 0 {
+            if let Some(reference) = self.references.remove(&key) {
+                self.by_reference.remove(&reference);
+            }
+            return;
+        }
+        let reference = match self.references.get(&key) {
+            Some(reference) => reference.clone(),
+            None => {
+                self.next += 1;
+                let reference = format!("{prefix}{:06}", self.next);
+                self.references.insert(key, reference.clone());
+                reference
+            }
+        };
+        self.by_reference.insert(reference, owed);
+    }
+
     /// The overpayment a credit's reference names, if it names exactly one
     /// of the references held.
     pub fn named_by(&self, reference: &str) -> Option<&Repayable> {
@@ -68,31 +101,29 @@ impl PaymentsState {
         if claim.is_empty() || overpayment.is_empty() || policy.is_empty() {
             return Err(Reject::new("invalid_overpayment", "an overpayment names its claim and policy"));
         }
-        let book = &mut self.repayables;
-        if outstanding_minor <= 0 {
-            if let Some(reference) = book.references.remove(overpayment) {
-                book.by_reference.remove(&reference);
-            }
-            return Ok(());
-        }
-        let reference = match book.references.get(overpayment) {
-            Some(reference) => reference.clone(),
-            None => {
-                book.next += 1;
-                let reference = format!("OP{:06}", book.next);
-                book.references.insert(overpayment.to_string(), reference.clone());
-                reference
-            }
+        let owed = Repayable {
+            claim: claim.to_string(),
+            overpayment: overpayment.to_string(),
+            policy: policy.to_string(),
+            outstanding_minor,
         };
-        book.by_reference.insert(
-            reference,
-            Repayable {
-                claim: claim.to_string(),
-                overpayment: overpayment.to_string(),
-                policy: policy.to_string(),
-                outstanding_minor,
-            },
-        );
+        self.repayables.hold("OP", owed);
+        Ok(())
+    }
+
+    /// The core changed what is owed on a policy's loan.
+    pub(crate) fn loan_changed(&mut self, tx: &mut Tx<'_>, policy: &str, outstanding_minor: i64) -> Result<(), Reject> {
+        tx.need(Role::Service)?;
+        if policy.is_empty() {
+            return Err(Reject::new("invalid_loan", "a loan names its policy"));
+        }
+        let owed = Repayable {
+            claim: String::new(),
+            overpayment: format!("loan:{policy}"),
+            policy: policy.to_string(),
+            outstanding_minor,
+        };
+        self.repayables.hold("LN", owed);
         Ok(())
     }
 }

@@ -1125,6 +1125,7 @@ pub(crate) fn split(
                 claims: Default::default(),
                 refunds_raised: Default::default(),
                 payouts: Default::default(),
+                loan: None,
                 member_accounts: Default::default(),
                 member_standing: Default::default(),
                 interests: Default::default(),

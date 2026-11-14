@@ -25,7 +25,7 @@ use ic_reinsurance::Notice;
 async fn other_modules_read_reinsurance_notices_and_it_reads_theirs() {
     let dir = std::env::temp_dir().join(format!("ic-node-between-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = free_port();
     let addr = format!("127.0.0.1:{port}");
     let auth = ClusterAuth::tokens(vec!["test-cluster-token-0123456789abcdef".to_string()]).unwrap();
     let settings = Settings {
@@ -157,4 +157,17 @@ async fn other_modules_read_reinsurance_notices_and_it_reads_theirs() {
     let gone = ClusterAudiences::new(client, Duration::from_millis(300));
     assert!(matches!(gone.hand_on(7, &notice, on).await, Err(DriverError::Unavailable(_))));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A local port that no other test in this process has been given: two
+/// nodes starting at the same moment must not be handed the same one.
+fn free_port() -> u16 {
+    static GIVEN: std::sync::Mutex<std::collections::BTreeSet<u16>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let mut given = GIVEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    loop {
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        if given.insert(port) {
+            return port;
+        }
+    }
 }

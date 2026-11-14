@@ -98,6 +98,14 @@ pub fn reconcile(state: &CoreState) -> Vec<Break> {
                 detail: format!("policy {}: ledger {refund_payable}, refunds owed {owed}", p.id),
             });
         }
+        // The loan account equals what the policy record says is owed.
+        let lent = state.ledger.balance(&accounts::policy_loan(&p.id, c).id);
+        if lent != crate::loan::expected_balance(p) {
+            breaks.push(Break {
+                check: "policy_loan",
+                detail: format!("policy {}: ledger {lent}, loan record {}", p.id, crate::loan::expected_balance(p)),
+            });
+        }
         // Only a policy in force has a standing.
         if (p.status == PolicyStatus::InForce) != p.standing.is_some() {
             breaks.push(Break {

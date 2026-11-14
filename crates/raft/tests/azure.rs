@@ -44,7 +44,7 @@ async fn a_ledger_node_holds_its_output_through_an_azure_outage() {
     std::env::set_var("AZURE_CLIENT_ID", "client-node");
     std::env::set_var("AZURE_AUTHORITY_HOST", &azure.base);
 
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = common::free_port();
     let addr = format!("127.0.0.1:{port}");
     let auth = ClusterAuth::tokens(vec![TOKEN.to_string()]).unwrap();
     let settings = Settings {

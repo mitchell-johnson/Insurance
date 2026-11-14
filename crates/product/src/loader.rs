@@ -270,6 +270,18 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                     return Err(invalid(file, "a cover cannot require itself"));
                 }
             }
+            Feature::PolicyLoans {
+                max_percent_of_value,
+                rate_code,
+            } => {
+                let share = max_percent_of_value.get();
+                if share <= ic_money::Dec::from(0i64) || share > ic_money::Dec::from(100i64) || rate_code.is_empty() {
+                    return Err(invalid(
+                        file,
+                        "policy loans are for a share of the value above nothing and up to all of it, at a named rate",
+                    ));
+                }
+            }
             Feature::Earning { .. } | Feature::Indexation { .. } | Feature::CoolingOff { .. } => {}
         }
     }

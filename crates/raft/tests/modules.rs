@@ -125,7 +125,7 @@ impl Cluster {
         let dir = scratch(name);
         let peers: BTreeMap<NodeId, String> = (1..=3u64)
             .map(|id| {
-                let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+                let port = common::free_port();
                 (id, format!("127.0.0.1:{port}"))
             })
             .collect();
@@ -444,7 +444,7 @@ async fn a_module_refuses_state_that_is_not_its_own() {
     assert!(ModuleSpec::new("", tally).is_err());
     assert!(ModuleSpec::new("re insurance", tally).is_err());
 
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = common::free_port();
     let addr = format!("127.0.0.1:{port}");
     let settings = Settings {
         id: 1,

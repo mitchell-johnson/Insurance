@@ -249,6 +249,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         claims: BTreeMap::new(),
         refunds_raised: BTreeMap::new(),
         payouts: BTreeMap::new(),
+        loan: None,
         member_accounts: BTreeSet::new(),
         member_standing: BTreeMap::new(),
         interests: BTreeMap::new(),
@@ -677,6 +678,9 @@ pub(crate) fn close_out(
             l.end = Some(cover_ends.max(l.start));
         }
     }
+    // A loan the ending did not repay has nothing left to be repaid from.
+    let id = policy.id.to_string();
+    crate::loan::write_off(ledger, policy, ctx, entry_kind, &id)?;
     Ok(())
 }
 

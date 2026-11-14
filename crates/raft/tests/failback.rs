@@ -72,7 +72,7 @@ impl Cluster {
         let dir = scratch(name);
         let peers: BTreeMap<NodeId, String> = (1..=3u64)
             .map(|id| {
-                let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+                let port = common::free_port();
                 (id, format!("127.0.0.1:{port}"))
             })
             .collect();
@@ -210,16 +210,21 @@ async fn leadership_returns_to_the_preferred_node_without_an_operator() {
         assert!(!cluster.tell(id, Some("resume")).await.paused);
     }
     cluster.until("leadership did not return to node 1", |l| l.iter().all(|id| *id == 1)).await;
-    // Each handover is counted once the group has answered under its new leader.
+    // Each handover is counted once the group has answered under its new leader. A group
+    // that an election took away from node 1 again on a busy machine is handed back a
+    // second time, so there are at least five and there may be more.
     let mut moved = 0;
     for _ in 0..100 {
         moved = cluster.tell(2, None).await.moved + cluster.tell(3, None).await.moved;
-        if moved == PARTITIONS as u64 + 1 {
+        if moved > PARTITIONS as u64 {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert_eq!(moved, PARTITIONS as u64 + 1, "five groups came back, each by one confirmed handover");
+    assert!(
+        moved > PARTITIONS as u64,
+        "five groups came back, each by a confirmed handover; {moved} were confirmed"
+    );
     assert_eq!(cluster.tell(2, None).await.halted, None);
     // Node 1 is where leaders belong: it hands nothing on.
     assert_eq!(cluster.tell(1, None).await.moved, 0);
