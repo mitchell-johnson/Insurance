@@ -9,6 +9,8 @@ cover limits, option menus, built-in benefits, discounts, grace periods and cool
 Premium rates and premium factors are best-estimate placeholders, because AIA does not
 publish its rates. Every placeholder is marked `PH` in the product file and listed below.
 
+Every AIA premium is also checked, to the cent, against an integer recalculation (`crates/product/tests/recalculation.rs`): each option choice's factor, every frequency, the policy fee, GST, each premium type's rating age, and the Multi-Benefit Discount. That check found a fault: a premium that is exactly half a cent per period was rounded up. Dividing by the number of periods last fixed it.
+
 Wording is not copied. Each definition in `products/definitions/aia.star` describes the
 claim event in this system's own words and names the AIA appendix that governs it. A claim
 is assessed against the published wording, not against the summary.
@@ -85,12 +87,7 @@ Every AIA wording is at `https://documents.aia.co.nz/<slug>/`. Versions current 
 
 - **Claims (`ic-claims`):** built on 14 November (docs/claims.md, "What the chosen option sets"): the benefit period and to-age, built-in benefits within their limits and only where their feature is chosen, product lifetime limits, a per-event cap, the mental health limit in all and claim indexation. What is left is the core's part below.
 - **The core, for claims:** done (14 Nov). `cover_facts` fills `benefit_months`, `benefit_to` (the first day the life is the option's `benefit_to_age`), `mental_health_months` (24 where the option has `mental-health-limit`; the period is a constant in `crates/core/src/claims.rs`, since the products name the feature and not the months), `claim_indexation`, `health_limits`, `event_cap_minor` (a product now declares `event_cap`, and `aia-interim` declares $500,000) and `built_in`. Test: `crates/sim/tests/aia.rs::the_claim_facts_carry_the_terms_of_the_option_chosen_and_the_products_limits`. A cover with no option does not send its own `benefit_months` (the monthly benefit's own period, as on `aia-interim` accidental income and `income-protection`): claims asked for the option's only.
-- **Underwriting (`ic-underwriting`):**
-  - Apply the occupation tests: TPD entry to 55 for most occupations and 60 for professional ones, income to 70 only for accepted occupations, and occupation class as a required rating factor for TPD, income, SAIC and business continuity.
-  - Apply Family Protection's 15-year minimum for a term to an age.
-  - Apply the $250,000 trauma limit for children under 16.
-  - Apply the age-banded Essentials limits.
-  - Issue `aia-interim` as the interim product for AIA Living proposals.
+- **Underwriting (`ic-underwriting`):** done on 14 November (9f9394e; `src/eligibility.rs`, docs/underwriting.md). An AIA application outside these conditions is refused `eligibility`: occupation class required for TPD, income and accidental injury; TPD entry to 55, or 60 in class 1; income to 70 only in classes 1 and 2; Family Protection to an age at least 15 years from entry; trauma at most $250,000 under 16; Essentials at most $500,000 from 61 to 70. Proposals carry the option code to the core, and AIA Living proposals get `aia-interim` interim cover. The class mapping is a placeholder until AIA's occupation guide is mapped (class 1 clerical, managerial and professional).
 - **A wellness module** that sets each life's AIA Vitality tier at each anniversary.
 - **The core:**
   - Paid-up alteration for Cover for Life after half the premium term.
