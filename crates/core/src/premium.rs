@@ -119,7 +119,7 @@ pub(crate) fn retail_premium_with(
             let basis = def.premium_basis(layer.excess_option.as_deref());
             // A cover whose premiums are all paid stays in force with
             // nothing more to bill.
-            if basis.is_some_and(|b| !ic_product::options::pays_premium(b, attained)) {
+            if layer.paid_up || basis.is_some_and(|b| !ic_product::options::pays_premium(b, attained)) {
                 continue;
             }
             let age = match basis {

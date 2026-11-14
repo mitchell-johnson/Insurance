@@ -214,6 +214,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
             }
             let id = cover.layers.len() as u32 + 1;
             cover.layers.push(Layer {
+                paid_up: false,
                 excess_option: spec.excess_option,
                 id,
                 life,
@@ -285,6 +286,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         option_uses: BTreeMap::new(),
         replaces: Vec::new(),
         payee_debts: BTreeMap::new(),
+        paid_up: BTreeMap::new(),
         member_accounts: BTreeSet::new(),
         member_standing: BTreeMap::new(),
         interests: BTreeMap::new(),
@@ -494,6 +496,7 @@ pub(crate) fn apply_indexation(catalog: &Catalog, product: &ProductDefinition, p
                             .unwrap_or_default();
                         let id = cover.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
                         cover.layers.push(Layer {
+                            paid_up: false,
                             id,
                             life: life.clone(),
                             start: on,

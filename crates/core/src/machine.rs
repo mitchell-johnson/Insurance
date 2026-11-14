@@ -568,6 +568,12 @@ impl CoreState {
                 let policy = spec.policy.clone();
                 self.with_policy(&policy, false, |_, p| underwritten::record_replacement(p, ctx, *spec))
             }
+            Command::MakePaidUp(spec) => {
+                let policy = spec.policy.clone();
+                self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                    crate::paid_up::make_paid_up(&mut s.ledger, &s.catalog, p, ctx, *spec)
+                })
+            }
             Command::ExerciseOption(spec) => {
                 let policy = spec.policy.clone();
                 self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {

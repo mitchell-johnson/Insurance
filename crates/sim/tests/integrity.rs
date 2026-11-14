@@ -675,6 +675,12 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             amount: Money::new(1, NZD),
             reason: "untraceable".into(),
         })),
+        Command::MakePaidUp(Box::new(ic_core::paid_up::MakePaidUp {
+            policy: p.clone(),
+            cover: "life".into(),
+            life: LifeId("life-1".into()),
+            reference: "pu-1".into(),
+        })),
         Command::RecordReplacement(Box::new(ic_core::command::Replacement {
             policy: p.clone(),
             replaced_policy: PolicyId("pol-old".into()),
@@ -732,7 +738,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 58, "{names:?}");
+    assert_eq!(names.len(), 59, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail
