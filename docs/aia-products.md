@@ -100,4 +100,4 @@ Every AIA wording is at `https://documents.aia.co.nz/<slug>/`. Versions current 
 ## Questions for Mitchell
 
 1. **Rate tables.** Real premium rates are needed for every `aia-*` table, and real premium factors for each `PH` above. AIA does not publish them, so they must come from AIA, from a reinsurer, or from your appointed actuary.
-2. **Use of AIA's names.** The products use AIA's product and benefit names, and the definitions name AIA's wording codes. If this is not being built for or with AIA, we need the right to use those names and marks, or the products need renaming before anything is customer-facing.
+2. **Use of AIA's names:** settled. Mitchell confirmed on 14 Nov 2026 that the system is being built for AIA, so AIA's product names, marks and published material may be used.
