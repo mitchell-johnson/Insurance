@@ -137,6 +137,8 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
                 "terms_version": s.terms_version,
                 "terms": s.terms,
                 "members": s.membership.active_count(),
+                "members_by_group": members_by_group(s),
+                "cover_minor": cover_totals(s),
                 "open_file": s.open_file,
                 "queued": s.queue.len(),
                 "scheduled": s.scheduled.len(),
@@ -275,4 +277,34 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
             json!({ "exceptions": open })
         }
     })
+}
+
+/// Active members per billing group.
+fn members_by_group(s: &crate::state::Scheme) -> std::collections::BTreeMap<String, u32> {
+    let mut out = std::collections::BTreeMap::new();
+    for m in s.membership.active_members() {
+        let group = m
+            .attrs
+            .billing_group
+            .clone()
+            .filter(|g| s.terms.has_billing_group(g))
+            .unwrap_or_else(|| s.terms.default_billing_group().to_string());
+        *out.entry(group).or_insert(0u32) += 1;
+    }
+    out
+}
+
+/// The scheme's cover in force by cover code: each active member's
+/// automatic amount and the underwritten cover accepted on top.
+fn cover_totals(s: &crate::state::Scheme) -> std::collections::BTreeMap<String, i64> {
+    let mut out = std::collections::BTreeMap::new();
+    for m in s.membership.active_members() {
+        for c in crate::benefit::member_cover(&s.product, &m.attrs, m.auto_cap_minor) {
+            *out.entry(c.cover).or_insert(0i64) += c.automatic_minor;
+        }
+    }
+    for c in s.cases.values().filter(|c| c.status == crate::state::CaseStatus::Accepted) {
+        *out.entry(c.cover.clone()).or_insert(0i64) += c.counts_minor();
+    }
+    out
 }
