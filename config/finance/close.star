@@ -50,6 +50,8 @@ CLOSE = close_config(
     grouping = [
         accounting_group("term-life", "individual-life"),
         accounting_group("interim-accident", "individual-life"),
+        # Disability income risk is managed apart from mortality risk.
+        accounting_group("income-protection", "disability-income"),
         accounting_group("group-life", "group-life"),
         accounting_group("group-benefits", "group-life"),
         accounting_group("group-health", "health"),
