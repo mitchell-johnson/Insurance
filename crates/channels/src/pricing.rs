@@ -105,3 +105,13 @@ pub fn envelope(key: &str, actor: &PartyId, roles: &Value, at: At, command: Valu
     let when = DateTime::from_timestamp(at, 0).unwrap_or_default();
     json!({ "key": key, "caller": CALLER, "actor": actor, "roles": roles, "at": when, "command": command })
 }
+
+/// The questions this console forwards, by name, for the MCP tool that asks them.
+pub fn question_names() -> Vec<&'static str> {
+    QUESTIONS.iter().map(|q| q.0).collect()
+}
+
+/// The commands this console forwards, by name, for the MCP tool that sends them.
+pub fn command_names() -> Vec<&'static str> {
+    COMMANDS.iter().map(|c| c.0).collect()
+}

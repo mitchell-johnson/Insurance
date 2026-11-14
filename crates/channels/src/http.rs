@@ -135,6 +135,11 @@ pub struct AppState {
     pub regions: Arc<dyn RegionSource>,
     /// How the web pages sign people in.
     pub ui: UiConfig,
+    /// Where this service is reached from outside, such as
+    /// `https://portal.example.co.nz` (`IC_PUBLIC_URL`). It names the MCP
+    /// endpoint in the OAuth discovery document and is the one browser
+    /// origin the MCP endpoint accepts. None on a laptop.
+    pub public_url: Option<String>,
     /// The unit pricing module, for the staff console.
     pub pricing: Arc<dyn crate::forward::Source>,
     /// The finance ledger, for the finance console.
@@ -323,7 +328,7 @@ impl AppState {
     }
 
     /// Resolve the caller to a party and check the session still stands.
-    async fn session(&self, auth: &Auth, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<(Caller, Session), Problem> {
+    pub(crate) async fn session(&self, auth: &Auth, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<(Caller, Session), Problem> {
         let caller = auth.authenticate(headers).await?;
         let at = self.now();
         let device = match (header(headers, "x-device-id"), header(headers, "x-device-proof")) {
@@ -3107,6 +3112,15 @@ pub fn router(state: Shared) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(ready))
+        // Every function below as an MCP tool, for a person working through an MCP client (src/mcp.rs).
+        .route(
+            "/mcp",
+            post(crate::mcp::endpoint)
+                .get(crate::mcp::no_stream)
+                .layer(axum::extract::DefaultBodyLimit::max(48 * 1024 * 1024)),
+        )
+        .route("/.well-known/oauth-protected-resource", get(crate::mcp::resource_metadata))
+        .route("/.well-known/oauth-protected-resource/mcp", get(crate::mcp::resource_metadata))
         // The customer app, shared by every External ID caller.
         .route("/app/v1/me", get(me))
         .route("/app/v1/profile", get(profile))

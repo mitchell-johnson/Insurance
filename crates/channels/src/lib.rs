@@ -33,6 +33,7 @@ pub mod forward;
 pub mod group;
 pub mod http;
 pub mod identity;
+pub mod mcp;
 pub mod ops;
 pub mod payments;
 pub mod pricing;

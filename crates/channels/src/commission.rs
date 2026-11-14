@@ -177,3 +177,8 @@ pub fn console_command(command: &Value) -> Option<&str> {
 pub fn envelope(key: &str, staff: Value, command: Value) -> Value {
     json!({ "key": format!("console:{key}"), "actor": { "staff": staff }, "command": command })
 }
+
+/// The questions this console forwards, by name, for the MCP tool that asks them.
+pub fn question_names() -> Vec<&'static str> {
+    QUESTIONS.iter().map(|q| q.0).collect()
+}

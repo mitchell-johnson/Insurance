@@ -102,6 +102,7 @@ async fn main() -> Result<(), String> {
         clock: Arc::new(wall_clock),
         regions: Live::new(settings.client(), settings.regions.clone()),
         ui: settings.ui.clone(),
+        public_url: settings.public_url.clone(),
         complaints: Arc::new(forward::Hosted {
             client: settings.client(),
             module: ic_channels::complaints::MODULE,

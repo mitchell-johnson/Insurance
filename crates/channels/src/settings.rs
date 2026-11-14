@@ -46,6 +46,9 @@ pub struct PortalSettings {
     pub heartbeat: Duration,
     /// How the web pages sign people in.
     pub ui: UiConfig,
+    /// Where the service is reached from outside (`IC_PUBLIC_URL`), for
+    /// the MCP endpoint's sign-in discovery. Required with Entra sign-in.
+    pub public_url: Option<String>,
     /// How often the commission module's changes are carried to the channels.
     pub forward: Duration,
     /// The currency of the commission module's balances.
@@ -171,6 +174,19 @@ impl PortalSettings {
             }
             Some(other) => return Err(format!("IC_AUTH must be entra or dev, not {other:?}")),
         };
+        let public_url = match (get("IC_PUBLIC_URL"), &ui) {
+            (Some(url), _) => {
+                let url = url.trim_end_matches('/').to_string();
+                if origin(&url).as_deref() != Some(url.as_str()) || (!url.starts_with("https://") && matches!(ui, UiConfig::Entra { .. })) {
+                    return Err(format!(
+                        "IC_PUBLIC_URL must be the service's https origin, such as https://portal.example.co.nz, not {url:?}"
+                    ));
+                }
+                Some(url)
+            }
+            (None, UiConfig::Entra { .. }) => return Err("set IC_PUBLIC_URL to the address people reach the portal at, for MCP sign-in".to_string()),
+            (None, UiConfig::Dev) => None,
+        };
         let regions = match (get("IC_REGIONS"), get("IC_HOME_REGION")) {
             (Some(spec), Some(home)) => {
                 let regions = Regions::parse(&spec, &home).map_err(|e| format!("IC_REGIONS: {e}"))?;
@@ -196,6 +212,7 @@ impl PortalSettings {
             return_definitions,
             customers,
             workforce,
+            public_url,
             cluster_auth: ClusterAuth::from_lookup(raw, read)?,
             nodes,
             patience: Duration::from_secs(seconds("IC_LEDGER_PATIENCE_SECS", 10)?),

@@ -40,6 +40,11 @@ data:
   # audience is the portal service's app registration; the client ID is the
   # single-page application the staff and operations consoles sign in
   # through, with redirect URIs https://<host>/staff and https://<host>/ops.
+  # The address people reach the portal at. The MCP endpoint (/mcp) names
+  # itself by it in its sign-in discovery document, and accepts browser
+  # calls from this origin only. Add https://<host>/mcp's redirect URIs for
+  # MCP clients to both single-page applications.
+  IC_PUBLIC_URL: https://REPLACE-portal-host
   IC_ENTRA_TENANT_ID: REPLACE-tenantId
   IC_ENTRA_AUDIENCE: REPLACE-portal-application-id
   IC_ENTRA_CLIENT_ID: REPLACE-staff-spa-client-id

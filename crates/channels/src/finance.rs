@@ -279,6 +279,11 @@ pub fn envelope(key: &str, actor: &PartyId, roles: &Value, returns: &Returns, mu
     Ok(json!({ "key": key, "caller": CALLER, "actor": actor, "roles": roles, "command": command }))
 }
 
+/// The questions this console forwards, by name, for the MCP tool that asks them.
+pub fn question_names() -> Vec<&'static str> {
+    QUESTIONS.iter().map(|q| q.0).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

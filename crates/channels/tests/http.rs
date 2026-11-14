@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
+use base64::Engine;
 use common::*;
 use http_body_util::BodyExt;
 use ic_api::auth::Auth;
@@ -406,6 +407,7 @@ fn portal_signed_in_by(
     let tick = clock.clone();
     let app = router(Arc::new(AppState {
         wordings: shipped_wordings(),
+        public_url: None,
         returns: Arc::new(ic_channels::finance::Returns::load(ic_channels::finance::SHIPPED_RETURNS).unwrap()),
         channel: local.clone(),
         customers,
@@ -1688,6 +1690,7 @@ async fn the_unit_pricing_console() {
     let now = portal.now();
     let down = router(Arc::new(AppState {
         wordings: Arc::default(),
+        public_url: None,
         returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
@@ -1903,6 +1906,7 @@ async fn the_complaints_and_conduct_workbench() {
     let now = portal.now();
     let down = router(Arc::new(AppState {
         wordings: Arc::default(),
+        public_url: None,
         returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
@@ -2004,6 +2008,7 @@ async fn the_reinsurance_exceptions_console() {
     let now = portal.now();
     let down = router(Arc::new(AppState {
         wordings: Arc::default(),
+        public_url: None,
         returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
@@ -2246,6 +2251,7 @@ async fn the_claims_console() {
     let now = portal.now();
     let down = router(Arc::new(AppState {
         wordings: Arc::default(),
+        public_url: None,
         returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
@@ -2477,6 +2483,7 @@ async fn the_finance_console() {
     let now = portal.now();
     let down = router(Arc::new(AppState {
         wordings: Arc::default(),
+        public_url: None,
         returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
@@ -2670,6 +2677,7 @@ async fn a_person_keeps_their_own_customer_record() {
     let now = portal.now();
     let bare = router(Arc::new(AppState {
         wordings: Arc::default(),
+        public_url: None,
         returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
@@ -2730,6 +2738,7 @@ async fn the_conduct_officer_decides_disputed_replacements() {
     let now = portal.now();
     let down = router(Arc::new(AppState {
         wordings: Arc::default(),
+        public_url: None,
         returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
@@ -2999,6 +3008,7 @@ async fn the_person_insured_signs_their_disclosure() {
     // A portal with no intake configured.
     let bare = router(Arc::new(AppState {
         wordings: Arc::default(),
+        public_url: None,
         returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
@@ -3096,6 +3106,7 @@ async fn documents_are_downloaded_by_their_owner_or_by_staff_with_a_purpose() {
     let now = portal.now();
     let bare = router(Arc::new(AppState {
         wordings: Arc::default(),
+        public_url: None,
         returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
@@ -3763,6 +3774,7 @@ async fn an_employer_runs_the_scheme_membership() {
     let now = portal.now();
     let bare = router(Arc::new(AppState {
         wordings: Arc::default(),
+        public_url: None,
         returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
@@ -4047,6 +4059,7 @@ async fn the_underwriting_console() {
     let now = portal.now();
     let down = router(Arc::new(AppState {
         wordings: Arc::default(),
+        public_url: None,
         returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
@@ -4223,6 +4236,7 @@ async fn the_payments_console() {
     let now = portal.now();
     let down = router(Arc::new(AppState {
         wordings: Arc::default(),
+        public_url: None,
         returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
@@ -4705,4 +4719,478 @@ async fn a_retry_after_a_dropped_connection_is_one_request_and_the_outcome_follo
     let (_, mine) = portal.get("sub-kiri", "/app/v1/requests").await;
     let r7 = mine.as_array().unwrap().iter().find(|r| r["id"] == "r7").unwrap().clone();
     assert_eq!((&r7["status"], &r7["reference"]), (&json!("applied"), &json!("chg-1")), "{r7}");
+}
+
+// ---- The MCP endpoint.
+
+/// One JSON-RPC message to `/mcp` as the given caller.
+async fn mcp(portal: &Portal, who: &[(&str, String)], message: Value) -> (StatusCode, Value) {
+    portal.send("POST", "/mcp", who, Some(message)).await
+}
+
+fn as_subject(subject: &str) -> Vec<(&'static str, String)> {
+    vec![("x-dev-subject", subject.to_string())]
+}
+
+/// Call one tool and hand back its result.
+async fn call_tool(portal: &Portal, subject: &str, name: &str, arguments: Value) -> Value {
+    let (status, reply) = mcp(
+        portal,
+        &as_subject(subject),
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": arguments } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    reply["result"].clone()
+}
+
+/// Purpose: the MCP endpoint speaks the protocol: it negotiates a version it supports, answers ping, takes notifications without a
+/// reply, refuses batches, unknown methods and text that is not JSON with JSON-RPC errors, offers no server stream on GET, refuses a
+/// protocol version it does not speak and a browser origin other than its own, and asks anyone not signed in to sign in.
+/// Why it matters: an MCP client that cannot complete the handshake cannot reach any function, and one that is told the wrong thing
+/// about what went wrong cannot recover. Refusing other origins stops a web page elsewhere driving the endpoint through a browser.
+#[tokio::test]
+async fn the_mcp_endpoint_speaks_the_protocol() {
+    let portal = portal();
+    let kiri = as_subject("sub-kiri");
+    let (status, reply) = mcp(&portal, &kiri, json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "test", "version": "1" } } })).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(reply["result"]["protocolVersion"], "2025-06-18");
+    assert_eq!(reply["result"]["capabilities"]["tools"]["listChanged"], false);
+    assert_eq!(reply["result"]["serverInfo"]["name"], "insurance-core");
+    let (_, newest) = mcp(
+        &portal,
+        &kiri,
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "initialize", "params": { "protocolVersion": "1999-01-01" } }),
+    )
+    .await;
+    assert_eq!(newest["result"]["protocolVersion"], ic_channels::mcp::VERSIONS[0]);
+
+    assert_eq!(
+        mcp(&portal, &kiri, json!({ "jsonrpc": "2.0", "id": "p", "method": "ping" })).await.1,
+        json!({ "jsonrpc": "2.0", "id": "p", "result": {} })
+    );
+    assert_eq!(
+        mcp(&portal, &kiri, json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).await.0,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(
+        mcp(&portal, &kiri, json!([{ "jsonrpc": "2.0", "id": 1, "method": "ping" }])).await.1["error"]["code"],
+        -32600
+    );
+    assert_eq!(
+        mcp(&portal, &kiri, json!({ "jsonrpc": "2.0", "id": 3, "method": "resources/list" })).await.1["error"]["code"],
+        -32601
+    );
+    assert_eq!(mcp(&portal, &kiri, json!({ "jsonrpc": "2.0", "id": 4 })).await.1["error"]["code"], -32600);
+    assert_eq!(portal.send("POST", "/mcp", &kiri, None).await.1["error"]["code"], -32700);
+    assert_eq!(portal.send("GET", "/mcp", &kiri, None).await.0, StatusCode::METHOD_NOT_ALLOWED);
+
+    let mut old = kiri.clone();
+    old.push(("mcp-protocol-version", "2024-01-01".to_string()));
+    assert_eq!(
+        mcp(&portal, &old, json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" })).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let mut current = kiri.clone();
+    current.push(("mcp-protocol-version", "2025-06-18".to_string()));
+    assert_eq!(
+        mcp(&portal, &current, json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" })).await.0,
+        StatusCode::OK
+    );
+    let mut elsewhere = kiri.clone();
+    elsewhere.push(("origin", "https://evil.example".to_string()));
+    assert_eq!(
+        mcp(&portal, &elsewhere, json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" })).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let mut local = kiri.clone();
+    local.push(("origin", "http://localhost:6274".to_string()));
+    assert_eq!(
+        mcp(&portal, &local, json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" })).await.0,
+        StatusCode::OK
+    );
+
+    let (status, _) = mcp(&portal, &[], json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize" })).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // A sign-in the insurer does not know is no one.
+    assert_eq!(
+        mcp(&portal, &as_subject("sub-nobody"), json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+/// Purpose: each caller is offered the tools of the sign-ins they hold: a customer the app, adviser and employer tools and not the
+/// staff ones; a member of staff the staff tools; an operator the regions; every tool has a valid name, a title, a description and an
+/// input schema whose required arguments it declares; and the operator's tool works for them.
+/// Why it matters: a model shown tools it can never use wastes the person's time and invites it to try; one that is not shown a tool
+/// the person may use cannot do that part of their job. A schema that does not match the call leaves the model guessing.
+#[tokio::test]
+async fn each_caller_is_offered_the_tools_of_their_sign_in() {
+    let portal = portal();
+    let list = |who: Vec<(&'static str, String)>| {
+        let portal = &portal;
+        async move {
+            let (status, reply) = mcp(portal, &who, json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" })).await;
+            assert_eq!(status, StatusCode::OK, "{reply}");
+            reply["result"]["tools"].as_array().unwrap().clone()
+        }
+    };
+    let names = |tools: &[Value]| {
+        tools
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let customer = list(as_subject("sub-kiri")).await;
+    let staff = list(as_subject("sub-sue")).await;
+    let ops = list(vec![("x-dev-subject", "ops-1".to_string()), ("x-dev-roles", OPERATIONS.to_string())]).await;
+    let (customer, staff, ops) = (names(&customer), names(&staff), names(&ops));
+    assert!(customer.contains("my_policy") && customer.contains("adviser_book") && customer.contains("employer_schemes"));
+    assert!(!customer.contains("staff_policy") && !customer.contains("finance_command") && !customer.contains("regions"));
+    assert!(staff.contains("staff_policy") && staff.contains("claims_command") && staff.contains("finance_question"));
+    assert!(!staff.contains("regions"));
+    assert_eq!(ops, ["regions", "status"].map(String::from).into());
+
+    let every = ic_channels::mcp::catalogue();
+    assert_eq!(
+        names(&every.iter().map(|t| t.listed()).collect::<Vec<_>>()).len(),
+        every.len(),
+        "two tools share a name"
+    );
+    for tool in every.iter().map(|t| t.listed()) {
+        let name = tool["name"].as_str().unwrap();
+        assert!(name.len() <= 64 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "{name}");
+        assert!(
+            !tool["title"].as_str().unwrap().is_empty() && tool["description"].as_str().unwrap().len() > 20,
+            "{name}"
+        );
+        let schema = &tool["inputSchema"];
+        assert_eq!(schema["type"], "object");
+        for required in schema["required"].as_array().unwrap() {
+            assert!(
+                schema["properties"].get(required.as_str().unwrap()).is_some(),
+                "{name} requires {required} it does not describe"
+            );
+        }
+        assert_eq!(
+            tool["annotations"]["readOnlyHint"],
+            tool["inputSchema"]["properties"].get("idempotency_key").is_none(),
+            "{name}"
+        );
+    }
+    let counts = ic_channels::mcp::counts();
+    assert_eq!(counts.values().sum::<usize>(), every.len());
+
+    let ops = vec![("x-dev-subject", "ops-1".to_string()), ("x-dev-roles", OPERATIONS.to_string())];
+    let (_, reply) = mcp(
+        &portal,
+        &ops,
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "regions", "arguments": {} } }),
+    )
+    .await;
+    assert_eq!(reply["result"]["isError"], false, "{reply}");
+    assert!(
+        reply["result"]["structuredContent"]["regions"].is_object() || reply["result"]["structuredContent"]["regions"].is_array(),
+        "{reply}"
+    );
+}
+
+/// Purpose: a tool call goes through the same route and checks as the screens: the customer reads their own policy and gets the
+/// route's own refusal for someone else's; a staff tool is refused to a customer before anything is asked; staff opening a policy
+/// without a case are refused by the access rules and allowed with one; a write is done once for one idempotency key; and
+/// arguments that are missing, unknown, outside a fixed set or the wrong shape are refused before any route is called.
+/// Why it matters: the MCP user must be able to do exactly what they could do on the screens, no more and no less. A second path with
+/// its own checks would sooner or later let someone do what the screens refuse.
+#[tokio::test]
+async fn a_tool_call_passes_the_same_checks_as_the_screens() {
+    let portal = portal();
+    let policy = portal.retail.to_string();
+    let mine = call_tool(&portal, "sub-kiri", "my_policy", json!({ "policy": policy })).await;
+    assert_eq!(mine["isError"], false, "{mine}");
+    assert_eq!(mine["structuredContent"]["policy"], policy.as_str());
+    assert!(mine["content"][0]["text"].as_str().unwrap().contains(&policy));
+    let other = call_tool(&portal, "sub-adv", "my_policy", json!({ "policy": policy })).await;
+    assert_eq!(other["isError"], true);
+    assert!(other["content"][0]["text"].as_str().unwrap().starts_with("Refused (404"), "{other}");
+
+    let staff_only = call_tool(&portal, "sub-kiri", "staff_policy", json!({ "policy": policy })).await;
+    assert_eq!(staff_only["isError"], true);
+    assert!(staff_only["content"][0]["text"].as_str().unwrap().contains("sign-in you do not hold"));
+    let no_case = call_tool(&portal, "sub-sue", "staff_policy", json!({ "policy": policy })).await;
+    assert_eq!(no_case["isError"], true, "{no_case}");
+    assert!(no_case["content"][0]["text"].as_str().unwrap().contains("403"), "{no_case}");
+    let with_case = call_tool(&portal, "sub-sue", "staff_policy", json!({ "policy": policy, "query": { "case": "case-mcp" } })).await;
+    assert_eq!(with_case["isError"], false, "{with_case}");
+    // The opening is in the person's own access log, as on the screens.
+    let me = call_tool(&portal, "sub-sue", "staff_me", json!({})).await;
+    assert!(
+        me["structuredContent"]["recent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l["purpose"]["reference"] == "case-mcp"),
+        "{me}"
+    );
+
+    // A write, retried with the same key, is one request.
+    let request = json!({ "id": "r-mcp", "policy": policy, "kind": "decline_indexation", "module": "policy-servicing", "payload": { "declined": true } });
+    let first = call_tool(&portal, "sub-kiri", "make_request", json!({ "body": request, "idempotency_key": "once" })).await;
+    assert_eq!(
+        (first["isError"].as_bool(), first["structuredContent"]["duplicate"].as_bool()),
+        (Some(false), Some(false)),
+        "{first}"
+    );
+    let again = call_tool(&portal, "sub-kiri", "make_request", json!({ "body": request, "idempotency_key": "once" })).await;
+    assert_eq!(again["structuredContent"]["duplicate"], true, "{again}");
+    let listed = call_tool(&portal, "sub-kiri", "my_requests", json!({})).await;
+    assert_eq!(listed["structuredContent"]["result"].as_array().unwrap().len(), 1, "{listed}");
+    // Money is refused without the phone's signature, as it is to the app.
+    let pay = json!({ "id": "p-mcp", "policy": policy, "kind": "make_payment", "module": "payments", "payload": { "amount_minor": 100 } });
+    let unsigned = call_tool(&portal, "sub-kiri", "make_request", json!({ "body": pay })).await;
+    assert!(unsigned["content"][0]["text"].as_str().unwrap().contains("step_up_required"), "{unsigned}");
+
+    for (name, arguments, said) in [
+        ("my_policy", json!({}), "policy is required"),
+        ("my_policy", json!({ "policy": policy, "colour": "red" }), "colour is not an argument"),
+        ("my_policy", json!({ "policy": policy, "query": { "a": "b" } }), "takes no query"),
+        ("claims_question", json!({ "question": "everything" }), "question is one of"),
+        ("make_request", json!({}), "body is required"),
+        ("make_request", json!({ "body": {}, "idempotency_key": "" }), "idempotency_key"),
+        ("my_policy", json!("policy"), "arguments are an object"),
+        (
+            "staff_policy",
+            json!({ "policy": policy, "query": { "case": ["x"] } }),
+            "query case is a string",
+        ),
+    ] {
+        let subject = if name.starts_with("staff") || name.starts_with("claims") {
+            "sub-sue"
+        } else {
+            "sub-kiri"
+        };
+        let refused = call_tool(&portal, subject, name, arguments).await;
+        assert_eq!(refused["isError"], true, "{name}");
+        assert!(refused["content"][0]["text"].as_str().unwrap().contains(said), "{name}: {refused}");
+    }
+    let (_, unknown) = mcp(
+        &portal,
+        &as_subject("sub-kiri"),
+        json!({ "jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": { "name": "drop_tables" } }),
+    )
+    .await;
+    assert_eq!(unknown["error"]["code"], -32602);
+    // A value cannot steer the call to another route.
+    let steered = call_tool(&portal, "sub-kiri", "my_policy", json!({ "policy": "../../staff/v1/me" })).await;
+    assert_eq!(steered["isError"], true);
+    assert!(steered["content"][0]["text"].as_str().unwrap().contains("404"), "{steered}");
+}
+
+/// Purpose: a document comes back whole as an embedded resource with its type, a query value and a number are carried, and a file
+/// for upload is decoded from base64 and refused when it is not.
+/// Why it matters: a PDF squeezed into text is useless and a file that arrives altered is worse; the person must get exactly the bytes
+/// the documents module gave.
+#[tokio::test]
+async fn files_go_both_ways_whole() {
+    let portal = portal();
+    let pdf = call_tool(&portal, "sub-kiri", "my_document", json!({ "id": "doc-1" })).await;
+    assert_eq!(pdf["isError"], false, "{pdf}");
+    let resource = &pdf["content"][0]["resource"];
+    assert_eq!(resource["mimeType"], "application/pdf");
+    let bytes = base64::engine::general_purpose::STANDARD.decode(resource["blob"].as_str().unwrap()).unwrap();
+    assert!(bytes.starts_with(b"%PDF"), "{:?}", &bytes[..8.min(bytes.len())]);
+    let staff = call_tool(
+        &portal,
+        "sub-rec",
+        "staff_document",
+        json!({ "id": "doc-1", "query": { "purpose": "complaint C-1" } }),
+    )
+    .await;
+    assert_eq!(staff["isError"], false, "{staff}");
+
+    let finance = call_tool(
+        &portal,
+        "sub-gllead",
+        "finance_question",
+        json!({ "question": "extract", "query": { "kind": "in_force", "period": "2027-11", "limit": 5 } }),
+    )
+    .await;
+    assert!(finance["content"][0]["text"].is_string());
+    let bad = call_tool(
+        &portal,
+        "sub-hr",
+        "upload_membership_file",
+        json!({ "policy": portal.scheme.to_string(), "file": "f1", "content_base64": "%%%" }),
+    )
+    .await;
+    assert!(bad["content"][0]["text"].as_str().unwrap().contains("not base64"), "{bad}");
+    let csv = base64::engine::general_purpose::STANDARD.encode("employee,name\nE1,Ana\n");
+    let uploaded = call_tool(
+        &portal,
+        "sub-hr",
+        "upload_membership_file",
+        json!({ "policy": portal.scheme.to_string(), "file": "f1", "content_base64": csv }),
+    )
+    .await;
+    assert!(uploaded["content"][0]["text"].is_string(), "{uploaded}");
+
+    // A route that answers with nothing, and one that answers with text, read as such.
+    use ic_channels::mcp::{catalogue, result};
+    let tool = catalogue().into_iter().find(|t| t.name == "status").unwrap();
+    assert_eq!(result(&tool, "/x", StatusCode::NO_CONTENT, "", b"")["isError"], false);
+    assert_eq!(result(&tool, "/x", StatusCode::OK, "text/plain", b"ok")["content"][0]["text"], "ok");
+    assert_eq!(
+        result(&tool, "/x", StatusCode::BAD_GATEWAY, "text/plain", b"down")["content"][0]["text"],
+        "Refused (502): down"
+    );
+    assert_eq!(
+        result(&tool, "/x", StatusCode::OK, "application/json", b"[1]")["structuredContent"],
+        json!({ "result": [1] })
+    );
+}
+
+/// Purpose: every route the portal serves is either a tool or deliberately left out with a reason, and every tool names a route
+/// that exists with its method.
+/// Why it matters: Mitchell asked that every function be usable through MCP. A route added to the portal without a tool would be a
+/// function the MCP user silently cannot reach; a tool for a route that is gone would fail every time it is called.
+#[test]
+fn every_route_is_a_tool_or_left_out_for_a_reason() {
+    let source = include_str!("../src/http.rs");
+    let start = source.find("pub fn router(").unwrap();
+    let routes_text = &source[start..];
+    let mut served = std::collections::BTreeSet::new();
+    for chunk in routes_text.split(".route(").skip(1) {
+        let path = chunk.split('"').nth(1).unwrap().to_string();
+        let end = chunk.find("\n        .").unwrap_or(chunk.len());
+        let handlers = &chunk[..end];
+        for (method, mark) in [("GET", "get("), ("POST", "post("), ("PUT", "put("), ("DELETE", "delete(")] {
+            if handlers.contains(&format!("({mark}")) || handlers.contains(&format!(" {mark}")) || handlers.contains(&format!(".{mark}")) {
+                served.insert((method.to_string(), path.clone()));
+            }
+        }
+    }
+    assert!(served.len() > 90, "the route list was not read: {served:?}");
+    let tools: std::collections::BTreeSet<(String, String)> = ic_channels::mcp::catalogue()
+        .iter()
+        .map(|t| (t.method.to_string(), t.path.to_string()))
+        .collect();
+    let left_out = |method: &str, path: &str| {
+        ic_channels::mcp::EXCLUDED.iter().any(|(m, p, _)| {
+            (*m == method || *m == "*")
+                && (*p == path
+                    || p.strip_suffix('*').is_some_and(|prefix| path.starts_with(prefix))
+                    || p.split(", ")
+                        .any(|q| q == path || q.strip_suffix('*').is_some_and(|prefix| path.starts_with(prefix))))
+        })
+    };
+    let missing: Vec<_> = served
+        .iter()
+        .filter(|(m, p)| !tools.contains(&(m.clone(), p.clone())) && !left_out(m, p))
+        .collect();
+    assert!(missing.is_empty(), "routes with no tool and no reason: {missing:?}");
+    let stale: Vec<_> = tools.iter().filter(|t| !served.contains(*t)).collect();
+    assert!(stale.is_empty(), "tools for routes that are not served: {stale:?}");
+}
+
+/// Purpose: with Entra sign-in the endpoint publishes its protected resource metadata, naming itself and both tenants' issuers and
+/// scopes, and a caller without a token is pointed to it; on a laptop there is none.
+/// Why it matters: an MCP client discovers where to sign the person in from this document. Without it no client can sign in; with
+/// the wrong issuer a staff member would be sent to the customers' tenant.
+#[tokio::test]
+async fn the_mcp_endpoint_says_where_to_sign_in() {
+    let portal = portal();
+    assert_eq!(
+        portal.send("GET", "/.well-known/oauth-protected-resource/mcp", &[], None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let sign_in = |authority: &str, scope: &str| SignIn {
+        authority: authority.into(),
+        tenant: "t1".into(),
+        client_id: "spa".into(),
+        scope: scope.into(),
+    };
+    let now = portal.now();
+    let app = router(Arc::new(AppState {
+        wordings: Arc::default(),
+        public_url: Some("https://portal.example.co.nz".into()),
+        returns: Arc::default(),
+        channel: portal.local.clone(),
+        customers: Auth::entra("cust-tenant", "api://app"),
+        workforce: Auth::entra("staff-tenant", "api://portal"),
+        clock: Arc::new(move || now),
+        regions: portal.regions.clone(),
+        ui: UiConfig::Entra {
+            customers: sign_in("https://contoso.ciamlogin.com", "api://app/portal"),
+            workforce: sign_in("https://login.microsoftonline.com", "api://portal/.default"),
+        },
+        pricing: portal.pricing.clone(),
+        complaints: Arc::new(common::pricing::Down),
+        commission: Arc::new(common::commission::seeded()),
+        finance: Arc::new(common::pricing::Down),
+        claims: portal.claims.clone(),
+        reinsurance: portal.reinsurance.clone(),
+        payments: portal.payments.clone(),
+        underwriting: portal.underwriting.clone(),
+        master: None,
+        intake: None,
+        documents: None,
+        group: None,
+    }));
+    let get = |path: &'static str| {
+        let app = app.clone();
+        async move {
+            let response = app.oneshot(Request::builder().uri(path).body(Body::empty()).unwrap()).await.unwrap();
+            let status = response.status();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null))
+        }
+    };
+    let (status, meta) = get("/.well-known/oauth-protected-resource/mcp").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(meta["resource"], "https://portal.example.co.nz/mcp");
+    assert_eq!(
+        meta["authorization_servers"],
+        json!(["https://login.microsoftonline.com/t1/v2.0", "https://contoso.ciamlogin.com/t1/v2.0"])
+    );
+    assert_eq!(meta["scopes_supported"], json!(["api://portal/.default", "api://app/portal"]));
+    assert_eq!(get("/.well-known/oauth-protected-resource").await.1, meta);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response.headers()["www-authenticate"],
+        "Bearer resource_metadata=\"https://portal.example.co.nz/.well-known/oauth-protected-resource/mcp\""
+    );
+    // Its own origin may call from a browser; no other may.
+    let from = |origin: &'static str| {
+        let app = app.clone();
+        async move {
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header("origin", origin)
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+        }
+    };
+    assert_eq!(from("https://portal.example.co.nz").await, StatusCode::UNAUTHORIZED);
+    assert_eq!(from("http://localhost:6274").await, StatusCode::FORBIDDEN);
 }

@@ -36,6 +36,8 @@ base64.workspace = true
 ring = "0.17"
 futures = "0.3"
 axum.workspace = true
+# The MCP endpoint calls the portal's own routes; axum already depends on it.
+tower.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -52,7 +54,6 @@ ic-payments = { path = "../payments" }
 ic-group = { path = "../group" }
 ic-entra = { workspace = true, features = ["testing"] }
 ic-sim.workspace = true
-tower.workspace = true
 http-body-util.workspace = true
 reqwest.workspace = true
 

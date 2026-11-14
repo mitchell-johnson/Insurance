@@ -48,7 +48,7 @@ fn a_laptop_configuration_and_its_guard() {
 }
 
 /// Purpose: production needs both tenants: the workforce's Entra ID and the customers' External ID with its own authority.
-/// Why it matters: validating customer tokens against the workforce tenant, or the other way round, would either lock everyone out or accept the wrong population as staff.
+/// Why it matters (and the public address the MCP endpoint names itself by): validating customer tokens against the workforce tenant, or the other way round, would either lock everyone out or accept the wrong population as staff.
 #[test]
 fn production_needs_both_tenants() {
     let workforce = [
@@ -63,7 +63,7 @@ fn production_needs_both_tenants() {
         ("IC_CUSTOMER_CLIENT_ID", "spa-app"),
         ("IC_CUSTOMER_SCOPE", "api://app/portal"),
     ];
-    let base = [NODES, ("IC_CLUSTER_TOKEN_FILE", "/token")];
+    let base = [NODES, ("IC_CLUSTER_TOKEN_FILE", "/token"), ("IC_PUBLIC_URL", "https://portal.example.co.nz/")];
     let all: Vec<(&str, &str)> = base.iter().chain(&workforce).chain(&customers).copied().collect();
     let s = load(&all).unwrap();
     assert_eq!(
@@ -100,6 +100,14 @@ fn production_needs_both_tenants() {
     odd.push(("IC_CUSTOMER_AUTHORITY", "contoso; script-src *"));
     assert!(load(&odd).unwrap_err().contains("web address"));
     assert!(load(&without("IC_CLUSTER_TOKEN_FILE")).unwrap_err().contains("IC_CLUSTER_TOKEN"));
+    // The MCP endpoint names itself by the public address, which must be the service's own https origin.
+    assert_eq!(s.public_url.as_deref(), Some("https://portal.example.co.nz"));
+    assert!(load(&without("IC_PUBLIC_URL")).unwrap_err().contains("IC_PUBLIC_URL"));
+    for odd in ["http://portal.example.co.nz", "https://portal.example.co.nz/path", "portal"] {
+        let mut wrong = without("IC_PUBLIC_URL");
+        wrong.push(("IC_PUBLIC_URL", odd));
+        assert!(load(&wrong).unwrap_err().contains("https origin"), "{odd}");
+    }
     let mut explicit = all.clone();
     explicit.push(("IC_AUTH", "entra"));
     explicit.push(("IC_ENTRA_AUTHORITY", "https://login.microsoftonline.us"));

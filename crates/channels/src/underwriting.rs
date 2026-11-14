@@ -169,3 +169,13 @@ pub fn countersigned(command: &Value, signer: &PartyId) -> Value {
     }
     command
 }
+
+/// The questions this console forwards, by name, for the MCP tool that asks them.
+pub fn question_names() -> Vec<&'static str> {
+    QUESTIONS.iter().map(|q| q.0).collect()
+}
+
+/// The commands this console forwards, by name, for the MCP tool that sends them.
+pub fn command_names() -> Vec<&'static str> {
+    DIRECT.iter().map(|c| c.0).chain(COUNTERSIGNED).collect()
+}
