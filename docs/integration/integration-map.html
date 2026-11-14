@@ -1,0 +1,89 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box}body{margin:0;background:#f6f7f9;font:14px/1.35 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#1d2330}
+.page{width:1640px;padding:28px 32px}
+h1{font-size:26px;margin:0 0 4px}.sub{color:#5a6372;margin:0 0 18px;font-size:14px}
+.band{border-radius:12px;padding:12px 14px;margin-bottom:0}
+.bl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#5a6372;font-weight:700;margin-bottom:8px}
+.row{display:flex;gap:10px}
+.b{border-radius:9px;padding:9px 11px;background:#fff;border:1.5px solid #c9ced8;flex:1}
+.b h3{margin:0 0 3px;font-size:14.5px}.b p{margin:0;font-size:12px;color:#454d5c}
+.b code{font:11.5px ui-monospace,Menlo,monospace;background:#eef0f4;padding:0 3px;border-radius:3px}
+.keep{background:#26303f;border-color:#26303f;color:#fff}.keep p{color:#d5dbe6}.keep code{background:#3a4556;color:#fff}
+.scr{background:#e6efff;border-color:#4f7fd9}
+.seam{background:#e5f6ec;border-color:#2f9d62}
+.heavy{background:#fff3df;border-color:#d68a1a}
+.ext{background:#fff;border-color:#9aa3b2}
+.nb{border-style:dashed}
+.tag{display:inline-block;font-size:10.5px;font-weight:700;border-radius:4px;padding:1px 5px;margin-left:4px;vertical-align:1px}
+.tk{background:#fff;color:#26303f}.ts{background:#4f7fd9;color:#fff}.tg{background:#2f9d62;color:#fff}.th{background:#d68a1a;color:#fff}.tn{background:#fff;color:#b23b3b;border:1px dashed #b23b3b}
+.conn{display:flex;justify-content:center;gap:60px;padding:6px 0;color:#3b4454;font-size:12.5px}
+.conn span{display:flex;align-items:center;gap:6px}.arr{font-size:18px;color:#7a8394}
+.cluster{border:2px solid #26303f;background:#eceff4;border-radius:14px;padding:12px 14px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}
+.legend{display:flex;gap:18px;margin-top:16px;font-size:12.5px;align-items:center;flex-wrap:wrap}
+.sw{display:inline-block;width:16px;height:12px;border-radius:3px;border:1.5px solid;vertical-align:-1px;margin-right:5px}
+.bus{background:#fff;border:1.5px solid #26303f;border-radius:9px;padding:7px 11px;margin:9px 0;font-size:12.5px;display:flex;justify-content:space-between}
+</style></head><body><div class="page">
+<h1>Integrating the insurance core: modules and what can be swapped</h1>
+<p class="sub">Read from the code and docs on main, 14 Nov 2026. Colour says how replaceable a part is. Dashed means designed but not built. Nothing has been deployed to Azure yet.</p>
+
+<div class="band"><div class="bl">Your people and channels</div><div class="row">
+<div class="b ext"><h3>Customers</h3><p>Your existing app calls <code>/app/v1</code> (API and offline sync). The native app stays in your codebase.</p></div>
+<div class="b ext"><h3>Advisers</h3><p>Web pages <code>/adviser</code>, or your adviser platform on <code>/adviser/v1</code></p></div>
+<div class="b ext"><h3>Employers</h3><p>Web pages <code>/employer</code>, member files to group schemes</p></div>
+<div class="b ext"><h3>Staff and operations</h3><p>Servicing console, workbench and a console per module; <code>/ops</code>, <code>/status</code></p></div>
+<div class="b keep"><h3>Sign-in: Entra ID <span class="tag tk">KEEP</span></h3><p>Workforce tenant for staff; External ID for customers, advisers, employers. Federate your existing identity providers into these.</p></div>
+</div></div>
+<div class="conn"><span><span class="arr">⇅</span>HTTPS with Entra tokens; the portal maps the person to a party ID and checks what they may do (Cedar, signed device approvals)</span></div>
+
+<div class="band"><div class="bl">Front doors and services (stateless, on AKS)</div><div class="row">
+<div class="b scr"><h3>Portal gateway <code>ic-portal</code> <span class="tag ts">SWAP SCREENS</span></h3><p>All web pages and app APIs. Replace the pages freely; the consoles carry approvals other modules rely on.</p></div>
+<div class="b keep"><h3>Core API <code>ic-api</code> <span class="tag tk">KEEP</span></h3><p><code>POST /v1/commands</code>, policies, quotes, payments, claims views. The door for your own systems: an Entra app role = the caller name.</p></div>
+<div class="b seam"><h3>Customer master <code>ic-customers</code> <span class="tag tg">SWAP: FIRST CANDIDATE</span></h3><p>Own PostgreSQL. Your CRM can take over behind a facade: <code>/parties/match</code>, <code>contact-points</code>, <code>spending-hold</code>, <code>routing</code>, <code>authority</code>, <code>due-diligence</code>; plus relays deaths and relationships.</p></div>
+<div class="b ext"><h3>Module drivers</h3><p>Stateless processes that talk to the outside for a module: payments pump, underwriting, reinsurance, unit pricing, documents, group, finance close.</p></div>
+</div></div>
+<div class="conn"><span><span class="arr">↓</span>Commands: named caller + fixed idempotency key</span><span><span class="arr">↑</span>Events: gapless, per partition, no personal data</span><span><span class="arr">⇄</span>Each workload has its own cluster token and grant</span></div>
+
+<div class="cluster"><div class="bl" style="color:#26303f">Ledger cluster: ic-node × 3, one per availability zone, New Zealand North. Each module runs as its own Raft group on these nodes.</div>
+<div class="row" style="gap:9px">
+<div class="b keep" style="flex:1.3"><h3>Core: policy engine and ledger <span class="tag tk">KEEP</span></h3><p>64 partitions, double-entry hash-chained ledger, products and rates as data, billing, arrears, investment ledger. The only writer of policies and money.</p></div>
+<div class="b keep" style="flex:1"><h3>Claims engine <span class="tag tk">KEEP</span></h3><p>Lives inside each partition so a decision and its postings commit together. Your claims workbench can sit in front as caller <code>claims</code>.</p></div>
+<div class="b keep" style="flex:1"><h3>Daily close <code>ic-worker</code> <span class="tag tk">KEEP</span></h3><p>On Temporal (Cloud or self-hosted: undecided). Billing, lapses, earning, reconciliation, signed Merkle root.</p></div>
+</div>
+<div class="bus"><b>Core interface</b><span>commands in: <code>allowed_callers()</code> per command</span><span>events out: <code>EventRecord {partition, seq}</code> and Event Hubs <code>policy-events</code></span><span>people only as <code>pty_…</code> IDs</span></div>
+<div class="grid">
+<div class="b scr"><h3>Channels module <span class="tag ts">SWAP SCREENS</span></h3><p>Directory of who relates to which policy, devices, staff authorisation, sync feeds.</p></div>
+<div class="b seam"><h3>Payments and collections <span class="tag tg">SEAM</span></h3><p>Point at your bank gateway (ISO 20022). Sends <code>SettlePayable</code>, <code>ApplyReceipt</code>; dunning, arrangements.</p></div>
+<div class="b seam"><h3>Finance ledger <span class="tag tg">SEAM</span></h3><p>Keep as subledger, feed your ERP. Month-end close, journals, returns, data mart. ERP export not built.</p></div>
+<div class="b seam"><h3>Documents <span class="tag tg">SEAM</span></h3><p>Your correspondence platform must send back <code>RecordNoticeDelivery</code>; lapses wait on it.</p></div>
+<div class="b seam"><h3>Complaints and conduct <span class="tag tg">SEAM</span></h3><p>Nothing in the core waits on it. Feeds finance conduct facts.</p></div>
+<div class="b seam"><h3>Unit pricing <span class="tag tg">SEAM</span></h3><p>A pricing adapter sends <code>ActivateUnitPrice</code> to every partition.</p></div>
+<div class="b seam"><h3>Wellness (AIA Vitality) <span class="tag tg">SEAM</span></h3><p>Discount per member. Takes <code>Join</code>, <code>ReportStatus</code>, <code>Leave</code> from caller <code>vitality</code>.</p></div>
+<div class="b heavy"><h3>Underwriting <span class="tag th">HEAVY</span></h3><p>Issues policies; reserves reinsurance capacity; group excess; reinstatements; advises commission.</p></div>
+<div class="b heavy"><h3>Reinsurance <span class="tag th">HEAVY</span></h3><p>Per-life accumulation, cessions, statements. Underwriting asks it for capacity live.</p></div>
+<div class="b heavy"><h3>Adviser commission <span class="tag th">HEAVY</span></h3><p>Posts only via <code>PostCounterparty</code>; workbench, licence cases, finance checks depend on it.</p></div>
+<div class="b heavy"><h3>Group schemes <span class="tag th">HEAVY</span></h3><p>Sends <code>group-admin</code> commands; drives matching, underwriting, reinsurance, letters.</p></div>
+<div class="b keep"><h3>Read models <span class="tag tk">KEEP</span></h3><p>Policy directory, life index, billing view, inside replicated state.</p></div>
+</div></div>
+<div class="conn"><span><span class="arr">⇅</span>Outside the cluster: partners, your back office, Azure platform</span></div>
+
+<div class="band"><div class="bl">Partners and your back office</div><div class="row">
+<div class="b ext nb"><h3>Bank</h3><p>ISO 20022 pain.001/008 out, pain.002, camt.053/054 in, mTLS. Fake bank only so far.</p></div>
+<div class="b ext"><h3>Fund administrator</h3><p>Uploads valuations over HTTPS to Blob under its own Entra identity. Not onboarded.</p></div>
+<div class="b ext"><h3>Reinsurers</h3><p>Listings by SFTP on Azure Storage and by API (client credentials).</p></div>
+<div class="b ext nb"><h3>AIA Vitality feed</h3><p>Intake not built; format unknown.</p></div>
+<div class="b ext"><h3>Inland Revenue, email, SMS, print</h3><p>Withheld tax via payments; Azure Communication Services; print outbox.</p></div>
+</div><div class="row" style="margin-top:10px">
+<div class="b ext nb"><h3>Your ERP / general ledger</h3><p>From finance: trial balance, movements, extracts in immutable Blob. Journal export in your format not built.</p></div>
+<div class="b ext"><h3>Your data warehouse, CRM, analytics</h3><p>Event Hubs <code>policy-events</code> and <code>customer-events</code>; finance extracts.</p></div>
+<div class="b ext"><h3>Your old policy system</h3><p>Migration cohorts loaded as caller <code>migration</code>, agreed with finance's cutover control.</p></div>
+<div class="b keep"><h3>Azure platform <span class="tag tk">KEEP</span></h3><p>Key Vault (signing, keys), immutable Blob (sealed log, Merkle roots), Event Hubs, AKS, PostgreSQL.</p></div>
+</div></div>
+
+<div class="legend"><b>Key</b>
+<span><span class="sw" style="background:#26303f;border-color:#26303f"></span>Keep: part of the core</span>
+<span><span class="sw" style="background:#e6efff;border-color:#4f7fd9"></span>Swap the screens, keep the engine</span>
+<span><span class="sw" style="background:#e5f6ec;border-color:#2f9d62"></span>Designed seam: swap with an adapter</span>
+<span><span class="sw" style="background:#fff3df;border-color:#d68a1a"></span>Swappable but heavy: others ask it questions</span>
+<span><span class="sw" style="background:#fff;border-color:#9aa3b2;border-style:dashed"></span>Designed, not built or not connected</span>
+</div></div></body></html>
