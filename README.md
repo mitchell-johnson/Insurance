@@ -6,30 +6,55 @@ It issues and services policies (retail term life, health, and group schemes), b
 
 ## How it is put together
 
+![How the system is put together](docs/architecture/system-overview.png)
+
+Every process is built and tested on main. Nothing has been deployed to Azure yet: the templates compile and the manifests render in CI, and the whole arrangement runs on one machine under Docker Compose.
+
 | Process | What it does | Runs as |
 | --- | --- | --- |
-| `ic-node` | A ledger node. Holds a replica of every partition's Raft group (the log, the policy state, the ledger and the read models) and of every module's group. | StatefulSet of three on AKS |
-| `ic-api` | The public HTTP API. A stateless gateway that routes each request to the partition that owns the policy. | Deployment |
-| `ic-worker` | Runs the end-of-day close as a Temporal workflow, so a close survives any process dying part-way. | Deployment, plus a nightly CronJob |
-| `ic-reinsurance` | Carries the reinsurance module's cessions and entries from its group on the nodes to the partitions, its notices to the modules they are for, its statements to write-once Blob Storage and its exceptions to an event hub. Holds no state. | Deployment |
-| `ic-underwriting` | Carries the underwriting module's effects to reinsurance, the core and group administration, and runs its daily sweep. Holds no state. | Deployment |
-| `ic-admin` | The operator's command: bootstrap, status, membership changes. | Job, or by hand |
+| `ic-node` | A ledger node. Holds a replica of every partition's Raft group (the log, the policy state, the ledger, claims and the read models) and of every module's group (`ic_node::modules()`: reinsurance, underwriting, group, distribution, payments, collections, finance, unit pricing, documents, complaints, channels, wellness). | StatefulSet of three on AKS, one per zone |
+| `ic-api` | The core API. A stateless gateway that checks the caller's Entra token and role and routes each command to the partition that owns the policy. | Deployment |
+| `ic-portal` | Every web page and app API: the customer app's API and sync, the adviser and employer portals, the staff and operations consoles, the status page (`crates/channels`, `docs/channels.md`). | Deployment |
+| `ic-customers` | The customer master (people master): who every person and organisation is, on its own PostgreSQL, separate from the ledger so personal data can be erased (`docs/customers.md`). | Deployment |
+| `ic-worker` | The end-of-day close as a Temporal workflow, so a close survives any process dying part-way, and unit orders between closes. | Deployment, and CronJobs `ic-close` and `ic-unit-orders` |
+| `ic-payments-pump` | The bank channels, payment evidence and the evacuation drill (`docs/payments.md`). | Deployment, and CronJob `ic-payments-drill` |
+| `ic-documents` | Rendering, the document vault, email, SMS and print, proof of delivery (`docs/documents.md`). | Deployment |
+| `ic-group` | Employer files and scheme administration's outside work (`docs/group.md`). | Deployment |
+| `ic-underwriting`, `ic-underwriting-intake` | Underwriting's driver, and the intake for health disclosures into the clinical store (`docs/underwriting.md`). | Deployments |
+| `ic-reinsurance` | Carries reinsurance's cessions to the partitions, statements to write-once storage and SFTP, and serves the reinsurer API (`docs/reinsurance.md`). | Deployment |
+| `ic-unit-pricing` | Valuation files in, prices to every partition, holdings extract out (`docs/unit-pricing.md`). | Deployment |
+| `ic-finance-close` | Finance's month-end close and its write-once extracts (`docs/finance.md`). `ic-finance-tables` validates rate tables. | Deployment; tool |
+| `ic-admin` | The operator's command: bootstrap, status, membership changes, the insurer's set-up file, the configuration register, policy migration. | Suspended CronJob run by hand, and Job `ic-bootstrap` |
 | `ic-simulate` | A synthetic insurer that runs a year of business in seconds, for sizing and soak runs. | Developer tool |
 
 Azure services do the work that should not be ours:
 
 | Need | Azure service |
 | --- | --- |
-| Identity for every process, no secrets | Entra Workload ID, one managed identity per process |
+| Identity for every process, no secrets | Entra Workload ID, a managed identity per workload |
 | Caller identity on the API | Entra ID tokens |
 | Tamper evidence: daily Merkle roots and sealed journal segments | Blob Storage with version-level immutability |
 | Signing the daily root | Key Vault (or Managed HSM) |
 | Clinical records, erasable per person | Key Vault key wrapping, a Blob container with no retention |
 | Events for downstream systems | Event Hubs, one hub partition per ledger partition |
-| The cluster token | Key Vault, mounted through the Secrets Store CSI driver |
-| Logs and metrics | Container Insights and Application Insights (JSON lines on stdout) |
+| Each workload's cluster token | Key Vault secret `cluster-token-<workload>`, mounted through the Secrets Store CSI driver |
+| Personal data, erasable per person | Azure Database for PostgreSQL for the customer master, each party's key wrapped in Key Vault |
+| Email and SMS with delivery reports | Communication Services and Event Grid |
+| Files from outside (employer files, valuations) | Blob Storage scanned by Defender for Storage |
+| Bank keys and credentials | A Key Vault of payments' own |
+| Logs, metrics and alerts | Container Insights, Application Insights and log alert rules (JSON lines on stdout) |
 
-[docs/architecture.md](docs/architecture.md) explains the design. [docs/operations.md](docs/operations.md) is the runbook. [docs/decisions.md](docs/decisions.md) lists what is deliberately not done yet and the decisions still open. [docs/modules.md](docs/modules.md) is the contract for the modules built beside the core. [docs/finance.md](docs/finance.md) describes the finance ledger, the close, returns and the table validation suite. [docs/unit-pricing.md](docs/unit-pricing.md) describes unit pricing: valuation intake, price checks, approval, price errors and the holdings extract.
+What each template creates is drawn in [docs/architecture/azure-deployment.png](docs/architecture/azure-deployment.png). Temporal hosting (Temporal Cloud or self-hosted on AKS) is still the insurer's decision.
+
+## Documentation
+
+- [docs/architecture.md](docs/architecture.md): how the system works, the diagrams, and each area's state and hand-over.
+- [docs/operations.md](docs/operations.md): the runbook, from the first deployment to replacing a node.
+- [docs/decisions.md](docs/decisions.md): what is deliberately not done yet, open decisions and best-estimate placeholders.
+- [docs/integration.md](docs/integration.md): fitting the core into an insurer's existing systems, and what can be swapped.
+- [docs/modules.md](docs/modules.md): the contract for modules built beside the core.
+- One document per area: [claims](docs/claims.md), [reinsurance](docs/reinsurance.md), [underwriting](docs/underwriting.md), [group schemes](docs/group.md), [commission](docs/distribution.md), [payments](docs/payments.md), [documents](docs/documents.md), [complaints](docs/complaints.md), [finance](docs/finance.md), [unit pricing](docs/unit-pricing.md), [customer master](docs/customers.md), [portal and app services](docs/channels.md), [wellness](docs/wellness.md), [AIA New Zealand products](docs/aia-products.md), [design system](docs/design-system.md).
+- Testing: [the persona test pack](docs/testing/personas/README.md) and [the persona end-to-end suite](e2e/README.md).
 
 ## Try it
 
@@ -71,40 +96,55 @@ The standards the suite is held to, enforced in CI (`.github/workflows/ci.yml`, 
 
 ## Deploy to Azure
 
-1. Create the platform: `az deployment group create -g <rg> -f infra/main.bicep -p infra/main.bicepparam`.
-2. Build and push the image to the registry it created.
-3. Fill in `deploy/k8s` from the deployment's outputs and `kubectl apply -k deploy/k8s`.
+1. Create the platform: `az deployment group create -g <rg> -f infra/main.bicep -p infra/main.bicepparam`, then issue each workload's cluster token.
+2. Deploy each module's own template (`infra/customers.bicep`, `documents`, `finance`, `group`, `reinsurance`, `underwriting`, `unit-pricing`) into the same resource group.
+3. Build and push the image to the registry `main.bicep` created, and register the applications with Entra ID.
+4. Fill in `deploy/k8s` from the deployments' outputs and `kubectl apply -k deploy/k8s`; the bootstrap job forms the groups and opens the first business date.
+5. Apply the insurer's set-up file with `ic-admin apply`.
 
 [docs/operations.md](docs/operations.md) has each step in full.
 
 ## Repository layout
 
 ```
-crates/money      exact decimal money and rounding
-crates/ledger     double-entry ledger, hash chain, Merkle roots
-crates/log        the ordered command log of one partition
-crates/product    product definitions (Starlark), rating, schedules
-crates/core       the policy state machine: issue, bill, collect, lapse, transfer, close
-crates/readmodel  policy directory, life index, billing view, audience scope
-crates/cashmatch  matching incoming payments to policies
-crates/raft       ledger nodes: Raft groups, storage, transport, the node server
-crates/workflows  the end-of-day close and its Temporal workflow
-crates/azure      Entra, Blob Storage, Key Vault and Event Hubs adapters
-crates/api        the HTTP API, the gateway, ic-admin
-crates/sim        in-process cluster and the synthetic insurer
-crates/claims      intake, assessment, decisions and authority, benefits in payment, overpayments (docs/claims.md)
-crates/reinsurance treaties, per-life accumulation, cessions, capacity, recoveries, reinsurer accounts
-crates/payments   direct debits, payee accounts, payment runs, refunds, bank reconciliation, the evacuation drill (docs/payments.md)
-crates/payments-service  bank channels, the pump (ic-payments-pump), payment evidence
-crates/channels   the customer app API, adviser and employer portals, staff and operations consoles, the status page (ic-portal)
+crates/money       exact decimal money; the only crate that rounds
+crates/ledger      double-entry ledger, hash chain, Merkle roots
+crates/log         the ordered command log of one partition
+crates/product     product definitions (Starlark), rating, schedules
+crates/core        the policy state machine: issue, bill, collect, lapse, loans, units, transfer, migration, close
+crates/readmodel   policy directory, life index, billing view, audience scope
+crates/cashmatch   matching incoming payments to policies
+crates/raft        Raft groups, storage, transport, the module host, access grants, fail-back
+crates/node        the deployed ledger node (ic-node) and the list of hosted modules
+crates/workflows   the end-of-day close and unit orders, as Temporal workflows (ic-worker)
+crates/azure       Blob Storage, Key Vault and Event Hubs adapters
+crates/entra       the one Entra token check every service uses
+crates/api         the core API, the gateway, ic-admin and policy migration
+crates/sim         in-process cluster and the synthetic insurer
+crates/claims      intake, assessment, decisions and authority, benefits in payment, overpayments (inside each partition)
+crates/reinsurance treaties, per-life accumulation, cessions, capacity, recoveries, reinsurer accounts, the reinsurer API
 crates/underwriting proposals, disclosure, rules, case work and authority, offers, issue, the clinical store
+crates/group       scheme administration, employer files, billing groups, leavers
 crates/distribution advisers, licence status, commission, clawback, statements, the held balance workbench
-crates/documents  templates, issuing, the document vault, delivery and proof, notice clocks and defects (ic-documents)
-crates/complaints complaints, disputes and conduct cases: the register, timers, external forums, reporting
-treaties/         the shipped reinsurance treaties and reinsurer rate tables
-products/         the shipped products, definitions and rate tables
-infra/            the Azure platform (Bicep)
-deploy/compose    the cluster on one machine, and the failure drill
-deploy/k8s        the cluster on AKS
-docs/             architecture, operations, decisions, the persona test pack
+crates/payments    direct debits, payee accounts, payment runs, refunds, bank reconciliation
+crates/payments-service the payments module's host, bank channels, the pump (ic-payments-pump), payment evidence
+crates/collections dunning, arrangements and hardship
+crates/finance     the finance ledger, month-end close, returns, rate table validation
+crates/pricing     unit pricing: valuations, price checks, approval, price errors, holdings extract
+crates/documents   templates, issuing, the document vault, delivery and proof, notice clocks and defects
+crates/complaints  complaints, disputes and conduct cases: the register, timers, external forums, reporting
+crates/customers   the customer master (people master), on its own PostgreSQL
+crates/channels    the customer app API, adviser and employer portals, staff and operations consoles, the status page (ic-portal)
+crates/wellness    the AIA Vitality discount
+products/          the shipped products, definitions and rate tables
+treaties/          the shipped reinsurance treaties and reinsurer rate tables
+config/            Cedar access policies, commission and finance configuration
+infra/             the Azure platform (Bicep): main.bicep and one template per module
+deploy/compose     the cluster on one machine, and the failure drill
+deploy/k8s         the cluster on AKS
+deploy/entra       app registrations and roles
+deploy/cluster-access  per-workload cluster tokens and grants
+e2e/               the persona end-to-end suite through the web pages
+tools/             build checks, the persona matrix generator, diagram rendering, the CI runner image
+docs/              architecture, operations, decisions, each area's document, the persona test pack
 ```
