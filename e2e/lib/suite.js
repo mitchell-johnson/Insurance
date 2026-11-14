@@ -12,6 +12,7 @@
 // It declares who it is for and why it exists; `tools/check_test_docs.py`
 // holds Rust tests to the same two lines.
 "use strict";
+const { execFile } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { System } = require("../stack/cluster");
@@ -141,6 +142,43 @@ class Journey {
   /// Do something through the portal's own routes as a persona, without a screen: the set-up a journey starts from.
   async does(who, method, pathname, body, what) { return this.sys.must(this.sys.portal(method, pathname, who, body), `${who.key} ${what || pathname}`); }
   note(text) { this.steps.push(text); }
+
+  // --- Time and money, for the lifecycle journeys (`lock: "business-date"`; they run after every other test). ---
+  /// The ledger's business date now.
+  async today() {
+    const r = await this.sys.must(this.sys.http("GET", this.stack.api, "/v1/admin/reconciliation", { headers: { "x-dev-subject": "sub-st16", "x-dev-roles": "operations" } }), "read the business date");
+    return r.business_date;
+  }
+  /// Close `n` business days: the end-of-day close the scheduled workflow runs, once per day, by the
+  /// `ic-e2e-close` tool. Each close must reconcile; a break fails the journey.
+  async closes(n = 1) {
+    const bin = path.resolve(__dirname, "../..", process.env.IC_BIN || "target/debug", "ic-e2e-close");
+    const env = { PATH: process.env.PATH, IC_NODES: this.stack.nodes.map((u) => u.replace(/^https?:\/\//, "")).join(","), IC_CLUSTER_TOKEN: this.stack.token, IC_ROOT_DIR: path.join(this.stack.run, "roots") };
+    let last = null;
+    for (let i = 0; i < n; i++) {
+      const out = await new Promise((done, fail) => execFile(bin, [], { env, maxBuffer: 16 * 1024 * 1024 }, (e, stdout, stderr) => (e ? fail(new Error(`the close failed: ${stderr || e.message}`)) : done(stdout))));
+      last = JSON.parse(out);
+      if (last.breaks && last.breaks.length) throw new Error(`the close of ${last.closed} did not reconcile: ${JSON.stringify(last.breaks).slice(0, 300)}`);
+    }
+    return last;
+  }
+  /// Close days until the business date is `date`.
+  async closesTo(date) {
+    for (let n = 0; n < 800; n++) { if ((await this.today()) >= date) return; await this.closes(1); }
+    throw new Error(`the business date never reached ${date}`);
+  }
+  /// Money arrives at the bank quoting a policy number, and cash matching applies it.
+  async pays(number, minor) {
+    const id = this.ref("rc").toLowerCase();
+    const r = await this.sys.must(this.sys.http("POST", this.stack.api, "/v1/payments", { headers: { "x-dev-subject": "svc-cash-matching", "x-dev-roles": "cash-matching", "x-caller": "cash-matching" },
+      body: { id, amount: { minor, currency: "NZD" }, reference: number, payer_account: null, received_on: await this.today() } }), `receipt for ${number}`);
+    if (r.status !== "applied") throw new Error(`the receipt for ${number} was not applied: ${JSON.stringify(r)}`);
+    return id;
+  }
+  /// A command to the core from one of its named calling services (policy servicing, collections).
+  core(caller, command, policy) {
+    return this.sys.http("POST", this.stack.api, "/v1/commands", { headers: { "x-dev-subject": `svc-${caller}`, "x-dev-roles": caller, "x-caller": caller, "idempotency-key": this.ref("cmd") }, body: { command, policy } });
+  }
   /// Open a page as a persona. `who` is a member of the cast (`lib/cast.js`), or null for a public page.
   /// `statuses` are refusals the page is expected to meet while it loads.
   async open(pathname, who, ...statuses) {

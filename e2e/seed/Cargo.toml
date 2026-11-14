@@ -15,6 +15,14 @@ edition = "2021"
 publish = false
 license = "UNLICENSED"
 
+[[bin]]
+name = "ic-e2e-config"
+path = "src/main.rs"
+
+[[bin]]
+name = "ic-e2e-close"
+path = "src/bin/ic-e2e-close.rs"
+
 [workspace]
 
 [dependencies]
@@ -23,6 +31,9 @@ ic-underwriting = { path = "../../crates/underwriting" }
 ic-reinsurance = { path = "../../crates/reinsurance" }
 ic-sim = { path = "../../crates/sim" }
 ic-product = { path = "../../crates/product" }
+ic-workflows = { path = "../../crates/workflows" }
+ic-raft = { path = "../../crates/raft" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 serde = "1"
 serde_json = "1"

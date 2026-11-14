@@ -1937,11 +1937,14 @@ dependencies = [
  "chrono",
  "ic-finance",
  "ic-product",
+ "ic-raft",
  "ic-reinsurance",
  "ic-sim",
  "ic-underwriting",
+ "ic-workflows",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -2159,6 +2162,33 @@ dependencies = [
  "serde_json",
  "sha2",
  "starlark",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "ic-workflows"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-tz 0.10.4",
+ "futures",
+ "hex",
+ "ic-azure",
+ "ic-core",
+ "ic-ledger",
+ "ic-raft",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-workflow",
  "thiserror",
  "tokio",
  "tracing",

@@ -31,6 +31,7 @@ async function main() {
   const browser = await chromium.launch();
   const results = [];
   const held = new Set();
+  let running = 0;
   const queue = [...chosen];
   const started = Date.now();
 
@@ -39,7 +40,8 @@ async function main() {
     const began = Date.now();
     let error = null;
     try {
-      await Promise.race([t.run(journey), new Promise((_, no) => setTimeout(() => no(new Error("the test ran past its limit of 120 seconds")), 120000))]);
+      const limit = t.meta.limit || 120;
+      await Promise.race([t.run(journey), new Promise((_, no) => setTimeout(() => no(new Error(`the test ran past its limit of ${limit} seconds`)), limit * 1000))]);
     } catch (e) { error = String(e.message || e).split("\n").slice(0, 4).join(" / "); }
     const problems = [...(error ? [error] : []), ...journey.findings()];
     await journey.close(problems.length > 0);
@@ -47,14 +49,19 @@ async function main() {
   }
   async function worker() {
     for (;;) {
-      const at = queue.findIndex((t) => !t.meta.lock || !held.has(t.meta.lock));
+      // Journeys that move the business date go last, one at a time, once nothing else is running:
+      // every other test takes the opening date as today.
+      const moves = (t) => t.meta.lock === "business-date";
+      const at = queue.findIndex((t) => (!t.meta.lock || !held.has(t.meta.lock)) && (!moves(t) || (queue.every(moves) && held.size === 0 && running === 0)));
       if (at < 0) { if (!queue.length) return; await new Promise((r) => setTimeout(r, 200)); continue; }
       const [t] = queue.splice(at, 1);
       if (t.meta.lock) held.add(t.meta.lock);
+      running++;
       let r = await attempt(t), flaky = false;
       const first = r.problems;
       if (r.problems.length && process.env.RETRY !== "0") { const again = await attempt(t, 2); if (!again.problems.length) { flaky = true; r = { problems: [], ms: r.ms + again.ms }; } }
       if (t.meta.lock) held.delete(t.meta.lock);
+      running--;
       const status = r.problems.length ? "failed" : flaky ? "flaky" : "passed";
       results.push({ ...t.meta, status, ms: r.ms, problems: r.problems, first_attempt: flaky ? first : undefined });
       console.log(`${status === "passed" ? "ok   " : status === "flaky" ? "FLAKY" : "FAIL "} ${t.meta.id} ${t.meta.persona} ${t.meta.title}${r.problems.length ? "\n        " + r.problems.join("\n        ") : ""}`);
