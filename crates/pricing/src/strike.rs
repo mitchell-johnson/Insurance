@@ -26,7 +26,7 @@
 //! must accept each failure with a reason, on the record.
 
 use chrono::NaiveDate;
-use ic_money::{dec_i128, Dec, DecStr, FastRounding, MICRO_PER_UNIT};
+use ic_money::{dec_i128, round_integer, Dec, DecStr, RoundingMode, MICRO_PER_UNIT};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -99,27 +99,13 @@ fn pow10(n: u32) -> Dec {
 
 /// `value` rounded to `places` decimals by `mode`, written with exactly that
 /// many decimals, so the same price always has the same string.
-pub fn fixed(value: Dec, places: u32, mode: FastRounding) -> Result<DecStr, String> {
+pub fn fixed(value: Dec, places: u32, mode: RoundingMode) -> Result<DecStr, String> {
     if value.is_nan() || value.is_infinite() {
         return Err("the price is not a number".to_string());
     }
-    // Decide from the whole remainder, not the first dropped digit:
-    // fastnum's `round(0)` looks only at that digit, so 1.00490680 rounded
-    // up to four places came out 1.0049.
-    let scaled = value * pow10(places);
-    let whole = scaled.trunc();
-    let rest = (scaled - whole).abs();
-    let toward = |n: i128| if scaled.is_sign_negative() { n - 1 } else { n + 1 };
-    let n = whole.to_i128().map_err(|_| "the price is out of range".to_string())?;
-    let half = Dec::ONE / Dec::TWO;
-    let away = match mode {
-        _ if rest.is_zero() => false,
-        FastRounding::Up => true,
-        FastRounding::Down => false,
-        FastRounding::HalfEven => rest > half || (rest == half && n % 2 != 0),
-        other => return Err(format!("rounding {other:?} is not used for prices")),
-    };
-    let n = if away { toward(n) } else { n };
+    // Exact on the whole remainder: the decimal library's own rounding
+    // decides from the first dropped digit alone (E2E-232).
+    let n = round_integer(value * pow10(places), mode).map_err(|_| "the price is out of range".to_string())?;
     let scale = 10i128.pow(places);
     let sign = if n < 0 { "-" } else { "" };
     let a = n.unsigned_abs();
@@ -128,7 +114,7 @@ pub fn fixed(value: Dec, places: u32, mode: FastRounding) -> Result<DecStr, Stri
 }
 
 fn show(d: Dec) -> String {
-    fixed(d, 6, FastRounding::HalfEven).map_or_else(|e| e, |s| s.as_str().to_string())
+    fixed(d, 6, RoundingMode::HalfEven).map_or_else(|e| e, |s| s.as_str().to_string())
 }
 
 fn within(measured: Dec, limit: &DecStr) -> bool {
@@ -177,9 +163,9 @@ pub fn strike(
     }
     let bps = |b: u32| dec_i128(b as i128) / dec_i128(10_000);
     let places = def.price_decimals;
-    let mid = fixed(raw_mid, places, FastRounding::HalfEven)?;
-    let buy = fixed(raw_mid * (Dec::ONE + bps(def.buy_spread_bps)), places, FastRounding::Up)?;
-    let sell = fixed(raw_mid * (Dec::ONE - bps(def.sell_spread_bps)), places, FastRounding::Down)?;
+    let mid = fixed(raw_mid, places, RoundingMode::HalfEven)?;
+    let buy = fixed(raw_mid * (Dec::ONE + bps(def.buy_spread_bps)), places, RoundingMode::Up)?;
+    let sell = fixed(raw_mid * (Dec::ONE - bps(def.sell_spread_bps)), places, RoundingMode::Down)?;
 
     let mut checks = Vec::new();
     checks.push(match core_units_micro {
@@ -467,7 +453,7 @@ mod tests {
         assert!(strike(&def, &terms, &valuation("1", 1), None, None).unwrap_err().contains("not cash"));
         let def = sample("growth");
         assert!(strike(&def, &terms, &valuation("0", 1_000_000), None, None).unwrap_err().contains("zero"));
-        assert!(fixed(Dec::NAN, 2, FastRounding::Up).is_err());
+        assert!(fixed(Dec::NAN, 2, RoundingMode::Up).is_err());
     }
 
     /// Purpose: rounding looks at every dropped digit, not only the first:
@@ -480,16 +466,15 @@ mod tests {
     #[test]
     fn rounds_on_the_whole_remainder() {
         let f = |v: &str, mode| fixed(DecStr::parse(v).unwrap().get(), 4, mode).unwrap().as_str().to_string();
-        assert_eq!(f("1.00490680", FastRounding::Up), "1.0050");
-        assert_eq!(f("1.00170092", FastRounding::Up), "1.0018");
-        assert_eq!(f("1.00490000", FastRounding::Up), "1.0049");
-        assert_eq!(f("1.00499999", FastRounding::Down), "1.0049");
-        assert_eq!(f("1.00125001", FastRounding::HalfEven), "1.0013");
-        assert_eq!(f("1.00125000", FastRounding::HalfEven), "1.0012");
-        assert_eq!(f("1.00135000", FastRounding::HalfEven), "1.0014");
-        assert_eq!(f("1.00124999", FastRounding::HalfEven), "1.0012");
-        assert_eq!(f("-1.00490680", FastRounding::Up), "-1.0050");
-        assert!(fixed(DecStr::parse("1.00001").unwrap().get(), 4, FastRounding::Floor).is_err());
+        assert_eq!(f("1.00490680", RoundingMode::Up), "1.0050");
+        assert_eq!(f("1.00170092", RoundingMode::Up), "1.0018");
+        assert_eq!(f("1.00490000", RoundingMode::Up), "1.0049");
+        assert_eq!(f("1.00499999", RoundingMode::Down), "1.0049");
+        assert_eq!(f("1.00125001", RoundingMode::HalfEven), "1.0013");
+        assert_eq!(f("1.00125000", RoundingMode::HalfEven), "1.0012");
+        assert_eq!(f("1.00135000", RoundingMode::HalfEven), "1.0014");
+        assert_eq!(f("1.00124999", RoundingMode::HalfEven), "1.0012");
+        assert_eq!(f("-1.00490680", RoundingMode::Up), "-1.0050");
         // The reported fund: 1,002,400.80 over 1,000,000 units, 25 bps.
         let def = sample("growth");
         let struck = strike(&def, &def.terms().unwrap(), &valuation("1002400.80", 1_000_000 * MICRO_PER_UNIT), None, None).unwrap();

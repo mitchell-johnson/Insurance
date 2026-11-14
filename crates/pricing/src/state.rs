@@ -724,7 +724,7 @@ impl PricingState {
                 version = w.version.unwrap_or(1) + 1;
                 let correction = Correction {
                     price: id.to_string(),
-                    size: crate::strike::fixed(size, 8, ic_money::FastRounding::HalfEven).map_err(|m| refuse("cannot_strike", m))?,
+                    size: crate::strike::fixed(size, 8, ic_money::RoundingMode::HalfEven).map_err(|m| refuse("cannot_strike", m))?,
                     threshold: terms.error_threshold.clone(),
                     material,
                 };
