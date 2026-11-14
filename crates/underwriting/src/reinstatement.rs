@@ -37,6 +37,7 @@ pub fn reinstatement_proposal(policy: &Policy, today: NaiveDate) -> Option<OpenP
                 cover_type: cover.cover_type.clone(),
                 life,
                 sum_insured_minor,
+                option: None,
             });
         }
     }

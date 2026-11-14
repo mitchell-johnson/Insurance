@@ -107,7 +107,7 @@ fn broken_treaty_files_are_refused_with_the_reason() {
         ("notify_at = dollars(1000000)", "notify_at = 0"),
         ("reinsurer(\"reinsurer-south\", \"0.40\")", "reinsurer(\"reinsurer-north\", \"0.40\")"),
         ("rate_table_premium(\"ri-life-base\")", "rate_table_premium(\"\")"),
-        ("scope = [scope(\"term-life\", [\"life\", \"trauma\"])]", "scope = []"),
+        ("scope(\"term-life\", [\"life\", \"trauma\"]),", "scope(\"term-life\", []),"),
         (
             "effective_from = \"2027-01-01\",",
             "effective_from = \"2027-01-01\",\n    closed_to_new_business_from = \"2026-01-01\",",
@@ -117,6 +117,10 @@ fn broken_treaty_files_are_refused_with_the_reason() {
         assert!(matches!(err, LoadError::Invalid { .. }), "{from}: {err}");
         assert!(err.to_string().contains("invalid"));
     }
+    // A treaty that names no product at all.
+    let (a, b) = (RETAIL.find("    scope = [").unwrap(), RETAIL.find("    retention_group").unwrap());
+    let unscoped = format!("{}    scope = [],\n{}", &RETAIL[..a], &RETAIL[b..]);
+    assert!(matches!(load_treaty("t.star", &unscoped), Err(LoadError::Invalid { .. })));
     for (from, to) in [
         ("facultative_limit = dollars(1000000)", "facultative_limit = -1"),
         ("scheme_share(\"0.30\")", "excess_per_member(-1)"),
@@ -245,4 +249,59 @@ fn a_statement_period_starts_where_its_length_says() {
     assert_eq!(StatementPeriod::Quarterly.start_for(end), d(2027, 10, 1));
     assert_eq!(StatementPeriod::Yearly.start_for(end), d(2027, 1, 1));
     assert_eq!(StatementPeriod::Yearly.start_for(d(2028, 2, 29)), d(2027, 3, 1));
+}
+
+/// Purpose: the shipped treaties take the AIA NZ range: lump sum cover on a life (life,
+/// trauma and TPD) under the retail surplus treaty and AIA Corporate's group life under the
+/// group treaty, and a TPD layer on an AIA Living policy is ceded over the retention like any
+/// other lump sum. Income, health and accidental injury cover are retained: no shipped treaty
+/// names them.
+/// Why it matters: a product no treaty names is retained in full. Without these entries every
+/// AIA policy above the retention would be kept by the insurer, unseen by any reinsurer.
+#[test]
+fn the_aia_range_is_covered_by_the_shipped_treaties() {
+    let retail = load_treaty("retail_life_surplus.star", RETAIL).unwrap();
+    let group = load_treaty("group_life_surplus.star", GROUP).unwrap();
+    for (product, cover_types) in [
+        ("aia-living", &["life", "trauma", "tpd"][..]),
+        ("aia-living-business", &["life", "trauma", "tpd"][..]),
+        ("aia-cover-for-life", &["life"][..]),
+        ("aia-essentials-life", &["life"][..]),
+        ("aia-starter", &["life"][..]),
+        ("aia-interim", &["life", "trauma"][..]),
+    ] {
+        for cover_type in cover_types {
+            assert!(retail.covers(product, cover_type), "{product} {cover_type}");
+        }
+        for retained in ["income_protection", "health", "accidental_injury"] {
+            assert!(!retail.covers(product, retained), "{product} {retained}");
+        }
+    }
+    assert!(group.covers("aia-corporate", "group_life") && !retail.covers("aia-corporate", "group_life"));
+
+    let mut b = Bench::new();
+    b.feed(
+        1,
+        vec![ic_core::event::Event::PolicyIssued {
+            policy: ic_core::PolicyId::from("A1"),
+            number: "N-A1".into(),
+            group: ic_core::GroupId::from("A1"),
+            policyholder: ic_core::PartyId::from("ana"),
+            product_code: "aia-living".into(),
+            product_hash: "hash".into(),
+            inception: d(2027, 2, 1),
+            lives: vec![ic_core::event::LifeInfo::new(ic_core::LifeId::from("L1"), Some(ic_core::PartyId::from("ana")))],
+            layers: vec![
+                layer("tpd", "tpd", 1, "L1", 900 * K, d(2027, 2, 1)),
+                layer("income", "income_protection", 2, "L1", 900 * K, d(2027, 2, 1)),
+            ],
+            members: vec![],
+        }],
+    );
+    let tpd = b.ri.cession(&key("A1", "tpd", 1, "L1"), d(2027, 2, 1)).unwrap();
+    assert_eq!((tpd.retained_minor, tpd.treaty_ceded()), (500 * K, 400 * K));
+    assert_eq!(tpd.treaty.as_ref().unwrap().id, ic_reinsurance::TreatyId::from("retail-life-surplus"));
+    let income = b.ri.cession(&key("A1", "income", 2, "L1"), d(2027, 2, 1)).unwrap();
+    assert_eq!((income.retained_minor, income.treaty_ceded(), income.treaty.clone()), (900 * K, 0, None));
+    b.assert_reconciles();
 }
