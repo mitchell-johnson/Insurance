@@ -123,9 +123,9 @@ const portal = (() => {
   function say(el, kind, text) { put(el, banner(kind, text)); }
   // A question that must be answered before an action goes ahead. Resolves to the
   // answer (or true when nothing is asked for), or null when the person backs out.
-  function ask({ title, text, label, confirm, danger }) {
+  function ask({ title, text, label, confirm, danger, type }) {
     return new Promise((resolve) => {
-      const input = label ? h("input", { id: "ask-input", required: true, maxlength: 500, autocomplete: "off" }) : null;
+      const input = label ? h("input", { id: "ask-input", type: type || "text", required: true, maxlength: 500, autocomplete: "off" }) : null;
       let answer = null;
       const box = h("dialog", { "aria-labelledby": "ask-title" }, h("form", { on: { submit: (ev) => { ev.preventDefault(); answer = input ? input.value.trim() : true; box.close(); } } },
         h("h2", { id: "ask-title" }, title), text ? h("p", {}, text) : null, input ? [h("label", { for: "ask-input" }, label), input] : null,
@@ -202,7 +202,13 @@ const portal = (() => {
     const res = await fetch(path, { method, headers, body: body === undefined ? undefined : raw ? body : JSON.stringify(body) });
     const data = await res.json().catch(() => null);
     if (res.status === 401 && cfg.mode !== "dev") { store.removeItem("token:" + realm); throw new Error("Your sign-in has expired. Reload the page to sign in again."); }
-    if (!res.ok) { const e = new Error((data && data.detail) || "The request failed (" + res.status + ")."); e.status = res.status; e.code = data && data.title; throw e; }
+    if (!res.ok) {
+      // A reference nobody holds is most often a slip of the fingers: say so, and what to do.
+      const vague = res.status === 404 && (!data || !data.detail || /^no such resource$/i.test(data.detail));
+      // A role named as the code spells it (PayeeMaintainer) reads as words.
+      const detail = data && data.detail && String(data.detail).replace(/\b([A-Z][a-z]+)((?:[A-Z][a-z]+)+)\b/g, (w) => w.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase());
+      const e = new Error(vague ? "Nothing was found with that reference. Check it for a slip and try again; if it is right, it may not be open to you." : detail || "The request failed (" + res.status + ")."); e.status = res.status; e.code = data && data.title; throw e;
+    }
     return data;
   }
   // Fetch a file as the signed-in person and hand it to the browser to save.

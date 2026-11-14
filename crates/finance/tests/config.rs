@@ -46,6 +46,36 @@ fn the_shipped_chart_maps_every_core_role() {
     assert_ne!(edited.content_hash, chart.content_hash);
 }
 
+/// Purpose: every product shipped under `products/` has a rule in the shipped close
+/// configuration that places its policies in an accounting group.
+/// Why it matters: a product with no rule leaves every policy of it ungrouped however often
+/// policies are classified, and out of every group's figures. A new product must come with
+/// its rule, and this fails the build until it does.
+#[test]
+fn every_shipped_product_has_an_accounting_group_rule() {
+    let config = close_config();
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products");
+    let mut products = Vec::new();
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "star") {
+            let source = std::fs::read_to_string(&path).unwrap();
+            let code = source
+                .lines()
+                .find_map(|l| l.strip_prefix("    code = \"")?.split('"').next().map(str::to_string))
+                .unwrap_or_else(|| panic!("no product code in {}", path.display()));
+            products.push(code);
+        }
+    }
+    assert!(products.len() >= 9 && products.contains(&"income-protection".to_string()), "{products:?}");
+    for code in products {
+        assert!(
+            config.grouping.iter().any(|g| g.product == code),
+            "product {code} has no accounting group rule in close.star"
+        );
+    }
+}
+
 /// Purpose: a chart is refused when it has no version or accounts, an account without a
 /// name or with a slash in its code, a duplicate account, a role mapped twice or mapped to
 /// an unlocked account, or a retained earnings account that is missing, locked or not a

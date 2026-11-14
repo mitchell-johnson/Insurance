@@ -1,40 +1,90 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Commission console · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
 <body data-shell="workforce" data-page="commission" data-realm="workforce">
-<main><header class="page"><div><h1>Commission console</h1><p>Ask the commission module, or send it one command.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
-<section><h2>Ask</h2><p class="muted">Advisers, payees, statements, cases and what is waiting. Dates are YYYY-MM-DD.</p>
-<form id="ask"><div class="row">
-<div><label for="q">Question</label><select id="q">
-<option value="status">Status</option><option value="open_tasks">Open tasks</option><option value="conduct_cases">Conduct cases</option><option value="relations">Relations</option><option value="history">Configuration history</option><option value="sweep_check">Sweep check</option>
-<option value="position">A party's position (party, as_at)</option><option value="proof_of_debt">Proof of debt (party, as_at)</option><option value="statement">A statement (payee, number)</option>
-<option value="held_control">Held control (date)</option><option value="month_end_blocks">Month-end blocks (date)</option><option value="clawback_exposure">Clawback exposure (date)</option><option value="aged_held">Aged held money (as_at)</option>
-<option value="action">A workbench action (id)</option><option value="case">A case (id)</option></select></div>
-<div><label for="f">Fields (name=value, separated by &amp;)</label><input id="f" size="40" placeholder="party=adv-1&amp;as_at=2027-11-30"></div>
-<button>Ask</button></div></form><div id="ask-msg" aria-live="polite"></div><div id="answer"></div></section>
-<section><h2>Send a command</h2><p class="muted">One command in the commission module's own JSON, for example <code>{"set_payment_hold": {...}}</code>. That module decides whether your roles allow it and records the decision with your purpose. Workbench actions, replacement decisions and policy assignment have their own pages.</p>
-<form id="send"><label for="cmd">Command</label><textarea id="cmd" rows="6" cols="70" required></textarea>
+<main><header class="page"><div><h1>Commission console</h1><p>Advisers, payees, engagements, statements and cases in the commission module.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
+<section data-view="Look up"><h2>Look something up</h2><p class="muted">Advisers, payees, statements, cases and what is waiting.</p>
+<form id="ask"><div class="row"><div><label for="q">Show</label><select id="q"></select></div></div><div class="row" id="q-fields"></div><p><button>Show</button></p></form><div id="ask-msg" aria-live="polite"></div><div id="answer"></div></section>
+<section data-view="Change something"><h2>Change something</h2><p class="muted">The commission module decides whether your roles allow it, and records the decision with your reason. Held balance actions, replacement decisions and commission rules have their own pages or approvals.</p>
+<form id="do"><div class="row"><div><label for="a">Action</label><select id="a"></select></div><div><label for="a-purpose">Why (recorded with the decision)</label><input id="a-purpose" required size="40"></div></div><div class="row" id="a-fields"></div><p><button>Do it</button></p></form><div id="do-msg" aria-live="polite"></div></section>
+<section data-view="Another command"><h2>Another command</h2><p class="muted">For the few commands with no form here (a new engagement, a relation, a proposed change to the rules): one command in the commission module's own JSON, for example <code>{"relate": {...}}</code>.</p>
+<form id="send"><label for="cmd">Command</label><textarea id="cmd" rows="6" required></textarea>
 <div class="row"><div><label for="purpose">Why (recorded with the decision)</label><input id="purpose" required size="40"></div><button>Send</button></div></form><div id="send-msg" aria-live="polite"></div></section>
 </main>
 <script src="/ui/app.js"></script>
 <script>
 "use strict";
-const { h, put, say, signIn, signOut, api, run } = portal;
+const { h, put, signIn, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "workforce", BASE = "/staff/v1/commission";
+const words = (s) => String(s).replace(/_/g, " ");
+// A field is [key, label, kind, options]. Kinds: text, date, int, bool, select, optional (blank is left out).
+const PARTY = ["party", "Party", "text"], ON = ["on", "On", "date"];
+const QUESTIONS = {
+  status: ["Status", []], open_tasks: ["Open tasks", []], conduct_cases: ["Conduct cases", []], relations: ["Relations", []], history: ["Configuration history", []], sweep_check: ["Sweep check", []],
+  position: ["A party's position", [PARTY, ["as_at", "As at", "date"]]], proof_of_debt: ["Proof of debt", [PARTY, ["as_at", "As at", "date"]]],
+  statement: ["A statement", [["payee", "Payee", "text"], ["number", "Statement number", "int"]]],
+  held_control: ["Held control", [["date", "Date", "date"]]], month_end_blocks: ["Month-end blocks", [["date", "Date", "date"]]], clawback_exposure: ["Clawback exposure", [["date", "Date", "date"]]],
+  aged_held: ["Aged held money", [["as_at", "As at", "date"]]], action: ["A workbench action", [["id", "Action", "text"]]], case: ["A case", [["id", "Case", "text"]]],
+};
+const ACTIONS = {
+  add_party: ["Add an adviser, company or other party", [PARTY, ["kind", "Kind", "select", ["adviser", "company", "team", "authorised_body", "fap", "group", "referral_partner", "broker", "counterparty"]]]],
+  record_licence: ["Record a licence state", [PARTY, ["state", "Licence is", "select", ["active", "suspended", "revoked", "lapsed"]], ["effective", "Effective", "date"], ["source_ref", "Source (register reference)", "text"]]],
+  mark_ceased: ["Mark a party as ceased", [PARTY, ON, ["reason", "Reason", "select", ["deceased", "liquidation", "wound_up", "retired"]]]],
+  end_engagement: ["End an engagement", [["id", "Engagement", "text"], ON]],
+  end_relation: ["End a relation", [["child", "Party", "text"], ["parent", "Was under, licensed by or paid through", "text"], ["kind", "Relation", "select", ["under", "licensed_by", "payee_for"]], ON]],
+  register_payee: ["Register a payee", [PARTY, ["agreement_ref", "Agreement reference", "text"], ["advance_recovery_ppm", "Advance recovery, parts per million of each payment", "int"]]],
+  add_payee_account: ["Add a payee's bank account", [PARTY, ["account_ref", "Account reference", "text"], ["name_check_ref", "Name check reference", "text"], ["step_up_ref", "Step-up sign-in reference", "text"], ["appointment_ref", "Appointment document (optional)", "optional"]]],
+  set_payment_hold: ["Hold or release a payee's payments", [PARTY, ["reason", "Reason to hold (blank releases)", "optional"]]],
+  remove_payment_instruction: ["Remove a payment instruction", [PARTY, ["id", "Instruction", "text"], ["consent_ref", "Consent reference", "text"]]],
+  appoint_adviser: ["Appoint a policy's adviser", [["policy", "Policy", "text"], ["engagement", "Engagement (blank for none)", "optional"], ["book", "Book (optional)", "optional"]]],
+  link_replacement: ["Link a policy to the one it replaces", [["policy", "New policy", "text"], ["replaces", "Policy replaced", "text"]]],
+  attribute_alteration: ["Attribute an alteration to an engagement", [["policy", "Policy", "text"], ["engagement", "Engagement", "text"]]],
+  approve_change: ["Approve a proposed change to the rules", [["id", "Change", "text"], ["compliance", "Approving as compliance", "bool"]]],
+  reject_change: ["Reject a proposed change to the rules", [["id", "Change", "text"], ["reason", "Reason", "text"]]],
+  cut_statement: ["Cut a payee's statement now", [["payee", "Payee", "text"]]],
+};
+// Draw a set of fields into a row, and read them back as an object.
+function draw(row, prefix, spec) {
+  put(row, spec.map(([key, label, kind, options]) => {
+    const id = prefix + key;
+    const input = kind === "select" ? h("select", { id }, options.map((o) => h("option", { value: o }, words(o))))
+      : kind === "bool" ? h("select", { id }, h("option", { value: "false" }, "No"), h("option", { value: "true" }, "Yes"))
+      : h("input", { id, type: kind === "date" ? "date" : kind === "int" ? "number" : "text", min: kind === "int" ? "0" : null, required: kind !== "optional" });
+    return h("div", {}, h("label", { for: id }, label), input);
+  }));
+}
+function read(prefix, spec, keepBlank) {
+  const out = {};
+  for (const [key, , kind] of spec) {
+    const raw = $(prefix + key).value.trim();
+    if (kind === "optional") { if (raw) out[key] = raw; else if (keepBlank) out[key] = null; }
+    else out[key] = kind === "bool" ? raw === "true" : kind === "int" ? Number(raw) : raw;
+  }
+  return out;
+}
+put($("q"), Object.entries(QUESTIONS).map(([k, [label]]) => h("option", { value: k }, label)));
+put($("a"), Object.entries(ACTIONS).map(([k, [label]]) => h("option", { value: k }, label)));
+const fresh = () => { draw($("q-fields"), "q-", QUESTIONS[$("q").value][1]); draw($("a-fields"), "a-", ACTIONS[$("a").value][1]); };
+$("q").addEventListener("change", () => draw($("q-fields"), "q-", QUESTIONS[$("q").value][1]));
+$("a").addEventListener("change", () => draw($("a-fields"), "a-", ACTIONS[$("a").value][1]));
+fresh();
 async function load() {
   const me = await api(R, "GET", BASE + "/me");
-  $("me").textContent = `${me.staff}: ` + (me.roles.length ? me.roles.map((r) => r.replace(/_/g, " ")).join(", ") : "may look, holds no role that changes anything");
+  $("me").textContent = `${me.staff}: ` + (me.roles.length ? me.roles.map(words).join(", ") : "may look, holds no role that changes anything");
 }
 $("ask").addEventListener("submit", run($("ask-msg"), async () => {
-  const fields = $("f").value.trim();
-  const answer = await api(R, "GET", `${BASE}/${$("q").value}` + (fields ? "?" + new URLSearchParams(fields) : ""));
-  put($("answer"), portal.details(answer));
+  const fields = new URLSearchParams(read("q-", QUESTIONS[$("q").value][1])).toString();
+  put($("answer"), portal.details(await api(R, "GET", `${BASE}/${$("q").value}` + (fields ? "?" + fields : ""))));
+}));
+const done = (answer) => answer.duplicate ? "Already done." : "Done.";
+$("do").addEventListener("submit", run($("do-msg"), async () => {
+  const name = $("a").value;
+  return done(await api(R, "POST", BASE + "/commands", { command: { [name]: read("a-", ACTIONS[name][1], true) }, purpose: $("a-purpose").value }));
 }));
 $("send").addEventListener("submit", run($("send-msg"), async () => {
   let command;
   try { command = JSON.parse($("cmd").value); } catch (e) { throw new Error("The command is not JSON: " + e.message); }
-  const done = await api(R, "POST", BASE + "/commands", { command, purpose: $("purpose").value });
-  return done.duplicate ? "Already done." : "Done.";
+  return done(await api(R, "POST", BASE + "/commands", { command, purpose: $("purpose").value }));
 }));
 signIn(R).then(load).catch(portal.refuse);
 </script></body></html>

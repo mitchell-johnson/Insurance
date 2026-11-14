@@ -985,11 +985,27 @@ async fn family_consent(State(s): State<Shared>, headers: HeaderMap, method: Met
 
 async fn book(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
     let session = s.customer(&headers, &method, &uri, b"").await?;
-    ok(s.ask(Question::Book {
-        adviser: session.party,
-        at: session.at,
-    })
-    .await?)
+    let book = s
+        .ask(Question::Book {
+            adviser: session.party.clone(),
+            at: session.at,
+        })
+        .await?;
+    // The portal is for advisers and for those with advisers under them. Anyone else is told so, not shown an empty book.
+    if book["engagements"].as_array().is_none_or(|e| e.is_empty()) {
+        let practice = s
+            .ask(Question::Practice {
+                party: session.party,
+                at: session.at,
+            })
+            .await?;
+        if practice["advisers"].as_array().is_none_or(|a| a.is_empty()) {
+            return Err(Problem::forbidden(
+                "the adviser portal is for advisers and advice providers, and you are not engaged as either",
+            ));
+        }
+    }
+    ok(book)
 }
 
 /// What an advice provider or a group sees of the advisers under it and
@@ -1670,7 +1686,7 @@ async fn replacement_standing(s: &AppState, session: &Session, purpose: &str) ->
         })
         .await?;
     if standing["view"] != true {
-        return Err(Problem::forbidden("your roles do not include the held balance workbench"));
+        return Err(Problem::forbidden("your roles do not include replacement matches"));
     }
     Ok(standing)
 }
@@ -2397,12 +2413,16 @@ impl AppState {
         // A node from before the access log was wired in answers without the request. Fail closed until it is upgraded.
         let (request, decision): (AccessRequest, Decision) = serde_json::from_value(json!([view["request"], view["decision"]]))
             .map_err(|_| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "unavailable", "the access log cannot be written yet"))?;
+        // Two decisions by one person on one record can fall in the same second: an allowed
+        // lookup, then a refused one under another scope. Each keeps its own line.
         let key = format!(
-            "access:{}:{}:{}:{}",
+            "access:{}:{}:{}:{}:{}:{}",
             request.staff,
             request.at,
             request.action,
-            request.record.as_deref().unwrap_or_default()
+            request.record.as_deref().unwrap_or_default(),
+            if decision.allowed { "allowed" } else { "refused" },
+            request.scopes.join(",")
         );
         let actor = Actor::Staff(request.staff.clone());
         self.propose(key, actor, Command::Staff(StaffCommand::Record { request, decision })).await?;
