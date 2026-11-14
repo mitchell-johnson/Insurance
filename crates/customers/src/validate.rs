@@ -12,6 +12,18 @@ use crate::model::Field;
 
 /// Valid NZ prescribed investor rates, in percent.
 pub const PIR_RATES: [&str; 3] = ["10.5", "17.5", "28"];
+/// A person's right to live in New Zealand, as residency status records it.
+pub const RESIDENCY_STATUSES: [&str; 8] = [
+    "citizen",
+    "permanent_resident",
+    "resident_visa",
+    "work_visa",
+    "working_holiday_visa",
+    "student_visa",
+    "visitor_visa",
+    "non_resident",
+];
+
 /// Valid NZ resident withholding tax rates on interest, in percent.
 pub const RWT_RATES: [&str; 6] = ["10.5", "17.5", "30", "33", "39", "45"];
 pub const PRESENTATION_FORMATS: [&str; 4] = ["standard", "large_print", "audio", "braille"];
@@ -187,6 +199,7 @@ pub fn normalise(field: Field, value: &Value) -> Result<Value, Problem> {
     match field {
         Field::GivenName | Field::MiddleNames | Field::FamilyName | Field::PreferredName => Ok(Value::String(text(value, 200)?)),
         Field::Gender => Ok(Value::String(text(value, 100)?)),
+        Field::ResidencyStatus => one_of(value, &RESIDENCY_STATUSES),
         Field::DateOfBirth | Field::DateOfDeath => Ok(Value::String(date(value)?.to_string())),
         Field::Email => Ok(Value::String(email(value.as_str().ok_or("must be text")?)?)),
         Field::MobilePhone => Ok(Value::String(phone(value.as_str().ok_or("must be text")?)?)),

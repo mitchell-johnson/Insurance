@@ -525,6 +525,9 @@ fn a_limited_pay_cover_is_made_paid_up_for_the_share_of_the_term_paid() {
     days(&mut c, 731);
     let p = &c.state(0).policies[&id];
     assert_eq!((p.status, p.covers["life"].status), (PolicyStatus::InForce, CoverStatus::InForce));
-    assert!(p.receivables.iter().filter(|r| r.due > on).all(|r| r.total_minor == 0), "billed after it was paid up");
+    assert!(
+        p.receivables.iter().filter(|r| r.due > on).all(|r| r.total_minor == 0),
+        "billed after it was paid up"
+    );
     assert_eq!(p.outstanding_minor(), 0);
 }
