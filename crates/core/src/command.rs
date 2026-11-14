@@ -447,6 +447,14 @@ pub enum Command {
         policy: PolicyId,
         reference: String,
     },
+    /// Discharge this partition's share of withheld tax paid to the revenue
+    /// authority against the bank account it was paid from.
+    RemitWithholding(Box<crate::remittance::Remittance>),
+    /// The bank sent a payment of withheld tax back: the tax is owed again.
+    ReturnRemittance {
+        kind: String,
+        payment: String,
+    },
     /// Record that cover on this policy replaces cover on another.
     RecordReplacement(Box<Replacement>),
     /// Give a life a cover from the product's menu that it does not hold.
@@ -726,7 +734,7 @@ impl Command {
             Command::SplitScheme(command) => command.allowed_callers(),
             Command::SetMemberCovers(command) => command.allowed_callers(),
             Command::Loan(command) => command.allowed_callers(),
-            Command::PayeeDebt(_) => &["payments"],
+            Command::PayeeDebt(_) | Command::RemitWithholding(_) | Command::ReturnRemittance { .. } => &["payments"],
             Command::SetDiscountOverride(command) => command.allowed_callers(),
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
             Command::ApplyMemberReceipt { .. } => &["cash-matching"],
@@ -800,6 +808,8 @@ impl Command {
             Command::SetMemberCovers(_) => "set_member_covers",
             Command::Loan(_) => "policy_loan",
             Command::PayeeDebt(_) => "payee_debt",
+            Command::RemitWithholding(_) => "remit_withholding",
+            Command::ReturnRemittance { .. } => "return_remittance",
             Command::SetDiscountOverride(_) => "set_discount_override",
             Command::RecordCession { .. } => "record_cession",
             Command::PostReinsurance { .. } => "post_reinsurance",
