@@ -3743,6 +3743,17 @@ async fn the_payments_console() {
     let (status, runs) = ask("sub-payview", "open_runs").await;
     assert!(status == StatusCode::OK && runs.to_string().contains("r9"), "{runs}");
     assert_eq!(ask("sub-payview", "open_exceptions").await.0, StatusCode::OK);
+    // Matches applied by hand that wait for a second reconciler; one nobody proposed is not there.
+    assert_eq!(ask("sub-payview", "matches_to_approve").await, (StatusCode::OK, json!({})));
+    assert_eq!(ask("sub-payview", "manual_match?exception=exc-none").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(ask("sub-payview", "manual_match").await.0, StatusCode::BAD_REQUEST);
+    // Proposing one is a person's command: it reaches the module, which refuses a maker who is no reconciler.
+    let (status, problem) = tell(
+        "sub-paymk",
+        json!({ "type": "propose_receipt_match", "exception": "exc-none", "parts": [["pol-c1", 120_00]] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
     assert_eq!(ask("sub-payview", "open_exceptions?account=anz-sf1-claims").await.0, StatusCode::OK);
     let (status, party) = ask("sub-payview", "party?party=party-p1").await;
     assert_eq!((status, &party["payees"][0]["payee"]), (StatusCode::OK, &json!("p1")), "{party}");

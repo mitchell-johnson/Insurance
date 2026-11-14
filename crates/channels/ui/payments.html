@@ -38,6 +38,11 @@
 
 <section data-view="Reconciliation"><h2>Open reconciliation exceptions</h2><div id="exc-msg" aria-live="polite"></div><div id="exceptions"></div></section>
 
+<section data-view="Reconciliation"><h2>Apply unidentified money by hand</h2><p class="muted">Money that reached the bank with no usable reference. One reconciler says which policies it belongs to; above the threshold a second reconciler approves before it is applied. The parts must add up to the receipt.</p>
+<form id="mm-form"><div class="row"><div><label for="mm-exception">Exception</label><input id="mm-exception" required></div>
+<div><label for="mm-parts">Parts, one per line: policy, amount</label><textarea id="mm-parts" rows="3" cols="36" required placeholder="pol-00000001, 120.00"></textarea></div><button id="mm-send">Propose</button></div></form>
+<div id="mm-msg" aria-live="polite"></div><h2>Waiting for a second reconciler</h2><div id="mm-waiting"></div></section>
+
 <section data-view="Reconciliation"><h2>Reconciliation</h2>
 <form id="rec-form"><div class="row"><div><label for="rec-account">Bank account</label><input id="rec-account" required placeholder="anz-sf1-claims"></div><button>Show</button></div></form>
 <div class="row"><div><label for="rec-resolution">How an exception was resolved</label><input id="rec-resolution"></div></div>
@@ -53,7 +58,7 @@
 <div><label for="aml-note">Why it is explained</label><input id="aml-note" required></div><button>Clear</button></div></form><div id="aml-msg" aria-live="polite"></div></section>
 
 <section data-view="Controls" id="raw" hidden><h2>Another command</h2><p class="muted">Any command people send, in the payments module's JSON (<code>{"type": "suspend_authority", ...}</code>). The module decides by your roles.</p>
-<form id="raw-form"><textarea id="raw-cmd" rows="5" required></textarea><p><button>Send</button></p></form><div id="raw-msg" aria-live="polite"></div></section>
+<form id="raw-form"><div><label for="raw-cmd">The command, as the payments module reads it</label><textarea id="raw-cmd" rows="5" required></textarea></div><p><button>Send</button></p></form><div id="raw-msg" aria-live="polite"></div></section>
 </main>
 <script src="/ui/app.js"></script>
 <script>
@@ -121,7 +126,8 @@ async function showExceptions() {
 $("party-form").addEventListener("submit", run($("party-msg"), async () => {
   const p = await ask("party", { party: $("party-id").value.trim() });
   const hold = p.customer_hold;
-  put($("party"), h("p", {}, hold && hold.held ? `They have a hold on their own money going out (checked ${hold.checked_at}).` : "No hold of their own is recorded."),
+  // Whether to offer support, never why: the reason stays with the people who hold it.
+  put($("party"), p.support_prompt ? h("div", { class: "banner info" }, "Offer this person support on this contact, and take extra care with what they ask for.") : null, h("p", {}, hold && hold.held ? `They have a hold on their own money going out (checked ${hold.checked_at}).` : "No hold of their own is recorded."),
     table(["Payee", "Kind", "Blocked", "Cooling off until"], (p.payees || []).map((x) => [x.payee, words(x.kind), x.blocked ? (holdWords[x.blocked] || words(x.blocked)) : "", x.cooling_off_until || ""])),
     table(["Authority", "Policy", "Life", "Status", "Dishonours", "Hardship", "Sole name"], (p.authorities || []).map((a) => [a.authority, a.policy, a.life || "", status(a.status), a.dishonours, a.hardship ? "yes" : "", a.sole_name ? "yes" : ""])));
 }));
@@ -148,6 +154,22 @@ async function showRefund() {
 }
 $("refund-form").addEventListener("submit", run($("refund-msg"), showRefund));
 
+async function showMatches() {
+  const waiting = Object.entries(await ask("matches_to_approve"));
+  put($("mm-waiting"), waiting.length ? table(["Exception", "Proposed by", "Parts", "Total", ""], waiting.map(([exception, m]) => [exception, m.by, m.parts.map(([policy, minor]) => `${policy} ${money(minor)}`).join("; "), money(m.parts.reduce((sum, part) => sum + part[1], 0)),
+    has("reconciler") && m.by !== me.staff ? button("Approve", $("mm-msg"), async () => { await send({ type: "approve_receipt_match", exception }); await Promise.all([showMatches(), showExceptions()]); return "Approved. The money is being applied."; }) : m.by === me.staff ? "Someone else approves" : ""])) : portal.empty("Nothing is waiting."));
+}
+$("mm-form").addEventListener("submit", run($("mm-msg"), async () => {
+  const parts = $("mm-parts").value.split("\n").map((row) => row.split(",").map((x) => x.trim())).filter((row) => row[0]).map(([policy, amount]) => {
+    if (!/^\d+(\.\d{1,2})?$/.test(amount || "")) throw new Error(`"${amount || ""}" is not an amount: use 120.00.`);
+    return [policy, Math.round(Number(amount) * 100)];
+  });
+  const exception = $("mm-exception").value.trim();
+  await send({ type: "propose_receipt_match", exception, parts });
+  await Promise.all([showMatches(), showExceptions()]);
+  const held = await ask("manual_match", { exception }).catch(() => null);
+  return held && !held.approved_by ? "Proposed. A second reconciler approves it before it is applied." : "Applied.";
+}));
 async function showRec() {
   const account = $("rec-account").value.trim();
   const book = await ask("reconciliation", { account });
@@ -181,7 +203,8 @@ signIn(R).then(async () => {
   $("raw").hidden = !(me.roles || []).length;
   document.querySelectorAll(".compliance").forEach((e) => { e.hidden = !has("compliance"); });
   if (has("compliance")) await showPayerCases();
-  await Promise.all([showWaiting(), showRuns(), showExceptions()]);
+  await Promise.all([showWaiting(), showRuns(), showExceptions(), showMatches()]);
+  $("mm-send").disabled = !has("reconciler");
   const conv = await ask("awaiting_conversation");
   const held = Object.entries(conv || {});
   put($("conv"), held.length ? table(["Item", "Detail"], held.map(([k, v]) => [k, portal.text(v)])) : h("p", { class: "muted" }, "None."));

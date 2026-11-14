@@ -73,6 +73,7 @@ const cell = (v) => v == null ? "" : typeof v === "object" ? portal.text(v) : v;
 function grid(rows) {
   const list = Array.isArray(rows) ? rows : rows == null ? [] : [rows];
   const keys = [...new Set(list.flatMap((r) => (r && typeof r === "object" ? Object.keys(r) : ["value"])))];
+  if (!keys.length) return portal.empty("Nothing to show.");
   // The ledger keeps amounts in millionths of a cent; people read dollars.
   const amount = (k, v) => typeof v === "number" && /^(balance|debit|credit|amount|total|movement|opening|closing)$/.test(k) ? money(v / 1e6) : cell(v);
   return table(keys.map(words), list.map((r) => keys.map((k) => (r && typeof r === "object" ? amount(k, r[k]) : cell(r)))));
