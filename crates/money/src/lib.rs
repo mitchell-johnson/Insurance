@@ -14,7 +14,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use fastnum::decimal::Context;
-pub use fastnum::decimal::RoundingMode as FastRounding;
+use fastnum::decimal::RoundingMode as FastRounding;
 pub use fastnum::D256 as Dec;
 use serde::{Deserialize, Serialize};
 

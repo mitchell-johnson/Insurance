@@ -50,6 +50,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Every test documents its purpose and why it matters
         run: python3 tools/check_test_docs.py
+      - name: Only the money crate rounds a decimal
+        run: python3 tools/check_rounding.py
       - name: The persona test matrix and its traceability to built tests hold together
         run: python3 tools/persona_matrix.py --check
 
