@@ -1319,3 +1319,62 @@ async fn a_joint_cover_carries_each_lifes_own_terms() {
     assert_eq!(facts.joint_lives, vec!["L1".to_string(), "L2".to_string()]);
     assert!(cluster.reconcile().is_empty());
 }
+
+/// Purpose: a new policy advised as replacing cover on another of our policies is issued, and
+/// the core is then told, cover by cover, which cover it replaces and how much of it (the lesser
+/// of the old cover and the new as accepted), with the signed replacement disclosure as the
+/// evidence; the core records it on the new policy and nothing is parked.
+/// Why it matters: reinsurance carries the old cover's cession on from this record, on its
+/// original treaty basis and inception. Without it the replaced amount would be ceded again as
+/// new business, on today's terms, and the accumulation on the life counted twice (RI-016).
+#[tokio::test]
+async fn a_replacing_policy_tells_the_core_what_it_replaces() {
+    let b = bench(TakesAll::default());
+    b.open("P1", 500_000_00);
+    b.module.with(|w| w.disclose("P1", "L1", &clean()));
+    b.pass().await;
+    let old = b.module.with(|w| w.p("P1").policy.clone());
+    let hash = b.product_hash.clone();
+    let new = b.module.with(|w| {
+        let mut open = w.open_command("R1", &["L1"], &[("L1", "life", "life", 300_000_00)], true);
+        open.quote.product_hash = hash;
+        open.group = ic_core::GroupId::from("grp-R1");
+        open.replacement = true;
+        open.replaces = vec![ic_underwriting::model::ReplacedCover {
+            life: "L1".into(),
+            cover: "life".into(),
+            replaced_policy: old.clone(),
+            replaced_life: "L1".into(),
+            replaced_cover: "life".into(),
+            replaced_sum_insured_minor: 500_000_00,
+        }];
+        let policy = open.policy.clone();
+        w.ok("new-business", Command::OpenProposal(Box::new(open)));
+        w.ok(
+            "new-business",
+            Command::RecordConsent {
+                proposal: "R1".into(),
+                life: "L1".into(),
+                kind: ConsentKind::ReplacementDisclosure,
+                granted: true,
+                signed: Some(signed("consent", &["R1", "L1", "replacement_disclosure"])),
+            },
+        );
+        w.disclose("R1", "L1", &clean());
+        policy
+    });
+    let pass = b.pass().await;
+    assert!(pass.parked.is_empty(), "{pass:?}");
+    assert!(matches!(b.status("R1"), ProposalStatus::Issued { .. }), "{:?}", b.status("R1"));
+    let recorded = b.ledger.cluster.lock().unwrap().state(0).policies[&new].replaces.clone();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(
+        (
+            recorded[0].replaced_policy.clone(),
+            recorded[0].replaced_sum_insured_minor,
+            recorded[0].evidence.as_str()
+        ),
+        (old, 300_000_00, "uw-consent:R1/L1/replacement_disclosure")
+    );
+    assert!(b.pass().await.parked.is_empty(), "nothing is left to deliver");
+}

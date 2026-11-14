@@ -39,7 +39,7 @@
 <section data-view="Files"><h2>File layouts</h2><p class="muted">Try a mapping against a sample of the employer's file before setting it. Nothing is stored by a trial.</p>
 <form id="mp-form"><div class="row"><div><label for="mp-scheme">Scheme</label><input id="mp-scheme" required></div><button>Show the mappings in use</button></div></form>
 <div><label for="mp-json">Mapping (JSON)</label><textarea id="mp-json" rows="8"></textarea></div>
-<div><label for="mp-sample">Sample of the file</label><textarea id="mp-sample" rows="6"></textarea></div>
+<div><label for="mp-sample">Sample of the file (needed to replace a layout in use)</label><textarea id="mp-sample" rows="6"></textarea></div>
 <p><button type="button" id="mp-try">Try it</button> <button type="button" id="mp-set" class="admin" hidden>Set this mapping</button></p>
 <div id="mp-msg" aria-live="polite"></div><div id="mp"></div></section>
 
@@ -140,7 +140,17 @@ $("mp-try").addEventListener("click", run($("mp-msg"), async () => {
   put($("mp"), portal.details(answer));
   return "Tried. Nothing was stored.";
 }));
-$("mp-set").addEventListener("click", run($("mp-msg"), async () => { await send({ set_mapping: { scheme: val("mp-scheme"), mapping: mapping() } }); return "Set."; }));
+// Replacing a layout the scheme already holds needs a trial that passed, so a sample given here is tried first.
+$("mp-set").addEventListener("click", run($("mp-msg"), async () => {
+  if ($("mp-sample").value.trim()) {
+    const tried = await api(R, "POST", BASE + "schemes/" + encodeURIComponent(val("mp-scheme")) + "/mappings/try", { mapping: mapping(), sample: $("mp-sample").value });
+    put($("mp"), portal.details(tried));
+    if (tried.passed === false) throw new Error("The trial did not read every row of the sample, so the mapping was not set. What it could not read is shown below.");
+  }
+  try { await send({ set_mapping: { scheme: val("mp-scheme"), mapping: mapping() } }); }
+  catch (e) { if (/mapping_not_tried/.test(`${e.code || ""} ${e.message}`)) throw new Error("This replaces a layout the scheme already uses, so it must be tried first. Paste a sample of the file and press Set again."); throw e; }
+  return "Set.";
+}));
 
 $("tm-form").addEventListener("submit", run($("tm-msg"), async () => {
   await send({ terminate: { scheme: val("tm-scheme"), effective: $("tm-date").value, reason: val("tm-reason") } });

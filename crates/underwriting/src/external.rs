@@ -189,6 +189,7 @@ pub(crate) fn policy_issued(p: &mut Proposal, cx: &mut Cx, layers: &[crate::comm
             smoker: f.factors.smoker,
         });
     }
+    record_replacements(p, cx);
     flow::end_interim(p, cx);
     cx.effect(Effect::Notify {
         to: Recipient::Party { party: p.policyholder.clone() },
@@ -439,5 +440,38 @@ impl UnderwritingState {
         }
         self.licences.insert(subject, status);
         Ok(())
+    }
+}
+
+/// A new policy issued in place of cover on another of ours: the core is
+/// told, cover by cover, so reinsurance carries the old cession on. The
+/// amount replaced is the lesser of the old cover and the new as accepted.
+fn record_replacements(p: &Proposal, cx: &mut Cx) {
+    for (n, r) in p.replaces.iter().enumerate() {
+        let Some(f) = p.lives.get(&r.life).filter(|f| f.stage == Stage::Accepted) else {
+            continue;
+        };
+        let accepted = f.effective_decision().and_then(|d| match d.terms_for(&r.cover) {
+            Some(crate::model::CoverOutcome::Accept { revised_sum_insured_minor, .. }) => {
+                p.cover(&r.life, &r.cover).map(|c| revised_sum_insured_minor.unwrap_or(c.sum_insured_minor))
+            }
+            _ => None,
+        });
+        let Some(accepted) = accepted else { continue };
+        cx.effect(Effect::RecordReplacement {
+            key: format!("{}/replaces/{}", p.id, n + 1),
+            proposal: p.id.clone(),
+            group: p.group.clone(),
+            command: Box::new(ic_core::command::Replacement {
+                policy: p.policy.clone(),
+                replaced_policy: r.replaced_policy.clone(),
+                life: r.life.clone(),
+                replaced_life: r.replaced_life.clone(),
+                cover: r.cover.clone(),
+                replaced_cover: r.replaced_cover.clone(),
+                replaced_sum_insured_minor: r.replaced_sum_insured_minor.min(accepted),
+                evidence: format!("uw-consent:{}/{}/replacement_disclosure", p.id, r.life),
+            }),
+        });
     }
 }

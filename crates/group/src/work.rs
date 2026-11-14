@@ -2006,12 +2006,31 @@ impl GroupState {
                 Ok(())
             }
             ObserveCore { event } => self.observe(*event),
+            UnderwritingHeld { key, code } => {
+                let scheme = self.outbox.values().find_map(|o| match o {
+                    Outbound::Underwriting { key: k, request } if *k == key => Some(request.scheme.clone()),
+                    _ => None,
+                });
+                let Some(scheme) = scheme else { return Ok(()) };
+                if code == "authority" {
+                    self.raise(&scheme, ExceptionKind::DelegatedAuthorityRefused, &key);
+                }
+                Ok(())
+            }
             Ack { ids } => {
                 for id in ids {
                     // A command for the core leaves the outbox only when the
                     // core's answer has been recorded.
-                    if !matches!(self.outbox.get(&id), Some(Outbound::Core { .. })) {
-                        self.outbox.remove(&id);
+                    match self.outbox.get(&id) {
+                        Some(Outbound::Core { .. }) | None => {}
+                        Some(Outbound::Underwriting { key, request }) => {
+                            let (scheme, key) = (request.scheme.clone(), key.clone());
+                            self.outbox.remove(&id);
+                            self.clear(&scheme, ExceptionKind::DelegatedAuthorityRefused, Some(&key));
+                        }
+                        Some(_) => {
+                            self.outbox.remove(&id);
+                        }
                     }
                 }
                 Ok(())

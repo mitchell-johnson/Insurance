@@ -102,12 +102,19 @@ pub fn rows(p: &Proposal) -> Vec<ProgressRow> {
         });
         // A replacement shows the life what it gains, for the disclosure
         // statement they sign: the added cover and the premium quoted.
-        if p.replacement && matches!(p.entry, crate::model::Entry::Increase { .. }) {
-            if let Some(c) = p.covers_on(life).next() {
+        // A new policy names the policy it replaces; a top-up replaces on its own.
+        if p.replacement {
+            let named = p.replaces.iter().find(|r| &r.life == life);
+            let cover = match named {
+                Some(r) => p.cover(life, &r.cover),
+                None => p.covers_on(life).next(),
+            };
+            if let Some(c) = cover {
                 body["replacement"] = json!({
                     "cover": c.code,
                     "sum_insured_minor": c.sum_insured_minor,
                     "premium_minor": p.quote.premium_minor,
+                    "replaced_policy": named.map_or(&p.policy, |r| &r.replaced_policy),
                 });
             }
         }
