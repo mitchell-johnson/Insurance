@@ -837,6 +837,7 @@ pub(crate) fn add_excess_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &
     let before = member_layers(policy, &spec.life);
     let id = policy.covers[&spec.cover].layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
     let layer = Layer {
+        paid_up: false,
         id,
         life: spec.life.clone(),
         start: spec.start,
@@ -1133,6 +1134,7 @@ pub(crate) fn split(
                 option_uses: Default::default(),
                 replaces: Vec::new(),
                 payee_debts: Default::default(),
+                paid_up: Default::default(),
                 member_accounts: Default::default(),
                 member_standing: Default::default(),
                 interests: Default::default(),
@@ -1316,6 +1318,7 @@ pub(crate) fn set_member_covers(ledger: &mut Ledger, catalog: &Catalog, policy: 
     for chosen in spec.covers.iter().filter(|c| !kept.contains(&c.code)) {
         let id = policy.covers.get(&chosen.code).and_then(|c| c.layers.iter().map(|l| l.id).max()).unwrap_or(0) + 1;
         let layer = Layer {
+            paid_up: false,
             id,
             life: spec.life.clone(),
             start: effective,

@@ -456,3 +456,75 @@ fn the_claim_facts_carry_the_terms_of_the_option_chosen_and_the_products_limits(
     let facts = ic_core::cover_facts(c.state(0), &id.0, "accidental-income", Some("life-1"), on).unwrap();
     assert_eq!((facts.benefit_months, facts.benefit_to), (Some(24), None));
 }
+
+/// Purpose: Cover for Life on a four-year premium term cannot be made paid up after one year
+/// or while premium is owing; after two years it can, and the life then holds 47.5% of the
+/// sum assured (half the term, times 0.95, cut to the cent) on a layer that is never billed
+/// again, with the premium already billed for the rest of the year handed back. The cover
+/// check gives the reduced amount, the same request again changes nothing, and a cover with
+/// no paid-up option refuses.
+/// Why it matters: the paid-up option is a promise in the wording. Made too early or for the
+/// wrong amount it gives away cover nobody paid for; left billing, it charges a customer who
+/// was told there was nothing more to pay; and if the old amount stayed on the record a
+/// claim would be paid at twice what the policy now provides.
+#[test]
+fn a_limited_pay_cover_is_made_paid_up_for_the_share_of_the_term_paid() {
+    use ic_core::paid_up::MakePaidUp;
+    let mut c = cluster();
+    let cfl = product("aia_cover_for_life.star");
+    let to_65 = pick(&cfl, "life", &[("pay-to", "to-65")]);
+    // 61 at the start: premiums for four years.
+    let id = issue(&mut c, policy(1, "aia-cover-for-life", d(1966, 6, 1), &[("life", 100_001_01, Some(to_65))])).unwrap();
+    let ask = |policy: &PolicyId, cover: &str, reference: &str| {
+        Command::MakePaidUp(Box::new(MakePaidUp {
+            policy: policy.clone(),
+            cover: cover.to_string(),
+            life: ic_core::LifeId("life-1".to_string()),
+            reference: reference.to_string(),
+        }))
+    };
+    let send = |c: &mut Cluster, command: Command| c.submit(0, "policy-servicing", command);
+    let refused = |r: Result<(), Reject>| r.unwrap_err().code;
+
+    assert_eq!(refused(send(&mut c, ask(&id, "life", "pu-1"))), "premium_owing");
+    // A cover with no paid-up option says so.
+    let living = product("aia_living.star");
+    let life = pick(&living, "life", &[]);
+    let other = issue(&mut c, policy(2, "aia-living", d(1987, 6, 1), &[("life", 200_000_00, Some(life))])).unwrap();
+    assert_eq!(refused(send(&mut c, ask(&other, "life", "pu-3"))), "no_paid_up_option");
+    days(&mut c, 367);
+    assert_eq!(refused(send(&mut c, ask(&id, "life", "pu-1"))), "paid_up_too_early");
+    assert_eq!(refused(send(&mut c, ask(&id, "funeral", "pu-1"))), "unknown_cover");
+    assert_eq!(refused(send(&mut c, ask(&id, "life", "pu 1"))), "invalid_request");
+    days(&mut c, 366); // just over two years in: the third year's premium is billed and paid
+    let year = billed(&c, &id, "life");
+    assert_eq!(year.len(), 3);
+    assert!(year[2] > 0);
+
+    send(&mut c, ask(&id, "life", "pu-1")).unwrap();
+    send(&mut c, ask(&id, "life", "pu-1")).unwrap();
+    assert_eq!(refused(send(&mut c, ask(&id, "life", "pu-2"))), "life_not_covered");
+    let p = &c.state(0).policies[&id];
+    let layers = &p.covers["life"].layers;
+    let live: Vec<_> = layers.iter().filter(|l| l.end.is_none()).collect();
+    // 100,001.01 x 2/4 x 0.95 = 47,500.47975
+    assert_eq!((layers.len(), live.len(), live[0].sum_insured_minor, live[0].paid_up), (2, 1, 47_500_47, true));
+    assert_eq!(p.paid_up["pu-1"].paid_up_minor, 47_500_47);
+    // All but the first days of the third year's premium came back as credit.
+    let credit = p.receivables.iter().map(|r| r.total_minor).filter(|t| *t < 0).sum::<i64>();
+    let third_year = p.receivables.iter().map(|r| r.total_minor).rfind(|t| *t > 0).unwrap();
+    assert!(
+        credit < 0 && -credit < third_year && -credit > third_year * 360 / 366,
+        "{credit} of {third_year}"
+    );
+    let on = c.state(0).business_date.unwrap();
+    let facts = ic_core::cover_facts(c.state(0), &id.0, "life", Some("life-1"), on).unwrap();
+    assert_eq!((facts.in_force, facts.sum_insured_minor), (true, 47_500_47));
+
+    // Two more years: in force, and never billed again.
+    days(&mut c, 731);
+    let p = &c.state(0).policies[&id];
+    assert_eq!((p.status, p.covers["life"].status), (PolicyStatus::InForce, CoverStatus::InForce));
+    assert!(p.receivables.iter().filter(|r| r.due > on).all(|r| r.total_minor == 0), "billed after it was paid up");
+    assert_eq!(p.outstanding_minor(), 0);
+}

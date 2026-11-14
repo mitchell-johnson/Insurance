@@ -106,6 +106,9 @@ pub enum Question {
     /// smoker status, a loading, an exclusion, or why underwriting decided
     /// as it did.
     Member { scheme: String, employee: String },
+    /// The people a member might be, for staff deciding a possible match.
+    /// Never served to the employer.
+    PossibleMatch { scheme: String, employee: String },
 }
 
 /// A file the driver has work to do on.
@@ -137,6 +140,8 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
                 "terms_version": s.terms_version,
                 "terms": s.terms,
                 "members": s.membership.active_count(),
+                "members_by_group": members_by_group(s),
+                "cover_minor": cover_totals(s),
                 "open_file": s.open_file,
                 "queued": s.queue.len(),
                 "scheduled": s.scheduled.len(),
@@ -157,6 +162,7 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
                 .ok_or_else(|| format!("file {file} is not known for scheme {id}"))?;
             json!({
                 "file": f.id,
+                "content_hash": f.content_hash,
                 "status": f.status,
                 "received": f.received,
                 "summary": f.summary,
@@ -201,6 +207,15 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
             let today = state.today();
             let compared = compare(s, today, kind, today, &rows, rejected);
             json!({ "summary": compared.summary, "rejected": compared.rejected, "ambiguities": compared.ambiguities, "would_be_held": compared.held })
+        }
+        Question::PossibleMatch { scheme: id, employee } => {
+            let s = scheme(&id)?;
+            let candidates = s
+                .possible
+                .get(&employee)
+                .ok_or_else(|| format!("{employee} has no possible match waiting on scheme {id}"))?;
+            let life = s.membership.members.get(&employee).map(|m| m.life.clone());
+            json!({ "scheme": s.id, "employee": employee, "life": life, "candidates": candidates })
         }
         Question::SchemeOf { policy } => {
             let schemes: Vec<&String> = state.by_policy.get(&policy).into_iter().collect();
@@ -275,4 +290,34 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
             json!({ "exceptions": open })
         }
     })
+}
+
+/// Active members per billing group.
+fn members_by_group(s: &crate::state::Scheme) -> std::collections::BTreeMap<String, u32> {
+    let mut out = std::collections::BTreeMap::new();
+    for m in s.membership.active_members() {
+        let group = m
+            .attrs
+            .billing_group
+            .clone()
+            .filter(|g| s.terms.has_billing_group(g))
+            .unwrap_or_else(|| s.terms.default_billing_group().to_string());
+        *out.entry(group).or_insert(0u32) += 1;
+    }
+    out
+}
+
+/// The scheme's cover in force by cover code: each active member's
+/// automatic amount and the underwritten cover accepted on top.
+fn cover_totals(s: &crate::state::Scheme) -> std::collections::BTreeMap<String, i64> {
+    let mut out = std::collections::BTreeMap::new();
+    for m in s.membership.active_members() {
+        for c in crate::benefit::member_cover(&s.product, &m.attrs, m.auto_cap_minor) {
+            *out.entry(c.cover).or_insert(0i64) += c.automatic_minor;
+        }
+    }
+    for c in s.cases.values().filter(|c| c.status == crate::state::CaseStatus::Accepted) {
+        *out.entry(c.cover.clone()).or_insert(0i64) += c.counts_minor();
+    }
+    out
 }

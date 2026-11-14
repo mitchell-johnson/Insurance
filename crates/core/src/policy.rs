@@ -219,6 +219,10 @@ pub struct Layer {
     /// What of this layer's premium the member pays for themselves.
     #[serde(default, skip_serializing_if = "MemberPays::is_nothing")]
     pub member_pays: MemberPays,
+    /// The layer was made paid up: it stays in force for its reduced sum
+    /// insured and no more premium is billed for it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paid_up: bool,
 }
 
 impl Layer {
@@ -237,6 +241,7 @@ impl Layer {
             && self.exclusions == o.exclusions
             && self.excess_option == o.excess_option
             && self.member_pays == o.member_pays
+            && self.paid_up == o.paid_up
     }
 }
 
@@ -648,6 +653,9 @@ pub struct Policy {
     /// Each use of a cover's insurability option, by its reference.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub option_uses: BTreeMap<String, OptionUse>,
+    /// Each cover made paid up, by the request's reference.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub paid_up: BTreeMap<String, crate::paid_up::PaidUpRecord>,
     /// What people paid by mistake owe back, by debt ID.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub payee_debts: BTreeMap<String, crate::payee_debt::PayeeDebt>,

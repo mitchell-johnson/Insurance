@@ -70,19 +70,19 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | ANN Annuities | 2 | 2 | 9 | 4 |
 | VUL Vulnerable customers, support people and representatives | 15 | 6 | 0 | 4 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
-| STF Staff authorisation and permissions | 17 | 0 | 1 | 0 |
+| STF Staff authorisation and permissions | 18 | 0 | 0 | 0 |
 | PAY Payment runs and bank connectivity | 14 | 0 | 0 | 0 |
 | FIN Finance close, statutory funds and regulatory reporting | 18 | 0 | 0 | 0 |
 | CFG Configuration operations and the actuary's interface | 6 | 2 | 6 | 2 |
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **359** | **90** | **128** | **94** |
+| **Total** | **360** | **90** | **127** | **94** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 35 | 25 | 9 |
-| B | 109 | 17 | 16 |
+| B | 110 | 17 | 15 |
 | C | 213 | 45 | 88 |
 | D | 2 | 3 | 15 |
 
