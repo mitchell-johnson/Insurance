@@ -80,6 +80,11 @@ pub enum Question {
     Work,
     /// Configurations proposed and waiting for approval.
     Proposals,
+    /// Tax of one kind withheld in a closed month, and when it is due.
+    WithholdingDue {
+        kind: String,
+        period: PeriodId,
+    },
     /// Money held in policy suspense, by policy, as an aged items report.
     AgedSuspense {
         as_at: NaiveDate,
@@ -151,6 +156,7 @@ pub fn answer(state: &FinanceState, question: Value) -> Result<Value, String> {
         Question::Conduct { period, product } => encode(&state.conduct_report(period, product.as_deref())),
         Question::Work => encode(&state.work()),
         Question::Proposals => Ok(state.pending_proposals()),
+        Question::WithholdingDue { kind, period } => state.withholding_due(&kind, period),
         Question::AgedSuspense { as_at } => Ok(state.aged_suspense(as_at)),
         Question::TaxReconciliation { period } => encode(&state.tax_reconciliation(period)),
         Question::AccountingGroups => Ok(state.accounting_group_counts()),

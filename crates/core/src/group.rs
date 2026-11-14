@@ -1135,6 +1135,7 @@ pub(crate) fn split(
                 replaces: Vec::new(),
                 payee_debts: Default::default(),
                 paid_up: Default::default(),
+                suspensions: Default::default(),
                 member_accounts: Default::default(),
                 member_standing: Default::default(),
                 interests: Default::default(),

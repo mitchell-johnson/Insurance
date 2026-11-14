@@ -162,6 +162,7 @@ impl PaymentsState {
     /// The core applied a receipt to a policy: check who paid it.
     pub(crate) fn premium_applied(&mut self, tx: &mut Tx<'_>, policy: &str, receipt: &str) -> Result<(), Reject> {
         tx.need(Role::Service)?;
+        self.note_applied(receipt, policy, tx.now.date());
         let Some(paid) = self.payer_checks.pending.remove(receipt) else {
             return Ok(());
         };
