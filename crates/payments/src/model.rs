@@ -490,6 +490,8 @@ pub enum Instruction {
     },
     /// Tell people something they must act on.
     Notify { to: Role, subject: String, detail: String },
+    /// Ask the bank to recall a payment it settled into the wrong account.
+    Recall { recall: Box<crate::file::Recall> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -509,6 +511,8 @@ pub enum About {
     RefundRelease(Id),
     Item(Id),
     Exception(Id),
+    /// A payment that went to the wrong account (`recall.rs`).
+    Misdirection(Id),
 }
 
 /// One line of a bank statement. Credits are positive.
