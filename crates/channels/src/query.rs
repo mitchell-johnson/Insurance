@@ -63,6 +63,15 @@ pub enum Question {
         proposal: String,
         life: String,
     },
+    /// What a life is shown before they sign that they understand their new
+    /// cover replaces cover they hold: what stays, what is added, what is
+    /// lost and what it costs, from the proposal underwriting published and
+    /// the policy as the core has it. Null if the party is not that life.
+    ReplacementStatement {
+        party: PartyId,
+        proposal: String,
+        life: String,
+    },
     /// The engagements an adviser has held, current or not, by ID.
     AdviserEngagements {
         party: PartyId,
@@ -444,6 +453,46 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 .filter(|v| v.party == party && v.revoked.is_none())
                 .map(|v| v.public_key.clone());
             json!({ "life": is_life, "public_key": key })
+        }
+        Question::ReplacementStatement { party, proposal, life } => {
+            let found = d.published.iter().find_map(|(policy, rows)| {
+                rows.values()
+                    .find(|r| {
+                        r.kind == "proposal_life"
+                            && r.subject.as_ref() == Some(&party)
+                            && r.body["proposal"] == proposal.as_str()
+                            && r.body["life"] == life.as_str()
+                    })
+                    .map(|r| (policy, &r.body["replacement"]))
+            });
+            match found {
+                None => Value::Null,
+                Some((_, offer)) if !offer.is_object() => json!({ "replacement": false }),
+                Some((policy, offer)) => {
+                    // The replacement is written as a further layer on the cover held, so what is held stays as it is.
+                    let kept: Vec<Value> = d
+                        .view
+                        .layers_on_policy(policy)
+                        .into_iter()
+                        .filter(|r| r.in_force && r.cover == offer["cover"].as_str().unwrap_or_default() && d.view.party_of(policy, &r.life) == Some(&party))
+                        .map(|r| json!({ "cover": r.cover, "type": r.cover_type, "layer": r.layer, "sum_insured_minor": r.sum_insured_minor }))
+                        .collect();
+                    let old = d
+                        .extras
+                        .get(policy)
+                        .and_then(|e| e.notices.back())
+                        .map(|(_, start, end, total)| json!({ "period_start": start, "period_end": end, "total_minor": total }));
+                    json!({
+                        "replacement": true,
+                        "replaced_policy": policy,
+                        "kept": kept,
+                        "gained": { "cover": offer["cover"], "sum_insured_minor": offer["sum_insured_minor"] },
+                        "lost": [],
+                        "old_premium": old,
+                        "new_premium_minor": offer["premium_minor"],
+                    })
+                }
+            }
         }
         Question::AdviserEngagements { party } => {
             json!(d
