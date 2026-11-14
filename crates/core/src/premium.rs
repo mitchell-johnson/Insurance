@@ -116,7 +116,13 @@ pub(crate) fn retail_premium_with(
             // like a stepped premium; level for blocks of years, each block
             // at the age it began.
             let attained = age_on(dob, rated_on);
-            let age = match def.premium_basis(layer.excess_option.as_deref()) {
+            let basis = def.premium_basis(layer.excess_option.as_deref());
+            // A cover whose premiums are all paid stays in force with
+            // nothing more to bill.
+            if basis.is_some_and(|b| !ic_product::options::pays_premium(b, attained)) {
+                continue;
+            }
+            let age = match basis {
                 Some(basis) => ic_product::options::rating_age(basis, age_on(dob, layer.rating_start()), attained),
                 None => attained,
             };

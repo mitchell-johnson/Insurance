@@ -109,7 +109,7 @@ fn validate_built_in(file: &str, c: &crate::CoverDefinition) -> Result<(), LoadE
             return fail("needs a name and a code no other built-in benefit of the cover has");
         }
         let pays = !matches!(b.kind, BuiltInKind::Facility | BuiltInKind::PremiumWaiver);
-        let limits = [b.max_minor.is_some(), b.percent_of_cover.is_some(), b.monthly_multiple.is_some()];
+        let limits = [b.max_minor.is_some(), b.percent_of_cover.is_some(), b.multiple_of_cover.is_some()];
         if pays && !limits.contains(&true) {
             return fail("pays money, so it sets the most it pays");
         }
@@ -117,15 +117,15 @@ fn validate_built_in(file: &str, c: &crate::CoverDefinition) -> Result<(), LoadE
             return fail("pays nothing, so it sets no limit");
         }
         let positive = |d: &Option<ic_money::DecStr>| d.as_ref().is_none_or(|v| v.get() > Dec::from(0i64));
-        if b.max_minor.is_some_and(|m| m <= 0) || !positive(&b.percent_of_cover) || !positive(&b.monthly_multiple) {
+        if b.max_minor.is_some_and(|m| m <= 0) || !positive(&b.percent_of_cover) || !positive(&b.multiple_of_cover) {
             return fail("limits are above zero");
         }
         let income = matches!(c.benefit, Benefit::MonthlyBenefit { .. });
-        if (b.monthly_multiple.is_some() || b.kind == BuiltInKind::MonthlyAddition) && !income {
-            return fail("is reckoned in monthly benefits, so it belongs to an income cover");
+        if b.kind == BuiltInKind::MonthlyAddition && !income {
+            return fail("is paid each month with an income benefit, so it belongs to an income cover");
         }
-        if b.kind == BuiltInKind::EarlyPayment && !matches!(c.benefit, Benefit::LumpSum { .. }) {
-            return fail("is paid out of a lump sum, so it belongs to a lump sum cover");
+        if b.kind == BuiltInKind::EarlyPayment && !matches!(c.benefit, Benefit::LumpSum { .. } | Benefit::MonthlyBenefit { .. }) {
+            return fail("is paid early out of the cover's benefit, so it belongs to a lump sum or income cover");
         }
         if b.requires_feature.as_deref().is_some_and(|f| !features.contains(f)) {
             return fail("names a feature none of the cover's options switches on");
@@ -335,19 +335,29 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                     return Err(invalid(file, "a set of discounts has at least one member"));
                 }
             }
-            Feature::Composition { core, requires, exclusive } => {
+            Feature::Composition {
+                core,
+                requires,
+                exclusive,
+                requires_any,
+            } => {
                 let named = core
                     .iter()
                     .chain(requires.keys())
                     .chain(requires.values().flatten())
+                    .chain(requires_any.keys())
+                    .chain(requires_any.values().flatten())
                     .chain(exclusive.iter().flatten());
                 for code in named {
                     if !codes.contains(code.as_str()) {
                         return Err(invalid(file, format!("composition names cover {code}, which the product does not offer")));
                     }
                 }
-                if requires.iter().any(|(cover, needed)| needed.contains(cover)) {
+                if requires.iter().chain(requires_any).any(|(cover, needed)| needed.contains(cover)) {
                     return Err(invalid(file, "a cover cannot require itself"));
+                }
+                if requires_any.values().any(Vec::is_empty) {
+                    return Err(invalid(file, "a cover held with one of a set names at least one cover"));
                 }
             }
             Feature::PolicyLoans {

@@ -18,8 +18,9 @@ def monthly_benefit(waiting_days, benefit_months, benefit_while_imprisoned = "su
         "benefit_while_imprisoned": benefit_while_imprisoned,
     }
 
-def benefit_limit(category, per_event = None, per_year = None, excess = 0):
-    return {"category": category, "per_event_minor": per_event, "per_year_minor": per_year, "excess_minor": excess}
+def benefit_limit(category, per_event = None, per_year = None, excess = 0, per_lifetime = None):
+    return {"category": category, "per_event_minor": per_event, "per_year_minor": per_year, "excess_minor": excess,
+            "per_lifetime_minor": per_lifetime}
 
 def health_schedule(limits):
     return {"kind": "health_schedule", "limits": limits}
@@ -91,7 +92,8 @@ def option_axis(code, name, choices):
     return {"code": code, "name": name, "choices": choices}
 
 def choice(code, name, premium_factor = "1", excess = None, waiting_days = None, benefit_months = None,
-           benefit_to_age = None, expiry_age = None, expiry_after_years = None, premium = None, features = []):
+           benefit_to_age = None, expiry_age = None, expiry_after_years = None, premium = None, features = [],
+           only_with = []):
     """One answer on an axis: what it does to the premium and the terms it sets."""
     terms = {"features": features}
     for key, value in [("excess_minor", excess), ("waiting_days", waiting_days), ("benefit_months", benefit_months),
@@ -99,7 +101,7 @@ def choice(code, name, premium_factor = "1", excess = None, waiting_days = None,
                        ("expiry_after_years", expiry_after_years), ("premium", premium)]:
         if value != None:
             terms[key] = value
-    return {"code": code, "name": name, "premium_factor": premium_factor, "terms": terms}
+    return {"code": code, "name": name, "premium_factor": premium_factor, "terms": terms, "only_with": only_with}
 
 def stepped_premium():
     """Re-rated at each anniversary on the life's age then."""
@@ -109,11 +111,15 @@ def level_premium(to_age):
     """Fixed at the age the layer was first rated, until this age."""
     return {"kind": "level", "to_age": to_age}
 
+def limited_pay_premium(to_age):
+    """Level, and paid only until the anniversary on or after this age; the cover carries on."""
+    return {"kind": "limited_pay", "to_age": to_age}
+
 def level_term_premium(years):
     """Fixed for blocks of this many years, each priced at the age it began."""
     return {"kind": "level_term", "years": years}
 
-def built_in(code, name, kind, max = None, percent_of_cover = None, monthly_multiple = None, requires = None, definitions = []):
+def built_in(code, name, kind, max = None, percent_of_cover = None, multiple_of_cover = None, requires = None, definitions = []):
     """A benefit the cover's wording gives besides its main one. kind: early_payment,
     additional, reimbursement, monthly_addition, facility or premium_waiver."""
     return {
@@ -122,7 +128,7 @@ def built_in(code, name, kind, max = None, percent_of_cover = None, monthly_mult
         "kind": kind,
         "max_minor": max,
         "percent_of_cover": percent_of_cover,
-        "monthly_multiple": monthly_multiple,
+        "multiple_of_cover": multiple_of_cover,
         "requires_feature": requires,
         "definitions": definitions,
     }
@@ -237,8 +243,8 @@ def benefit_categories(required, categories, count):
 def entitled(code):
     return {"kind": "entitlement", "code": code}
 
-def composition(core = [], requires = {}, exclusive = []):
-    return {"kind": "composition", "core": core, "requires": requires, "exclusive": exclusive}
+def composition(core = [], requires = {}, exclusive = [], requires_any = {}):
+    return {"kind": "composition", "core": core, "requires": requires, "exclusive": exclusive, "requires_any": requires_any}
 
 def cooling_off(days):
     return {"kind": "cooling_off", "days": days}

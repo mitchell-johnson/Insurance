@@ -59,6 +59,9 @@ pub struct BenefitLimit {
     pub per_year_minor: Option<i64>,
     #[serde(default)]
     pub excess_minor: i64,
+    /// The most paid for the life over the whole life of the policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_lifetime_minor: Option<i64>,
 }
 
 /// An income benefit while the life is in custody after sentence.
@@ -271,9 +274,11 @@ pub struct BuiltInBenefit {
     /// The most it pays as a percentage of the life's sum insured on the cover.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub percent_of_cover: Option<DecStr>,
-    /// The most it pays as a multiple of the monthly benefit.
+    /// The most it pays as a multiple of the life's sum insured on the
+    /// cover: of the monthly benefit on an income cover, or of the benefit
+    /// amount a cover such as accidental injury pays in multiples of.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub monthly_multiple: Option<DecStr>,
+    pub multiple_of_cover: Option<DecStr>,
     /// Only where the life's option has this feature.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires_feature: Option<String>,
@@ -284,8 +289,7 @@ pub struct BuiltInBenefit {
 
 impl BuiltInBenefit {
     /// The most this benefit pays on a cover with this sum insured, in minor
-    /// units, the lowest of its limits. A monthly multiple reads the sum
-    /// insured as the monthly benefit. `None` where it sets no limit.
+    /// units, the lowest of its limits. `None` where it sets no limit.
     pub fn limit_minor(&self, sum_insured_minor: i64) -> Option<i64> {
         // A share of the cover is cut down to whole minor units: a limit
         // never rounds up past what the wording allows.
@@ -296,7 +300,7 @@ impl BuiltInBenefit {
         [
             self.max_minor,
             self.percent_of_cover.as_ref().and_then(|p| of(p, 100)),
-            self.monthly_multiple.as_ref().and_then(|m| of(m, 1)),
+            self.multiple_of_cover.as_ref().and_then(|m| of(m, 1)),
         ]
         .into_iter()
         .flatten()
@@ -456,6 +460,10 @@ pub enum Feature {
         /// Sets of covers of which a life holds at most one.
         #[serde(default)]
         exclusive: Vec<Vec<String>>,
+        /// A cover and covers of which the same life must also hold at
+        /// least one to have it.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        requires_any: BTreeMap<String, Vec<String>>,
     },
 }
 
@@ -508,8 +516,13 @@ impl ProductDefinition {
     /// product's composition rules. A product that declares none allows any
     /// set, and a life with no covers breaks no rule.
     pub fn check_composition(&self, held: &std::collections::BTreeSet<&str>) -> Result<(), String> {
-        let Some((core, requires, exclusive)) = self.features.iter().find_map(|f| match f {
-            Feature::Composition { core, requires, exclusive } => Some((core, requires, exclusive)),
+        let Some((core, requires, exclusive, requires_any)) = self.features.iter().find_map(|f| match f {
+            Feature::Composition {
+                core,
+                requires,
+                exclusive,
+                requires_any,
+            } => Some((core, requires, exclusive, requires_any)),
             _ => None,
         }) else {
             return Ok(());
@@ -523,6 +536,11 @@ impl ProductDefinition {
         for (cover, needed) in requires {
             if let Some(missing) = needed.iter().find(|n| held.contains(cover.as_str()) && !held.contains(n.as_str())) {
                 return Err(format!("{cover} is held only with {missing}"));
+            }
+        }
+        for (cover, any) in requires_any {
+            if held.contains(cover.as_str()) && !any.iter().any(|n| held.contains(n.as_str())) {
+                return Err(format!("{cover} is held only with one of {}", any.join(", ")));
             }
         }
         for set in exclusive {

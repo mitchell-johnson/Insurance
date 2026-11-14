@@ -33,6 +33,10 @@ pub enum PremiumBasis {
     /// Fixed for blocks of this many years from the layer's rating date,
     /// each block priced at the life's age when it began.
     LevelTerm { years: u32 },
+    /// Fixed at the life's age when the layer was first rated, and paid
+    /// only until the anniversary on or after the life reaches this age;
+    /// the cover carries on with nothing more to pay.
+    LimitedPay { to_age: u32 },
 }
 
 /// What one choice sets. Each term is optional; a term no choice sets is
@@ -78,6 +82,10 @@ pub struct OptionChoice {
     pub premium_factor: DecStr,
     #[serde(default)]
     pub terms: OptionTerms,
+    /// The choice may be made only together with one of these choices on
+    /// other axes, each written `axis=choice`. Empty: with any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub only_with: Vec<String>,
 }
 
 /// One axis of a cover's options: a question with a set of answers.
@@ -153,12 +161,20 @@ pub(crate) fn validate_axes(cover: &CoverDefinition) -> Result<(), OptionError> 
                 .flatten()
                 .any(|v| v == 0);
             let bad_premium = match t.premium {
-                Some(PremiumBasis::Level { to_age }) => to_age == 0,
+                Some(PremiumBasis::Level { to_age } | PremiumBasis::LimitedPay { to_age }) => to_age == 0,
                 Some(PremiumBasis::LevelTerm { years }) => years == 0,
                 _ => false,
             };
             if zero_or_less || bad_premium || t.excess_minor.is_some_and(|e| e < 0) || t.features.iter().any(|f| !plain(f)) {
                 return menu(format!("axis {}: choice {} sets a term out of range", axis.code, c.code));
+            }
+            for pair in &c.only_with {
+                let known = pair.split_once('=').is_some_and(|(a, ch)| {
+                    a != axis.code && cover.option_axes.iter().any(|x| x.code == a && x.choices.iter().any(|y| y.code == ch))
+                });
+                if !known {
+                    return menu(format!("axis {}: choice {} is offered with {pair}, which another axis does not offer", axis.code, c.code));
+                }
             }
             let income = matches!(cover.benefit, crate::Benefit::MonthlyBenefit { .. });
             if !income && (t.waiting_days.is_some() || t.benefit_months.is_some() || t.benefit_to_age.is_some()) {
@@ -228,7 +244,8 @@ impl CoverDefinition {
             premium_factor: Dec::from(1i64),
             terms: OptionTerms::default(),
         };
-        for (axis, part) in self.option_axes.iter().zip(parts) {
+        let mut picked = Vec::new();
+        for (axis, part) in self.option_axes.iter().zip(&parts) {
             let (name, choice) = part.split_once('=').ok_or_else(unknown)?;
             if name != axis.code {
                 return Err(unknown());
@@ -236,6 +253,10 @@ impl CoverDefinition {
             let c = axis.choices.iter().find(|c| c.code == choice).ok_or_else(unknown)?;
             resolved.premium_factor *= c.premium_factor.get();
             merge(&mut resolved.terms, &c.terms, code)?;
+            picked.push(c);
+        }
+        if picked.iter().any(|c| !c.only_with.is_empty() && !c.only_with.iter().any(|w| parts.contains(&w.as_str()))) {
+            return Err(OptionError::Menu(format!("{code}: a choice is offered only with a choice not made")));
         }
         Ok(resolved)
     }
@@ -262,7 +283,12 @@ impl CoverDefinition {
                 .option_axes
                 .iter()
                 .flat_map(|a| &a.choices)
-                .any(|c| matches!(c.terms.premium, Some(PremiumBasis::Level { .. } | PremiumBasis::LevelTerm { .. })))
+                .any(|c| {
+                    matches!(
+                        c.terms.premium,
+                        Some(PremiumBasis::Level { .. } | PremiumBasis::LevelTerm { .. } | PremiumBasis::LimitedPay { .. })
+                    )
+                })
     }
 
     /// Whether any layer of this cover can reach an end by age or term.
@@ -294,10 +320,15 @@ pub fn rating_age(basis: PremiumBasis, age_at_rating_start: u32, attained: u32) 
     match basis {
         PremiumBasis::Stepped => attained,
         PremiumBasis::Level { to_age } if attained >= to_age => attained,
-        PremiumBasis::Level { .. } => age_at_rating_start,
+        PremiumBasis::Level { .. } | PremiumBasis::LimitedPay { .. } => age_at_rating_start,
         PremiumBasis::LevelTerm { years } => {
             let elapsed = attained.saturating_sub(age_at_rating_start);
             age_at_rating_start + elapsed / years * years
         }
     }
+}
+
+/// Whether a layer on this basis still pays premium at this attained age.
+pub fn pays_premium(basis: PremiumBasis, attained: u32) -> bool {
+    !matches!(basis, PremiumBasis::LimitedPay { to_age } if attained >= to_age)
 }
