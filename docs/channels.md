@@ -79,6 +79,8 @@ A policy carries its core status and `ended`, true for anything that is no longe
 
 **Owners, one or several.** A policy has a set of owners, each a policyholder in the app. The core's issue sets the first; `RecordOwnership` from the customer master adds an owner (a joint owner, or a buyer), and `EndOwnership {policy, party}` removes one. A transfer is the master recording the new owner and ending the old, in either order. When an owner leaves, they lose everything but their own cover, every adviser they authorised loses access, and anyone let look at the policy loses access (who let them in is not kept, so a remaining owner lets them in again). With no owner left the policy has none in the app, as when the only owner has died. An ending for someone who is not an owner does nothing.
 
+**Money needs a signature.** A person's own request of a kind in `MONEY_KINDS` (`make_payment`, `change_payment_method`, `change_bank_account`, `withdrawal`, `surrender`) is refused `step_up_required` (401) unless their enrolled device signed exactly that request over a fresh challenge. A challenge needs a connection, so a payment keyed in offline cannot be queued and sent later unsigned. Reading offline from the device's own store is the native app's part.
+
 **Every joint owner signs.** On a policy with more than one owner, a request an owner makes waits (`awaiting_approval` from the customer) until every owner has signed it on their own device; `signed_by` lists those who have. An owner who signs twice is told `already_signed`. A request prepared by an adviser or support person needs every owner too. Either owner may alone make the requests in `EITHER_OWNER` (`notify_claim`, `update_contact_details`).
 
 **When the data may be stale.** The module knows when it last heard from the event stream. If that is more than two minutes ago, answers carry `fresh: false`, the audience policy is given that fact and withholds what it only allows on current relationship data, and the app shows "as at" rather than presenting old data as current.
@@ -440,6 +442,10 @@ node crates/channels/tests/browser/check.js
 ### More time for a life who needs it
 
 When a life comes to answer their disclosure or sign a consent, the portal asks the customer master's routing for them. If the adjustments include `more_time` it sends underwriting `set_more_time {proposal, life, more_time: true}` as `underwriting-console` (key `more-time:{proposal}:{life}`), so a marker placed after the proposal opened is picked up. Underwriting extends the dates once. The person is never told why, and a master or module that cannot answer stops nothing.
+
+### Someone phones about a policy
+
+`POST /staff/v1/policies/{policy}/caller` with `{caller, case, scope}` tells the member of staff whether to talk to the caller. They must be able to open the policy, and that read is logged as any other. `caller` is the caller's customer reference, or empty when they are not a customer or cannot be identified. An owner is spoken to. Anyone else is spoken to only if the customer master's `authority` answer for the act `view` is `allow` for every owner; `route` (capacity in question) refers the call to legal. Every other case, including a master that cannot answer, gets one set of words that neither confirm nor deny that a policy exists. The contact is a second line in the access log, action `contact.caller_check`, record `policy:{policy}/caller/{reference or unidentified}/{outcome}`. The words are in `CALLER_REFUSED` in `src/http.rs` and are a draft for the conduct team to settle.
 
 ### Reviewing vulnerability markers
 
