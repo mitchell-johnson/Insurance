@@ -333,9 +333,9 @@ impl Admin {
                     let reply = self
                         .propose(partition, format!("open:p{partition}"), "leader", Command::OpenBusinessDate { date })
                         .await?;
-                    if let Some(refusal) = reply.rejected {
-                        return Err(format!("partition {partition} refused to open: {refusal}"));
-                    }
+                    reply
+                        .rejected
+                        .map_or(Ok(()), |refusal| Err(format!("partition {partition} refused to open: {refusal}")))?;
                     opened.push(partition);
                 }
             }
@@ -357,9 +357,9 @@ impl Admin {
                 let reply = self
                     .propose(partition, format!("shipped:{digest}:p{partition}"), "config", command.clone())
                     .await?;
-                if let Some(refusal) = reply.rejected {
-                    return Err(format!("partition {partition} refused {}: {refusal}", command.name()));
-                }
+                reply
+                    .rejected
+                    .map_or(Ok(()), |refusal| Err(format!("partition {partition} refused {}: {refusal}", command.name())))?;
                 if reply.duplicate {
                     unchanged += 1;
                 } else {
@@ -386,9 +386,9 @@ impl Admin {
                         let reply = self
                             .propose(partition, format!("setup:{key}:p{partition}"), "config", (**command).clone())
                             .await?;
-                        if let Some(refusal) = reply.rejected {
-                            return Err(format!("step {n}: partition {partition} refused {}: {refusal}", command.name()));
-                        }
+                        reply.rejected.map_or(Ok(()), |refusal| {
+                            Err(format!("step {n}: partition {partition} refused {}: {refusal}", command.name()))
+                        })?;
                         fresh |= !reply.duplicate;
                     }
                     if fresh {

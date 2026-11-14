@@ -501,7 +501,10 @@ fn a_released_cohort_carries_on_from_where_the_old_system_stopped() {
 /// inception with no assumption recorded, layer dates that do not match the covers or fall
 /// outside the policy's life, a period the old system should have billed and did not, a bill
 /// for a period it had not reached, more owing than was billed, a spent bill, a hardship
-/// override with no dates, an assumption that is not a code, and negative money held.
+/// override with no dates, an assumption that is not a code, negative money held, a cohort
+/// opened for another day, and a policy in another currency than its cohort's. A policy the
+/// old system let fall overdue to lapse comes across suspended, and one written on the cutover
+/// day has passed no anniversary.
 /// Why it matters: the extract is written by mapping code from another system's data, and its
 /// faults are found here or not at all. Each refusal is an exception for a person to clear
 /// before the cohort moves; a load that accepted any of them would bake the fault into the
@@ -563,10 +566,56 @@ fn a_load_that_breaks_a_rule_is_refused_whole() {
     load.issue.product_code = "no-such-product".into();
     assert_eq!(try_load(&mut c, load), "unknown_product");
 
+    // A cohort is opened only on its cutover day, and one in another currency takes no
+    // policy written in this one.
+    let tomorrow = MigrationCommand::OpenCohort {
+        cohort: "tomorrow".into(),
+        currency: NZD,
+        cutover: cutover().succ_opt().unwrap(),
+        control: ControlTotals::default(),
+    };
+    assert_eq!(code(step(&mut c, tomorrow)), "cutover_date");
+    step(
+        &mut c,
+        MigrationCommand::OpenCohort {
+            cohort: "australia".into(),
+            currency: ic_money::Currency::AUD,
+            cutover: cutover(),
+            control: ControlTotals::default(),
+        },
+    )
+    .unwrap();
+    let mut load = first();
+    load.cohort = "australia".into();
+    assert_eq!(try_load(&mut c, load), "currency");
+
     assert!(c.state(0).policies.is_empty());
     assert_eq!(c.state(0).migration.cohorts["retail-1"].loaded, ControlTotals::default());
     assert_eq!(try_load(&mut c, first()), "accepted");
     assert_eq!(try_load(&mut c, first()), "policy_exists");
+    // A policy the old system had let fall overdue to lapse comes across suspended, and
+    // the first end of day here lapses it with its notice.
+    let mut overdue = loads("retail-1").remove(3);
+    overdue.opening.bills = (6..=10)
+        .map(|m| bill(d(2027, m, 20), d(2027, m + 1, 20), d(2027, m, 20), 54_00, 6_00, 60_00))
+        .collect();
+    assert_eq!(try_load(&mut c, overdue), "accepted");
+    assert_eq!(c.state(0).policies[&pol(4)].standing, Some(Standing::Suspended));
+    // One the old system wrote on the cutover day itself has passed no anniversary.
+    let mut fresh = loads("retail-1").remove(0);
+    fresh.issue = {
+        let mut issue = term_life(9, cutover(), d(1980, 5, 5), Sex::Female, false, 300_000_00, None, Frequency::Monthly, None);
+        issue.product_code = "term-life-1998".into();
+        issue.migrated = true;
+        issue
+    };
+    fresh.opening = Opening {
+        periods_billed: 1,
+        bills: vec![bill(cutover(), d(2027, 12, 15), cutover(), 54_00, 6_00, 60_00)],
+        ..Opening::default()
+    };
+    assert_eq!(try_load(&mut c, fresh), "accepted");
+    assert_eq!(c.state(0).policies[&pol(9)].anniversaries_processed, 0);
     assert_eq!(
         code(step(
             &mut c,

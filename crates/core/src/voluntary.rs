@@ -373,10 +373,7 @@ pub(crate) fn reinstate(
         ));
     }
     if rules.reinstatement_evidence_free_days.is_some_and(|free| since > i64::from(free)) {
-        return Err(Reject::new(
-            "underwriting_required",
-            "the member's cover has been lapsed too long to reinstate on payment alone",
-        ));
+        return Err(Reject::new("underwriting_required", "lapsed too long to reinstate on payment alone"));
     }
     // Priced first, with nothing written, so a refusal leaves no trace.
     let billed = crate::group::restore_member_paid_layers(ledger, catalog, &product, policy, ctx, &lapse.layers, lapse.lapsed_on, false)?;

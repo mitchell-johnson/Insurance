@@ -238,3 +238,32 @@ pub(crate) fn change(catalog: &Catalog, policy: &mut Policy, ctx: &mut Ctx<'_>, 
     });
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    /// Purpose: a short period before a new billing day is measured against a whole period
+    /// of the new frequency, so each calendar frequency gives its length in months (and a
+    /// fortnightly schedule, which is counted in days, gives none); and the new billing day
+    /// is the next date on that day of the month, later this month where it has not passed
+    /// and next month where it has.
+    /// Why it matters: the short period's premium is a share of a whole period's. A quarter
+    /// measured as a month would charge three times too much for the days before the new
+    /// billing day, and a billing day put a month late would leave a month unbilled.
+    #[test]
+    fn a_new_billing_day_and_the_period_it_is_measured_against() {
+        let lengths: Vec<Option<u32>> = [Frequency::Fortnightly, Frequency::Monthly, Frequency::Quarterly, Frequency::HalfYearly, Frequency::Yearly]
+            .into_iter()
+            .map(months)
+            .collect();
+        assert_eq!(lengths, vec![None, Some(1), Some(3), Some(6), Some(12)]);
+        assert_eq!(next_on_day(d(2027, 11, 10), 20), Some(d(2027, 11, 20)), "later this month");
+        assert_eq!(next_on_day(d(2027, 11, 10), 10), Some(d(2027, 11, 10)), "today is on the day");
+        assert_eq!(next_on_day(d(2027, 11, 10), 5), Some(d(2027, 12, 5)), "passed, so next month");
+    }
+}

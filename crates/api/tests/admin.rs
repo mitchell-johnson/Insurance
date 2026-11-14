@@ -391,7 +391,10 @@ fn migrated(n: u64, owing: i64) -> serde_json::Value {
 /// every exception; that cohort does not reconcile, so sign-off sends nothing, and abandon takes
 /// the load out on every partition. A clean file loads, reconciles, signs off and releases, and
 /// running each step again changes nothing. Each policy's commission book then goes to the
-/// commission module, and what it refuses is reported.
+/// commission module, and what it refuses is reported. A file with a policy not marked as
+/// migrated or listed twice is refused, so is a sign-off by one person in two roles and the
+/// abandonment of a released cohort, as is a step for a cohort no partition has and a
+/// commission book that is not an object.
 /// Why it matters: this is the tool the cutover runbook runs, against production, under a clock.
 /// Signing a cohort that did not reconcile would bring an unexplained difference onto the books
 /// for good, and a tool that stopped at the first bad policy would hide how many more there are.
@@ -410,6 +413,18 @@ async fn a_cohort_file_is_loaded_reconciled_signed_off_and_released() {
     };
     let error = CohortFile::parse(&file("c1", &policies, control(6, 0))).unwrap_err();
     assert!(error.contains("receivable_minor"), "{error}");
+    let mut unmarked = policies.clone();
+    unmarked[1]["issue"]["migrated"] = json!(false);
+    let error = CohortFile::parse(&file("c1", &unmarked, control(6, 180_00))).unwrap_err();
+    assert!(error.contains("not marked as migrated"), "{error}");
+    let mut twice = policies.clone();
+    twice[1] = twice[0].clone();
+    let error = CohortFile::parse(&file("c1", &twice, control(6, 180_00))).unwrap_err();
+    assert!(error.contains("listed twice"), "{error}");
+    for step in ["status", "abandon"] {
+        let error = admin.migrate(MigrateCommand::parse(&[step, "nowhere"]).unwrap()).await.unwrap_err();
+        assert!(error.contains("no partition has a cohort called nowhere"), "{step}: {error}");
+    }
 
     // One policy is for a product that does not exist: refused, and the rest load.
     let mut faulty = policies.clone();
@@ -440,10 +455,16 @@ async fn a_cohort_file_is_loaded_reconciled_signed_off_and_released() {
     assert_eq!(again["refused"], json!({}), "a repeated load is the same load: {again}");
     let status = admin.migrate(MigrateCommand::parse(&["status", "c2"]).unwrap()).await.unwrap();
     assert_eq!(status["reconciled"], json!(true));
+    // The same person cannot sign for finance and the business: every partition refuses it.
+    let one_person = MigrateCommand::parse(&["sign-off", "c2", "fin-ana", "fin-ana", "sha256:pack"]).unwrap();
+    let error = admin.migrate(one_person).await.unwrap_err();
+    assert!(error.contains("invalid_sign_off"), "{error}");
     let done = admin.migrate(sign("c2")).await.unwrap();
     assert_eq!(done["released"], json!(6), "{done}");
     let again = admin.migrate(sign("c2")).await.unwrap();
     assert_eq!(again["released"], json!(0), "signing again changes nothing: {again}");
+    let error = admin.migrate(MigrateCommand::parse(&["abandon", "c2"]).unwrap()).await.unwrap_err();
+    assert!(error.contains("refused to abandon cohort c2"), "a released cohort stays: {error}");
     for partition in 0..2 {
         let c = ledger.client.cohort(partition, "c2").await.unwrap().unwrap();
         assert_eq!((c.status, c.waiting.len()), (ic_core::migration::CohortStatus::Released, 0));
@@ -463,6 +484,16 @@ async fn a_cohort_file_is_loaded_reconciled_signed_off_and_released() {
         .await
         .unwrap_err();
     assert!(error.contains("not released"), "{error}");
+    // Through the command line, a commission book that is not an object is refused by name.
+    let mut odd = policies.clone();
+    odd[2]["commission"] = json!("level");
+    let path = ledger.dir.join("commission.json");
+    std::fs::write(&path, file("c2", &odd, control(6, 180_00))).unwrap();
+    let error = admin
+        .run(AdminCommand::parse(&args(&format!("migrate commission {}", path.display()))).unwrap())
+        .await
+        .unwrap_err();
+    assert!(error.contains("its commission is not an object"), "{error}");
     assert!(MigrateCommand::parse(&["sign-off", "c2", "a"]).is_none());
     assert!(AdminCommand::parse(&args("migrate nothing")).is_err());
 }

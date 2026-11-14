@@ -474,6 +474,49 @@ mod tests {
         let too_much = bill("life", i64::MAX, 0, 0, 0);
         assert!(add_premium(&mut total, &too_much).is_err(), "an overflow is an error, never a wrapped amount");
     }
+    /// Purpose: a short period's premium (the days before a new billing day) cuts every line
+    /// of the whole period's premium to its days, the discount lines included, and the cent
+    /// that rounding each line on its own leaves unaccounted goes on the largest discount, so
+    /// the premium before discounts less the discount lines is still the premium.
+    /// Why it matters: billing posts the premium before discounts and each discount as its
+    /// own pair of lines. If they stopped adding up after a change of billing day, the entry
+    /// would not balance by a cent, or the discount reported to the business would differ
+    /// from what the customer was given.
+    #[test]
+    fn a_short_periods_discount_lines_still_add_up_to_the_premium() {
+        let m = |minor| Money::new(minor, NZD);
+        let line = |code: &str, minor| ic_product::rating::DiscountLine {
+            code: code.to_string(),
+            name: code.to_string(),
+            posting_type: format!("discount_{code}"),
+            amount: m(minor),
+        };
+        let whole = ModalPremium {
+            by_cover: [("life".to_string(), m(90_01))].into(),
+            policy_fee: m(3_00),
+            gst: BTreeMap::new(),
+            levies: BTreeMap::new(),
+            gross_by_cover: [("life".to_string(), m(100_00))].into(),
+            discounts: vec![line("loyalty", 6_66), line("staff", 3_33)],
+        };
+        // 10 days of 30: 30.00 gross, 30.003 net and 2.22, 1.11 of discount.
+        let short = for_days(&whole, 10, 30);
+        assert_eq!(
+            (short.gross_by_cover["life"].minor, short.by_cover["life"].minor, short.policy_fee.minor),
+            (33_33, 30_00, 1_00)
+        );
+        let lines: Vec<i64> = short.discounts.iter().map(|d| d.amount.minor).collect();
+        assert_eq!(lines, vec![2_22, 1_11]);
+        assert_eq!(33_33 - 30_00, lines.iter().sum::<i64>(), "the lines add up");
+        let odd = for_days(&whole, 7, 30);
+        let total: i64 = odd.discounts.iter().map(|d| d.amount.minor).sum();
+        assert_eq!(
+            odd.gross_by_cover["life"].minor - odd.by_cover["life"].minor,
+            total,
+            "the largest line takes the odd cent"
+        );
+        assert_eq!(odd.discounts[1].amount.minor, 78, "the smaller line is only rounded");
+    }
     /// Purpose: for both benefit categories of the shipped group life product and salaries
     /// from a dollar to two million, round and awkward, alone and as a declared pool, the
     /// member's sum insured and the month's premium equal what integer long division gives
@@ -492,14 +535,10 @@ mod tests {
             let (whole, fraction) = s.split_once('.').unwrap_or((s, ""));
             (format!("{whole}{fraction}").parse::<i128>().unwrap(), 10i128.pow(fraction.len() as u32))
         };
+        assert_eq!(product.rounding, RoundingMode::HalfEven, "the shipped scheme rounds half to even");
         let nearest = |top: i128, bottom: i128| {
             let (cut, rest) = (top / bottom, top % bottom);
-            let up = match product.rounding {
-                RoundingMode::Down => false,
-                RoundingMode::Up => rest != 0,
-                RoundingMode::HalfUp => rest * 2 >= bottom,
-                RoundingMode::HalfEven => rest * 2 > bottom || (rest * 2 == bottom && cut % 2 == 1),
-            };
+            let up = rest * 2 > bottom || (rest * 2 == bottom && cut % 2 == 1);
             i64::try_from(cut + i128::from(up)).unwrap()
         };
         let life = LifeId::from("member");

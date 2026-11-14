@@ -445,7 +445,8 @@ fn a_member_who_leaves_has_only_their_own_collection_ended() {
 /// premium for the periods since: the cover is in force again from the day it ended,
 /// those periods are billed to the member and paid from the credit, and the member is
 /// paid up. Short of that sum it is refused `arrears_unpaid` with nothing changed; a
-/// member with no lapse is refused `not_lapsed`; after the window, `window_closed`.
+/// member with no lapse is refused `not_lapsed`; after the window, `window_closed`; with no
+/// reference, for someone not a member, or on a scheme no longer in force, likewise refused.
 /// Why it matters: a retail policy can be reinstated by paying what it owes, and the
 /// design gives a member's own cover the same standing as a policy of its own. Without
 /// this a member who paid a week late would have to apply and be underwritten again,
@@ -527,6 +528,15 @@ fn a_lapsed_members_cover_is_reinstated_when_they_pay_what_it_needs() {
     days(&mut c, 91);
     c.submit(p, "cash-matching", member_receipt(&id, &exec(), "m-3", 1_000_00)).unwrap();
     assert_eq!(code(c.submit(p, "group-admin", reinstate(exec()))), "window_closed");
+    let unnamed = Command::ReinstateMemberCover {
+        policy: id.clone(),
+        life: exec(),
+        reference: " ".into(),
+    };
+    assert_eq!(code(c.submit(p, "group-admin", unnamed)), "invalid_request");
+    assert_eq!(code(c.submit(p, "group-admin", reinstate(LifeId("nobody".into())))), "unknown_member");
+    c.submit(p, "group-admin", Command::CancelPolicy { policy: id.clone() }).unwrap();
+    assert_eq!(code(c.submit(p, "group-admin", reinstate(exec()))), "not_in_force");
 }
 
 /// Purpose: a scheme holding a member's own money moves to another partition with that

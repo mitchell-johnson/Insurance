@@ -27,6 +27,7 @@
 //! Every step is safe to repeat: commands carry keys made from the cohort
 //! and the policy.
 
+use sha2::Digest;
 use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
@@ -213,9 +214,9 @@ impl Admin {
                 control: sum(policies.iter().copied()),
             };
             let reply = self.migration(partition, format!("migration:{name}:open:p{partition}"), open).await?;
-            if let Some(refusal) = reply.rejected {
-                return Err(format!("partition {partition} did not open cohort {name}: {refusal}"));
-            }
+            reply
+                .rejected
+                .map_or(Ok(()), |refusal| Err(format!("partition {partition} did not open cohort {name}: {refusal}")))?;
             for p in policies {
                 let load = MigrationCommand::Load(Box::new(Load {
                     cohort: name.clone(),
@@ -283,15 +284,21 @@ impl Admin {
             ));
         }
         let partitions: Vec<PartitionId> = self.cohorts(cohort).await?.into_keys().collect();
+        // The key names who signed, so a sign-off refused for its signers can be made
+        // again correctly, and the same sign-off sent twice is still one.
+        let signers = serde_json::to_vec(sign_off).map_err(|e| e.to_string())?;
+        let signed: String = sha2::Sha256::digest(&signers).iter().take(8).map(|b| format!("{b:02x}")).collect();
         for partition in &partitions {
             let step = MigrationCommand::SignOff {
                 cohort: cohort.to_string(),
                 sign_off: sign_off.clone(),
             };
-            let reply = self.migration(*partition, format!("migration:{cohort}:sign-off:p{partition}"), step).await?;
-            if let Some(refusal) = reply.rejected {
-                return Err(format!("partition {partition} refused the sign-off of cohort {cohort}: {refusal}"));
-            }
+            let reply = self
+                .migration(*partition, format!("migration:{cohort}:sign-off:{signed}:p{partition}"), step)
+                .await?;
+            reply.rejected.map_or(Ok(()), |refusal| {
+                Err(format!("partition {partition} refused the sign-off of cohort {cohort}: {refusal}"))
+            })?;
         }
         let mut released = 0u64;
         for partition in &partitions {
@@ -311,9 +318,9 @@ impl Admin {
                 let reply = self
                     .migration(*partition, format!("migration:{cohort}:release:p{partition}:{waiting}:{round}"), step)
                     .await?;
-                if let Some(refusal) = reply.rejected {
-                    return Err(format!("partition {partition} refused to release cohort {cohort}: {refusal}"));
-                }
+                reply.rejected.map_or(Ok(()), |refusal| {
+                    Err(format!("partition {partition} refused to release cohort {cohort}: {refusal}"))
+                })?;
                 released += waiting.min(MAX_COHORT_STEP as u64);
                 round += 1;
             }
@@ -376,9 +383,9 @@ impl Admin {
                 };
                 let key = format!("migration:{cohort}:abandon:p{partition}:{}:{round}", c.waiting.len());
                 let reply = self.migration(*partition, key, step).await?;
-                if let Some(refusal) = reply.rejected {
-                    return Err(format!("partition {partition} refused to abandon cohort {cohort}: {refusal}"));
-                }
+                reply.rejected.map_or(Ok(()), |refusal| {
+                    Err(format!("partition {partition} refused to abandon cohort {cohort}: {refusal}"))
+                })?;
                 round += 1;
             }
         }
