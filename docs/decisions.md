@@ -36,9 +36,15 @@ The design posts tax on claim payments and investment earnings at the event, at 
 
 ## Known gaps
 
-### Callers have roles but no relationships
+### The core API is for staff and services; people come through the portal
 
-The API takes the caller's roles from the Entra ID token. What a customer or adviser may see depends also on their relationship to a policy (policyholder, life insured, adviser of record), which belongs to a customer master that is not part of this system. Until one is connected, a caller with no staff role sees nothing. Staff roles work fully.
+Decided 14 Nov 2026, replacing "Callers have roles but no relationships", which was written before the customer master and the portal existed.
+
+What a customer, adviser or employer may see depends on their relationship to a policy (policyholder, life insured, member, adviser of record, administrator). Those relationships are held by the customer master (`crates/customers`) and relayed to the portal's directory (`crates/channels/src/directory.rs`), which also knows which sign-in is which party, follows the core's own events, and applies a revocation ahead of everything else. The portal checks every row it shows against the same audience policy the core API uses (`ic_readmodel::scope::AudienceScope`).
+
+The core API (`crates/api`) therefore does not ask the customer master about anybody. It takes roles from the Entra ID token and serves staff and services. A token with no staff role sees nothing there, and a policy it may not see answers exactly as one that does not exist. That is the intended behaviour in production and not a gap to fill: a second place deciding who is related to whom would have to be kept in step with the directory, and its revocations would lag the portal's.
+
+Development mode (`Auth::Dev`) can assert relationships in a header, so the audience policy can be exercised through the core API without a portal. Entra mode never reads that header.
 
 ### Rotating the cluster token needs a rolling restart
 

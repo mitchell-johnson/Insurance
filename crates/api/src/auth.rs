@@ -24,8 +24,9 @@ pub struct Caller {
     /// Opaque subject: the Entra object ID, which the customer master maps to a party.
     pub subject: String,
     pub roles: Vec<String>,
-    /// Relationships asserted in development mode only. In production they
-    /// come from the gateway's read model of the customer master.
+    /// Relationships asserted in development mode only. In production this
+    /// API serves staff and services, and people reach their policies through
+    /// the portal, which holds the customer master's relationships.
     pub dev_relationships: Vec<Relationship>,
 }
 
