@@ -502,6 +502,27 @@ impl AppState {
         }
         Ok(signer["public_key"].as_str().map(str::to_string))
     }
+
+    /// Tell underwriting that a life on an open proposal is to be given more
+    /// time, where the customer master's routing for them says so. Asked
+    /// each time the life comes to answer or sign, so a marker placed after
+    /// the proposal opened is picked up; underwriting extends the dates
+    /// once. Never why, and nothing here stops the person: a master or a
+    /// module that cannot answer leaves the dates as they are.
+    async fn more_time(&self, session: &Session, proposal: &str, life: &str) {
+        let Some(master) = &self.master else { return };
+        let wanted = matches!(master.routing(&session.party).await, Ok((200, routing))
+            if routing["adjustments"].as_array().is_some_and(|a| a.iter().any(|x| x == "more_time")));
+        if !wanted {
+            return;
+        }
+        let command = json!({ "set_more_time": { "proposal": proposal, "life": life, "more_time": true } });
+        let today = crate::payments::nz(session.at).date().to_string();
+        let envelope = crate::underwriting::envelope(&format!("more-time:{proposal}:{life}"), session.at, &today, command);
+        if let Err(problem) = self.to_underwriting(envelope).await {
+            tracing::warn!(proposal, life, problem = %problem.detail, "underwriting did not take the more-time marker");
+        }
+    }
 }
 
 /// What the person insured signs for their answers. The answers go to the
@@ -516,6 +537,7 @@ async fn disclosure_to_sign(
 ) -> Answer {
     let session = s.customer(&headers, &method, &uri, &body).await?;
     s.signer(&session, &proposal, &life).await?;
+    s.more_time(&session, &proposal, &life).await;
     let request = crate::disclosures::answers(&proposal, &life, &parse(&body)?).map_err(Problem::bad_request)?;
     intake_answer(s.intake()?.to_sign(request).await)
 }
@@ -557,6 +579,7 @@ async fn consent_to_sign(
     if !crate::disclosures::CONSENTS.contains(&kind.as_str()) {
         return Err(Problem::not_found());
     }
+    s.more_time(&session, &proposal, &life).await;
     let message = base64::engine::general_purpose::STANDARD.encode(crate::disclosures::consent_message(&proposal, &life, &kind));
     ok(json!({ "message": message, "signed": crate::disclosures::SIGNED_CONSENTS.contains(&kind.as_str()) }))
 }
@@ -1427,6 +1450,39 @@ async fn group_staff_command(State(s): State<Shared>, headers: HeaderMap, method
     group_staff_answer(s.group()?.staff_command(&key, &session.party.0, sent).await)
 }
 
+#[derive(Deserialize)]
+struct FirstAdmin {
+    party: PartyId,
+}
+
+/// Name a scheme's first administrator. Group administration sets up the
+/// first; from then on the employer's own administrators manage the list,
+/// so this is refused once the scheme has one.
+async fn group_first_admin(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(policy): Path<String>, body: Bytes) -> Answer {
+    let session = s.group_admin(&headers, &method, &uri, &body).await?;
+    let first: FirstAdmin = parse(&body)?;
+    let policy = PolicyId::from(policy.as_str());
+    if s.ask(Question::SchemeAdmins { policy: policy.clone() }).await? != json!(0) {
+        return Err(Problem::new(
+            StatusCode::CONFLICT,
+            "has_administrators",
+            "this scheme already has an administrator, and its administrators manage their own list from the employer portal",
+        ));
+    }
+    tracing::info!(staff = %session.party.0, scheme = %policy, "first scheme administrator named by group administration");
+    let command = DirectoryCommand::SetEmployerAdmin {
+        policy,
+        party: first.party,
+        admin: true,
+    };
+    ok(s.propose(
+        key(&headers, &session.party.0)?,
+        Actor::Module("group-admin".to_string()),
+        Command::Directory(command),
+    )
+    .await?)
+}
+
 /// Try a mapping against a sample of the employer's file. Nothing is
 /// stored, so reading the console is enough.
 async fn group_try_mapping(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(scheme): Path<String>, body: Bytes) -> Answer {
@@ -1440,6 +1496,91 @@ async fn group_try_mapping(State(s): State<Shared>, headers: HeaderMap, method: 
 }
 
 // --- the staff console ---
+
+impl AppState {
+    /// A member of staff trained to see and review vulnerability markers.
+    async fn care(&self, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<Session, Problem> {
+        let session = self.staff(headers, method, uri, body).await?;
+        let trained = self
+            .ask(Question::CareStaff {
+                staff: session.party.clone(),
+                at: session.at,
+            })
+            .await?;
+        if trained != true {
+            return Err(Problem::forbidden("reviewing a marker is for people trained in vulnerability support"));
+        }
+        Ok(session)
+    }
+}
+
+/// The master's answer to a trained person, or why there is none.
+fn cared(answer: Result<crate::customers::Answered, String>) -> Result<Value, Problem> {
+    match answer {
+        Ok((200, body)) => Ok(body),
+        Ok((status, body)) => Err(Problem::new(
+            StatusCode::from_u16(status)
+                .ok()
+                .filter(|s| s.is_client_error() && *s != StatusCode::FORBIDDEN)
+                .unwrap_or(StatusCode::BAD_GATEWAY),
+            body["title"].as_str().unwrap_or("customer_master"),
+            body["detail"].as_str().unwrap_or("the customer master did not take it"),
+        )),
+        Err(e) => Err(Problem::new(StatusCode::SERVICE_UNAVAILABLE, "customer_master_unavailable", e)),
+    }
+}
+
+/// The markers waiting for a trained person: one that has reached its
+/// review date, or a prompt to consider one after a death or a concern
+/// someone raised. Each comes with how the person is served now.
+async fn care_reviews(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
+    use crate::customers::Care;
+    let session = s.care(&headers, &method, &uri, b"").await?;
+    let master = s.master()?;
+    let open = cared(master.care(&session.party, Care::Reviews).await)?;
+    let mut rows = Vec::new();
+    for review in open["reviews"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| r["kind"] == "consider_marker")
+        .take(100)
+    {
+        let party = PartyId::from(review["party"].as_str().unwrap_or_default());
+        // A person whose routing cannot be read is still listed: the review is the work.
+        let now = cared(master.care(&session.party, Care::Routing(party.clone())).await).unwrap_or(Value::Null);
+        let marker = if now["route_to_person"] == true || now["kind"].is_string() {
+            json!({ "kind": now["kind"], "review_on": now["review_on"], "adjustments": now["adjustments"] })
+        } else {
+            Value::Null
+        };
+        rows.push(json!({ "review": review["id"], "party": party, "reason": review["reason"], "opened": review["created_at"], "marker": marker }));
+    }
+    ok(json!({ "rows": rows, "kinds": crate::customers::MARKER_KINDS, "adjustments": crate::customers::ADJUSTMENTS }))
+}
+
+/// What the trained person decided: renew the marker to a later date,
+/// change it, remove it, or close a prompt with no marker needed. The
+/// marker is changed first and the prompt closed after, so a failure
+/// leaves the prompt open.
+async fn care_decide(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(review): Path<String>, body: Bytes) -> Answer {
+    use crate::customers::Care;
+    let session = s.care(&headers, &method, &uri, &body).await?;
+    let key = key(&headers, &session.party.0)?;
+    let decision: Value = parse(&body)?;
+    let party = decision["party"]
+        .as_str()
+        .filter(|p| !p.is_empty())
+        .map(PartyId::from)
+        .ok_or_else(|| Problem::bad_request("say whose marker it is"))?;
+    let command = crate::customers::marker_command(&review, &decision).map_err(Problem::bad_request)?;
+    let master = s.master()?;
+    if let Some(body) = command {
+        cared(master.care(&session.party, Care::Marker { party, key, body }).await)?;
+    }
+    cared(master.care(&session.party, Care::Dismiss(review.clone())).await)?;
+    ok(json!({ "review": review, "outcome": decision["outcome"] }))
+}
 
 async fn staff_me(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
     let session = s.staff(&headers, &method, &uri, b"").await?;
@@ -2807,6 +2948,8 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/policies/{policy}", get(staff_policy))
         .route("/staff/v1/requests", post(staff_request))
         .route("/staff/v1/requests/{id}/second-approval", post(staff_second_approval))
+        .route("/staff/v1/care/reviews", get(care_reviews))
+        .route("/staff/v1/care/reviews/{review}", post(care_decide))
         .route("/staff/v1/workbench", get(workbench))
         .route("/staff/v1/workbench/actions", post(workbench_action))
         .route("/staff/v1/workbench/{party}", get(workbench_party))
@@ -2821,6 +2964,7 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/payments/commands", post(payments_command))
         .route("/staff/v1/group/commands", post(group_staff_command))
         .route("/staff/v1/group/schemes/{scheme}/mappings/try", post(group_try_mapping))
+        .route("/staff/v1/group/schemes/{policy}/first-admin", put(group_first_admin))
         .route("/staff/v1/group/{question}", get(group_staff_question))
         .route("/staff/v1/payments/{question}", get(payments_question))
         .route("/staff/v1/underwriting/commands", post(underwriting_command))

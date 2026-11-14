@@ -30,6 +30,7 @@ pub mod model;
 pub mod notices;
 mod payee;
 pub mod query;
+pub mod recall;
 mod recon;
 mod refund;
 pub mod repay;

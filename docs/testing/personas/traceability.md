@@ -217,6 +217,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | CLM-019 | full | `claims/tests/suite/book.rs::reviews_fall_due_by_date_and_never_stop_the_benefit` |
 | CLM-020 | full | `claims/tests/suite/book.rs::a_benefit_ends_closes_and_can_recur` |
 | CLM-021 | full | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid`<br>`sim/tests/claims.rs::an_offset_recovers_an_overpayment_across_policies` |
+| CLM-022 | full | `payments/tests/recall.rs::a_refund_paid_to_the_wrong_account_is_recalled_owed_again_and_chased`<br>`payments/tests/recall.rs::a_recalled_payment_coming_back_is_recovered_not_retried`<br>`payments-service/tests/pump.rs::a_misdirected_refund_is_recalled_through_the_bank`<br>`sim/tests/payments.rs::a_payment_to_the_wrong_person_is_owed_again_and_owed_back` |
 | CLM-023 | full | `claims/tests/suite/intake.rs::escalation_and_identification`<br>`sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
 | CLM-024 | full | `claims/tests/suite/decisions.rs::admission_follows_the_cover_facts`<br>`claims/tests/suite/decisions.rs::a_pool_cover_claim_is_admitted_on_the_employers_evidence_kept_with_it` |
 | CLM-025 | full | `sim/tests/personas_lines.rs::a_pilots_claim_is_checked_on_the_automatic_amount_plus_any_underwritten_layer`<br>`sim/tests/claims.rs::a_member_above_the_automatic_limit_is_paid_the_excess_only_where_it_was_underwritten` |
@@ -471,9 +472,9 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | VUL-013 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-014 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-015 | full | `customers/tests/api.rs::a_death_prompts_a_person_to_consider_the_bereaved` |
-| VUL-017 | part | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due` |
+| VUL-017 | full | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due`<br>`channels/tests/http.rs::a_trained_person_reviews_vulnerability_markers`<br>`channels/tests/customers.rs::the_master_is_asked_about_markers_as_the_trained_person` |
 | VUL-018 | part | `customers/tests/api.rs::a_capacity_question_pauses_representatives` |
-| VUL-016 | full | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not`<br>`underwriting/tests/more_time.rs::a_customer_who_needs_more_time_gets_longer_to_answer_an_offer` |
+| VUL-016 | full | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not`<br>`underwriting/tests/more_time.rs::a_customer_who_needs_more_time_gets_longer_to_answer_an_offer`<br>`channels/tests/http.rs::the_life_gives_their_own_consents` |
 | VUL-019 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_post_only_customer_and_their_representative_both_get_the_notice`<br>`documents/tests/requested_letters.rs::a_representative_sees_ordinary_letters_and_never_clinical_ones` |
 | VUL-020 | full | `payments/tests/aml.rs::repeated_refunds_raise_a_restricted_case` |
 | VUL-021 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_representative_gets_the_notice_in_their_own_language` |

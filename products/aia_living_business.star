@@ -236,13 +236,27 @@ TRAUMA = ["critical-conditions", "critical-conditions-accelerated", "progressive
 TPD = ["tpd-own-occupation", "tpd-own-occupation-accelerated", "tpd-any-occupation", "tpd-any-occupation-accelerated"]
 INCOME = ["business-continuity-agreed-value", "business-continuity-indemnity", "rural-continuity"]
 
+# Cover the same life holds on its other AIA Living, Cover for Life and Start-Up
+# Income Protection policies counts towards the minimums too; only this
+# policy's covers are discounted here.
+PERSONAL_INCOME = ["income-agreed-value", "income-indemnity", "income-loss-of-earnings", "mortgage-income-rent"]
+
+def on(pairs):
+    return ["%s/%s" % (product, cover) for (product, covers) in pairs for cover in covers]
+
 def MBD(count):
     return benefit_categories(
-        required = [discount_category("life", ["life"], min_sum_insured = dollars(100000))],
+        required = [discount_category("life", ["life"], min_sum_insured = dollars(100000),
+                                      elsewhere = on([("aia-living", ["life", "accidental-death"]), ("aia-living-business", ["life"]),
+                                                      ("aia-cover-for-life", ["life"])]))],
         categories = [
-            discount_category("trauma", TRAUMA, min_sum_insured = dollars(75000)),
-            discount_category("tpd", TPD, min_sum_insured = dollars(75000)),
-            discount_category("income", INCOME, min_sum_insured = dollars(2000)),
+            discount_category("trauma", TRAUMA, min_sum_insured = dollars(75000),
+                              elsewhere = on([("aia-living", TRAUMA), ("aia-living-business", TRAUMA)])),
+            discount_category("tpd", TPD, min_sum_insured = dollars(75000),
+                              elsewhere = on([("aia-living", TPD), ("aia-living-business", TPD)])),
+            discount_category("income", INCOME, min_sum_insured = dollars(2000),
+                              elsewhere = on([("aia-living", PERSONAL_INCOME), ("aia-living-business", INCOME),
+                                              ("aia-start-up-income", ["start-up-income"])])),
         ],
         count = count,
     )

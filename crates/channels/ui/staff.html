@@ -25,6 +25,15 @@
 <p class="muted">Someone else approves it. Large amounts need two approvers and legal. While a conduct case is open on the party, the conduct officer signs too. A new account for a party in liquidation or deceased always needs legal.</p></form>
 <p><button class="quiet" id="proof">Proof of debt extract</button></p><div id="bench-msg" aria-live="polite"></div><div id="proof-out"></div></section></div>
 
+<div data-view="Markers to review">
+<section><h2>Markers to review</h2><p class="muted">Customers whose support marker has reached its review date, and prompts to consider one after a death or a concern someone raised. This list is only for people trained in vulnerability support. A marker says how to serve someone, never a diagnosis, and has no notes.</p><div id="care-list"></div><div id="care-msg" aria-live="polite"></div></section>
+<section id="care-one" hidden><h2 id="care-title"></h2><div id="care-now"></div>
+<form id="care-form"><div class="row">
+<div><label for="care-outcome">Decision</label><select id="care-outcome"><option value="renew">Keep it and set the next review</option><option value="change">Set or change the marker</option><option value="remove">Remove the marker</option><option value="no_marker">No marker needed</option></select></div>
+<div id="care-kind-box"><label for="care-kind">Kind</label><select id="care-kind"></select></div>
+<div id="care-date-box"><label for="care-date">Next review</label><input id="care-date" type="date"></div></div>
+<fieldset id="care-adj-box"><legend>Serve this customer with</legend><div id="care-adj" class="choices"></div></fieldset>
+<p><button>Record the decision</button></p></form><div id="care-one-msg" aria-live="polite"></div></section></div>
 <div data-view="My access"><section><h2>What you can do</h2><div id="mine"></div></section><section><h2>Your recent access</h2><div id="recent"></div></section><section><h2>Personal connections</h2><p class="muted">Declare anyone whose records you must not handle: relatives, friends, a former partner. Their policies and your own are then closed to you here. Only a staff administrator can remove a declaration.</p><div id="connections"></div><form id="connect"><div class="row"><div><label for="conn">Customer reference</label><input id="conn" required></div><button>Declare</button></div></form><div id="conn-msg" aria-live="polite"></div></section></div>
 <div data-view="Access administration"><section><h2>Grants</h2><div id="grants"></div><div id="admin-msg" aria-live="polite"></div></section><section><h2>Alignment with the entitlement source</h2><div id="alignment"></div></section></div>
 </main>
@@ -37,7 +46,7 @@ const R = "workforce";
 let policy = null, party = null;
 const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 const amounts = (m) => Object.entries(m || {}).map(([c, v]) => money(v, c)).join(", ") || "none";
-const loaders = { "policies": async () => {}, "held-balances": bench, "my-access": access, "access-administration": admin };
+const loaders = { "policies": async () => {}, "held-balances": bench, "markers-to-review": care, "my-access": access, "access-administration": admin };
 portal.onView((key) => run($("msg"), loaders[key] || (async () => {}))());
 
 $("lookup").addEventListener("submit", run($("lookup-msg"), async () => {
@@ -66,6 +75,49 @@ $("second").addEventListener("submit", run($("second-msg"), async () => {
   return "Agreed. It now waits for the customer's approval in their app.";
 }));
 
+// ---- Markers to review: for people trained in vulnerability support only.
+let reviewing = null;
+async function care() {
+  $("care-one").hidden = true; reviewing = null;
+  let view;
+  try { view = await api(R, "GET", "/staff/v1/care/reviews"); }
+  catch (e) {
+    if (e.status !== 403) throw e;
+    put($("care-list"), portal.empty("This list is for people trained in vulnerability support, and your role does not include it. When a customer needs something done differently, the policy screen tells you how to serve them."));
+    return;
+  }
+  put($("care-kind"), ...view.kinds.map((k) => h("option", { value: k }, words(k))));
+  put($("care-adj"), ...view.adjustments.map((a) => h("label", {}, h("input", { type: "checkbox", value: a }), " " + words(a))));
+  put($("care-list"), view.rows.length ? table(["Customer", "Why it is here", "Since", "Served now with", "Next review", ""], view.rows.map((r) => [r.party, words(r.reason), String(r.opened || "").slice(0, 10),
+    r.marker ? (r.marker.adjustments || []).map(words).join(", ") || "care" : "no marker", r.marker && r.marker.review_on || "",
+    h("button", { class: "quiet", on: { click: () => decide(r) } }, "Decide")])) : portal.empty("Nothing to review. No marker has reached its review date and no one has asked for one to be considered."));
+}
+function shape() {
+  const o = $("care-outcome").value, marker = o === "renew" || o === "change";
+  $("care-kind-box").hidden = !marker; $("care-date-box").hidden = !marker; $("care-adj-box").hidden = !marker;
+  $("care-date").required = marker;
+}
+function decide(r) {
+  reviewing = r; $("care-one").hidden = false; clear($("care-one-msg"));
+  $("care-title").textContent = `Decide for ${r.party}`;
+  put($("care-now"), h("p", {}, r.marker ? `Marker now: ${words(r.marker.kind || "kind not shown")}, reviewed ${r.marker.review_on || "with no date"}.` : "No marker now.", ` This is here because: ${words(r.reason)}.`));
+  $("care-outcome").value = r.marker ? "renew" : "change";
+  if (r.marker && r.marker.kind) $("care-kind").value = r.marker.kind;
+  $("care-date").value = "";
+  for (const box of $("care-adj").querySelectorAll("input")) box.checked = !!r.marker && (r.marker.adjustments || []).includes(box.value);
+  shape(); $("care-outcome").focus();
+}
+$("care-outcome").addEventListener("change", shape);
+$("care-form").addEventListener("submit", run($("care-one-msg"), async () => {
+  const outcome = $("care-outcome").value, body = { party: reviewing.party, outcome };
+  if (outcome === "renew" || outcome === "change") {
+    body.kind = $("care-kind").value; body.review_on = $("care-date").value;
+    body.adjustments = [...$("care-adj").querySelectorAll("input:checked")].map((b) => b.value);
+  }
+  await api(R, "POST", "/staff/v1/care/reviews/" + encodeURIComponent(reviewing.review), body);
+  await care();
+  say($("care-msg"), "ok", "Recorded.");
+}));
 async function bench() {
   const view = await api(R, "GET", "/staff/v1/workbench");
   put($("control"), ...view.control.held.map((c) => h("div", {}, h("p", {}, h("strong", {}, c.currency), ": ", money(c.total_minor, c.currency), " held"), table(c.aged.map((a) => a.days + " days"), [c.aged.map((a) => money(a.minor, c.currency))]))),

@@ -931,6 +931,13 @@ impl PaymentsState {
         if !matches!(item.status, ItemStatus::Acknowledged | ItemStatus::Settled) {
             return Err(wrong_state("only an item the bank accepted can come back"));
         }
+        // A recalled payment coming back is money recovered from whoever
+        // had it, not a payment that failed: the right person is already
+        // owed it again.
+        if let Some(misdirection) = self.misdirection_of(item_id).cloned().filter(|_| item.status == ItemStatus::Settled) {
+            self.recalled_back(&misdirection, returned_on);
+            return Ok(());
+        }
         let (n, was_settled) = (item.new.clone(), item.was_settled);
         let run = &self.runs[&run_id];
         let (inbound, run_type, value_date) = (run.run_type.inbound(), run.run_type, run.value_date);

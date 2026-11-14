@@ -1107,6 +1107,7 @@ pub(crate) fn split(
                 split_from: Some(origin),
                 scheme: policy.scheme,
                 covers_elsewhere: 0,
+                sums_elsewhere: Default::default(),
                 lives: Default::default(),
                 reopen_windows: Default::default(),
                 notices: Default::default(),

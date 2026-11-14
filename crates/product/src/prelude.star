@@ -238,9 +238,10 @@ def min_lives(count):
 def paid(frequencies):
     return {"kind": "frequency", "frequencies": frequencies}
 
-def discount_category(code, covers, min_sum_insured = 0):
-    """Covers that count as one category towards a multi-benefit discount."""
-    return {"code": code, "covers": covers, "min_sum_insured_minor": min_sum_insured}
+def discount_category(code, covers, min_sum_insured = 0, elsewhere = []):
+    """Covers that count as one category towards a multi-benefit discount; `elsewhere` names
+    covers on the life's other policies that count too, as "product/cover"."""
+    return {"code": code, "covers": covers, "min_sum_insured_minor": min_sum_insured, "elsewhere": elsewhere}
 
 def benefit_categories(required, categories, count):
     """Each life holds a cover from one of the required categories and covers from at least `count` others."""

@@ -553,6 +553,44 @@ impl FinanceState {
     /// type and product the core gave it, and whatever moved it under a
     /// posting type the close configuration does not list for it, or under
     /// none. These are control accounts, so only the core's feed moves them.
+    /// The tax of one kind withheld in a closed period and owed to Inland
+    /// Revenue: the net credit to withholding tax payable under the posting
+    /// type `withholding_{kind}`, in minor units, and the day it is due. Each
+    /// kind is taken to file monthly, due on the 20th of the next month (15
+    /// January for December), moved to the next working day; that schedule is
+    /// a best estimate until the tax review. The partitions hold the
+    /// liability, so the split between them is the core's to answer.
+    pub fn withholding_due(&self, kind: &str, period: PeriodId) -> Result<serde_json::Value, String> {
+        let posting_type = format!("withholding_{kind}");
+        let account = self
+            .close_config
+            .as_ref()
+            .and_then(|c| c.tax.iter().find(|t| t.posting_types.contains(&posting_type)))
+            .map(|t| t.account.clone())
+            .ok_or_else(|| format!("no tax account takes posting type {posting_type}"))?;
+        if period.is_adjustment() || !self.periods.get(&period).is_some_and(|p| p.closed.is_some()) {
+            return Err(format!("{period} is not closed; withholding is paid on a closed month's figure"));
+        }
+        let moved: i128 = self
+            .cube
+            .iter()
+            .filter(|(k, _)| k.period == period && k.account == account && k.dims.posting_type.as_deref() == Some(posting_type.as_str()))
+            .map(|(_, amount)| *amount)
+            .sum();
+        let next = period.end().succ_opt().unwrap_or(period.end());
+        let nominal = if next.month() == 1 { next.with_day(15) } else { next.with_day(20) }.unwrap_or(next);
+        let holidays = self.close_config.as_ref().map(|c| c.holidays.clone()).unwrap_or_default();
+        let due = working_days_after(nominal.pred_opt().unwrap_or(nominal), 1, &holidays);
+        Ok(serde_json::json!({
+            "kind": kind,
+            "period": period,
+            "account": account,
+            "posting_type": posting_type,
+            "amount_minor": -moved / ic_money::FINE_PER_MINOR,
+            "due": due,
+        }))
+    }
+
     pub fn tax_reconciliation(&self, period: PeriodId) -> TaxReconciliation {
         let mut out = TaxReconciliation {
             period,

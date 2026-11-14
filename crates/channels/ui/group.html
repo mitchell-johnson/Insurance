@@ -26,7 +26,7 @@
 <section data-view="Members" class="admin" hidden><h2>Decide a possible match</h2><p class="muted">The member joined unlinked because the customer master found people they might be. Say who they are.</p>
 <form id="rm-form"><div class="row"><div><label for="rm-scheme">Scheme</label><input id="rm-scheme" required></div><div><label for="rm-emp">Employee ID</label><input id="rm-emp" required></div>
 <div><label for="rm-decision">Decision</label><select id="rm-decision"><option value="same_person">The same person as</option><option value="different_person">A different person, created as</option></select></div>
-<div><label for="rm-party">Party</label><input id="rm-party" required></div><button>Record</button></div></form><div id="rm-msg" aria-live="polite"></div></section>
+<div><label for="rm-party">Party</label><input id="rm-party" required></div><button type="button" class="quiet" id="rm-find">Show who they might be</button><button>Record</button></div></form><div id="rm-msg" aria-live="polite"></div><div id="rm-found"></div></section>
 
 <section data-view="Members" class="admin" hidden><h2>Put back members removed in error</h2><p class="muted">From the day they were removed, with no gap in cover.</p>
 <form id="ri-form"><div class="row"><div><label for="ri-scheme">Scheme</label><input id="ri-scheme" required></div><div><label for="ri-emps">Employee IDs, separated by commas</label><input id="ri-emps" required></div>
@@ -43,6 +43,8 @@
 <p><button type="button" id="mp-try">Try it</button> <button type="button" id="mp-set" class="admin" hidden>Set this mapping</button></p>
 <div id="mp-msg" aria-live="polite"></div><div id="mp"></div></section>
 
+<section data-view="Schemes" class="admin" hidden><h2>Name a scheme's first administrator</h2><p class="muted">The employer's first administrator is set up here, once, when the scheme is registered. After that the scheme's own administrators add and remove each other from the employer portal.</p>
+<form id="fa-form"><div class="row"><div><label for="fa-policy">Scheme's policy</label><input id="fa-policy" required></div><div><label for="fa-party">The administrator, as a party in the customer master</label><input id="fa-party" required></div><button>Name them</button></div></form><div id="fa-msg" aria-live="polite"></div></section>
 <section data-view="Schemes" class="admin" hidden><h2>End a scheme</h2><p class="muted">Every member is removed on the date, each with a continuation option, and the policy is cancelled. This cannot be undone.</p>
 <form id="tm-form"><div class="row"><div><label for="tm-scheme">Scheme</label><input id="tm-scheme" required></div><div><label for="tm-date">Effective</label><input id="tm-date" type="date" required></div>
 <div><label for="tm-reason">Reason</label><input id="tm-reason" required></div><div><label for="tm-sure"><input type="checkbox" id="tm-sure" required> I am sure</label></div><button>End the scheme</button></div></form><div id="tm-msg" aria-live="polite"></div></section>
@@ -115,6 +117,17 @@ $("mb-form").addEventListener("submit", run($("mb-msg"), async () => {
     (above_automatic || []).length ? table(["Above automatic", "Asked", "State", "In place", "From"], above_automatic.map((a) => [a.cover, money(a.asked_minor), words(a.state), money(a.in_place_minor), a.from || ""])) : "");
 }));
 
+$("fa-form").addEventListener("submit", run($("fa-msg"), async () => {
+  await api(R, "PUT", BASE + "schemes/" + encodeURIComponent(val("fa-policy")) + "/first-admin", { party: val("fa-party") });
+  return "Named. They can now sign in to the employer portal and manage the scheme's administrators.";
+}));
+// The people the customer master found the member might be: pick one, or say they are someone new.
+$("rm-find").addEventListener("click", run($("rm-msg"), async () => {
+  const found = await ask("possible_match", { scheme: val("rm-scheme"), employee: val("rm-emp") });
+  const list = Array.isArray(found) ? found : (found && found.candidates) || [];
+  put($("rm-found"), list.length ? table(["Might be", "", ""], list.map((c) => { const party = typeof c === "string" ? c : c.party; return [party, typeof c === "string" ? "" : portal.text(Object.fromEntries(Object.entries(c).filter(([k]) => k !== "party"))),
+    h("button", { class: "quiet", type: "button", on: { click: () => { $("rm-party").value = party; $("rm-decision").value = "same_person"; } } }, "It is this person")]; })) : portal.empty("No candidates are held for this member."));
+}));
 $("rm-form").addEventListener("submit", run($("rm-msg"), async () => {
   await send({ resolve_match: { scheme: val("rm-scheme"), employee_id: val("rm-emp"), decision: { decision: $("rm-decision").value, party: val("rm-party") } } });
   return "Recorded.";

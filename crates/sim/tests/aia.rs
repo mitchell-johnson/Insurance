@@ -242,6 +242,74 @@ fn the_multi_benefit_discount_is_on_the_bill_from_each_lifes_cover_amounts() {
     assert_eq!(discounts(&mut c, below), Vec::<String>::new());
 }
 
+/// Purpose: life cover the same person holds on their Cover for Life policy qualifies the
+/// trauma on their AIA Living policy for the multi-benefit discount; it counts for no one else,
+/// not for the same person in another group, and not once the Cover for Life policy has ended,
+/// when the next bill carries no discount; Cover for Life itself is not discounted.
+/// Why it matters: AIA's terms count a life's cover across their AIA policies towards the
+/// minimums. Without it a customer who bought life cover first and trauma later would pay full
+/// price on the trauma; counting someone else's cover would discount cover that has not earned it.
+#[test]
+fn cover_the_life_holds_on_another_policy_counts_towards_the_multi_benefit_discount() {
+    let mut c = cluster();
+    let living = product("aia_living.star");
+    let cfl = product("aia_cover_for_life.star");
+    let dob = d(1987, 6, 1);
+    // Policy `n` for the given person in the given group.
+    let mine = |n: u64, product_code: &str, party: &str, group: &str, covers: &[(&str, i64, Option<String>)]| {
+        let mut p = policy(n, product_code, dob, covers);
+        p.group = GroupId(group.to_string());
+        p.policyholder = PartyId(party.to_string());
+        p.lives = vec![named_life("life-1", party, dob, Sex::Female, false)];
+        p.frequency = Frequency::Monthly;
+        p
+    };
+    let discounts = |c: &mut Cluster, p: IssuePolicy| {
+        c.take_events();
+        issue(c, p).unwrap();
+        first_discounts(c)
+    };
+    let whole_life = Some(pick(&cfl, "life", &[]));
+    let trauma = Some(pick(&living, "critical-conditions", &[]));
+    let cover_for_life = mine(1, "aia-cover-for-life", "party-ann", "grp-ann", &[("life", 200_000_00, whole_life)]);
+    let cfl_id = cover_for_life.policy.clone();
+    assert!(discounts(&mut c, cover_for_life).is_empty(), "Cover for Life is not discounted");
+    let ann = mine(2, "aia-living", "party-ann", "grp-ann", &[("critical-conditions", 80_000_00, trauma.clone())]);
+    let ann_id = ann.policy.clone();
+    assert_eq!(discounts(&mut c, ann), vec!["mbd-10".to_string()]);
+    let bob = mine(3, "aia-living", "party-bob", "grp-ann", &[("critical-conditions", 80_000_00, trauma.clone())]);
+    assert!(discounts(&mut c, bob).is_empty(), "another person's cover does not count");
+    let elsewhere = mine(4, "aia-living", "party-ann", "grp-other", &[("critical-conditions", 80_000_00, trauma)]);
+    assert!(discounts(&mut c, elsewhere).is_empty(), "nor the same person's in another group");
+    let held = &c.state(0).policies[&ann_id].sums_elsewhere;
+    assert_eq!(held["life-1"]["aia-cover-for-life/life"], 200_000_00);
+
+    // The Cover for Life policy ends: from the next bill the trauma is not discounted.
+    c.submit(0, "policy-servicing", Command::CancelPolicy { policy: cfl_id }).unwrap();
+    c.take_events();
+    days(&mut c, 40);
+    let later: Vec<Vec<String>> = c
+        .take_events()
+        .into_iter()
+        .filter_map(|e| match e.event {
+            Event::PremiumDue { policy, discounts, .. } if policy == ann_id => Some(discounts.into_iter().map(|d| d.code).collect()),
+            _ => None,
+        })
+        .collect();
+    assert!(!later.is_empty() && later.iter().all(|d| d.is_empty()), "{later:?}");
+}
+
+/// The discount codes on the first bill among the events since they were last taken.
+fn first_discounts(c: &mut Cluster) -> Vec<String> {
+    c.take_events()
+        .into_iter()
+        .find_map(|e| match e.event {
+            Event::PremiumDue { discounts, .. } => Some(discounts.into_iter().map(|d| d.code).collect::<Vec<_>>()),
+            _ => None,
+        })
+        .unwrap()
+}
+
 /// Purpose: the waiting period a life chose for its income cover is the one the claim facts
 /// carry, not the cover's fallback.
 /// Why it matters: claims starts paying from the end of the waiting period; reading the
@@ -457,6 +525,9 @@ fn a_limited_pay_cover_is_made_paid_up_for_the_share_of_the_term_paid() {
     days(&mut c, 731);
     let p = &c.state(0).policies[&id];
     assert_eq!((p.status, p.covers["life"].status), (PolicyStatus::InForce, CoverStatus::InForce));
-    assert!(p.receivables.iter().filter(|r| r.due > on).all(|r| r.total_minor == 0), "billed after it was paid up");
+    assert!(
+        p.receivables.iter().filter(|r| r.due > on).all(|r| r.total_minor == 0),
+        "billed after it was paid up"
+    );
     assert_eq!(p.outstanding_minor(), 0);
 }

@@ -212,6 +212,37 @@ pub enum Command {
         #[serde(default)]
         reason: String,
     },
+    /// A settled payment, or part of it, went into the wrong account
+    /// (`recall.rs`): the bank is asked to recall it, the core holds what
+    /// the holder owes, and the right person is owed again.
+    ReportMisdirected {
+        misdirection: Id,
+        item: Id,
+        amount_minor: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        holder: Option<String>,
+        note: String,
+    },
+    /// The bank's answer to a recall.
+    RecordRecallAnswer {
+        recall: Id,
+        accepted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    /// What will not come back, by an approver who did not report it.
+    WriteOffMisdirected {
+        misdirection: Id,
+        amount_minor: i64,
+        reason: String,
+    },
+    /// The core changed a payee debt (`PayeeDebtRaised`, `Recovered`,
+    /// `WrittenOff`), with what is still owed.
+    PayeeDebtChanged {
+        policy: String,
+        debt: String,
+        outstanding_minor: i64,
+    },
     /// What the customer master said about a party this module holds bank
     /// details for: still on its books, or erased (`erase.rs`).
     PartyChecked {
@@ -615,6 +646,19 @@ pub enum Event {
     PayerCaseCleared {
         case: String,
     },
+    MisdirectionReported {
+        misdirection: Id,
+        item: Id,
+        amount_minor: i64,
+    },
+    RecallAnswered {
+        misdirection: Id,
+        accepted: bool,
+    },
+    /// Nothing more is owed on a misdirected payment.
+    MisdirectionClosed {
+        misdirection: Id,
+    },
     /// The customer master erased a party, and its bank details here were
     /// forgotten.
     PartyErased {
@@ -720,6 +764,9 @@ pub struct PaymentsState {
     /// Policy owners with insolvency interests recorded by the core.
     #[serde(default)]
     pub insolvencies: BTreeMap<String, crate::insolvency::Insolvency>,
+    /// Payments that went to the wrong account (`recall.rs`).
+    #[serde(default)]
+    pub misdirections: BTreeMap<Id, crate::recall::Misdirection>,
     /// Parties the customer master has erased, and when each was checked.
     #[serde(default)]
     pub erasure: crate::erase::Erasure,
@@ -834,6 +881,24 @@ impl PaymentsState {
             Command::PremiumApplied { policy, receipt } => self.premium_applied(tx, &policy, &receipt),
             Command::ClearPayer { case, relationship, note } => self.clear_payer(tx, &case, relationship, note),
             Command::ConfirmRelationship { case, confirmed, reason } => self.confirm_relationship(tx, &case, confirmed, reason),
+            Command::ReportMisdirected {
+                misdirection,
+                item,
+                amount_minor,
+                holder,
+                note,
+            } => self.report_misdirected(tx, misdirection, &item, amount_minor, holder, note),
+            Command::RecordRecallAnswer { recall, accepted, reason } => self.record_recall_answer(tx, &recall, accepted, reason),
+            Command::WriteOffMisdirected {
+                misdirection,
+                amount_minor,
+                reason,
+            } => self.write_off_misdirected(tx, &misdirection, amount_minor, reason),
+            Command::PayeeDebtChanged {
+                policy,
+                debt,
+                outstanding_minor,
+            } => self.payee_debt_changed(tx, &policy, &debt, outstanding_minor),
             Command::PartyChecked { party, erased } => self.party_checked(tx, &party, erased),
             Command::LoanChanged { policy, outstanding_minor } => self.loan_changed(tx, &policy, outstanding_minor),
             Command::OverpaymentChanged {
