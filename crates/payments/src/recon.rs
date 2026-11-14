@@ -145,8 +145,28 @@ impl PaymentsState {
                         id.clone(),
                         exception(ExceptionKind::UnidentifiedReceipt, line.amount_minor, &line.reference),
                     );
-                    let loan = repayment.as_ref().filter(|o| o.claim.is_empty()).map(|o| o.policy.clone());
-                    if let Some(policy) = loan {
+                    let loan = repayment.as_ref().filter(|o| o.overpayment.starts_with("loan:")).map(|o| o.policy.clone());
+                    let debt = repayment.as_ref().and_then(|o| o.overpayment.strip_prefix("debt:"));
+                    if let Some(owed) = debt.and(repayment.as_ref()).filter(|o| line.amount_minor <= o.outstanding_minor) {
+                        // Someone paid back money that went to them by mistake.
+                        let policy = PolicyId::from(owed.policy.as_str());
+                        self.push_outbox(OutboxEntry {
+                            key: format!("{}{id}", crate::repay::DEBT_REPAID),
+                            instruction: Instruction::CoreAt {
+                                policy: policy.clone(),
+                                caller: "payments".to_string(),
+                                command: Box::new(ic_core::Command::PayeeDebt(Box::new(ic_core::payee_debt::PayeeDebtCommand::Recover {
+                                    policy,
+                                    debt: owed.overpayment["debt:".len()..].to_string(),
+                                    receipt: id.clone(),
+                                    amount: ic_money::Money::new(line.amount_minor, currency),
+                                }))),
+                            },
+                            about: Some(About::Exception(id.clone())),
+                        });
+                    } else if debt.is_some() {
+                        // More than is owed: a person decides.
+                    } else if let Some(policy) = loan {
                         // Interest accrues daily: the core says if it is too much.
                         self.push_outbox(OutboxEntry {
                             key: format!("{}{id}", crate::repay::LOAN_REPAID),
@@ -285,6 +305,7 @@ impl PaymentsState {
                     });
                 }
             }
+            (Some(About::Misdirection(id)), refused) => self.misdirection_done(&id, &done.key, refused),
             (Some(About::RefundRaise(id)), refused) => self.refund_raised(tx, &id, refused),
             (Some(About::RefundRelease(id)), None) => self.refund_released(tx, &id),
             // Cash matching applied the receipt: it is identified.
@@ -296,6 +317,8 @@ impl PaymentsState {
                     "recorded by claims against its overpayment"
                 } else if done.key.starts_with(crate::repay::LOAN_REPAID) {
                     "applied to the policy loan"
+                } else if done.key.starts_with(crate::repay::DEBT_REPAID) {
+                    "recovered against the payee debt"
                 } else {
                     "applied by cash matching"
                 };

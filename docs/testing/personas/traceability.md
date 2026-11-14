@@ -217,6 +217,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | CLM-019 | full | `claims/tests/suite/book.rs::reviews_fall_due_by_date_and_never_stop_the_benefit` |
 | CLM-020 | full | `claims/tests/suite/book.rs::a_benefit_ends_closes_and_can_recur` |
 | CLM-021 | full | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid`<br>`sim/tests/claims.rs::an_offset_recovers_an_overpayment_across_policies` |
+| CLM-022 | full | `payments/tests/recall.rs::a_refund_paid_to_the_wrong_account_is_recalled_owed_again_and_chased`<br>`payments/tests/recall.rs::a_recalled_payment_coming_back_is_recovered_not_retried`<br>`payments-service/tests/pump.rs::a_misdirected_refund_is_recalled_through_the_bank`<br>`sim/tests/payments.rs::a_payment_to_the_wrong_person_is_owed_again_and_owed_back` |
 | CLM-023 | full | `claims/tests/suite/intake.rs::escalation_and_identification`<br>`sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
 | CLM-024 | full | `claims/tests/suite/decisions.rs::admission_follows_the_cover_facts`<br>`claims/tests/suite/decisions.rs::a_pool_cover_claim_is_admitted_on_the_employers_evidence_kept_with_it` |
 | CLM-025 | full | `sim/tests/personas_lines.rs::a_pilots_claim_is_checked_on_the_automatic_amount_plus_any_underwritten_layer`<br>`sim/tests/claims.rs::a_member_above_the_automatic_limit_is_paid_the_excess_only_where_it_was_underwritten` |

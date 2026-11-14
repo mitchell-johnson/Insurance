@@ -30,6 +30,9 @@ use crate::model::{Reject, Role};
 /// Outbox key prefix of a repayment sent to claims.
 pub(crate) const REPAID: &str = "claims-repaid-";
 
+/// Outbox key prefix of money paid back against a payee debt (`recall.rs`).
+pub(crate) const DEBT_REPAID: &str = "debt-repaid-";
+
 /// Outbox key prefix of a policy loan repayment sent to the core.
 pub(crate) const LOAN_REPAID: &str = "loan-repaid-";
 
@@ -63,7 +66,7 @@ fn words(reference: &str) -> Vec<String> {
 impl Repayables {
     /// Hold a reference for what is owed while anything is, under the
     /// prefix given; forget it once nothing is.
-    fn hold(&mut self, prefix: &str, owed: Repayable) {
+    pub(crate) fn hold(&mut self, prefix: &str, owed: Repayable) {
         let key = owed.overpayment.clone();
         if owed.outstanding_minor <= 0 {
             if let Some(reference) = self.references.remove(&key) {

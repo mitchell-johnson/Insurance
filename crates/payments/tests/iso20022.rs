@@ -341,3 +341,71 @@ fn return_reasons_travel_as_iso_codes() {
     assert_eq!(return_reason("MD07"), ReturnReason::AuthorityCancelled);
     assert_eq!(return_reason("AC03"), ReturnReason::InvalidAccount);
 }
+
+fn recall(id: &str, amount_minor: i64) -> ic_payments::file::Recall {
+    ic_payments::file::Recall {
+        id: id.into(),
+        channel: "bank-a-file".into(),
+        account: "refunds".into(),
+        submission: "SUB-0001".into(),
+        item: "i1".into(),
+        amount_minor,
+        currency: Currency::NZD,
+        settled_on: NaiveDate::from_ymd_opt(2026, 11, 13).unwrap(),
+        reason: "AC03".into(),
+        format: WireFormat::Iso20022,
+        ordering: Some(OrderingAccount {
+            name: "Insurer & Co".into(),
+            number: "0100001".into(),
+            bic: Some("ANZBNZ22".into()),
+        }),
+    }
+}
+
+/// Purpose: a recall is written as a `camt.055` naming the case, the
+/// original batch, end-to-end reference, amount, settlement day and the
+/// wrong-account reason, and reads back the same; a recall with no amount,
+/// an ID ISO 20022 cannot carry, or no ordering account is refused; and a
+/// bank's `camt.029` answer reads as accepted, refused with its reason, or
+/// refused with the status when no reason is given.
+/// Why it matters: the recall is the only thing that asks the receiving
+/// bank for the customer's money back; a request the bank cannot match to
+/// the payment, or an answer misread, leaves the money where it went.
+#[test]
+fn a_recall_is_written_and_answered_in_iso_20022() {
+    use ic_payments::iso20022::{read_recall, recall_document};
+    let r = recall("md-1", 70_00);
+    let xml = r.wire().unwrap();
+    assert!(xml.contains("camt.055.001.08") && xml.contains("<OrgnlPmtInfId>SUB-0001</OrgnlPmtInfId>"));
+    assert!(xml.contains("<OrgnlInstdAmt Ccy=\"NZD\">70.00</OrgnlInstdAmt>") && xml.contains("<Cd>AC03</Cd>"));
+    assert!(xml.contains("Insurer &amp; Co") && xml.contains("<Dt>2026-11-13</Dt>"));
+    assert_eq!(read_recall(&xml), Ok(("md-1".to_string(), "i1".to_string(), 70_00)));
+    let ordering = r.ordering.clone().unwrap();
+    assert!(recall_document(&recall("md-1", 0), &ordering).unwrap_err().contains("no positive amount"));
+    assert!(recall_document(&recall("md 1", 1), &ordering).unwrap_err().contains("recall ID"));
+    let mut bare = recall("md-1", 1);
+    bare.ordering = None;
+    assert!(bare.wire().unwrap_err().contains("no bank details"));
+    bare.format = WireFormat::Own;
+    assert!(bare.wire().unwrap().contains("\"id\":\"md-1\""));
+    assert!(read_recall("<Document><Other/></Document>").is_err());
+    assert!(read_recall("<Document><CstmrPmtCxlReq/></Document>").unwrap_err().contains("no case"));
+    assert!(read_recall("<Document><CstmrPmtCxlReq><Case><Id>x</Id></Case></CstmrPmtCxlReq></Document>")
+        .unwrap_err()
+        .contains("no payment"));
+
+    let answer = |body: &str| read_messages(&format!("<Document><RsltnOfInvstgtn>{body}</RsltnOfInvstgtn></Document>"), &Default::default());
+    let said = |accepted, reason: Option<&str>| {
+        Ok(vec![BankMessage::RecallAnswer {
+            recall: "md-1".into(),
+            accepted,
+            reason: reason.map(str::to_string),
+        }])
+    };
+    assert_eq!(answer("<Case><Id>md-1</Id></Case><Sts><Conf>CNCL</Conf></Sts>"), said(true, None));
+    let refused = "<Case><Id>md-1</Id></Case><Sts><Conf>RJCR</Conf></Sts><CxlDtls><TxInfAndSts><CxlStsRsnInf><Rsn><Cd>NOAS</Cd></Rsn></CxlStsRsnInf></TxInfAndSts></CxlDtls>";
+    assert_eq!(answer(refused), said(false, Some("NOAS")));
+    assert_eq!(answer("<Case><Id>md-1</Id></Case><Sts><Conf>RJCR</Conf></Sts>"), said(false, Some("RJCR")));
+    assert!(answer("<Sts><Conf>CNCL</Conf></Sts>").unwrap_err().contains("names the case"));
+    assert!(answer("<Case><Id>md-1</Id></Case>").unwrap_err().contains("how the case was resolved"));
+}
