@@ -187,7 +187,7 @@ test({ id: "E2E-157", area: A, persona: "ST12", story: "US-ST12-2", title: "Ever
     if (/ungrouped/i.test(text) && /(^|\s)0\s*$/.test(text.trim())) return;
     await s.wait(500);
   }
-  throw new Error(`after six classifications the groups read "${text.slice(0, 200)}"`);
+  throw new Error(`after six classifications policies are still ungrouped (a product with no grouping rule in config/finance/close.star stays ungrouped for good); the groups read "${text.slice(0, 200)}"`);
 });
 
 test({ id: "E2E-158", area: A, persona: "ST12", story: "US-ST12-2", title: "The actuary can read the accounting groups but cannot reclassify policies",
