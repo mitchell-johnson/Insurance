@@ -212,6 +212,12 @@ pub enum Command {
         #[serde(default)]
         reason: String,
     },
+    /// What the customer master said about a party this module holds bank
+    /// details for: still on its books, or erased (`erase.rs`).
+    PartyChecked {
+        party: String,
+        erased: bool,
+    },
     /// The core changed what is owed on a policy's loan (`PolicyLoanDrawn`,
     /// `PolicyLoanRepaid`, `PolicyLoanWrittenOff`).
     LoanChanged {
@@ -609,6 +615,11 @@ pub enum Event {
     PayerCaseCleared {
         case: String,
     },
+    /// The customer master erased a party, and its bank details here were
+    /// forgotten.
+    PartyErased {
+        party: String,
+    },
     /// Whether an insolvency interest stands against a policy owner changed.
     OwnerInsolvencyChanged {
         party: String,
@@ -709,6 +720,9 @@ pub struct PaymentsState {
     /// Policy owners with insolvency interests recorded by the core.
     #[serde(default)]
     pub insolvencies: BTreeMap<String, crate::insolvency::Insolvency>,
+    /// Parties the customer master has erased, and when each was checked.
+    #[serde(default)]
+    pub erasure: crate::erase::Erasure,
     pub exceptions: BTreeMap<Id, Exception>,
     pub drills: BTreeMap<Id, Drill>,
     /// Work for the drivers, in order. Removed when its result is recorded.
@@ -820,6 +834,7 @@ impl PaymentsState {
             Command::PremiumApplied { policy, receipt } => self.premium_applied(tx, &policy, &receipt),
             Command::ClearPayer { case, relationship, note } => self.clear_payer(tx, &case, relationship, note),
             Command::ConfirmRelationship { case, confirmed, reason } => self.confirm_relationship(tx, &case, confirmed, reason),
+            Command::PartyChecked { party, erased } => self.party_checked(tx, &party, erased),
             Command::LoanChanged { policy, outstanding_minor } => self.loan_changed(tx, &policy, outstanding_minor),
             Command::OverpaymentChanged {
                 claim,

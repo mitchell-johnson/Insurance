@@ -500,6 +500,8 @@ pub struct FakeMaster {
     pub holds: Arc<Mutex<BTreeMap<String, bool>>>,
     /// Relationship records by `{party}/{id}`.
     pub relationships: Arc<Mutex<BTreeMap<String, Value>>>,
+    /// Parties erased by retention shredding: answered 410 Gone.
+    pub erased: Arc<Mutex<std::collections::BTreeSet<String>>>,
 }
 
 impl FakeMaster {
@@ -509,6 +511,7 @@ impl FakeMaster {
             url: format!("http://{}", listener.local_addr()?),
             holds: Arc::new(Mutex::new(holds.iter().map(|(p, h)| (p.to_string(), *h)).collect())),
             relationships: Arc::default(),
+            erased: Arc::default(),
         };
         let app = Router::new()
             .route("/v1/parties/{id}/spending-hold", get(spending_hold))
@@ -524,6 +527,9 @@ impl FakeMaster {
 async fn spending_hold(State(master): State<FakeMaster>, Path(id): Path<String>, headers: HeaderMap) -> (StatusCode, Json<Value>) {
     if !headers.get("authorization").is_some_and(|v| v.as_bytes().starts_with(b"Bearer ")) {
         return (StatusCode::UNAUTHORIZED, Json(json!({"code": "unauthorised"})));
+    }
+    if master.erased.lock().expect("the fake master's erasures").contains(&id) {
+        return (StatusCode::GONE, Json(json!({"code": "shredded"})));
     }
     let held = master.holds.lock().expect("the fake master's holds").get(&id).copied();
     match held {

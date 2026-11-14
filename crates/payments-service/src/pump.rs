@@ -38,6 +38,8 @@ pub struct Pass {
     pub holds: usize,
     /// Payer relationships the customer master was asked about.
     pub relationships: usize,
+    /// Parties holding bank details the customer master was asked about.
+    pub erasures: usize,
     /// What could not be done this time. The next pass tries again.
     pub problems: Vec<String>,
 }
@@ -413,6 +415,9 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
         if let Err(e) = self.check_relationships(&mut pass).await {
             pass.problems.push(e);
         }
+        if let Err(e) = self.check_erasure(&mut pass).await {
+            pass.problems.push(e);
+        }
         if let Err(e) = self.propose_sweep().await {
             pass.problems.push(e);
         }
@@ -487,6 +492,30 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
             match self.tell(key, command).await {
                 Ok(()) => pass.relationships += 1,
                 Err(e) => pass.problems.push(format!("relationship {reference}: {e}")),
+            }
+        }
+        Ok(())
+    }
+
+    /// Ask the customer master whether it has erased each party this module
+    /// holds bank details for, as the module lists them, and record what it
+    /// says; an erased party's details are then forgotten (`erase.rs`).
+    async fn check_erasure(&self, pass: &mut Pass) -> Result<(), String> {
+        let Some(master) = &self.holds else { return Ok(()) };
+        let now = (self.clock)();
+        let wanted: Vec<String> = self.ask(json!({"q": "erasure_watch", "now": now})).await?;
+        for party in wanted {
+            let erased = match master.erased(&party).await {
+                Ok(erased) => erased,
+                Err(e) => {
+                    pass.problems.push(format!("erasure of {party}: {e}"));
+                    continue;
+                }
+            };
+            let key = format!("erasure:{party}:{}", now.format("%Y%m%dT%H%M%S"));
+            match self.tell(key, Command::PartyChecked { party: party.clone(), erased }).await {
+                Ok(()) => pass.erasures += 1,
+                Err(e) => pass.problems.push(format!("erasure of {party}: {e}")),
             }
         }
         Ok(())

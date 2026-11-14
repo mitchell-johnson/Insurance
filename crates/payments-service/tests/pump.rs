@@ -1858,3 +1858,49 @@ async fn a_payer_relationship_is_confirmed_with_the_customer_master() {
     assert!(unknown.cleared.is_none() && unknown.proposed.is_none());
     assert_eq!(pump.pass().await.relationships, 0, "nothing left to ask");
 }
+
+/// Purpose: the pump asks the customer master about each party holding
+/// bank details here, and a 410 Gone (the master's answer for a person it
+/// has erased) makes the module forget that person's details; a master that
+/// cannot answer leaves the party to be asked next pass.
+/// Why it matters: account names and numbers here are not under the
+/// master's per-person key, so this check is the only thing that carries the
+/// master's retention shredding into payments.
+#[tokio::test]
+async fn an_erased_person_is_forgotten_when_the_master_says_so() {
+    use ic_payments_service::fake::FakeMaster;
+    use ic_payments_service::ports::{erased_in, Holds, MasterHolds};
+
+    assert_eq!(erased_in(410), Ok(true));
+    assert_eq!(erased_in(200), Ok(false));
+    assert_eq!(erased_in(404), Ok(false), "a party the master never knew is not erased");
+    assert!(erased_in(503).is_err());
+    let answers: BTreeMap<String, bool> = BTreeMap::new();
+    assert!(answers.erased("party").await.is_err());
+
+    let mut world = World::new().await;
+    world.payee("p1", PayeeKind::Customer);
+    let mut pump = world.pump("akl", "a");
+    pump.holds = Some(Arc::new(answers));
+    let pass = pump.pass().await;
+    assert_eq!(pass.erasures, 0);
+    assert!(pass.problems.iter().any(|p| p.starts_with("erasure of party")), "{:?}", pass.problems);
+
+    let master = FakeMaster::start(&[("party", false)]).await.unwrap();
+    pump.holds = Some(Arc::new(MasterHolds {
+        base: master.url.clone(),
+        scope: "api://ic-customers/.default".to_string(),
+        credential: ic_azure::credential::AzureCredential::static_token("t"),
+        http: reqwest::Client::new(),
+    }));
+    assert_eq!(pump.pass().await.erasures, 1, "still on the master's books");
+    assert!(!world.state().payees["p1"].closed);
+    assert_eq!(pump.pass().await.erasures, 0, "not asked again so soon");
+
+    master.erased.lock().unwrap().insert("party".to_string());
+    world.later(60 * 24 * 31);
+    assert_eq!(pump.pass().await.erasures, 1);
+    let state = world.state();
+    assert!(state.payees["p1"].closed && state.payees["p1"].account.number.is_empty());
+    assert!(state.erasure.erased.contains("party"));
+}
