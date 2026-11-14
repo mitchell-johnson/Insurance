@@ -228,7 +228,7 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
             }
         }
         if let Some(option) = &c.insurability_option {
-            let plain = |e: &String| !e.is_empty() && e.chars().all(|ch| ch.is_ascii_lowercase() || ch == '_');
+            let plain = |e: &String| !e.is_empty() && e != crate::definition::ANNIVERSARY_EVENT && e.chars().all(|ch| ch.is_ascii_lowercase() || ch == '_');
             let share = option.max_percent_of_original.get();
             let sound = !option.events.is_empty()
                 && option.events.iter().all(plain)
@@ -237,12 +237,38 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                 && option.max_increase_minor > 0
                 && option.max_uses > 0
                 && option.within_days > 0
-                && option.to_age > 0;
+                && option.to_age > 0
+                && option.max_total_percent_of_original.as_ref().is_none_or(|t| t.get() >= share)
+                && option.max_total_increase_minor.is_none_or(|t| t >= option.max_increase_minor)
+                && option.once_in_days.is_none_or(|d| d > 0);
             if !sound || !lump_sum(&c.code) {
                 return Err(invalid(
                     file,
                     format!(
                         "cover {}: an insurability option is on a lump sum cover, names its events once each, and has limits above zero",
+                        c.code
+                    ),
+                ));
+            }
+        }
+        if let Some(option) = &c.anniversary_option {
+            let zero = ic_money::Dec::from(0i64);
+            let share = option.max_percent_of_original.get();
+            let total = option.max_total_percent_of_original.get();
+            let sound = option.every_years > 0
+                && share > zero
+                && option.at_least_minor > 0
+                && total >= share
+                && option.max_total_increase_minor >= option.at_least_minor
+                && option.within_days > 0
+                && option.to_age > 0
+                && option.requires_feature.as_ref().is_none_or(|f| !f.is_empty())
+                && option.once_in_days.is_none_or(|d| d > 0);
+            if !sound || !lump_sum(&c.code) {
+                return Err(invalid(
+                    file,
+                    format!(
+                        "cover {}: an anniversary option is on a lump sum cover, its limits are above zero and its totals at least one use",
                         c.code
                     ),
                 ));

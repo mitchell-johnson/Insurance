@@ -688,3 +688,55 @@ fn the_loader_refuses_unsound_benefit_categories_and_one_of_a_set_rules() {
         assert!(err.contains(why), "{feature}: {err}");
     }
 }
+
+/// Purpose: the loader takes AIA Living's special events totals, its once-in-12-months rule
+/// and its Life Future Insurability anniversary option as written, and refuses each unsound
+/// variant with the reason: totals below one use, a gap of zero days, an anniversary option
+/// with no period, no minimum, totals below one use, an empty feature, or on a cover that pays
+/// no lump sum, and an event option that names the reserved `anniversary` event.
+/// Why it matters: these limits are what keep cover given without evidence of health inside
+/// what AIA priced; a limit that loaded broken would let a life add cover without end, or never.
+#[test]
+fn the_loader_refuses_unsound_option_totals_and_anniversary_options() {
+    let path = format!("{}/../../products/aia_living.star", env!("CARGO_MANIFEST_DIR"));
+    let source = std::fs::read_to_string(path).unwrap();
+    let living = load_product("aia_living.star", &source).unwrap();
+    let life = living.cover("life").unwrap();
+    let events = life.insurability_option.as_ref().unwrap();
+    assert_eq!(
+        (events.max_total_increase_minor, events.once_in_days, events.max_total_percent_of_original.as_ref().map(|p| p.get())),
+        (Some(750_000_00), Some(365), Some(ic_money::Dec::from(100i64)))
+    );
+    let anniversary = life.anniversary_option.as_ref().unwrap();
+    assert_eq!(
+        (anniversary.every_years, anniversary.at_least_minor, anniversary.max_total_increase_minor, anniversary.within_days, anniversary.to_age),
+        (3, 100_000_00, 1_000_000_00, 60, 60)
+    );
+    assert_eq!(anniversary.requires_feature.as_deref(), Some("future-insurability"));
+    let events_wrong = "an insurability option is on a lump sum cover";
+    let anniversary_wrong = "an anniversary option is on a lump sum cover";
+    let cases = [
+        ("max_total_percent_of_original = \"100\",", "max_total_percent_of_original = \"40\",", events_wrong),
+        ("max_total_increase = dollars(750000),", "max_total_increase = dollars(1000),", events_wrong),
+        ("        once_in_days = 365,\n    )", "        once_in_days = 0,\n    )", events_wrong),
+        ("\"separation\",", "\"separation\", \"anniversary\",", events_wrong),
+        ("every_years = 3,", "every_years = 0,", anniversary_wrong),
+        ("at_least = dollars(100000),", "at_least = 0,", anniversary_wrong),
+        ("max_total_percent_of_original = \"200\",", "max_total_percent_of_original = \"10\",", anniversary_wrong),
+        ("max_total_increase = dollars(1000000),", "max_total_increase = dollars(99999),", anniversary_wrong),
+        ("requires = \"future-insurability\",", "requires = \"\",", anniversary_wrong),
+        ("within_days = 60,", "within_days = 0,", anniversary_wrong),
+        ("to_age = 60,", "to_age = 0,", anniversary_wrong),
+        ("                once_in_days = 365,\n            ),", "                once_in_days = 0,\n            ),", anniversary_wrong),
+    ];
+    for (from, to, why) in cases {
+        assert_eq!(source.matches(from).count(), 1, "{from}");
+        let err = load_product("aia_living.star", &source.replace(from, to)).unwrap_err().to_string();
+        assert!(err.contains(why), "{to}: {err}");
+    }
+    // On a cover that pays an income, and on a lump sum cover in the same terms.
+    let option = r#"anniversary_option(1, "20", 100, "40", 200, 60, 60)"#;
+    assert!(mini(&[("LIFE_AXES", &format!("[], anniversary_option = {option}"))]).is_ok());
+    let err = mini(&[("INCOME_AXES", &format!("[], anniversary_option = {option}"))]).unwrap_err();
+    assert!(err.contains(anniversary_wrong), "{err}");
+}

@@ -193,7 +193,8 @@ pub struct OptionExercise {
     pub policy: PolicyId,
     pub cover: String,
     pub life: LifeId,
-    /// One of the product's events for the option.
+    /// One of the product's events for the option, or `anniversary` (with
+    /// the anniversary as `event_date`) for the cover's anniversary option.
     pub event: String,
     pub event_date: NaiveDate,
     pub sum_insured_minor: i64,

@@ -60,7 +60,7 @@ def benefit_category(code, salary_multiple, max_sum_insured):
 def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, levies = [],
           expiry_age = None, min_sum_insured = 0, max_sum_insured = None, categories = [],
           automatic_acceptance_limit = None, excess_options = [], premium_waiver = None,
-          shared_counter = None, reduces = [], joint_first_event = False, insurability_option = None,
+          shared_counter = None, reduces = [], joint_first_event = False, insurability_option = None, anniversary_option = None,
           option_axes = [], min_entry_age = None, max_entry_age = None, built_in = [], paid_up_option = None):
     return {
         "paid_up_option": paid_up_option,
@@ -82,6 +82,7 @@ def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, 
         "reduces": reduces,
         "joint_first_event": joint_first_event,
         "insurability_option": insurability_option,
+        "anniversary_option": anniversary_option,
         "option_axes": option_axes,
         "min_entry_age": min_entry_age,
         "max_entry_age": max_entry_age,
@@ -139,9 +140,11 @@ def paid_up_option(min_share_of_term, factor):
     the share of the sum insured paid for, times the factor."""
     return {"min_share_of_term": min_share_of_term, "factor": factor}
 
-def insurability_option(events, max_percent_of_original, max_increase, max_uses, within_days, to_age):
-    """More of a lump sum cover without evidence of health, after an event in the life's own life."""
-    return {
+def insurability_option(events, max_percent_of_original, max_increase, max_uses, within_days, to_age,
+                        max_total_percent_of_original = None, max_total_increase = None, once_in_days = None):
+    """More of a lump sum cover without evidence of health, after an event in the life's own life.
+    The totals cap all uses together; once_in_days keeps increases without evidence apart."""
+    option = {
         "events": events,
         "max_percent_of_original": max_percent_of_original,
         "max_increase_minor": max_increase,
@@ -149,6 +152,32 @@ def insurability_option(events, max_percent_of_original, max_increase, max_uses,
         "within_days": within_days,
         "to_age": to_age,
     }
+    if max_total_percent_of_original != None:
+        option["max_total_percent_of_original"] = max_total_percent_of_original
+    if max_total_increase != None:
+        option["max_total_increase_minor"] = max_total_increase
+    if once_in_days != None:
+        option["once_in_days"] = once_in_days
+    return option
+
+def anniversary_option(every_years, max_percent_of_original, at_least, max_total_percent_of_original, max_total_increase,
+                       within_days, to_age, requires = None, once_in_days = None):
+    """More of a lump sum cover without evidence of health every few years from the day the cover
+    started: the greater of the share and at_least each time, the lower of the totals in all."""
+    option = {
+        "every_years": every_years,
+        "max_percent_of_original": max_percent_of_original,
+        "at_least_minor": at_least,
+        "max_total_percent_of_original": max_total_percent_of_original,
+        "max_total_increase_minor": max_total_increase,
+        "within_days": within_days,
+        "to_age": to_age,
+    }
+    if requires != None:
+        option["requires_feature"] = requires
+    if once_in_days != None:
+        option["once_in_days"] = once_in_days
+    return option
 
 def excess_option(code, excess, premium_factor = "1"):
     """An excess level a customer may choose on a cover, and what it does to the premium."""
