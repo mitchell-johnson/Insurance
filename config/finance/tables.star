@@ -45,6 +45,30 @@ def per_life_by_age(rate_max):
         "change_block_factor": 3,
     }
 
+def aia_by_age(kind, first, last, rate_max, by_class = False):
+    """An AIA placeholder table (docs/aia-products.md): by age from the
+    product's youngest entry to its oldest cover age, sex and smoking, and
+    by occupation class 1 to 5 where the risk depends on the work."""
+    schema = by_age_sex_smoker(kind, rate_max)
+    schema["ages"] = [first, last]
+    if by_class:
+        schema["occupation_classes"] = ["1", "2", "3", "4", "5"]
+    return schema
+
+def aia_group(rate_max):
+    return {
+        "kind": "unit_rate_per_mille_by_category",
+        "version": 1,
+        "by_sex": False,
+        "by_smoker": False,
+        "categories": ["staff", "executive"],
+        "rate_min": "0.01",
+        "rate_max": rate_max,
+        "decimal_places": 2,
+        "change_review_pct": 10,
+        "change_block_factor": 3,
+    }
+
 TABLE_SCHEMAS = {
     "life-base": by_age_sex_smoker("mortality_per_mille", "1000"),
     "trauma-base": by_age_sex_smoker("morbidity_per_mille", "1000"),
@@ -93,4 +117,25 @@ TABLE_SCHEMAS = {
         "change_review_pct": 10,
         "change_block_factor": 3,
     },
+    # AIA New Zealand products: placeholders until the appointed actuary
+    # supplies the real tables (tools/aia_placeholder_rates.py).
+    "aia-life": aia_by_age("mortality_per_mille", 10, 105, "1000"),
+    "aia-family-protection": aia_by_age("mortality_per_mille", 10, 85, "10000"),
+    "aia-accidental-death": aia_by_age("mortality_per_mille", 16, 66, "100"),
+    "aia-trauma": aia_by_age("morbidity_per_mille", 0, 105, "1000"),
+    "aia-progressive-care": aia_by_age("morbidity_per_mille", 0, 105, "1000"),
+    "aia-severe-trauma": aia_by_age("morbidity_per_mille", 0, 105, "1000"),
+    "aia-tpd": aia_by_age("morbidity_per_mille", 16, 71, "1000", by_class = True),
+    "aia-income": aia_by_age("disability_income_per_mille", 16, 71, "100000", by_class = True),
+    "aia-accidental-injury": aia_by_age("disability_income_per_mille", 16, 66, "10000", by_class = True),
+    "aia-business-continuity": aia_by_age("disability_income_per_mille", 16, 66, "100000", by_class = True),
+    "aia-specialist-testing": per_life_by_age("50000"),
+    "aia-private-health": per_life_by_age("50000"),
+    "aia-private-health-plus": per_life_by_age("50000"),
+    "aia-cancer-care": per_life_by_age("50000"),
+    "aia-group-life": aia_group("100"),
+    "aia-group-tpd": aia_group("100"),
+    "aia-group-critical-illness": aia_group("100"),
+    "aia-group-severe-trauma": aia_group("100"),
+    "aia-group-income": aia_group("1000"),
 }

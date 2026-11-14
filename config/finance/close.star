@@ -58,6 +58,17 @@ CLOSE = close_config(
         accounting_group("health-plan", "health"),
         accounting_group("health-flex", "health"),
         accounting_group("invest-plan", "investment-linked"),
+        # AIA New Zealand products, by the same lines of business.
+        accounting_group("aia-living", "individual-life"),
+        accounting_group("aia-living-business", "individual-life"),
+        accounting_group("aia-cover-for-life", "individual-life"),
+        accounting_group("aia-essentials-life", "individual-life"),
+        accounting_group("aia-starter", "individual-life"),
+        accounting_group("aia-interim", "individual-life"),
+        accounting_group("aia-start-up-income", "disability-income"),
+        accounting_group("aia-private-health", "health"),
+        accounting_group("aia-cancer-care", "health"),
+        accounting_group("aia-corporate", "group-life"),
     ],
     tax = [
         tax_account("2200", "GST payable", ["gst"]),

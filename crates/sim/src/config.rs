@@ -6,7 +6,7 @@ use ic_core::Command;
 use ic_money::DecStr;
 use ic_product::{load_definitions, load_product, load_rate_table, LoadError};
 
-const PRODUCTS: [(&str, &str); 9] = [
+const PRODUCTS: [(&str, &str); 19] = [
     ("group_health.star", include_str!("../../../products/group_health.star")),
     ("group_benefits.star", include_str!("../../../products/group_benefits.star")),
     ("income_protection.star", include_str!("../../../products/income_protection.star")),
@@ -16,8 +16,18 @@ const PRODUCTS: [(&str, &str); 9] = [
     ("group_life.star", include_str!("../../../products/group_life.star")),
     ("invest_plan.star", include_str!("../../../products/invest_plan.star")),
     ("health_flex.star", include_str!("../../../products/health_flex.star")),
+    ("aia_living.star", include_str!("../../../products/aia_living.star")),
+    ("aia_living_business.star", include_str!("../../../products/aia_living_business.star")),
+    ("aia_start_up_income.star", include_str!("../../../products/aia_start_up_income.star")),
+    ("aia_cover_for_life.star", include_str!("../../../products/aia_cover_for_life.star")),
+    ("aia_essentials_life.star", include_str!("../../../products/aia_essentials_life.star")),
+    ("aia_starter.star", include_str!("../../../products/aia_starter.star")),
+    ("aia_interim.star", include_str!("../../../products/aia_interim.star")),
+    ("aia_private_health.star", include_str!("../../../products/aia_private_health.star")),
+    ("aia_cancer_care.star", include_str!("../../../products/aia_cancer_care.star")),
+    ("aia_corporate.star", include_str!("../../../products/aia_corporate.star")),
 ];
-const RATES: [(&str, &str); 10] = [
+const RATES: [(&str, &str); 29] = [
     ("rates/income_base.star", include_str!("../../../products/rates/income_base.star")),
     ("rates/life_base.star", include_str!("../../../products/rates/life_base.star")),
     ("rates/trauma_base.star", include_str!("../../../products/rates/trauma_base.star")),
@@ -31,6 +41,25 @@ const RATES: [(&str, &str); 10] = [
         "rates/group_life_standard.star",
         include_str!("../../../products/rates/group_life_standard.star"),
     ),
+    ("rates/aia_accidental_death.star", include_str!("../../../products/rates/aia_accidental_death.star")),
+    ("rates/aia_accidental_injury.star", include_str!("../../../products/rates/aia_accidental_injury.star")),
+    ("rates/aia_business_continuity.star", include_str!("../../../products/rates/aia_business_continuity.star")),
+    ("rates/aia_cancer_care.star", include_str!("../../../products/rates/aia_cancer_care.star")),
+    ("rates/aia_family_protection.star", include_str!("../../../products/rates/aia_family_protection.star")),
+    ("rates/aia_group_critical_illness.star", include_str!("../../../products/rates/aia_group_critical_illness.star")),
+    ("rates/aia_group_income.star", include_str!("../../../products/rates/aia_group_income.star")),
+    ("rates/aia_group_life.star", include_str!("../../../products/rates/aia_group_life.star")),
+    ("rates/aia_group_severe_trauma.star", include_str!("../../../products/rates/aia_group_severe_trauma.star")),
+    ("rates/aia_group_tpd.star", include_str!("../../../products/rates/aia_group_tpd.star")),
+    ("rates/aia_income.star", include_str!("../../../products/rates/aia_income.star")),
+    ("rates/aia_life.star", include_str!("../../../products/rates/aia_life.star")),
+    ("rates/aia_private_health.star", include_str!("../../../products/rates/aia_private_health.star")),
+    ("rates/aia_private_health_plus.star", include_str!("../../../products/rates/aia_private_health_plus.star")),
+    ("rates/aia_progressive_care.star", include_str!("../../../products/rates/aia_progressive_care.star")),
+    ("rates/aia_severe_trauma.star", include_str!("../../../products/rates/aia_severe_trauma.star")),
+    ("rates/aia_specialist_testing.star", include_str!("../../../products/rates/aia_specialist_testing.star")),
+    ("rates/aia_tpd.star", include_str!("../../../products/rates/aia_tpd.star")),
+    ("rates/aia_trauma.star", include_str!("../../../products/rates/aia_trauma.star")),
 ];
 const FUNDS: [(&str, &str); 3] = [
     ("funds/cash.star", include_str!("../../../products/funds/cash.star")),
@@ -38,6 +67,7 @@ const FUNDS: [(&str, &str); 3] = [
     ("funds/growth.star", include_str!("../../../products/funds/growth.star")),
 ];
 const DEFINITIONS: &str = include_str!("../../../products/definitions/library.star");
+const AIA_DEFINITIONS: &str = include_str!("../../../products/definitions/aia.star");
 
 /// The funds shipped in this repository. The unit pricing module activates
 /// the same definitions on its own side.
@@ -60,6 +90,9 @@ pub fn shipped_activations() -> Result<Vec<Command>, LoadError> {
     let mut out = vec![Command::ActivateDefinitions {
         definitions: load_definitions("definitions/library.star", DEFINITIONS)?,
     }];
+    out.push(Command::ActivateDefinitions {
+        definitions: load_definitions("definitions/aia.star", AIA_DEFINITIONS)?,
+    });
     for (file, source) in RATES {
         out.push(Command::ActivateRateTable {
             table: Box::new(load_rate_table(file, source)?),
