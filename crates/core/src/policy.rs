@@ -39,6 +39,8 @@ pub enum PolicyStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Standing {
+    /// Nothing is overdue. Premium due today and not yet paid is not
+    /// overdue: grace starts the day after it was due.
     Paid,
     /// Cover continues in full.
     InGrace,

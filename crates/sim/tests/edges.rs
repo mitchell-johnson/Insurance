@@ -705,6 +705,34 @@ fn an_insurability_option_adds_cover_without_evidence_inside_the_products_limits
     assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
 }
 
+/// Purpose: on the daily close that lapses a policy for unpaid premium, no new premium is
+/// billed first. The health plan lapses when its oldest premium is 61 days overdue, which
+/// for a monthly policy is the day its third instalment falls due: the policy lapses on that
+/// close with two instalments on it and no premium notice for a third.
+/// Why it matters: a bill and a lapse notice sent on the same day tell the customer two
+/// different things, and the bill is for cover that ended before it was sent. The billed
+/// premium would also be written off the moment it was raised, inflating both premium
+/// written and lapse write-offs by the same amount.
+#[test]
+fn a_policy_that_lapses_today_is_not_billed_today() {
+    use ic_sim::persona::health_family;
+    let mut c = cluster(1);
+    let issue = health_family(1, start(), &[d(1985, 5, 5)], Frequency::Monthly);
+    let id = issue.policy.clone();
+    c.submit(0, "new-business", issue_command(issue)).unwrap();
+    days(&mut c, 60);
+    assert_eq!(c.state(0).policies[&id].status, PolicyStatus::InForce);
+    assert_eq!(c.state(0).policies[&id].receivables.len(), 2);
+    c.take_events();
+    days(&mut c, 1);
+    assert_eq!(c.business_date(), Some(d(2028, 1, 15)));
+    let policy = &c.state(0).policies[&id];
+    assert_eq!(policy.status, PolicyStatus::Lapsed);
+    assert_eq!(policy.receivables.len(), 2, "no instalment was raised on the day of the lapse");
+    assert!(!c.take_events().iter().any(|e| matches!(e.event, Event::PremiumDue { .. })));
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+}
+
 fn levied_product(c: &mut Cluster) {
     let source = include_str!("../../../products/term_life.star")
         .replace("code = \"term-life\"", "code = \"term-life-levied\"")

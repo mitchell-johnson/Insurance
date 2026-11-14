@@ -159,8 +159,11 @@ fn a_lapse_claws_back_from_the_liable_party_and_reinstatement_restores_it() {
     assert!(w.dist.clawback_exposure(w.today()).is_empty());
     w.assert_reconciled();
 
-    let arrears = w.cluster.state(0).policies[&policy].lapse.as_ref().unwrap().arrears_minor;
-    w.pay_amount(&policy, "catch-up", arrears);
+    // The instalment that fell due on the day of the lapse was not billed that day; the
+    // core bills it at reinstatement, so it is paid with the arrears.
+    let lapse = w.cluster.state(0).policies[&policy].lapse.clone().unwrap();
+    let missed = lapse.receivables_before.last().map_or(0, |r| r.total_minor);
+    w.pay_amount(&policy, "catch-up", lapse.arrears_minor + missed);
     w.core(&policy, "collections", CoreCommand::Reinstate { policy: policy.clone() }).unwrap();
     // The clawback is reversed, and the arrears now applied earn renewal commission.
     let total = w.payable("a-co") + w.payable("fap-one");
