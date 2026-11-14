@@ -373,3 +373,41 @@ fn counters_never_cross_covers_unless_the_shell_shares_one() {
     assert_eq!(w.claim("h-3").admitted_minor, 0, "one shared limit, used up");
     assert_eq!(w.state.health_used["pol-3/life-1/family-dental/dental/2027-01-01"], 2_000);
 }
+
+/// Purpose: where the record now says a member left before the event, through a leave date
+/// backdated after it, the cover check keeps both what is true on the event date as known now
+/// and what was known then, notes the change, and the working view shows both; with nothing
+/// recorded since, the view shows nothing extra.
+/// Why it matters: persona test CLM-008. A backdated leave date can take away cover the member
+/// relied on; the assessor must see that the record changed after the event, not only today's
+/// answer, to decide fairly and to explain the decision.
+#[test]
+fn a_cover_check_shows_the_event_date_as_known_now_and_as_known_then() {
+    use ic_claims::port::KnownThen;
+    let mut w = World::new();
+    w.open_claim("t-0");
+    w.assess("t-0", "CC-0003");
+    assert!(w.state.work_view("t-0").expect("a view").cover_now_and_then.is_none());
+
+    w.core.cover(
+        "pol-1",
+        "trauma",
+        CoverFacts {
+            in_force: false,
+            life_on_policy: false,
+            known_then: Some(KnownThen {
+                in_force: true,
+                life_on_policy: true,
+                sum_insured_minor: 500_000,
+            }),
+            ..facts("trauma")
+        },
+    );
+    w.open_claim("t-1");
+    w.assess("t-1", "CC-0003");
+    let c = w.claim("t-1");
+    assert!(c.history.iter().any(|h| h.action == "cover_changed_since_event"));
+    let view = w.state.work_view("t-1").expect("a view");
+    assert_eq!(view.cover_now_and_then, Some(((false, false, 500_000), (true, true, 500_000))));
+    assert_eq!(w.undecided("t-1", "ana", World::admit_lump(Some(1_000)), "R-OK"), "cover_not_confirmed");
+}

@@ -1558,3 +1558,86 @@ fn a_discount_for_covers_across_a_customers_policies_counts_theirs_and_not_the_s
     assert!(discounts_on_latest_bill(&mut c, &first_id).is_empty());
     assert_eq!(latest_bill(&c, &first_id), undiscounted);
 }
+
+/// Purpose: new business records that cover on a new policy replaces cover a person held on
+/// another policy; the record is kept on the new policy and announced once with both sides
+/// named and the new cover's amount; the same record again changes nothing; and a record
+/// that names no cover the life holds, replaces the policy with itself, carries no amount or
+/// disclosure, or contradicts one already made is refused with nothing written.
+/// Why it matters: reinsurance carries the old cover's cession on (treaty version, start
+/// date, years toward recapture) only if something tells it the new policy is a replacement;
+/// without this the reinsurer is given the risk as new business on today's terms. A record
+/// that could be changed quietly, or made for cover that does not exist, would move those
+/// terms on someone's say-so.
+#[test]
+fn cover_that_replaces_cover_on_another_policy_is_recorded_once_and_announced() {
+    use ic_core::command::Replacement;
+    let mut c = cluster(1);
+    let id = standard(&mut c, 1);
+    let record = |policy: &PolicyId, old: &str, cover: &str, life: &str, amount: i64, evidence: &str| {
+        Command::RecordReplacement(Box::new(Replacement {
+            policy: policy.clone(),
+            replaced_policy: PolicyId(old.to_string()),
+            life: LifeId(life.to_string()),
+            replaced_life: LifeId("life-9".to_string()),
+            cover: cover.to_string(),
+            replaced_cover: "life".to_string(),
+            replaced_sum_insured_minor: amount,
+            evidence: evidence.to_string(),
+        }))
+    };
+    let send = |c: &mut Cluster, command: Command| c.submit(0, "new-business", command);
+    for (command, refusal) in [
+        (record(&id, "pol-old", "life", "life-1", 0, "vault/disclosure-1"), "invalid_replacement"),
+        (record(&id, "pol-old", "life", "life-1", 200_000_00, ""), "invalid_replacement"),
+        (record(&id, &id.0, "life", "life-1", 200_000_00, "vault/disclosure-1"), "invalid_replacement"),
+        (record(&id, "pol-old", "funeral", "life-1", 200_000_00, "vault/disclosure-1"), "unknown_cover"),
+        (record(&id, "pol-old", "life", "life-7", 200_000_00, "vault/disclosure-1"), "life_not_covered"),
+    ] {
+        assert_eq!(code(send(&mut c, command)), refusal);
+    }
+    assert!(c.state(0).policies[&id].replaces.is_empty(), "a refusal writes nothing");
+    assert_eq!(
+        code(c.submit(
+            0,
+            "policy-servicing",
+            record(&id, "pol-old", "life", "life-1", 200_000_00, "vault/disclosure-1")
+        )),
+        "caller_not_allowed"
+    );
+
+    send(&mut c, record(&id, "pol-old", "life", "life-1", 200_000_00, "vault/disclosure-1")).unwrap();
+    send(&mut c, record(&id, "pol-old", "life", "life-1", 200_000_00, "vault/disclosure-1")).unwrap();
+    assert_eq!(
+        code(send(&mut c, record(&id, "pol-old", "life", "life-1", 250_000_00, "vault/disclosure-1"))),
+        "replacement_recorded"
+    );
+    let insured: i64 = c.state(0).policies[&id].covers["life"].layers.iter().map(|l| l.sum_insured_minor).sum();
+    let announced: Vec<_> = events(&c)
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::CoverReplaced {
+                policy,
+                cover,
+                replaced_policy,
+                replaced_life,
+                replaced_sum_insured_minor,
+                sum_insured_minor,
+                ..
+            } => Some((
+                policy.clone(),
+                cover.clone(),
+                replaced_policy.0.clone(),
+                replaced_life.0.clone(),
+                *replaced_sum_insured_minor,
+                *sum_insured_minor,
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        announced,
+        vec![(id.clone(), "life".to_string(), "pol-old".to_string(), "life-9".to_string(), 200_000_00, insured)]
+    );
+    assert_eq!(c.state(0).policies[&id].replaces.len(), 1);
+}

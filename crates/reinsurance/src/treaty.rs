@@ -95,6 +95,16 @@ pub struct ClaimTerms {
     pub consent_days: u32,
     #[serde(default)]
     pub ex_gratia_recoverable: bool,
+    /// Money the insurer gets back against an overpaid claim, from the
+    /// person, a provider that billed twice or an offset, reduces the loss
+    /// the reinsurers share. On by default: a placeholder best estimate,
+    /// for a reinsurance manager to confirm (`docs/decisions.md`).
+    #[serde(default = "yes")]
+    pub share_recoveries: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// How members who are not linked to a party are ceded.

@@ -478,7 +478,8 @@ fn an_offset_is_taken_only_by_decision_and_within_the_cap() {
 /// Purpose: an overpayment on a closed claim is offset against the same person's benefit on
 /// another claim, and the instruction names the claim and policy the receivable sits on.
 /// Why it matters: the receivable is on the old claim's policy. The core has to credit that
-/// policy's receivable, not the paying claim's, or the daily ledger control breaks.
+/// policy's receivable, not the paying claim's, or the daily ledger control breaks; and the
+/// recovery is published on the old claim so reinsurers share in it.
 #[test]
 fn an_offset_can_recover_another_claims_overpayment() {
     let mut w = World::new();
@@ -511,6 +512,18 @@ fn an_offset_can_recover_another_claims_overpayment() {
         ("ip-2", "ip-1", "pol-2", op.as_str(), 300)
     );
     assert_eq!(w.claim("ip-1").overpayments[0].recovered_minor, 300);
+    // Published for the overpayment's own claim, so reinsurers share in what came back.
+    let recovered = w.core.noticed("overpayment_recovered");
+    let last = recovered.last().expect("published");
+    assert_eq!(
+        (
+            last["claim"].as_str(),
+            last["amount_minor"].as_str(),
+            last["outstanding_minor"].as_str(),
+            last["source"].as_str()
+        ),
+        ("ip-1", "300", "1151", "offset")
+    );
 }
 
 /// Purpose: ending a benefit in the past closes the claim and raises what was paid beyond the

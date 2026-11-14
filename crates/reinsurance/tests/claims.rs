@@ -258,6 +258,76 @@ fn periodic_and_ex_gratia_payments_follow_the_treaty() {
     assert_eq!(run(true), 6 * K);
 }
 
+/// Purpose: money got back against an overpaid claim, repaid by a provider that billed twice or
+/// offset from another partition, comes off the loss the reinsurers share; each receipt counts
+/// once however often it is delivered, and a treaty that keeps recoveries for the insurer bills
+/// the reinsurers on what was paid.
+/// Why it matters: a treaty shares the net loss. Billing reinsurers for money the insurer has
+/// since got back overstates the recovery due, and the setting lets a reinsurance manager follow
+/// a treaty that says otherwise.
+#[test]
+fn money_got_back_on_an_overpaid_claim_reduces_what_the_reinsurers_pay() {
+    let run = |share: bool| {
+        let mut b = Bench::empty();
+        let source = if share {
+            RETAIL.to_string()
+        } else {
+            RETAIL.replace("consent_days = 10)", "consent_days = 10, share_recoveries = False)")
+        };
+        b.ok(
+            "config",
+            Command::ActivateTreaty {
+                treaty: Box::new(load_treaty("t.star", &source).unwrap()),
+            },
+        );
+        b.issue(1, "P1", "anna", vec![layer("life", "life", 1, "L1", 800 * K, d(2027, 2, 1))]);
+        b.today = d(2027, 6, 10);
+        fact(&mut b, reserved("C1", "P1", "life", 800 * K));
+        fact(&mut b, paid("C1", "PAY-1", 800 * K, false));
+        // North holds 180,000 of 800,000: 22.5% of the claim.
+        assert_eq!(b.posted(PostingKind::RecoveryDue, &north()), 180 * K);
+        let repaid = [
+            ("overpayment", "OP-1"),
+            ("amount_minor", "6000000"),
+            ("outstanding_minor", "2000000"),
+            ("cause", "ProviderBilling"),
+        ];
+        b.feed(
+            1,
+            vec![published("overpayment_raised", "C1", &[("overpayment", "OP-1"), ("amount_minor", "8000000")])],
+        );
+        b.feed(1, vec![published("overpayment_recovered", "C1", &repaid)]);
+        b.feed(1, vec![published("overpayment_recovered", "C1", &repaid)]);
+        let offset = [
+            ("overpayment", "OP-1"),
+            ("amount_minor", "2000000"),
+            ("outstanding_minor", "0"),
+            ("partition", "2"),
+        ];
+        b.feed(1, vec![published("overpayment_offset_received", "C1", &offset)]);
+        b.assert_reconciles();
+        (claim(&b, "C1").recovered_minor, b.posted(PostingKind::RecoveryDue, &north()))
+    };
+    // 80,000 got back in two receipts: 22.5% of 720,000 is 162,000.
+    assert_eq!(run(true), (80 * K, 162 * K));
+    assert_eq!(run(false), (80 * K, 180 * K));
+
+    // A receipt that cannot be read, or is for nothing, is refused rather than counted.
+    let mut b = anna();
+    fact(&mut b, reserved("C1", "P1", "life", 800 * K));
+    assert_eq!(
+        b.refused(
+            "claims",
+            Command::Claim(Box::new(ClaimFact::Recovered {
+                claim: ClaimId::from("C1"),
+                reference: "recovered:OP-1:0".into(),
+                amount_minor: 0,
+            }))
+        ),
+        "invalid_amount"
+    );
+}
+
 /// Purpose: under an excess of loss treaty a claim recovers what it costs above the retention,
 /// not a proportion of it.
 /// Why it matters: the two bases give very different recoveries for a partial claim. Using the

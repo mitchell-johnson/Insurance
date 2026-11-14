@@ -103,6 +103,8 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | COL-017 | part | `payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |
 | COL-018 | full | `sim/tests/personas_spine.rs::paying_the_arrears_while_suspended_restores_the_standing_at_once`<br>`collections/tests/dunning.rs::paying_stops_the_sequence_and_a_new_spell_starts_it_afresh`<br>`collections/tests/dunning.rs::an_ended_policy_leaves_the_sequence` |
 | COL-019 | full | `collections/tests/queue.rs::the_queue_puts_what_is_about_to_lapse_and_matters_most_first`<br>`collections/tests/cases.rs::an_officer_does_not_read_health_in_a_hardship_note`<br>`collections/tests/dunning.rs::a_high_premium_is_called_earlier`<br>`collections/tests/dunning.rs::a_call_left_too_long_goes_to_the_team_lead` |
+| COL-020 | full | `payments/tests/manual.rs::a_receipt_is_split_across_policies_with_a_second_person`<br>`payments/tests/manual.rs::a_small_receipt_is_applied_by_one_person` |
+| COL-022 | full | `payments/tests/manual.rs::a_receipt_is_split_across_policies_with_a_second_person`<br>`payments/tests/aml.rs::a_recorded_relationship_stops_the_rule` |
 | COL-024 | part | `payments/tests/incident.rs::failures_in_an_incident_are_not_held_against_the_payers` |
 | COL-025 | part | `payments/tests/runs.rs::a_collection_held_up_by_an_outage_goes_next_window_and_is_found`<br>`payments-service/tests/pump.rs::a_bank_that_is_down_or_says_no_leaves_the_money_unpaid_and_known` |
 | COL-026 | full | `collections/tests/dunning.rs::a_customer_with_several_policies_gets_one_notice_and_one_task`<br>`collections/tests/dunning.rs::a_notice_already_taken_is_not_added_to` |
@@ -196,12 +198,12 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | --- | --- | --- |
 | CLM-001 | full | `claims/tests/suite/intake.rs::notification_opens_a_claim_with_a_reserve`<br>`claims/tests/suite/intake.rs::a_late_notified_death_prompts_a_register_check`<br>`customers/tests/api.rs::deaths_are_marked_and_retracted`<br>`customers/tests/lifecycle.rs::deaths_are_told_to_claims_on_every_partition` |
 | CLM-002 | full | `sim/tests/claims.rs::a_lender_recorded_on_the_policy_is_paid_before_the_claimant`<br>`claims/tests/suite/book.rs::recorded_interests_are_paid_before_the_claimant`<br>`claims/tests/suite/covers.rs::joint_and_linked_covers_count_what_the_others_have_paid`<br>`core/src/claims.rs::a_joint_cover_ends_for_every_life_on_the_first_event` |
-| CLM-003 | part | `sim/tests/claims.rs::a_lump_sum_claim_runs_from_notification_to_the_bank`<br>`sim/tests/claims.rs::an_admission_can_end_the_policy_or_take_the_premium_owing`<br>`claims/tests/suite/book.rs::a_payee_is_verified_before_anything_is_paid` |
+| CLM-003 | full | `sim/tests/claims.rs::a_lump_sum_claim_runs_from_notification_to_the_bank`<br>`sim/tests/claims.rs::an_admission_can_end_the_policy_or_take_the_premium_owing`<br>`claims/tests/suite/book.rs::a_payee_is_verified_before_anything_is_paid`<br>`reinsurance/tests/claims.rs::a_claim_recovers_each_reinsurers_share_as_it_is_paid`<br>`distribution/tests/commission.rs::a_claim_never_triggers_clawback` |
 | CLM-004 | full | `claims/tests/suite/book.rs::a_funeral_advance_is_paid_early_and_counted_against_the_benefit`<br>`sim/tests/claims.rs::a_funeral_advance_is_posted_once_and_the_admission_pays_the_rest` |
 | CLM-005 | full | `claims/tests/suite/intake.rs::a_death_with_no_certificate_is_registered_and_the_coroner_is_chased` |
 | CLM-006 | full | `sim/tests/claims.rs::an_admission_can_end_the_policy_or_take_the_premium_owing`<br>`sim/tests/claims.rs::a_premium_paid_after_the_event_does_not_rewrite_the_event_date` |
 | CLM-007 | full | `sim/tests/claims.rs::the_cover_check_reads_the_policy_as_it_was_on_the_event_date`<br>`claims/tests/suite/intake.rs::doubtful_cover_still_registers_and_a_refused_reserve_leaves_nothing` |
-| CLM-008 | part | `sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
+| CLM-008 | part | `sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme`<br>`claims/tests/suite/covers.rs::a_cover_check_shows_the_event_date_as_known_now_and_as_known_then` |
 | CLM-009 | part | `claims/tests/suite/decisions.rs::lump_sums_on_one_cover_never_exceed_the_sum_insured`<br>`claims/tests/suite/covers.rs::joint_and_linked_covers_count_what_the_others_have_paid`<br>`claims/tests/suite/decisions.rs::an_admission_within_authority_takes_effect_and_is_recorded`<br>`core/src/claims.rs::a_lump_sum_reduces_its_cover_and_the_covers_linked_to_it_until_reversed`<br>`product/tests/products.rs::a_cover_can_reduce_another_and_be_joint_on_the_first_event`<br>`documents/tests/lifecycle.rs::a_claim_that_reduces_cover_asks_for_one_new_schedule_a_day` |
 | CLM-010 | full | `claims/tests/suite/intake.rs::health_invoice_goes_straight_through_inside_the_limits`<br>`sim/tests/claims.rs::a_health_invoice_goes_straight_through_to_the_provider` |
 | CLM-011 | full | `claims/tests/suite/intake.rs::pre_approval_is_a_hold_not_a_posting` |
@@ -216,7 +218,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | CLM-020 | full | `claims/tests/suite/book.rs::a_benefit_ends_closes_and_can_recur` |
 | CLM-021 | full | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid`<br>`sim/tests/claims.rs::an_offset_recovers_an_overpayment_across_policies` |
 | CLM-023 | full | `claims/tests/suite/intake.rs::escalation_and_identification`<br>`sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
-| CLM-024 | part | `claims/tests/suite/decisions.rs::admission_follows_the_cover_facts` |
+| CLM-024 | full | `claims/tests/suite/decisions.rs::admission_follows_the_cover_facts`<br>`claims/tests/suite/decisions.rs::a_pool_cover_claim_is_admitted_on_the_employers_evidence_kept_with_it` |
 | CLM-025 | full | `sim/tests/personas_lines.rs::a_pilots_claim_is_checked_on_the_automatic_amount_plus_any_underwritten_layer`<br>`sim/tests/claims.rs::a_member_above_the_automatic_limit_is_paid_the_excess_only_where_it_was_underwritten` |
 | CLM-026 | part | `claims/tests/suite/views.rs::a_continuation_policy_claim_carries_the_scheme_history`<br>`sim/tests/claims.rs::a_continuation_policy_carries_its_scheme_membership_to_the_claim` |
 | CLM-027 | full | `claims/tests/suite/views.rs::a_company_owned_income_claim_pays_the_company_and_is_about_the_life` |
@@ -233,7 +235,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | CLM-038 | full | `claims/tests/suite/views.rs::totals_by_policy_are_what_the_ledger_must_agree_with`<br>`sim/tests/claims.rs::the_core_refuses_instructions_its_own_record_does_not_support` |
 | CLM-039 | full | `claims/tests/suite/book.rs::recorded_interests_are_paid_before_the_claimant`<br>`claims/tests/suite/book.rs::a_whole_interest_takes_all_of_the_proceeds`<br>`claims/tests/suite/covers.rs::a_policy_loan_is_repaid_from_a_death_benefit_before_any_interest`<br>`claims/tests/suite/covers.rs::a_loan_takes_no_more_than_the_benefit_and_only_on_death`<br>`core/src/claims.rs::an_admission_repays_the_policy_loan_out_of_the_benefit` |
 | CLM-040 | full | `claims/tests/suite/book.rs::a_benefit_is_suspended_in_custody_and_resumes_on_release`<br>`product/tests/products.rs::income_protection_prices_a_monthly_benefit_and_carries_its_custody_setting`<br>`sim/tests/claims.rs::the_cover_check_reports_an_income_benefits_waiting_period_and_custody_setting` |
-| CLM-041 | part | `claims/tests/suite/intake.rs::triage_routes_by_skill_and_ranks_by_urgency` |
+| CLM-041 | full | `claims/tests/suite/intake.rs::triage_routes_by_skill_and_ranks_by_urgency`<br>`claims/tests/suite/intake.rs::a_trauma_event_overseas_goes_to_the_complex_queue_with_a_case_conference` |
 | CLM-042 | full | `claims/tests/suite/intake.rs::a_communication_marker_gives_one_owner_a_said_handover_and_more_time` |
 
 ## RI Reinsurance
@@ -243,7 +245,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | RI-001 | full | `reinsurance/tests/treaties.rs::shipped_treaties_load_and_their_scenarios_pass`<br>`reinsurance/tests/replay.rs::cessions_balance_and_never_over_retain` |
 | RI-002 | full | `reinsurance/tests/accumulation.rs::one_life_on_two_partitions_fills_one_retention`<br>`reinsurance/tests/core.rs::a_life_on_two_partitions_is_ceded_once_and_recorded_on_both` |
 | RI-003 | full | `reinsurance/tests/premiums.rs::a_period_charges_each_reinsurer_its_share_at_its_rate`<br>`reinsurance/tests/core.rs::ceded_premium_reaches_the_ledger_and_the_two_balances_agree` |
-| RI-004 | full | `reinsurance/tests/claims.rs::a_claim_recovers_each_reinsurers_share_as_it_is_paid` |
+| RI-004 | full | `reinsurance/tests/claims.rs::a_claim_recovers_each_reinsurers_share_as_it_is_paid`<br>`reinsurance/tests/claims.rs::money_got_back_on_an_overpaid_claim_reduces_what_the_reinsurers_pay` |
 | RI-005 | full | `reinsurance/tests/accumulation.rs::a_lapse_suspends_the_cession_and_reinstatement_restores_it`<br>`reinsurance/tests/premiums.rs::lapse_and_unwind_take_ceded_premium_back` |
 | RI-006 | full | `reinsurance/tests/accumulation.rs::layers_are_ceded_one_by_one_and_over_limit_cover_is_never_silent`<br>`reinsurance/tests/premiums.rs::a_backdated_change_posts_only_the_difference` |
 | RI-007 | full | `reinsurance/tests/capacity.rs::facultative_terms_follow_the_proposal_to_the_issued_layer`<br>`reinsurance/tests/claims.rs::a_claim_on_facultative_cover_recovers_the_facultative_share` |
@@ -265,7 +267,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | INV-002 | full | `pricing/src/fund.rs::pricing_date_follows_cutoff_and_calendar` |
 | INV-003 | full | `sim/tests/investment.rs::orders_that_cannot_be_honoured_are_refused_when_placed` |
 | INV-004 | full | `sim/tests/investment.rs::a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run` |
-| INV-005 | part | `pricing/tests/prices.rs::a_fund_follows_its_own_calendar` (pricing side; the switch's wait in pending cash is the core's) |
+| INV-005 | part | `pricing/tests/prices.rs::a_fund_follows_its_own_calendar` |
 | INV-006 | full | `pricing/src/strike.rs::units_on_issue_difference_blocks` |
 | INV-007 | full | `pricing/src/strike.rs::failed_checks_hold_the_price`<br>`pricing/tests/prices.rs::held_and_blocked_prices` |
 | INV-008 | full | `pricing/tests/prices.rs::price_runs_from_valuation_to_every_partition`<br>`pricing/tests/recalculation.rs::struck_prices_equal_an_exact_recalculation` |
@@ -500,6 +502,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | STF-009 | full | `channels/tests/staff.rs::break_glass_is_immediate_loud_short_and_reviewed` |
 | STF-010 | full | `channels/tests/staff.rs::leaving_and_recertification` |
 | STF-012 | full | `channels/src/classes.rs::fields_above_the_callers_classes_are_masked_and_named`<br>`channels/src/classes.rs::field` |
+| STF-013 | full | `claims/tests/suite/investigate.rs::a_service_billed_twice_is_investigated_quietly_and_recovered_from_the_provider` |
 | STF-014 | full | `channels/tests/http.rs::the_staff_console_asks_the_four_questions`<br>`channels/tests/http.rs::every_staff_read_is_in_the_access_log` |
 | STF-015 | full | `channels/tests/staff.rs::external_elevation_is_capped_and_fails_closed` |
 | STF-016 | full | `channels/tests/staff.rs::external_source_drives_templates` |
@@ -542,7 +545,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | FIN-011 | full | `finance/tests/returns.rs::any_figure_on_a_filed_return_opens_to_what_is_behind_it` |
 | FIN-012 | full | `finance/tests/edges.rs::a_policy_is_placed_in_its_accounting_group_at_issue_and_never_moved` |
 | FIN-013 | full | `finance/tests/journals.rs::money_moves_between_statutory_funds_only_by_an_approved_transfer` |
-| FIN-014 | full | `finance/tests/edges.rs::tax_accounts_reconcile_to_the_posting_types_that_may_move_them`<br>`e2e/tests/08-lifecycle.js::E2E-235`<br>`claims/tests/suite/book.rs::tax_is_kept_back_from_an_income_benefit_where_the_rules_set_a_rate`<br>`claims/tests/suite/book.rs::tax_is_withheld_from_late_interest_at_the_payees_rate` |
+| FIN-014 | full | `finance/tests/edges.rs::tax_accounts_reconcile_to_the_posting_types_that_may_move_them`<br>`e2e/tests/08-lifecycle.js::E2E-235`<br>`claims/tests/suite/book.rs::tax_is_kept_back_from_an_income_benefit_where_the_rules_set_a_rate`<br>`claims/tests/suite/book.rs::tax_is_withheld_from_late_interest_at_the_payees_rate`<br>`distribution/tests/statements.rs::tax_is_withheld_from_commission_at_the_payees_rate_and_given_back_on_a_return` |
 | FIN-015 | full | `payments/tests/aml.rs::a_payer_who_is_not_the_owner_is_raised_once`<br>`customers/tests/api.rs::a_premium_payer_relationship_can_be_checked_by_its_reference` |
 | FIN-016 | full | `payments/tests/aml.rs::a_recorded_relationship_stops_the_rule`<br>`payments-service/tests/pump.rs::a_payer_relationship_is_confirmed_with_the_customer_master`<br>`customers/tests/api.rs::a_premium_payer_relationship_can_be_checked_by_its_reference` |
 | FIN-017 | full | `finance/tests/mart.rs::claims_that_leave_the_policy_in_force_are_on_the_experience_extract`<br>`finance/tests/mart.rs::the_real_claims_module_feeds_the_experience_extract`<br>`finance/tests/mart.rs::claims_by_cause_are_categories_with_small_rows_folded_or_withheld` |

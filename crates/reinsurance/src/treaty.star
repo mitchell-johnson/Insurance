@@ -29,12 +29,13 @@ def rate_table_premium(table):
 def original_premium(of = "net"):
     return {"kind": "original_premium", "of": of}
 
-def claim_terms(notify_at = None, consent_at = None, consent_days = 0, ex_gratia_recoverable = False):
+def claim_terms(notify_at = None, consent_at = None, consent_days = 0, ex_gratia_recoverable = False, share_recoveries = True):
     return {
         "notification_threshold_minor": notify_at,
         "consent_threshold_minor": consent_at,
         "consent_days": consent_days,
         "ex_gratia_recoverable": ex_gratia_recoverable,
+        "share_recoveries": share_recoveries,
     }
 
 def scheme_share(share):

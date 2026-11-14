@@ -828,7 +828,7 @@ impl DistributionState {
         let held = self.held_available(party);
         match &record.action {
             Action::Release { amount_minor, account_ref } => {
-                let taken = take(&held, *amount_minor);
+                let mut taken = take(&held, *amount_minor);
                 for (p, a) in &taken {
                     postings.push((
                         *p,
@@ -836,17 +836,24 @@ impl DistributionState {
                         vec![line(account(party, PartyLedger::Held), *a), line(account(party, PartyLedger::Clearing), -*a)],
                     ));
                 }
+                // Held commission released is commission paid: tax is
+                // withheld from it as from a statement's payment.
+                let withheld = self.withhold(party, *amount_minor, &mut taken);
+                for (p, tax) in &withheld {
+                    postings.push((*p, crate::statement::WITHHOLDING_KIND, crate::statement::withholding_lines(party, *tax)));
+                }
+                let net = *amount_minor - withheld.iter().map(|(_, t)| t).sum::<i64>();
                 let part = PaymentPart {
                     reference: format!("pay:{id}"),
                     account_ref: account_ref.clone(),
-                    amount_minor: *amount_minor,
+                    amount_minor: net,
                     settled: None,
                 };
                 ctx.emit(Event::PaymentRequested {
                     reference: part.reference.clone(),
                     party: party.clone(),
                     account_ref: account_ref.clone(),
-                    amount_minor: *amount_minor,
+                    amount_minor: net,
                     currency: c,
                 });
                 self.payments.insert(
@@ -859,6 +866,7 @@ impl DistributionState {
                         parts: vec![part],
                         clearing: taken,
                         return_to: PartyLedger::Held,
+                        withheld,
                     },
                 );
             }
