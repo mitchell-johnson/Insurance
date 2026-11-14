@@ -265,3 +265,14 @@ fn repeated_refunds_raise_a_restricted_case() {
     }
     assert_eq!(compliance_notices(&desk), 2, "a new pattern after the clearance is raised");
 }
+
+/// Purpose: a refusal for a missing role names the role in words.
+/// Why it matters: the portal shows the module's message to staff as it is;
+/// "PayeeMaintainer" reads as a code, "payee maintainer" as a sentence.
+#[test]
+fn a_missing_role_is_named_in_words() {
+    assert_eq!(ic_payments::machine::role_words(Role::PayeeMaintainer), "payee maintainer");
+    let mut desk = Desk::new();
+    let reject = desk.send(&mia(), Command::ConfirmPayee { payee: "p1".into() }).unwrap_err();
+    assert_eq!(reject.message, "this needs the payee maintainer role");
+}
