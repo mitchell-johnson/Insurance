@@ -663,6 +663,12 @@ pub struct Policy {
     /// discount for covers held across a customer's policies reads it.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub covers_elsewhere: u32,
+    /// What each named life on this policy holds on its other policies in the same group,
+    /// as last counted when this policy was last worked on: by life, the sum insured on each
+    /// cover in force there, keyed `product/cover`. A multi-benefit discount whose categories
+    /// count cover held elsewhere reads it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sums_elsewhere: BTreeMap<String, BTreeMap<String, i64>>,
     /// A group scheme: its lives are members, billed together on one
     /// invoice. A scheme whose product has only covers that members choose
     /// (a health-only employer plan) has no formula cover to know it by.

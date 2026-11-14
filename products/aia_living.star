@@ -295,16 +295,33 @@ MIRC_PERIODS = ["2y", "5y", "to-65", "to-70"]
 # amounts AIA publishes. Family Protection counts as life insurance on its
 # monthly amount: AIA converts it to a lump sum over the term, which this
 # system does not, so the minimum here is a best estimate (PH).
+#
+# Cover the same life holds on its other AIA Living, AIA Living for business,
+# Cover for Life and Start-Up Income Protection policies counts towards the
+# minimums too (AIA's Multi-Benefit Discount terms, the table of benefits that
+# count), though only this policy's covers are discounted here.
+BUSINESS_INCOME = ["business-continuity-agreed-value", "business-continuity-indemnity", "rural-continuity"]
+
+def on(pairs):
+    return ["%s/%s" % (product, cover) for (product, covers) in pairs for cover in covers]
+
 def MBD(count):
     return benefit_categories(
         required = [
-            discount_category("life", ["life", "accidental-death"], min_sum_insured = dollars(100000)),
-            discount_category("family-protection", ["family-protection"], min_sum_insured = dollars(1000)),
+            discount_category("life", ["life", "accidental-death"], min_sum_insured = dollars(100000),
+                              elsewhere = on([("aia-living", ["life", "accidental-death"]), ("aia-living-business", ["life"]),
+                                              ("aia-cover-for-life", ["life"])])),
+            discount_category("family-protection", ["family-protection"], min_sum_insured = dollars(1000),
+                              elsewhere = on([("aia-living", ["family-protection"])])),
         ],
         categories = [
-            discount_category("trauma", TRAUMA, min_sum_insured = dollars(75000)),
-            discount_category("tpd", TPD, min_sum_insured = dollars(75000)),
-            discount_category("income", INCOME_MAIN, min_sum_insured = dollars(2000)),
+            discount_category("trauma", TRAUMA, min_sum_insured = dollars(75000),
+                              elsewhere = on([("aia-living", TRAUMA), ("aia-living-business", TRAUMA)])),
+            discount_category("tpd", TPD, min_sum_insured = dollars(75000),
+                              elsewhere = on([("aia-living", TPD), ("aia-living-business", TPD)])),
+            discount_category("income", INCOME_MAIN, min_sum_insured = dollars(2000),
+                              elsewhere = on([("aia-living", INCOME_MAIN), ("aia-living-business", BUSINESS_INCOME),
+                                              ("aia-start-up-income", ["start-up-income"])])),
         ],
         count = count,
     )

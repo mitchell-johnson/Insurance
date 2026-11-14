@@ -320,7 +320,10 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                             let all: Vec<_> = required.iter().chain(categories).collect();
                             let named = all.iter().flat_map(|c| &c.covers).all(|c| p.covers.iter().any(|o| &o.code == c));
                             let distinct = all.iter().map(|c| c.code.as_str()).collect::<BTreeSet<_>>().len() == all.len();
-                            let sound = all.iter().all(|c| !c.code.is_empty() && !c.covers.is_empty() && c.min_sum_insured_minor >= 0);
+                            let elsewhere = |e: &String| e.split_once('/').is_some_and(|(product, cover)| !product.is_empty() && !cover.is_empty() && !cover.contains('/'));
+                            let sound = all
+                                .iter()
+                                .all(|c| !c.code.is_empty() && !c.covers.is_empty() && c.min_sum_insured_minor >= 0 && c.elsewhere.iter().all(elsewhere));
                             if !named {
                                 return Err(invalid(
                                     file,
