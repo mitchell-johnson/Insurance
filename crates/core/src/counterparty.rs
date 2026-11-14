@@ -91,6 +91,10 @@ pub enum InternalLedger {
     WriteOff { class: String },
     /// Cash: a payment out or a receipt in.
     Settlement,
+    /// Tax withheld from a payment to the counterparty, by kind (for
+    /// example `schedular` on commission), owed to the revenue authority.
+    /// The same accounts the claims withholding uses.
+    WithholdingTax { kind: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,6 +169,7 @@ pub fn internal_account(ledger: &InternalLedger, c: Currency) -> Account {
         InternalLedger::CommissionBadDebt => (format!("int/commission_bad_debt/{c}"), AccountClass::Expense, role::COMMISSION_BAD_DEBT),
         InternalLedger::WriteOff { class } => (format!("int/counterparty_write_off/{class}/{c}"), AccountClass::Expense, role::WRITE_OFF),
         InternalLedger::Settlement => return crate::accounts::settlement(c),
+        InternalLedger::WithholdingTax { kind } => return crate::accounts::withholding_tax_payable(kind, c),
     };
     Account {
         id: AccountId(id),
@@ -243,6 +248,7 @@ pub(crate) fn post(
                         dims.cover_type = Some(cover_type.clone());
                     }
                     InternalLedger::WriteOff { class } if !plain(class) => return Err(bad("a write-off names the class of balance")),
+                    InternalLedger::WithholdingTax { kind } if !plain(kind) => return Err(bad("withholding tax names its kind")),
                     _ => {}
                 }
                 (internal_account(internal, c), dims)

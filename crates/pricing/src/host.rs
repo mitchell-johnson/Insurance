@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::command::{Command, Delivery, Envelope, MovementKind, UnitMovement, CALLER_EVENTS, CALLER_OUTBOX};
-use crate::state::{slot, PricingState, Publication};
+use crate::state::{slot, PriceStatus, PricingState, Publication};
 
 /// The module's permanent name on the cluster.
 pub const NAME: &str = "unit-pricing";
@@ -72,6 +72,12 @@ pub enum Question {
     /// The finance close's check: green when no price is late, waiting for
     /// a person or held by an open price error, and every extract is written.
     CloseCheck {
+        as_at: NaiveDate,
+    },
+    /// What operations must be told of now: prices late as at a date,
+    /// prices a partition refused, and valuation files that could not be
+    /// read. Each item has a stable `id`, so the driver raises it once.
+    Alerts {
         as_at: NaiveDate,
     },
 }
@@ -170,6 +176,34 @@ pub fn ask(state: &PricingState, question: Question) -> Result<Value, String> {
             }
             items.truncate(MAX_ANSWER);
             Ok(json!({ "green": items.is_empty(), "items": items }))
+        }
+        Question::Alerts { as_at } => {
+            let mut items: Vec<Value> = Vec::new();
+            for (fund, date) in state.late(as_at) {
+                items.push(json!({ "id": format!("late:{}", slot(&fund, date)), "kind": "late_price", "fund": fund, "pricing_date": date }));
+            }
+            for p in state.prices.values().filter(|p| p.status == PriceStatus::Activating) {
+                for (partition, d) in &p.deliveries {
+                    if let Delivery::Refused { code, message } = d {
+                        items.push(json!({
+                            "id": format!("refused:{}/{partition}", p.id),
+                            "kind": "publication_refused",
+                            "price": p.id,
+                            "partition": partition,
+                            "code": code,
+                            "message": message,
+                        }));
+                    }
+                }
+            }
+            for (definition, reason) in &state.refused_definitions {
+                items.push(json!({ "id": format!("definition:{definition}"), "kind": "definition_refused", "definition": definition, "reason": reason }));
+            }
+            for (file, reason) in &state.refused_files {
+                items.push(json!({ "id": format!("file:{file}"), "kind": "file_refused", "file": file, "reason": reason }));
+            }
+            items.truncate(MAX_ANSWER);
+            Ok(json!(items))
         }
     }
 }

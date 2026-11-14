@@ -142,6 +142,19 @@ pub struct CoverFacts {
     /// against the sum insured on the event date.
     #[serde(default)]
     pub built_in: Vec<BuiltIn>,
+    /// The same cover on the event date as the record knew it on that
+    /// date, before anything recorded later (a backdated leave date, a
+    /// late alteration). Absent: nothing recorded since changes it.
+    #[serde(default)]
+    pub known_then: Option<KnownThen>,
+}
+
+/// What the record said about a cover on the event date, as known then.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnownThen {
+    pub in_force: bool,
+    pub life_on_policy: bool,
+    pub sum_insured_minor: i64,
 }
 
 /// A product's limits for one health benefit category. Absent fields keep

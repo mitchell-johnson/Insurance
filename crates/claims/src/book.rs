@@ -506,7 +506,7 @@ impl ClaimsState {
                 .periods
                 .iter()
                 .find(|(_, p)| p.returned && &p.payment_ref == r)
-                .map(|(k, p)| (*k, p.gross_minor - p.offset_minor))
+                .map(|(k, p)| (*k, p.gross_minor - p.offset_minor - p.tax_withheld_minor))
         });
         if period.is_some_and(|(_, net)| net != amount_minor) {
             return Err(Reject::new(
@@ -997,6 +997,10 @@ impl ClaimsState {
                                 partition: o.partition,
                             })
                         });
+                        // Tax on the benefit, never more than is left to pay after the offset.
+                        let taken = offset.as_ref().map_or(0, |o| o.amount_minor);
+                        let rate = i64::from(self.rules.benefit_withholding_bp.min(10_000));
+                        let tax = (gross * rate / 10_000).min(gross - taken).max(0);
                         items.push(RunItem {
                             claim: c.id.clone(),
                             period_start: start,
@@ -1004,6 +1008,7 @@ impl ClaimsState {
                             gross_minor: gross,
                             offset,
                             payee: payee.party.clone(),
+                            tax_withheld_minor: tax,
                         });
                         start = end;
                     }
@@ -1044,6 +1049,7 @@ impl ClaimsState {
                         gross_minor: gross,
                         offset,
                         payee: provider.unwrap_or_else(|| c.policyholder.clone()),
+                        tax_withheld_minor: 0,
                     });
                 }
             }
@@ -1126,7 +1132,7 @@ impl ClaimsState {
                 offset: item.offset.clone(),
             })?;
             if let Some(o) = &item.offset {
-                self.take_offset(claim, o);
+                self.take_offset(cx, claim, o);
             }
             claim.payments.push(Payment {
                 payment_ref: payment_ref.clone(),
@@ -1156,7 +1162,7 @@ impl ClaimsState {
             let last = item.period_end >= s.end;
             if item.gross_minor > 0 || last {
                 cx.core.execute(Instruction::PayBenefit {
-                    tax_withheld_minor: 0,
+                    tax_withheld_minor: item.tax_withheld_minor,
                     claim: claim.id.clone(),
                     policy: claim.policy.clone(),
                     cover: claim.cover.clone(),
@@ -1175,7 +1181,7 @@ impl ClaimsState {
                     let life = claim.life_party.clone();
                     self.take_remote(cx, &claim.id, life.as_deref(), o, &payment_ref);
                 }
-                Some(o) => self.take_offset(claim, o),
+                Some(o) => self.take_offset(cx, claim, o),
                 None => {}
             }
             if let Some(s) = claim.schedule.as_mut() {
@@ -1190,6 +1196,7 @@ impl ClaimsState {
                         payment_ref: payment_ref.clone(),
                         run: run.id.clone(),
                         returned: false,
+                        tax_withheld_minor: item.tax_withheld_minor,
                         arrears_minor: std::mem::take(&mut s.arrears_minor).min(item.gross_minor),
                     },
                 );
@@ -1223,19 +1230,28 @@ impl ClaimsState {
 
     /// Count an offset against the overpayment it recovers, which may be on
     /// this claim or on another claim of the same person.
-    fn take_offset(&mut self, claim: &mut Claim, offset: &Offset) {
-        let apply = |c: &mut Claim| {
+    fn take_offset(&mut self, cx: &mut Cx<'_>, claim: &mut Claim, offset: &Offset) {
+        // Published for the overpayment's own claim, so reinsurers share in what came back.
+        let apply = |cx: &mut Cx<'_>, c: &mut Claim| {
             if let Some(o) = c.overpayments.iter_mut().find(|o| o.id == offset.overpayment) {
                 o.recovered_minor += offset.amount_minor;
                 if o.outstanding_minor() <= 0 {
                     o.status = RecoveryStatus::Recovered;
                 }
+                let o = o.clone();
+                crate::overpay::publish(
+                    cx,
+                    "overpayment_recovered",
+                    c,
+                    &o,
+                    &[("amount_minor", offset.amount_minor.to_string()), ("source", "offset".into())],
+                );
             }
         };
         if offset.claim == claim.id {
-            apply(claim);
+            apply(cx, claim);
         } else if let Ok(mut other) = self.claim(&offset.claim) {
-            apply(&mut other);
+            apply(cx, &mut other);
             self.commit(other);
         }
     }

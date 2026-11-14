@@ -93,6 +93,28 @@ Every AIA wording is at `https://documents.aia.co.nz/<slug>/`. Versions current 
 | Reinstatement | each product | 180 days, evidence-free within 60 days (life), or 90 and 30 (health and simplified). |
 | Corporate scheme terms | `aia_corporate.star` | Multiples: life 3x (staff) and 5x (executive), TPD the same, CI 1x, income 75%. Maximums and automatic acceptance limits are as in the file. The income waiting period is 90 days and the benefit period 24 months. In practice each is set per scheme. |
 
+## Each product end to end
+
+`crates/underwriting/tests/aia_journeys.rs` takes each product through the modules as they run in production. The core quotes the application. The underwriting module takes it from proposal to decision. The driver carries it to reinsurance for capacity and to the core to issue on the quoted product version. The core bills three months, each bill equal to the quote, and takes the payments. The claims module on the partition admits a claim, and the payments module settles it.
+
+| Product | Journey | Claim paid |
+| --- | --- | --- |
+| aia-living | life, Critical Conditions and agreed value income on one life; AIA Interim Cover written while underwritten and ended at issue | Critical Conditions at the sum insured |
+| aia-living-business | key person life cover | death, ending the policy |
+| aia-start-up-income | income for occupation class 2 | first month, after the waiting period, by a benefit run |
+| aia-cover-for-life | whole of life cover | death |
+| aia-essentials-life | life cover | death |
+| aia-starter | life cover | death |
+| aia-interim | written by underwriting when an AIA Living proposal opens | death during underwriting |
+| aia-private-health | Private Health at its first excess | surgery invoice, under the product's own limits, paid to the provider by a run |
+| aia-cancer-care | Cancer Care at its first excess | cancer treatment invoice, paid to the provider by a run |
+| aia-corporate | scheme issued on the core with three staff members and billed to the employer | a member's death, with the scheme staying in force |
+
+Two limits on what these journeys show:
+
+- **Corporate Solutions** is issued straight to the core with its members. In production, group administration (`ic-group`) sends membership from the employer's file. That path is tested for group life by the group thread, but not with `aia-corporate`.
+- **Claims rules and authority** are the insurer's own to set and are not shipped (docs/claims.md). The journeys activate a minimal set. A health invoice is priced on the AIA product's own limits for its category.
+
 ## Not built yet, and who owns it
 
 - **Claims (`ic-claims`):** built on 14 November (docs/claims.md, "What the chosen option sets"): the benefit period and to-age, built-in benefits within their limits and only where their feature is chosen, product lifetime limits, a per-event cap, the mental health limit in all and claim indexation. What is left is the core's part below.
