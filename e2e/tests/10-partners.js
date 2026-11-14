@@ -388,7 +388,13 @@ test({ id: "E2E-291", area: REP, persona: "Conduct", story: "US-D05-1", title: "
   purpose: "Send a decision for the life cover of an ordinary new policy.",
   why: "A decision takes commission back or releases it. It must only be possible where the rule has actually made a match." }, async (t) => {
   const p = await t.policy("term_life", cast.p1.party);
-  const r = await t.sys.portal("POST", "/staff/v1/replacements/decide", cast.conduct, { policy: p.id, cover: "life", layer: 1, replacement: true, purpose: "testing the rule" });
+  // The commission module hears of a new policy's layers from the core's feed a moment after issue.
+  let r;
+  for (let n = 0; n < 40; n++) {
+    r = await t.sys.portal("POST", "/staff/v1/replacements/decide", cast.conduct, { policy: p.id, cover: "life", layer: 1, replacement: true, purpose: "testing the rule" });
+    if (!String(r.data && r.data.type).endsWith("unknown_layer")) break;
+    await new Promise((done) => setTimeout(done, 250));
+  }
   if (r.status !== 409 || !String(r.data.detail).includes("not treated as a replacement")) throw new Error(`the decision answered ${r.status} ${JSON.stringify(r.data)}`);
 });
 

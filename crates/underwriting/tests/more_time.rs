@@ -72,3 +72,32 @@ fn a_customer_who_needs_more_time_gets_longer_to_answer_an_offer() {
     w.respond("P1", "L1", ic_underwriting::command::OfferResponse::Accept);
     assert_eq!(w.stage("P1", "L1"), Stage::Accepted);
 }
+
+/// Purpose: a life marked as needing more time while a medical report is still awaited has the
+/// report's deadline moved by the further days, once; a report already settled is not touched.
+/// Why it matters: the deadline is when the evidence is given up as unobtainable and the case
+/// goes to a person. A customer who needs longer to arrange a GP visit or a blood test, and is
+/// not given it, has their application judged without the evidence they were getting (VUL-016).
+#[test]
+fn a_customer_who_needs_more_time_gets_longer_to_supply_evidence() {
+    let mut w = World::new();
+    let more = w.s.config.settings.more_time_days;
+    w.open("P1", 500_000_00);
+    w.consent("P1", "L1", ic_underwriting::model::ConsentKind::ObtainRecords);
+    w.disclose("P1", "L1", &yes("diabetes"));
+    let deadlines = |w: &World| {
+        w.p("P1").lives[&LifeId::from("L1")]
+            .evidence
+            .iter()
+            .filter(|e| e.outstanding())
+            .map(|e| e.deadline)
+            .collect::<Vec<_>>()
+    };
+    let before = deadlines(&w);
+    assert!(!before.is_empty(), "a report is awaited");
+    mark(&mut w, "P1", true);
+    let moved: Vec<_> = before.iter().map(|d| *d + chrono::Duration::days(more)).collect();
+    assert_eq!(deadlines(&w), moved);
+    mark(&mut w, "P1", true);
+    assert_eq!(deadlines(&w), moved, "given once");
+}

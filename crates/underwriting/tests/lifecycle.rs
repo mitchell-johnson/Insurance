@@ -571,6 +571,7 @@ fn a_refused_issue_waits_for_a_person_or_a_new_quote() {
         rate_tables: vec![],
         premium_minor: 91_00,
         quoted_on: w.today(),
+        cover_premiums_minor: Default::default(),
     };
     let requote = |signed| Command::Requote {
         proposal: "P1".into(),

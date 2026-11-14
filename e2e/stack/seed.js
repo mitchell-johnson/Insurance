@@ -147,6 +147,13 @@ async function seed(stack) {
     }
   }
   log("two advice providers licensed, three advisers engaged");
+
+  // --- Group schemes: one standing scheme for Kai Fresh Supermarkets, registered by group administration, with
+  // its founding member and its first administrator. The tests that change a scheme register their own.
+  if (stack.group) {
+    await require("../lib/group").register(sys, "kaifresh");
+    log("the Kai Fresh scheme is registered with its file layout and its administrator");
+  }
 }
 
 

@@ -1323,13 +1323,15 @@ async fn a_joint_cover_carries_each_lifes_own_terms() {
 /// Purpose: a new policy advised as replacing cover on another of our policies is issued, and
 /// the core is then told, cover by cover, which cover it replaces and how much of it (the lesser
 /// of the old cover and the new as accepted), with the signed replacement disclosure as the
-/// evidence; the core records it on the new policy and nothing is parked.
+/// evidence; the core records it on the new policy and nothing is parked. The adviser's policy
+/// is advised to commission as a replacement.
 /// Why it matters: reinsurance carries the old cover's cession on from this record, on its
 /// original treaty basis and inception. Without it the replaced amount would be ceded again as
 /// new business, on today's terms, and the accumulation on the life counted twice (RI-016).
 #[tokio::test]
 async fn a_replacing_policy_tells_the_core_what_it_replaces() {
-    let b = bench(TakesAll::default());
+    let taken = TakesAll::default();
+    let b = bench(taken.clone());
     b.open("P1", 500_000_00);
     b.module.with(|w| w.disclose("P1", "L1", &clean()));
     b.pass().await;
@@ -1377,4 +1379,19 @@ async fn a_replacing_policy_tells_the_core_what_it_replaces() {
         (old, 300_000_00, "uw-consent:R1/L1/replacement_disclosure")
     );
     assert!(b.pass().await.parked.is_empty(), "nothing is left to deliver");
+    // The adviser's new policy went on to the commission module, marked as a replacement, with
+    // the month's 85.00 made yearly.
+    let advised: Vec<_> = taken
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            Effect::AdviseNewBusiness {
+                key, replacement, premiums, ..
+            } => Some((key.clone(), *replacement, premiums.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(advised, vec![("uw-nb:R1".to_string(), true, BTreeMap::from([("life".to_string(), 1020_00)]))]);
 }

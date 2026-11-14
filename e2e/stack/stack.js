@@ -82,7 +82,47 @@ function identity(client) {
 }
 const cluster = { IC_NODES: NODES, IC_CLUSTER_NODES: NODES, IC_CLUSTER_TOKEN: TOKEN };
 
+// PostgreSQL for the customer master. `IC_E2E_POSTGRES_URL` names a server that is already running (the workflow starts
+// one in a container, as `ci.yml` does); otherwise a throwaway server is made under the run directory from the
+// PostgreSQL installed on this machine (`IC_E2E_PG_BIN`, or the newest under /usr/lib/postgresql, or the PATH).
+async function postgres() {
+  if (process.env.IC_E2E_POSTGRES_URL) return process.env.IC_E2E_POSTGRES_URL;
+  const installed = "/usr/lib/postgresql";
+  const versions = fs.existsSync(installed) ? fs.readdirSync(installed).sort((a, b) => Number(b) - Number(a)) : [];
+  const pg = process.env.IC_E2E_PG_BIN || (versions.length ? path.join(installed, versions[0], "bin") : "");
+  const tool = (name) => (pg ? path.join(pg, name) : name);
+  // PostgreSQL refuses to run as root: in a container that is root, it runs as the postgres user, in a directory of its own.
+  let as = {};
+  let data = path.join(run, "postgres");
+  if (process.getuid && process.getuid() === 0) {
+    const id = (flag) => Number(spawnSync("id", [flag, "postgres"], { encoding: "utf8" }).stdout.trim());
+    as = { uid: id("-u"), gid: id("-g") };
+    if (!as.uid) throw new Error("this machine runs as root and has no postgres user; set IC_E2E_POSTGRES_URL to a running server");
+    data = fs.mkdtempSync(path.join(require("os").tmpdir(), "ic-e2e-postgres-"));
+    fs.chownSync(data, as.uid, as.gid);
+    fs.writeFileSync(path.join(run, "postgres-data"), data);
+  }
+  const made = spawnSync(tool("initdb"), ["-D", data, "-U", "postgres", "--auth=trust", "-E", "UTF8"], { ...as, encoding: "utf8" });
+  if (made.status !== 0) throw new Error(`initdb failed (is PostgreSQL installed? set IC_E2E_PG_BIN or IC_E2E_POSTGRES_URL): ${made.stderr || made.error}`);
+  fs.mkdirSync(path.join(run, "logs"), { recursive: true });
+  const out = fs.openSync(path.join(run, "logs", "postgres.log"), "a");
+  const child = spawn(tool("postgres"), ["-D", data, "-c", "listen_addresses=127.0.0.1", "-c", `port=${ports.postgres}`, "-c", `unix_socket_directories=${data}`, "-c", "fsync=off", "-c", "max_connections=100"], { ...as, stdio: ["ignore", out, out] });
+  child.on("exit", (code, signal) => { if (!stopping) console.error(`postgres exited (${code ?? signal}); see ${path.join(run, "logs", "postgres.log")}`); });
+  children.push({ name: "postgres", child });
+  await until("PostgreSQL", () => spawnSync(tool("pg_isready"), ["-h", "127.0.0.1", "-p", String(ports.postgres)]).status === 0, 60);
+  return `host=127.0.0.1 port=${ports.postgres} user=postgres dbname=postgres`;
+}
+
+/// The PostgreSQL directory a root-run stack keeps outside the run directory, removed with the run it belonged to.
+function forget() {
+  const note = path.join(run, "postgres-data");
+  if (!fs.existsSync(note)) return;
+  const data = fs.readFileSync(note, "utf8").trim();
+  if (path.basename(data).startsWith("ic-e2e-postgres-")) fs.rmSync(data, { recursive: true, force: true });
+}
+
 async function up() {
+  forget();
   if (fs.existsSync(run)) fs.rmSync(run, { recursive: true, force: true });
   fs.mkdirSync(run, { recursive: true });
   const az = await azure.start({ port: ports.azure, roles });
@@ -98,16 +138,33 @@ async function up() {
   once("ic-admin", ["open", OPENING], admin);
   once("ic-admin", ["activate-shipped"], admin);
 
+  // The customer master: a service of its own with a PostgreSQL database, because personal data must be erasable.
+  const database = await postgres();
+  start("customers", "ic-customers", {
+    ...cluster, ...identity("ic-customers"), IC_CUSTOMERS_DATABASE_URL: database, IC_CUSTOMERS_KEY_VAULT: az.base, IC_CUSTOMERS_INDEX_KEY: "e2e-only-index-key-0123456789abcdefghij",
+    IC_CUSTOMERS_TENANT: TENANT, IC_CUSTOMERS_AUDIENCE: AUD.customers, IC_CUSTOMERS_AUTHORITY: az.base, IC_EVENT_HUBS_NAMESPACE: az.base,
+    IC_CUSTOMERS_REGISTER_ENDPOINT: az.base, IC_CUSTOMERS_LISTEN: local(ports.customers), IC_CUSTOMERS_CYCLE_SECONDS: "1",
+  });
+  // Group scheme administration: member files, billing and the employer's side of a scheme.
+  start("group", "ic-group", {
+    ...cluster, ...identity("ic-group"), IC_GROUP_QUARANTINE_ENDPOINT: az.base, IC_GROUP_EVENT_HUBS_NAMESPACE: az.base, IC_GROUP_CUSTOMER_MASTER: url(ports.customers),
+    IC_GROUP_CUSTOMER_MASTER_SCOPE: `${AUD.customers}/.default`, IC_GROUP_FINGERPRINT_SALT: "e2e-only-fingerprint-salt-0123456789", IC_GROUP_AUDIENCE: AUD.group,
+    IC_GROUP_LISTEN: local(ports.group), IC_GROUP_CYCLE_SECONDS: "1",
+  });
   start("api", "ic-api", { ...cluster, IC_PARTITIONS: String(PARTITIONS), IC_AUTH: "dev", IC_LISTEN: local(ports.api) });
   start("portal", "ic-portal", {
     ...cluster, ...identity("ic-portal"), IC_AUTH: "dev", IC_PORTAL_LISTEN: local(ports.portal), IC_PARTITIONS: String(PARTITIONS),
     IC_REGIONS: `auckland=${local(ports.nodes[0])},${local(ports.nodes[1])};sydney=${local(ports.nodes[2])}`, IC_HOME_REGION: "auckland",
     IC_PORTAL_HEARTBEAT_SECS: "5", IC_PORTAL_FORWARD_SECS: "2",
+    // The portal takes plain http only from a host on this machine, which it knows by name.
+    IC_GROUP_URL: `http://localhost:${ports.group}`, IC_GROUP_SCOPE: `${AUD.group}/.default`, IC_CUSTOMERS_URL: `http://localhost:${ports.customers}`, IC_CUSTOMERS_SCOPE: `${AUD.customers}/.default`,
   });
   await until("the API", () => ok(url(ports.api) + "/readyz"));
+  await until("the customer master", () => ok(url(ports.customers) + "/readyz"));
+  await until("the group service", () => ok(url(ports.group) + "/readyz"));
   await until("the portal", () => ok(url(ports.portal) + "/readyz"));
 
-  const stack = { portal: url(ports.portal), api: url(ports.api), azure: az.base, nodes: ports.nodes.map(url), token: TOKEN, tenant: TENANT, partitions: PARTITIONS, opening: OPENING, audiences: AUD, run };
+  const stack = { portal: url(ports.portal), api: url(ports.api), group: url(ports.group), customers: url(ports.customers), azure: az.base, nodes: ports.nodes.map(url), token: TOKEN, tenant: TENANT, partitions: PARTITIONS, opening: OPENING, audiences: AUD, run };
   fs.writeFileSync(path.join(run, "stack.json"), JSON.stringify(stack, null, 2));
   return { stack, az };
 }
@@ -117,6 +174,7 @@ async function down() {
   for (const { child } of children.reverse()) child.kill("SIGTERM");
   await new Promise((r) => setTimeout(r, 1500));
   for (const { child } of children) if (child.exitCode === null) child.kill("SIGKILL");
+  forget();
 }
 
 module.exports = { up, down, ports, roles, AUD, TENANT, TOKEN, url };

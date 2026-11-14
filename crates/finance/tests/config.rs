@@ -120,7 +120,7 @@ fn a_chart_version_can_add_but_never_redefine() {
     assert_eq!(next(&|_| {}), Ok(()));
     let add = |c: &mut Chart| {
         c.accounts.push(ChartAccount {
-            code: "1160".to_string(),
+            code: "1199".to_string(),
             name: "Reinsurance recoverable".to_string(),
             class: AccountClass::Asset,
             control: true,

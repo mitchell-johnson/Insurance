@@ -179,7 +179,9 @@ test({ id: "E2E-024", area: A, persona: "ST4", story: "US-ST04-1", title: "On a 
 test({ id: "E2E-025", area: A, persona: "ST6", story: "US-ST06-1", title: "A keyboard user moves between a console's views with the arrow keys",
   purpose: "Focus the first tab of the staff console and move right and left with the arrow keys, checking the view on screen changes.",
   why: "Staff who cannot use a mouse must reach every view; the tabs are the only way between the parts of a console." }, async (t) => {
-  const s = await t.open("/staff", cast.st6);
+  // The next view along is the held balance workbench, which is not a hardship specialist's to read: the
+  // view opens and the system refuses its contents, which is right and is not what this test is about.
+  const s = await t.open("/staff", cast.st6, 403);
   await s.page.getByRole("tab", { name: "Policies", exact: true }).focus();
   await s.page.keyboard.press("ArrowRight");
   const selected = () => s.page.locator('[role="tab"][aria-selected="true"]').innerText();

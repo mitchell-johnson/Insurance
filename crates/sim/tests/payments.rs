@@ -568,3 +568,106 @@ fn a_payment_to_the_wrong_person_is_owed_again_and_owed_back() {
         .collect();
     assert_eq!(outstanding, vec![100_00, 40_00, 0]);
 }
+
+/// Purpose: tax withheld on a partition is discharged against the bank account when
+/// payments pays the revenue authority: the liability falls by the amount, the bank is
+/// credited, the event carries what is still held, a repeat changes nothing, and the same
+/// payment on other terms, more than the partition holds, a bad period or account and a
+/// return of an unknown payment are refused. When the bank sends the payment back, the
+/// liability is on again in full and a second return changes nothing.
+/// Why it matters: withheld tax is other people's money owed to Inland Revenue. If paying it
+/// did not clear the liability the books would show tax owed that was paid; if a partition
+/// could remit more than it withheld, its liability would go into debit and hide a shortfall
+/// elsewhere; and a returned payment not put back would leave tax unpaid and nobody chasing it.
+#[test]
+fn withheld_tax_paid_to_the_revenue_is_discharged_and_comes_back_if_the_bank_returns_it() {
+    use ic_core::counterparty::{CounterpartyAccount, CounterpartyLine, CounterpartyPosting, InternalLedger, PartyLedger};
+    use ic_core::remittance::Remittance;
+    let mut c = cluster(1);
+    // Commission earned with 20.00 of schedular tax kept back.
+    let earned = CounterpartyPosting {
+        reference: "stmt-1".into(),
+        kind: "commission_paid".into(),
+        currency: NZD,
+        value_date: None,
+        policy: None,
+        reverses: None,
+        lines: vec![
+            CounterpartyLine {
+                account: CounterpartyAccount::Party {
+                    party: ic_core::PartyId("adviser-1".into()),
+                    ledger: PartyLedger::CommissionPayable,
+                },
+                amount_minor: 20_00,
+            },
+            CounterpartyLine {
+                account: CounterpartyAccount::Internal(InternalLedger::WithholdingTax { kind: "schedular".into() }),
+                amount_minor: -20_00,
+            },
+        ],
+        detail: Default::default(),
+    };
+    c.submit(0, "distribution", Command::PostCounterparty(Box::new(earned))).unwrap();
+    let payable = accounts::withholding_tax_payable("schedular", NZD).id;
+    let bank = accounts::bank("main", NZD).id;
+    let held = |c: &Cluster| c.state(0).ledger.natural_balance(&payable);
+    assert_eq!(held(&c), 20_00);
+    let remit = |payment: &str, minor: i64, period: &str, account: &str| {
+        Command::RemitWithholding(Box::new(Remittance {
+            kind: "schedular".into(),
+            period: period.into(),
+            payment: payment.into(),
+            amount: Money::new(minor, NZD),
+            bank_account: account.into(),
+            statutory_fund: None,
+        }))
+    };
+    let send = |c: &mut Cluster, command: Command| c.submit(0, "payments", command);
+    let back = |payment: &str| Command::ReturnRemittance {
+        kind: "schedular".into(),
+        payment: payment.into(),
+    };
+
+    assert_eq!(code(send(&mut c, remit("ir-1", 20_01, "2027-11", "main"))), "over_remittance");
+    assert_eq!(code(send(&mut c, remit("ir-1", 0, "2027-11", "main"))), "invalid_remittance");
+    assert_eq!(code(send(&mut c, remit("ir-1", 15_00, "Nov 2027", "main"))), "invalid_remittance");
+    assert_eq!(code(send(&mut c, remit("ir 1", 15_00, "2027-11", "main"))), "invalid_remittance");
+    assert_eq!(code(send(&mut c, remit("ir-1", 15_00, "2027-11", "main account"))), "invalid_bank_account");
+    assert_eq!(code(send(&mut c, back("ir-1"))), "unknown_payment");
+    assert_eq!(held(&c), 20_00);
+
+    c.take_events();
+    send(&mut c, remit("ir-1", 15_00, "2027-11", "main")).unwrap();
+    send(&mut c, remit("ir-1", 15_00, "2027-11", "main")).unwrap();
+    assert_eq!(code(send(&mut c, remit("ir-1", 5_00, "2027-11", "main"))), "duplicate_payment");
+    assert_eq!((held(&c), c.state(0).ledger.natural_balance(&bank)), (5_00, -15_00));
+    let events = c.take_events();
+    let remitted: Vec<_> = events
+        .iter()
+        .filter_map(|e| match &e.event {
+            Event::WithholdingRemitted {
+                payment,
+                amount_minor,
+                outstanding_minor,
+                ..
+            } => Some((payment.as_str(), *amount_minor, *outstanding_minor)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(remitted, vec![("ir-1", 15_00, 5_00)]);
+    assert_eq!(code(send(&mut c, remit("ir-2", 5_01, "2027-11", "main"))), "over_remittance");
+
+    // The bank sends it back: owed again, once.
+    send(&mut c, back("ir-1")).unwrap();
+    send(&mut c, back("ir-1")).unwrap();
+    assert_eq!((held(&c), c.state(0).ledger.natural_balance(&bank)), (20_00, 0));
+    assert!(c
+        .take_events()
+        .iter()
+        .any(|e| matches!(&e.event, Event::WithholdingRemittanceReturned { payment, outstanding_minor: 20_00, .. } if payment == "ir-1")));
+    // A returned payment's ID is spent; the tax is paid again under a new one.
+    assert_eq!(code(send(&mut c, remit("ir-1", 15_00, "2027-11", "main"))), "duplicate_payment");
+    send(&mut c, remit("ir-3", 20_00, "2027-11", "main")).unwrap();
+    assert_eq!(held(&c), 0);
+    clean(&c);
+}

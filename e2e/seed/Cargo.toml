@@ -1,6 +1,7 @@
 # The end-to-end stack's configuration reader. It loads the configuration the
 # repository ships as Starlark (the finance chart and close configuration,
-# the underwriting libraries, the reinsurance treaties) with each module's
+# the underwriting libraries, the reinsurance treaties, a group scheme and
+# its file layout) with each module's
 # own loader and prints it as JSON, for `e2e/stack/seed.js` to activate on
 # the running system through each module's own commands.
 #
@@ -30,6 +31,8 @@ ic-finance = { path = "../../crates/finance" }
 ic-underwriting = { path = "../../crates/underwriting" }
 ic-reinsurance = { path = "../../crates/reinsurance" }
 ic-sim = { path = "../../crates/sim" }
+ic-core = { path = "../../crates/core" }
+ic-group = { path = "../../crates/group" }
 ic-product = { path = "../../crates/product" }
 ic-workflows = { path = "../../crates/workflows" }
 ic-raft = { path = "../../crates/raft" }

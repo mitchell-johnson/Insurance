@@ -50,6 +50,8 @@ ic-sim.workspace = true
 ic-channels = { path = "../channels" }
 # For the letters' contract test only: the driver sends that module JSON.
 ic-documents = { path = "../documents" }
+# For the commission advice's test on a real node only: the driver sends that module JSON.
+ic-distribution = { path = "../distribution" }
 # Tokens for the intake's HTTP tests.
 jsonwebtoken.workspace = true
 rsa = "0.9"

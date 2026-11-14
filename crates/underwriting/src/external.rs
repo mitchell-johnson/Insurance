@@ -190,6 +190,7 @@ pub(crate) fn policy_issued(p: &mut Proposal, cx: &mut Cx, layers: &[crate::comm
         });
     }
     record_replacements(p, cx);
+    crate::advice::advise(p, cx);
     flow::end_interim(p, cx);
     cx.effect(Effect::Notify {
         to: Recipient::Party { party: p.policyholder.clone() },
