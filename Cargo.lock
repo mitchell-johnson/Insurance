@@ -2055,6 +2055,7 @@ dependencies = [
  "ic-azure",
  "ic-cashmatch",
  "ic-core",
+ "ic-distribution",
  "ic-entra",
  "ic-finance",
  "ic-ledger",

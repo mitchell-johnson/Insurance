@@ -390,14 +390,15 @@ fn migrated(n: u64, owing: i64) -> serde_json::Value {
 /// the core refuses reports the refusal by reason and loads the rest, so a trial load counts
 /// every exception; that cohort does not reconcile, so sign-off sends nothing, and abandon takes
 /// the load out on every partition. A clean file loads, reconciles, signs off and releases, and
-/// running each step again changes nothing.
+/// running each step again changes nothing. Each policy's commission book then goes to the
+/// commission module, and what it refuses is reported.
 /// Why it matters: this is the tool the cutover runbook runs, against production, under a clock.
 /// Signing a cohort that did not reconcile would bring an unexplained difference onto the books
 /// for good, and a tool that stopped at the first bad policy would hide how many more there are.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_cohort_file_is_loaded_reconciled_signed_off_and_released() {
     use ic_api::migrate::{CohortFile, MigrateCommand};
-    let ledger = Ledger::start("migrate", 1, 2).await;
+    let ledger = Ledger::start_hosting("migrate", 1, 2, || vec![ic_distribution::host::module_spec().unwrap()]).await;
     let admin = admin(&ledger, Duration::from_secs(20));
     admin.run(AdminCommand::Open { date: d(2027, 11, 15) }).await.unwrap();
     admin.run(AdminCommand::ActivateShipped).await.unwrap();
@@ -447,6 +448,21 @@ async fn a_cohort_file_is_loaded_reconciled_signed_off_and_released() {
         let c = ledger.client.cohort(partition, "c2").await.unwrap().unwrap();
         assert_eq!((c.status, c.waiting.len()), (ic_core::migration::CohortStatus::Released, 0));
     }
+    // The commission books follow release; an agent code the module has not mapped is refused
+    // by it and reported, and nothing is sent for a cohort not yet released.
+    let mut booked: Vec<serde_json::Value> = policies.clone();
+    booked[0]["commission"] = json!({ "agent_code": "LEG-404", "option": "level", "premiums": { "life": 882_60 }, "last_paid": {} });
+    let report = admin
+        .migrate_commission(&CohortFile::parse(&file("c2", &booked, control(6, 180_00))).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(report["sent"], json!(0), "{report}");
+    assert_eq!(report["refused"].as_array().unwrap().len(), 1, "{report}");
+    let error = admin
+        .migrate_commission(&CohortFile::parse(&file("c1", &booked, control(6, 180_00))).unwrap())
+        .await
+        .unwrap_err();
+    assert!(error.contains("not released"), "{error}");
     assert!(MigrateCommand::parse(&["sign-off", "c2", "a"]).is_none());
     assert!(AdminCommand::parse(&args("migrate nothing")).is_err());
 }

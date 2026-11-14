@@ -18,6 +18,11 @@
 //!   [actuary]` signs every partition off, only if every one reconciles,
 //!   and then releases the policies.
 //! - `migrate abandon <cohort>` takes the load out again, before sign-off.
+//! - `migrate commission <cohort.json>`, once the cohort is released, sends
+//!   each policy's commission book (the policy's `commission` in the file:
+//!   agent code, option, annual premiums by cover and what the old system
+//!   last paid each payee) to the commission module as
+//!   `migrate_commission`, and reports what it refused.
 //!
 //! Every step is safe to repeat: commands carry keys made from the cohort
 //! and the policy.
@@ -55,6 +60,11 @@ pub struct CohortPolicy {
     pub issue: IssuePolicy,
     pub opening: Opening,
     pub legacy: LegacyFigures,
+    /// The commission module's `migrate_commission` for the policy, where
+    /// an adviser was paid on it: `agent_code`, `option`, `premiums` and
+    /// `last_paid`. The policy is filled in from `issue`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commission: Option<Value>,
 }
 
 impl CohortPolicy {
@@ -147,6 +157,7 @@ pub enum MigrateCommand {
     Status { cohort: String },
     SignOff { cohort: String, sign_off: SignOff },
     Abandon { cohort: String },
+    Commission { file: std::path::PathBuf },
 }
 
 impl MigrateCommand {
@@ -156,6 +167,7 @@ impl MigrateCommand {
             ["load", file] => Some(Self::Load { file: file.into() }),
             ["status", cohort] => Some(Self::Status { cohort: cohort.to_string() }),
             ["abandon", cohort] => Some(Self::Abandon { cohort: cohort.to_string() }),
+            ["commission", file] => Some(Self::Commission { file: file.into() }),
             ["sign-off", cohort, finance, owner, evidence, rest @ ..] if rest.len() <= 1 => Some(Self::SignOff {
                 cohort: cohort.to_string(),
                 sign_off: SignOff {
@@ -309,6 +321,42 @@ impl Admin {
         Ok(json!({ "cohort": cohort, "signed_off": partitions, "released": released }))
     }
 
+    /// Send each released policy's commission book to the commission
+    /// module. Nothing is sent until the cohort is released everywhere, so
+    /// the module already knows each policy as migrated. The module's key
+    /// makes a repeat safe, and it skips layers it has already written.
+    pub async fn migrate_commission(&self, file: &CohortFile) -> Result<Value, String> {
+        let name = &file.cohort;
+        let found = self.cohorts(name).await?;
+        if found.is_empty() || found.values().any(|c| c.status != CohortStatus::Released) {
+            return Err(format!("cohort {name} is not released on every partition; no commission was sent"));
+        }
+        let (mut sent, mut refused) = (0u64, Vec::new());
+        for p in file.policies.iter() {
+            let Some(body) = &p.commission else { continue };
+            let mut body = body.clone();
+            let Some(fields) = body.as_object_mut() else {
+                return Err(format!("policy {}: its commission is not an object", p.issue.policy));
+            };
+            fields.insert("policy".to_string(), json!(p.issue.policy));
+            let envelope = json!({
+                "key": format!("migration:{name}:commission:{}", p.issue.policy),
+                "caller": "migration",
+                "command": { "migrate_commission": body },
+            });
+            let reply = self
+                .client
+                .propose_module_until("distribution", &envelope, self.patience)
+                .await
+                .map_err(|e| format!("policy {}: distribution: {e}", p.issue.policy))?;
+            match crate::admin::module_refusal(&reply.result) {
+                None => sent += 1,
+                Some(why) => refused.push(json!({ "policy": p.issue.policy, "refusal": why })),
+            }
+        }
+        Ok(json!({ "cohort": name, "sent": sent, "refused": refused }))
+    }
+
     /// Take a cohort's load out again on every partition.
     pub async fn migrate_abandon(&self, cohort: &str) -> Result<Value, String> {
         let found = self.cohorts(cohort).await?;
@@ -346,6 +394,10 @@ impl Admin {
             MigrateCommand::Status { cohort } => self.migrate_status(&cohort).await,
             MigrateCommand::SignOff { cohort, sign_off } => self.migrate_sign_off(&cohort, &sign_off).await,
             MigrateCommand::Abandon { cohort } => self.migrate_abandon(&cohort).await,
+            MigrateCommand::Commission { file } => {
+                let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+                self.migrate_commission(&CohortFile::parse(&text)?).await
+            }
         }
     }
 }

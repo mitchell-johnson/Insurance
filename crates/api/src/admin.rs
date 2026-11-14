@@ -95,7 +95,8 @@ pub const USAGE: &str = "usage: ic-admin init
        ic-admin migrate load <cohort.json>
        ic-admin migrate status <cohort>
        ic-admin migrate sign-off <cohort> <finance> <business-owner> <evidence> [actuary]
-       ic-admin migrate abandon <cohort>";
+       ic-admin migrate abandon <cohort>
+       ic-admin migrate commission <cohort.json>";
 
 impl AdminCommand {
     /// Read a command line, without the program name.
@@ -191,7 +192,7 @@ impl SetupFile {
 
 /// Why a module did not take an envelope, if it did not: the host's own
 /// refusal, or the module's answer saying so.
-fn module_refusal(result: &Result<Value, String>) -> Option<String> {
+pub(crate) fn module_refusal(result: &Result<Value, String>) -> Option<String> {
     match result {
         Err(e) => Some(e.clone()),
         Ok(answer) => [&answer["refused"], &answer["result"]["Err"], &answer["Err"]]
@@ -235,8 +236,8 @@ impl AdminSettings {
 }
 
 pub struct Admin {
-    client: ClusterClient,
-    patience: Duration,
+    pub(crate) client: ClusterClient,
+    pub(crate) patience: Duration,
 }
 
 impl Admin {

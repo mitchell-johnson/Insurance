@@ -42,6 +42,7 @@ name = "ic-admin"
 path = "src/bin/ic-admin.rs"
 
 [dev-dependencies]
+ic-distribution = { path = "../distribution" }
 ic-azure = { workspace = true, features = ["testing"] }
 rsa = "0.9"
 rand.workspace = true
