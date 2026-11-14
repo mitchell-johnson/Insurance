@@ -40,6 +40,8 @@ CLOSE = close_config(
         aged("held_balance", "Held balances aged by party", "counterparty_finance", 2, by = "commission", max_age_days = 90, max_amount_minor = 10000000),
     ],
     migration_control = ["1420", "1430"],
+    # A cohort's load passes through clearing and leaves it at sign-off.
+    migration_clearing = ["1445"],
     # Portfolios of contracts with similar risks managed together, and the
     # profitability band of each product's new business. Best estimate until
     # the appointed actuary sets them: one portfolio per line of business

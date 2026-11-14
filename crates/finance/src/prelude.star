@@ -54,5 +54,5 @@ def accounting_group(product, portfolio, profitability = "other"):
     "onerous", "no_significant_risk" or "other"."""
     return {"product": product, "portfolio": portfolio, "profitability": profitability}
 
-def close_config(version, checks, aged = [], holidays = [], migration_control = [], tax = [], grouping = []):
-    return {"version": version, "checks": checks, "aged": aged, "holidays": holidays, "migration_control": migration_control, "tax": tax, "grouping": grouping}
+def close_config(version, checks, aged = [], holidays = [], migration_control = [], migration_clearing = [], tax = [], grouping = []):
+    return {"version": version, "checks": checks, "aged": aged, "holidays": holidays, "migration_control": migration_control, "migration_clearing": migration_clearing, "tax": tax, "grouping": grouping}

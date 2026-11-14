@@ -1754,6 +1754,20 @@ impl DocumentsState {
                 // Old events are history being replayed, not news.
                 continue;
             }
+            // A policy loaded from another system is issued and marked
+            // migrated in one command. Its customers were told before their
+            // cohort moved, so the issue's schedule is not sent.
+            if let ic_core::Event::PolicyMigrated { policy, .. } = &r.event {
+                let schedule = format!(
+                    "{}:{:?}",
+                    crate::triggers::schedule_event(policy, r.business_date),
+                    DocumentKind::PolicySchedule
+                );
+                if self.triggers.remove(&schedule).is_some() {
+                    ctx.events.push(Event::TriggerDismissed { trigger: schedule });
+                }
+                continue;
+            }
             for mut trigger in crate::triggers::triggers(&r) {
                 if trigger.kind == DocumentKind::PolicySchedule {
                     // One schedule a policy a day: the day's later changes
