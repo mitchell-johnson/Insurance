@@ -68,9 +68,11 @@ def trauma_built_ins():
 
 # The special events that allow more cover without evidence of health, and the
 # limits AIA Living sets on each increase: half the original cover or $250,000,
-# whichever is less, within 12 months of the event, up to age 55. The wording
-# also caps all increases at the original cover or $750,000; two uses at the
-# per-event limit stay inside that cap.
+# whichever is less, within 12 months of the event, up to age 55. All increases
+# together are at most the original cover or $750,000, whichever is less, and
+# only one increase without evidence (this or Life Future Insurability) is made
+# in any 12 months. The wording sets no count of uses: the money and the 12
+# months bound them.
 SPECIAL_EVENTS = ["marriage", "birth_or_adoption", "separation", "death_of_partner", "child_secondary_school",
                   "child_tertiary", "mortgage", "salary_increase"]
 
@@ -79,9 +81,12 @@ def special_events():
         events = SPECIAL_EVENTS,
         max_percent_of_original = "50",
         max_increase = dollars(250000),
-        max_uses = 2,
+        max_uses = 99,
         within_days = 365,
         to_age = 55,
+        max_total_percent_of_original = "100",
+        max_total_increase = dollars(750000),
+        once_in_days = 365,
     )
 
 # ---- Lump sum benefits ---------------------------------------------------------

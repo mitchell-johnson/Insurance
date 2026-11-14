@@ -223,6 +223,10 @@ pub struct CoverDefinition {
     /// event in the life's own life. Absent: the cover has no such option.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub insurability_option: Option<InsurabilityOption>,
+    /// The right to more of this cover without evidence of health at set
+    /// anniversaries. Absent: the cover has no such option.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anniversary_option: Option<AnniversaryOption>,
     /// The right to stop paying a limited-pay premium early and keep a
     /// reduced sum insured for life. Absent: the cover has no such option.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -348,6 +352,52 @@ pub struct InsurabilityOption {
     pub within_days: u32,
     /// The life must be younger than this when it is used.
     pub to_age: u32,
+    /// The most all uses add together, as a share of the cover the life had
+    /// at the start, in percent. Absent: only `max_uses` bounds the total.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_total_percent_of_original: Option<DecStr>,
+    /// And in money. Where both are set the lower applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_total_increase_minor: Option<i64>,
+    /// No use within this many days of an earlier increase of the cover for
+    /// the life without evidence, under this option or the anniversary one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub once_in_days: Option<u32>,
+}
+
+/// The event an anniversary option is used under, in place of one of the
+/// insurability option's events: the date is the anniversary itself.
+pub const ANNIVERSARY_EVENT: &str = "anniversary";
+
+/// A future insurability option at set anniversaries: every `every_years`
+/// years from the day the life's cover started, the life may add cover on
+/// the terms it already has, without underwriting, inside these limits. A
+/// right not used in the window after its anniversary lapses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnniversaryOption {
+    pub every_years: u32,
+    /// The most one use adds, as a share of the cover the life had at the
+    /// start, in percent ...
+    pub max_percent_of_original: DecStr,
+    /// ... or this much, whichever is the greater.
+    pub at_least_minor: i64,
+    /// The most all uses add together: the lower of this share of the
+    /// original cover and `max_total_increase_minor`.
+    pub max_total_percent_of_original: DecStr,
+    pub max_total_increase_minor: i64,
+    /// Days after the anniversary within which it must be used.
+    pub within_days: u32,
+    /// The life must be younger than this when it is used.
+    pub to_age: u32,
+    /// The option feature the life's original cover must have chosen.
+    /// Absent: every life on the cover has the option.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires_feature: Option<String>,
+    /// No use within this many days of an earlier increase of the cover for
+    /// the life without evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub once_in_days: Option<u32>,
 }
 
 /// One excess level on a cover's menu.
