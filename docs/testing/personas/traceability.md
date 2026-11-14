@@ -470,7 +470,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | VUL-015 | full | `customers/tests/api.rs::a_death_prompts_a_person_to_consider_the_bereaved` |
 | VUL-017 | part | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due` |
 | VUL-018 | part | `customers/tests/api.rs::a_capacity_question_pauses_representatives` |
-| VUL-016 | part | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not` |
+| VUL-016 | full | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not`<br>`underwriting/tests/more_time.rs::a_customer_who_needs_more_time_gets_longer_to_answer_an_offer` |
 | VUL-019 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_post_only_customer_and_their_representative_both_get_the_notice`<br>`documents/tests/requested_letters.rs::a_representative_sees_ordinary_letters_and_never_clinical_ones` |
 | VUL-020 | full | `payments/tests/aml.rs::repeated_refunds_raise_a_restricted_case` |
 | VUL-021 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_representative_gets_the_notice_in_their_own_language` |

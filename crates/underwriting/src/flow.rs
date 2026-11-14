@@ -89,7 +89,8 @@ pub(crate) fn request_evidence(cfg: &Config, p: &mut Proposal, life: &LifeId, ki
             0 => format!("{proposal}/{life}/{}", kind.key()),
             n => format!("{proposal}/{life}/{}/{}", kind.key(), n + 1),
         };
-        let deadline = cx.at + chrono::Duration::days(cfg.settings.evidence_days);
+        let extra = if f.more_time { cfg.settings.more_time_days } else { 0 };
+        let deadline = cx.at + chrono::Duration::days(cfg.settings.evidence_days + extra);
         f.evidence.push(EvidenceRequest {
             id: id.clone(),
             kind: *kind,
@@ -456,7 +457,7 @@ fn offer(p: &mut Proposal, life: &LifeId, cfg: &Config, cx: &mut Cx) -> Result<(
         decision: d.reference.clone(),
         status: OfferStatus::Open,
         made_at: cx.at,
-        expires_on: (cx.today + chrono::Duration::days(cfg.settings.offer_days)).min(expires),
+        expires_on: (cx.today + chrono::Duration::days(cfg.settings.offer_days + if f.more_time { cfg.settings.more_time_days } else { 0 })).min(expires),
         responded_at: None,
     };
     cx.event(Event::OfferMade {

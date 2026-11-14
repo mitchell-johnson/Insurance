@@ -485,6 +485,33 @@ pub enum Event {
         life: LifeId,
         amount_minor: i64,
     },
+    /// A settled payment went to the wrong person. The payable it paid is
+    /// owed again and the holder owes the amount back.
+    PayeeDebtRaised {
+        policy: PolicyId,
+        debt: String,
+        payment: String,
+        payable: crate::payments::PayableKind,
+        /// The refund owed again, for a refund payment.
+        refund: Option<String>,
+        party: Option<PartyId>,
+        amount_minor: i64,
+        outstanding_minor: i64,
+    },
+    PayeeDebtRecovered {
+        policy: PolicyId,
+        debt: String,
+        receipt: String,
+        amount_minor: i64,
+        outstanding_minor: i64,
+    },
+    PayeeDebtWrittenOff {
+        policy: PolicyId,
+        debt: String,
+        amount_minor: i64,
+        outstanding_minor: i64,
+        reason: String,
+    },
     /// Cover on a policy takes the place of cover on another policy for the
     /// same person. Reinsurance carries the old cession on for the replaced
     /// amount; the old policy's own ending is announced as it always is.

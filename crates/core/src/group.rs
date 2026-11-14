@@ -1131,6 +1131,7 @@ pub(crate) fn split(
                 loan: None,
                 option_uses: Default::default(),
                 replaces: Vec::new(),
+                payee_debts: Default::default(),
                 member_accounts: Default::default(),
                 member_standing: Default::default(),
                 interests: Default::default(),

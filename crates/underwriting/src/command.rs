@@ -404,6 +404,15 @@ pub enum Command {
         #[serde(default)]
         note: String,
     },
+    /// The life is marked as needing more time, or no longer. Marked, the
+    /// proposal, an open offer and outstanding evidence on the life each
+    /// run the further days the settings give; cleared, nothing is
+    /// shortened.
+    SetMoreTime {
+        proposal: ProposalId,
+        life: LifeId,
+        more_time: bool,
+    },
     ProposeDecision {
         case: String,
         underwriter: String,
@@ -592,6 +601,7 @@ impl Command {
             // above the automatic acceptance limit, and may withdraw it.
             OpenProposal(_) => &["new-business", "migration", "group-admin", "collections"],
             SubmitDisclosure(_) => &["new-business", "migration"],
+            SetMoreTime { .. } => &["new-business", "underwriting-console"],
             Withdraw { .. } => &["new-business", "group-admin"],
             // The life gives or withdraws its own consents in the app; the
             // portal checks the signed-in person is the life, and a consent
@@ -1013,6 +1023,11 @@ pub enum Event {
     },
     ProposalWithdrawn {
         proposal: ProposalId,
+    },
+    MoreTimeSet {
+        proposal: ProposalId,
+        life: LifeId,
+        more_time: bool,
     },
     /// A person checked the proof of the life event for an insurability option.
     OptionEvidenceChecked {
