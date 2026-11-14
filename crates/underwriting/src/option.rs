@@ -58,8 +58,8 @@ pub(crate) fn start(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
         Queue::Financial,
         [reason::INSURABILITY_OPTION.to_string()].into(),
         cx,
-    )?;
-    Ok(())
+    )
+    .map(|_| ())
 }
 
 /// The person holding the case accepts the proof of the event, or does not.

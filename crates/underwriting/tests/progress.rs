@@ -108,3 +108,28 @@ fn progress_is_marked_by_version_and_a_decline_is_shown_only_to_the_life() {
         "an ended proposal is not remembered"
     );
 }
+
+/// Purpose: once a proposal's rows are published, a later command that leaves them saying the
+/// same (a chaser on the case) marks nothing for publishing again.
+/// Why it matters: every mark is a write to the portal's store for every proposal touched; a
+/// chaser or note that re-sent unchanged rows would multiply that traffic for nothing and move
+/// the version the portal compares against.
+#[test]
+fn rows_that_say_what_was_published_are_not_marked_again() {
+    let mut w = World::new();
+    w.open("P1", 500_000_00);
+    w.disclose("P1", "L1", &yes("heart_condition"));
+    w.take("P1", "L1", "amy");
+    let version = pending(&w)[0].version;
+    published(&mut w, version);
+    assert!(pending(&w).is_empty());
+    w.ok(
+        "new-business",
+        Command::Chaser {
+            proposal: "P1".into(),
+            life: "L1".into(),
+            from: ic_underwriting::case::ChaserFrom::Customer,
+        },
+    );
+    assert!(pending(&w).is_empty(), "nothing the rows say has changed");
+}

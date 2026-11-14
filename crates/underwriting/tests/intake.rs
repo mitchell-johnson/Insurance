@@ -155,6 +155,49 @@ async fn signed_answers_are_sealed_and_submitted_once() {
     assert!(matches!(intake.submit(&late).await, Err(IntakeError::Refused(_))));
 }
 
+/// A module that cannot be reached.
+#[derive(Clone)]
+struct Down;
+
+impl Underwriting for Down {
+    async fn propose(&self, _envelope: Envelope) -> Result<Result<Applied, Reject>, DriverError> {
+        Err(DriverError::Unavailable("no leader".into()))
+    }
+    async fn ask(&self, _query: Query) -> Result<Value, DriverError> {
+        Err(DriverError::Unavailable("no leader".into()))
+    }
+}
+
+/// Purpose: answers for a life with no date of birth are refused before anything is signed,
+/// because the rules cannot run without the life's age; and an intake that cannot reach the
+/// module says it is unavailable rather than treat the answers as unknown or wrong.
+/// Why it matters: a disclosure signed and sealed that the rules can never run on strands the
+/// applicant with no decision; and a client told its proposal does not exist when the module
+/// was only briefly unreachable would give up instead of trying again.
+#[tokio::test]
+async fn answers_need_a_date_of_birth_and_a_module_that_answers() {
+    let (intake, module, records) = intake();
+    {
+        let mut w = module.0.lock().unwrap();
+        let mut open = w.open_command("P2", &["L1"], &[("L1", "life", "life", 100_000_00)], false);
+        open.lives[0].factors.date_of_birth = None;
+        w.ok("new-business", Command::OpenProposal(Box::new(open)));
+    }
+    let mut a = answers("L1");
+    a.proposal = "P2".into();
+    assert_eq!(intake.to_sign(&a).await, Err(IntakeError::NoDateOfBirth));
+    let unreachable = Intake {
+        module: Down,
+        store: ClinicalStore {
+            wrapper: DevWrapper,
+            records: records.clone(),
+        },
+        clock,
+    };
+    assert!(matches!(unreachable.to_sign(&answers("L1")).await, Err(IntakeError::Unavailable(_))));
+    assert!(records.names().is_empty());
+}
+
 // --- over HTTP ---
 
 const TENANT: &str = "tenant-1";

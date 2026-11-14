@@ -1060,3 +1060,71 @@ fn nothing_is_offered_above_the_treaty_limit_until_the_reinsurer_has_answered() 
     assert_eq!(command.covers.iter().map(|c| c.code.as_str()).collect::<Vec<_>>(), vec!["life"]);
     let _ = Answer::YesNo(true);
 }
+
+/// Purpose: only the person holding a case acts on it. Someone else asking for evidence,
+/// recording an interview, countersigning or releasing documents to a reinsurer on it is
+/// refused `not_owner` and nothing changes; and interim cover reported issued on a proposal
+/// that never asked for any is refused.
+/// Why it matters: a case is one person's work with one audit trail. A second person acting on
+/// it unseen would order evidence or send medical documents outside the insurer without the
+/// owner knowing, and a stray interim report would mark cover in force that does not exist.
+#[test]
+fn nobody_but_the_holder_acts_on_a_case() {
+    let mut w = World::new();
+    w.open("P1", 100_000_00);
+    w.disclose("P1", "L1", &yes("heart_condition"));
+    let case = w.take("P1", "L1", "amy");
+    let refused = |w: &mut World, c: Command| w.err("underwriting-console", c);
+    assert_eq!(
+        refused(
+            &mut w,
+            Command::RequestEvidence {
+                case: case.clone(),
+                underwriter: "sue".into(),
+                kinds: BTreeSet::from([ic_underwriting::evidence::EvidenceKind::GpReport]),
+            }
+        ),
+        "not_owner"
+    );
+    assert_eq!(
+        refused(
+            &mut w,
+            Command::RecordInterview {
+                case: case.clone(),
+                underwriter: "sue".into(),
+                notes_ref: "vault://n".into(),
+                notes_hash: "h".into(),
+                recording_ref: None,
+                present: vec![],
+                adviser_present: false,
+            }
+        ),
+        "not_owner"
+    );
+    assert_eq!(
+        refused(
+            &mut w,
+            Command::Countersign {
+                case: case.clone(),
+                underwriter: "sue".into(),
+                agree: true,
+                reasons: BTreeSet::new(),
+                withheld_reasons: BTreeSet::new(),
+            }
+        ),
+        "not_owner"
+    );
+    assert_eq!(
+        refused(
+            &mut w,
+            Command::ReleaseToReinsurer {
+                case,
+                underwriter: "sue".into(),
+                treaty: "T1".into(),
+                documents: vec![],
+            }
+        ),
+        "not_owner"
+    );
+    assert_eq!(w.err("issuer", Command::InterimIssued { proposal: "P1".into() }), "no_interim");
+}
