@@ -127,6 +127,7 @@ impl Forward for NothingConnected {
             match effect {
                 Effect::RequestEvidence { .. } | Effect::ChaseEvidence { .. } | Effect::CancelEvidence { .. } => "no evidence provider is connected",
                 Effect::RequestDelegateFile { .. } | Effect::RequestDelegatedDecision { .. } => "no delegate is connected",
+                Effect::AdviseNewBusiness { .. } => "commission is not connected to underwriting",
                 _ => "correspondence is not connected to underwriting",
             }
             .to_string(),

@@ -125,6 +125,17 @@ pub fn documents_envelope(key: &str, at: DateTime<Utc>, command: Value) -> Value
     })
 }
 
+/// A command to the commission module, as it reads one: sent as the new
+/// business module. The commission module keys on `key` alone, so a
+/// resend is one attribution.
+pub fn distribution_envelope(key: &str, command: Value) -> Value {
+    serde_json::json!({
+        "key": key,
+        "actor": {"module": "new-business"},
+        "command": command,
+    })
+}
+
 impl Cluster {
     /// `patience` is how long one command keeps looking for a leader.
     pub fn new(client: ClusterClient, partitions: PartitionId, patience: Duration) -> Self {
@@ -252,6 +263,11 @@ impl Letters for Cluster {
     async fn request(&self, key: &str, at: DateTime<Utc>, command: Value) -> Result<Result<(), Refusal>, DriverError> {
         let answered: Answered<Reject> = self.to_module("documents", &documents_envelope(key, at, command)).await?;
         Ok(answered.result.map_err(|r| Refusal::new(&r.code, r.message)))
+    }
+
+    async fn advise(&self, key: &str, _at: DateTime<Utc>, command: Value) -> Result<Result<(), Refusal>, DriverError> {
+        let answered: AnsweredWith<Reject> = self.to_module("distribution", &distribution_envelope(key, command)).await?;
+        Ok(answered.result.map(|_| ()).map_err(|r| Refusal::new(&r.code, r.message)))
     }
 }
 

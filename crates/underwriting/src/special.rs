@@ -468,6 +468,7 @@ impl UnderwritingState {
             reoffers: vec![],
             replacement: false,
             replaces: vec![],
+            commission_option: None,
             delegated_to: None,
         };
         for l in open.lives {
