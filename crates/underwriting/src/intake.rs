@@ -70,6 +70,7 @@ impl UnderwritingState {
             return reject("replacement", "a replacement is advised more cover on a policy in force");
         }
         crate::option::door(&open, cx)?;
+        crate::eligibility::check(&self.config.settings.eligibility, &open, cx.today)?;
         let continued = crate::continuation::earlier_terms(self, &open)?;
         if let crate::model::Entry::GroupExcess {
             delegated_authority: Some(authority),

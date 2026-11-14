@@ -150,6 +150,10 @@ pub struct ProposedCover {
     pub cover_type: String,
     pub life: LifeId,
     pub sum_insured_minor: i64,
+    /// The choices on the cover's option menu, as the core codes them
+    /// (`axis=choice,...` in axis order), where the cover has a menu.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

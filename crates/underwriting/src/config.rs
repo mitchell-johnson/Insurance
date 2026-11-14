@@ -61,6 +61,14 @@ pub struct Settings {
     /// And so does a loading above this.
     pub countersign_loading_above_percent: u32,
     pub interim: Option<InterimSettings>,
+    /// Interim cover for a product's proposals in place of `interim`, by
+    /// product code, where the product brings its own.
+    #[serde(default)]
+    pub interim_by_product: BTreeMap<String, InterimSettings>,
+    /// What an application must be for each product before it is taken:
+    /// occupation tests, minimum terms and limits by age.
+    #[serde(default)]
+    pub eligibility: Vec<crate::eligibility::Eligibility>,
     pub sample: SampleRates,
     /// Contracts from this date fall under the duty of reasonable care.
     pub reasonable_care_from: NaiveDate,
@@ -82,6 +90,8 @@ impl Default for Settings {
             countersign_above_minor: 2_000_000_00,
             countersign_loading_above_percent: 100,
             interim: None,
+            interim_by_product: crate::eligibility::shipped_interim(),
+            eligibility: crate::eligibility::shipped(),
             sample: SampleRates {
                 standard_per_mille: 20,
                 non_standard_per_mille: 100,
