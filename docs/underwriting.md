@@ -66,7 +66,7 @@ A receiver's refusal that means "already done" or "no longer wanted" is counted 
 
 Once a day the driver sends `Sweep` as caller `timer`, a page at a time, under keys of the day and the page start. After the sweep it asks the collections module for `reinstatements_for_underwriting` (the lapsed policies whose reinstatement the core refused with `underwriting_required`), reads each policy from the core (on the partition collections names, or by asking each partition), and opens `reinstatement_proposal` for it as caller `collections` under key `collections:{proposal}`. A policy already opened is not opened again; one no longer lapsed is reported in the sweep's result and skipped; and when collections cannot be asked, the sweep still stands and the next day's tries again.
 
-Settings: `IC_NODES` and `IC_EVENT_HUBS_ENDPOINT` (required), the cluster token as for every worker, the workers' Azure identity, `IC_UNDERWRITING_EVENT_HUB` (`underwriting-notices`), `IC_UNDERWRITING_CYCLE_MS` (2000), `IC_UNDERWRITING_PATIENCE_MS` (10000), `IC_UNDERWRITING_BATCH` (100), `IC_UNDERWRITING_SWEEP_PAGE` (200).
+Settings: `IC_NODES` and `IC_EVENT_HUBS_ENDPOINT` (required), its own cluster token (`cluster-token-ic-underwriting`, held to the `ic-underwriting` grant in `deploy/cluster-access/grants.json`), its own Azure identity (`infra/underwriting.bicep`),  `IC_UNDERWRITING_EVENT_HUB` (`underwriting-notices`), `IC_UNDERWRITING_CYCLE_MS` (2000), `IC_UNDERWRITING_PATIENCE_MS` (10000), `IC_UNDERWRITING_BATCH` (100), `IC_UNDERWRITING_SWEEP_PAGE` (200).
 
 ## Takeover terms and reinsurance's reference on a scheme member's excess
 

@@ -32,18 +32,7 @@
       "callers": [
         "end-of-day",
         "leader",
-        "collections",
-        "cash-matching",
-        "underwriting",
-        "new-business",
-        "unit-pricing",
         "unit-orders"
-      ],
-      "write_modules": [
-        "underwriting",
-        "collections",
-        "finance",
-        "unit-pricing"
       ]
     },
     "ic-portal": {
@@ -148,6 +137,24 @@
       "write_modules": [
         "reinsurance",
         "documents"
+      ]
+    },
+    "ic-underwriting": {
+      "read_partitions": true,
+      "callers": [
+        "new-business",
+        "underwriting"
+      ],
+      "write_modules": [
+        "underwriting",
+        "reinsurance",
+        "group",
+        "documents",
+        "distribution",
+        "channels"
+      ],
+      "read_modules": [
+        "collections"
       ]
     },
     "ic-underwriting-intake": {

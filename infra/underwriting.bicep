@@ -13,9 +13,9 @@
 //
 // The clinical identity is for the disclosure intake, the process that takes
 // disclosures and seals them (deploy/k8s/underwriting-intake.yaml). The underwriting driver
-// (deploy/k8s/underwriting.yaml) uses none of it: it talks to the ledger
-// nodes and publishes staff notices to the `underwriting-notices` hub below,
-// under the workers' identity from main.bicep, which may only send to it.
+// (deploy/k8s/underwriting.yaml) uses none of it: it has an identity of its
+// own, which may read its own cluster token and send to the hubs below, and
+// nothing else.
 //
 // Deployed on its own into the same resource group as main.bicep:
 //   az deployment group create -g <rg> -f infra/underwriting.bicep \
@@ -48,6 +48,9 @@ param eventHubsNamespaceName string
 @description('The Kubernetes service account of the process that reads and writes the clinical store.')
 param serviceAccount string = 'ic-underwriting-clinical'
 
+@description('The Kubernetes service account of the underwriting driver.')
+param driverServiceAccount string = 'ic-underwriting'
+
 var tags = {
   system: 'insurance-core'
   environment: environment
@@ -75,6 +78,23 @@ resource federation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedI
   properties: {
     issuer: aksOidcIssuer
     subject: 'system:serviceaccount:${workloadNamespace}:${serviceAccount}'
+    audiences: ['api://AzureADTokenExchange']
+  }
+}
+
+// The driver's own identity: its cluster token and the hubs it sends to.
+resource driverIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${name}-underwriting-driver'
+  location: location
+  tags: tags
+}
+
+resource driverFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: driverIdentity
+  name: 'aks'
+  properties: {
+    issuer: aksOidcIssuer
+    subject: 'system:serviceaccount:${workloadNamespace}:${driverServiceAccount}'
     audiences: ['api://AzureADTokenExchange']
   }
 }
@@ -175,6 +195,23 @@ resource readClusterToken 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   }
 }
 
+// The driver reads its own token, cluster-token-ic-underwriting, which
+// deploy/cluster-access/issue.sh makes before this is deployed.
+resource driverTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
+  parent: vault
+  name: 'cluster-token-ic-underwriting'
+}
+
+resource driverReadsToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: driverTokenSecret
+  name: guid(driverTokenSecret.id, driverIdentity.id, roles.keyVaultSecretsUser)
+  properties: {
+    principalId: driverIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsUser)
+  }
+}
+
 // --- notices for staff --------------------------------------------------------
 
 resource eventHubs 'Microsoft.EventHub/namespaces@2024-01-01' existing = {
@@ -195,16 +232,11 @@ resource notices 'Microsoft.EventHub/namespaces/eventhubs@2024-01-01' = {
   }
 }
 
-// The driver runs as ic-worker (deploy/k8s/underwriting.yaml).
-resource workerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
-  name: '${name}-worker'
-}
-
 resource driverSends 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: notices
-  name: guid(notices.id, workerIdentity.id, roles.eventHubsDataSender)
+  name: guid(notices.id, driverIdentity.id, roles.eventHubsDataSender)
   properties: {
-    principalId: workerIdentity.properties.principalId
+    principalId: driverIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.eventHubsDataSender)
   }
@@ -227,15 +259,16 @@ resource orderHubs 'Microsoft.EventHub/namespaces/eventhubs@2024-01-01' = [for h
 
 resource driverSendsOrders 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for (hub, i) in ['underwriting-evidence', 'underwriting-delegates']: {
   scope: orderHubs[i]
-  name: guid(orderHubs[i].id, workerIdentity.id, roles.eventHubsDataSender)
+  name: guid(orderHubs[i].id, driverIdentity.id, roles.eventHubsDataSender)
   properties: {
-    principalId: workerIdentity.properties.principalId
+    principalId: driverIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.eventHubsDataSender)
   }
 }]
 
 output noticesHub string = notices.name
+output underwritingDriverIdentityClientId string = driverIdentity.properties.clientId
 output clinicalIdentityClientId string = identity.properties.clientId
 output clinicalBlobEndpoint string = clinical.properties.primaryEndpoints.blob
 output clinicalContainer string = records.name

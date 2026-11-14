@@ -356,3 +356,64 @@ fn the_shipped_grants_make_a_map_the_nodes_accept() {
         assert!(access.decide(&Who::Workload(name.clone()), &Ask::Raft, None).is_err(), "{name} may reach Raft");
     }
 }
+
+/// Purpose: every cluster token in `deploy/k8s` belongs to a workload with a grant in
+/// `grants.json`, every grant has its token there, and a token is mounted only by the
+/// workload it is named for, apart from the pods listed here that are the same workload by
+/// design (the worker's scheduled runs; the payments pump and its drill; the admin pod and bootstrap job, which administer the
+/// cluster with the nodes' token).
+/// Why it matters: a process that borrows another's token is held to the other's grant and
+/// logged under its name, so its calls cannot be told apart or limited. The underwriting
+/// driver once ran on the worker's token that way; this stops the next one.
+#[test]
+fn every_process_calling_the_nodes_has_its_own_token_and_grant() {
+    const SAME_WORKLOAD: [(&str, &str); 5] = [
+        ("ic-close", "ic-worker"),
+        ("ic-payments-pump", "ic-payments"),
+        ("ic-unit-orders", "ic-worker"),
+        ("ic-payments-drill", "ic-payments"),
+        ("ic-bootstrap", "ic-node"),
+    ];
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../deploy");
+    let grants: Value = serde_json::from_str(&std::fs::read_to_string(format!("{root}/cluster-access/grants.json")).unwrap()).unwrap();
+    let granted: Vec<String> = grants["workloads"].as_object().unwrap().keys().cloned().collect();
+    let value = |line: &str, key: &str| line.trim().strip_prefix(key).map(|v| v.trim().to_string());
+
+    // Each SecretProviderClass and the cluster token it carries; then each pod's app and the classes it mounts.
+    let mut token_of: BTreeMap<String, String> = BTreeMap::new();
+    let mut pods: Vec<(String, Vec<String>)> = Vec::new();
+    let mut files: Vec<_> = std::fs::read_dir(format!("{root}/k8s")).unwrap().map(|e| e.unwrap().path()).collect();
+    files.sort();
+    for file in files.iter().filter(|p| p.extension().is_some_and(|e| e == "yaml")) {
+        for doc in std::fs::read_to_string(file).unwrap().split("\n---") {
+            let lines: Vec<&str> = doc.lines().collect();
+            let kind = lines.iter().find_map(|l| l.strip_prefix("kind: ")).unwrap_or_default();
+            if kind == "SecretProviderClass" {
+                let name = lines.iter().find_map(|l| value(l, "name:")).unwrap();
+                if let Some(token) = lines.iter().find_map(|l| value(l, "objectName: cluster-token-")) {
+                    assert!(token_of.insert(name.clone(), token).is_none(), "{name} is defined twice");
+                }
+            } else if ["Deployment", "StatefulSet", "CronJob", "Job"].contains(&kind) {
+                let app = lines.iter().find_map(|l| value(l, "app:")).unwrap();
+                let mounts = lines.iter().filter_map(|l| value(l, "secretProviderClass:")).collect();
+                pods.push((app, mounts));
+            }
+        }
+    }
+
+    let mut tokens: Vec<&String> = token_of.values().collect();
+    tokens.sort();
+    let mut expected: Vec<&String> = granted.iter().collect();
+    expected.sort();
+    assert_eq!(tokens, expected, "the tokens in deploy/k8s and the grants differ");
+
+    for (app, mounts) in &pods {
+        let owner = SAME_WORKLOAD.iter().find(|(a, _)| a == app).map_or(app.as_str(), |(_, w)| w);
+        for class in mounts {
+            if let Some(token) = token_of.get(class) {
+                assert_eq!(token, owner, "{app} mounts the cluster token of {token}");
+            }
+        }
+    }
+    assert!(pods.iter().any(|(app, _)| app == "ic-underwriting"), "the underwriting driver is in deploy/k8s");
+}

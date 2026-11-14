@@ -25,7 +25,7 @@ code{font:11.5px ui-monospace,Menlo,monospace;background:#eef0f4;padding:0 3px;b
 .zones{display:flex;gap:9px;margin-bottom:9px}
 </style></head><body><div class="page">
 <h1>The insurance core on Azure: what the templates create</h1>
-<p class="sub">Read from <code>infra/*.bicep</code> and <code>deploy/k8s</code> on main, 14 Nov 2026. Workloads sign in with managed identities federated to their Kubernetes service accounts (Workload ID) and reach the ledger nodes with their own cluster token; there are no account keys or connection strings. Two exceptions: <code>ic-underwriting</code> runs as <code>ic-worker</code>'s service account and token, and <code>ic-admin</code> and <code>ic-bootstrap</code> run as <code>ic-node</code>'s.</p>
+<p class="sub">Read from <code>infra/*.bicep</code> and <code>deploy/k8s</code> on main, 14 Nov 2026. Workloads sign in with managed identities federated to their Kubernetes service accounts (Workload ID) and reach the ledger nodes with their own cluster token; there are no account keys or connection strings. One exception, by design: <code>ic-admin</code> and <code>ic-bootstrap</code> administer the cluster, so they run as <code>ic-node</code>'s.</p>
 <div class="banner"><b>Designed and templated, not deployed.</b> CI compiles every template and renders the manifests on each push. No subscription has been deployed to, so nothing here has run on Azure. <code>main.bicep</code> is deployed first; each module template is deployed on its own into the same resource group (<code>docs/operations.md</code>, "First deployment").</div>
 
 <div class="rg"><div class="bl" style="color:#9a5b05">Resource group, New Zealand North (one region; voters in a second and third region are not provisioned)</div>
@@ -51,7 +51,7 @@ code{font:11.5px ui-monospace,Menlo,monospace;background:#eef0f4;padding:0 3px;b
 <li>Payments vault: bank signing key and bank credentials</li>
 <li>Event Hubs namespace, hub <code>policy-events</code></li>
 <li>PostgreSQL for Temporal, off by default</li></ul>
-<div class="who">Identities: ic-node, ic-worker (also ic-underwriting), ic-api, ic-portal, ic-payments</div></div>
+<div class="who">Identities: ic-node, ic-worker, ic-api, ic-portal, ic-payments</div></div>
 <div class="tpl"><h4><code>customers.bicep</code>: the people master</h4><ul>
 <li>PostgreSQL Flexible Server of its own, Entra sign-in only, TLS required, zone-redundant in prod</li>
 <li>Key Vault key <code>customers-kek</code>; secret <code>customers-index-key</code></li>
@@ -68,7 +68,7 @@ code{font:11.5px ui-monospace,Menlo,monospace;background:#eef0f4;padding:0 3px;b
 <li>Clinical store: own storage, no soft delete or versioning, on purpose (erasure)</li>
 <li>HSM key <code>clinical-key-wrap</code>, wrap and unwrap only</li>
 <li>Hubs <code>underwriting-notices</code>, <code>-evidence</code>, <code>-delegates</code></li></ul>
-<div class="who">Identity: ic-underwriting-intake (clinical)</div></div>
+<div class="who">Identities: ic-underwriting-intake (clinical), ic-underwriting (driver)</div></div>
 <div class="tpl"><h4><code>reinsurance.bicep</code></h4><ul>
 <li>Write-once <code>reinsurance-records</code> in the ledger account</li>
 <li>Hub <code>reinsurance-events</code></li>
