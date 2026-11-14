@@ -685,7 +685,7 @@ Each is in force now and is easy to change; confirm or replace.
 
 - **Holidays.** New Zealand national holidays as observed, 2026 to 2029, plus Auckland Anniversary Day (the office is taken to be in Auckland). `close.star`; add 2030 before it starts.
 - **Chart, close timetable, aged thresholds, returns.** The chart in `chart.star`, the due days and thresholds in `close.star` and the quarterly return in `returns/insurer_quarterly.star` stand as the working versions until finance and compliance supply the real chart and the regulator's template.
-- **Accounting groups.** One portfolio per line of business (individual life with interim accident, group life, health, investment-linked) and every product's band "other", the IFRS 17 default without evidence either way. A policy is grouped once at issue, so the actuary should confirm before the first live issue.
+- **Accounting groups.** One portfolio per line of business (individual life with interim accident, disability income for income protection, group life, health, investment-linked) and every product's band "other", the IFRS 17 default without evidence either way. A policy is grouped once at issue, so the actuary should confirm before the first live issue.
 - **Small-cell floor.** Five claims (`CAUSE_MIN_CELL`), the usual floor for de-identified health data.
 - **Experience age basis.** Kept as built: exposure on age at the end of the period, a claim on age at the event date. Restating a study on another basis is a change to `mart.rs`, `experience`.
 - **Avoided policies in experience.** Kept as built: exposure counts up to the day of avoidance. A study that wants them out altogether can drop the `avoided` policies using the movement extract.
