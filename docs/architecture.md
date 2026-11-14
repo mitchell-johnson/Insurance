@@ -30,7 +30,7 @@ This document is shared by every area of the build. The sections above the line 
 | Unit pricing | `pricing` | `unit-pricing.md` | its own section |
 | Customer master | `customers` | `customers.md` | its own section |
 | Persona test pack (matrix, stories, traceability) | none; `tools/persona_matrix.py` | `testing/personas/README.md` | "How far the build reaches" in that README |
-| Persona end-to-end suite (300 journeys through the web pages) | none; top-level `e2e/` | `../e2e/README.md` | "Persona end-to-end suite" at the end |
+| Persona end-to-end suite (324 journeys through the web pages) | none; top-level `e2e/` | `../e2e/README.md` | "Persona end-to-end suite" at the end |
 
 ### Checks every area shares
 
@@ -867,11 +867,11 @@ Mitchell asked on 13 November 2026 for 300 end-to-end UI tests based on the pers
 
 ### What is built
 
-- 300 tests (E2E-001 to E2E-300) in 13 areas: platform and access, complaints and conduct, claims, staff console, finance, payments, unit pricing, policy lifecycle, reinsurance, adviser portal, commission console, replacement matches, underwriting. Each names its persona, story and the matrix rows it bears on, with its purpose and why it is worth having.
-- A stack of the real binaries (three ledger nodes, API, portal, a stand-in for Azure sign-in and storage), seeded through the system's own routes.
-- An independent calculator (`e2e/lib/oracle.js`) for premiums, billing periods, grace, suspension and lapse days, reinstatement arrears, claim payable after unpaid premium, and unit prices. It reads `products/` as text and shares no code with the system.
+- 324 tests (E2E-001 to E2E-324) in 14 areas: platform and access, complaints and conduct, claims, staff console, finance, payments, unit pricing, policy lifecycle, reinsurance, adviser portal, commission console, replacement matches, underwriting, and group schemes (the group console and the employer portal, added 14 November). Each names its persona, story and the matrix rows it bears on, with its purpose and why it is worth having.
+- A stack of the real binaries (three ledger nodes, API, portal, the group service, the customer master on PostgreSQL, a stand-in for Azure sign-in and storage), seeded through the system's own routes. The seed registers one standing group scheme; `e2e/lib/group.js` registers more for the tests that change one.
+- An independent calculator (`e2e/lib/oracle.js`) for premiums, billing periods, grace, suspension and lapse days, reinstatement arrears, claim payable after unpaid premium, unit prices, and a group life member's cover and premium. It reads `products/` as text and shares no code with the system.
 - `ic-e2e-close` (in `e2e/seed`), which closes a business day by calling `ic_workflows::run_end_of_day` over the real nodes, so lifecycle tests can move through months and years in seconds without Temporal.
-- A manually started workflow, `.github/workflows/e2e.yml`. It has not yet been run on the Mac mini runners: their image has no Node or Chromium, and the workflow installs both. The first run there is the test of it.
+- A manually started workflow, `.github/workflows/e2e.yml`. It ran on the Mac mini runners on 14 November 2026 (run 1, 42 minutes: build, browser install, stack and all 300 journeys; 294 passed, 1 on a second attempt, 5 failed on the complaint date fault below). It starts a PostgreSQL container for the customer master, as `ci.yml` does.
 
 ### Decisions taken
 
@@ -899,17 +899,25 @@ All were reported to the owning thread on 14 November 2026 and fixed on main the
 | A customer sign-in could open the adviser portal (and saw an empty book) | E2E-275 | portal | b83b522 |
 | The commission page offered actions its route always refuses | E2E-284 | portal | 36c366f |
 | Complaints register accepted a period that ends before it starts | E2E-056 | complaints | f662518 |
+| Group console gave staff no way to learn who a possible match might be, so the match could not be decided | E2E-323 | group, portal | a850596, 4bccf34 |
+| Nothing deployed named a scheme's first administrator | E2E-324 | portal | 4bccf34 |
+| A file sent again under a used name overwrote the stored file before being refused | E2E-317 | group | a850596 |
 
 Still open: no deployed tool activates module configuration (payments, complaints, finance, claims, staff). `ic-admin activate-shipped` covers the core only, so the suite's seed does it by hand through each module's routes. A real deployment needs the same, and it belongs to the core's admin tool.
 
-Last full run, 14 November 2026 against main at 5821118: 297 passed, 3 passed on a second attempt (E2E-025, 107, 109), none failed, in about eleven minutes.
+Last full run, 14 November 2026 against main at 9d6194c with this suite's changes: all 324 passed, none on a second attempt, none failed, in 18 minutes. The run before it that day (the original 300, main at 0b5a953) had 292 passed, 2 on a second attempt and 6 failed; all eight were faults in the tests, listed under Working notes.
 
 ### Not covered
 
-The customer app (no screens exist to drive), group schemes and the customer master (their services are not started by this stack), the underwriting intake, the document service, and the drivers between modules. Adding `ic-group` and `ic-customers` (with PostgreSQL) to `e2e/stack/stack.js` is the next step that would widen coverage most; the employer portal and group console tests would then have real schemes to work on.
+- The customer app: no screens exist to drive. Mitchell has not decided whether it gets screens in this repository.
+- The customer master has no screens of its own. It is exercised through group schemes, where it decides who each joiner is; a person's own record, consents and holds are reached only by the customer app.
+- Group schemes beyond one product and one set of terms: pools, health menus, renewal, takeover, scheme split and billing over time are in the group module's own tests.
+- The underwriting intake, the document service, Defender's file scan, and the drivers between modules (reinsurance, unit pricing intake, the bank pump). The test or the seed sends what the missing part would send, and says so.
 
 ### Working notes
 
 - Restart the stack after any run that included the policy lifecycle area: those tests move the business date and every other test assumes the opening date.
 - A matrix reference on a test was checked to exist in `test-matrix.csv`; it means the test bears on the row, and `traceability.md` is still the record of what proves a row.
 - When a defect above is fixed its test should pass unchanged. If it does not, the test's expectation is the first thing to check.
+- Faults that were the tests' own, found on the 14 November rerun: the complaint tests took today's date in UTC while the module dates by the Auckland calendar, so five failed for the half of each day the two differ; three tests read a table before it had loaded. Both kinds are fixed, and no test needed a second attempt in the last run.
+- The customer master matches on name and date of birth across every scheme in the stack, so group tests give members random names and birth dates.
