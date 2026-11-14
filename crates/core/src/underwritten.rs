@@ -20,6 +20,7 @@ use crate::catalog::Catalog;
 use crate::command::{AddedCover, AlteredTerms, ChangedExcess, OptionExercise, ReinstatementTerms, UnderwrittenLayer};
 use crate::event::{Event, LayerInfo};
 use crate::machine::{Ctx, Reject};
+use ic_product::definition::ANNIVERSARY_EVENT;
 use crate::policy::{CoverStatus, Layer, LayerOrigin, LayerTerms, MemberPays, OptionUse, Policy, PolicyStatus, ReceivableKind, ReinstatementApproval};
 use crate::premium::{retail_period_premium, retail_premium_with, Layers};
 use crate::LifeId;
@@ -135,6 +136,62 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
     Ok(())
 }
 
+/// The limits a use of an option is measured against: the cover's event
+/// option, or its anniversary option for the reserved anniversary event.
+struct OptionTerms {
+    within_days: u32,
+    to_age: u32,
+    once_in_days: Option<u32>,
+    max_uses: Option<u32>,
+    per_use_percent: ic_money::Dec,
+    per_use_minor: i64,
+    total_percent: Option<ic_money::DecStr>,
+    total_minor: Option<i64>,
+    every_years: Option<u32>,
+    requires_feature: Option<String>,
+}
+
+fn option_terms(def: &ic_product::CoverDefinition, spec: &OptionExercise) -> Result<OptionTerms, Reject> {
+    if spec.event == ANNIVERSARY_EVENT {
+        let Some(o) = &def.anniversary_option else {
+            return Err(Reject::new("no_option", format!("cover {} has no anniversary option", spec.cover)));
+        };
+        return Ok(OptionTerms {
+            within_days: o.within_days,
+            to_age: o.to_age,
+            once_in_days: o.once_in_days,
+            max_uses: None,
+            per_use_percent: o.max_percent_of_original.get(),
+            per_use_minor: o.at_least_minor,
+            total_percent: Some(o.max_total_percent_of_original.clone()),
+            total_minor: Some(o.max_total_increase_minor),
+            every_years: Some(o.every_years),
+            requires_feature: o.requires_feature.clone(),
+        });
+    }
+    let Some(o) = &def.insurability_option else {
+        return Err(Reject::new("no_option", format!("cover {} has no insurability option", spec.cover)));
+    };
+    if !o.events.contains(&spec.event) {
+        return Err(Reject::new(
+            "event_not_covered",
+            format!("{} is not an event the option is given for", spec.event),
+        ));
+    }
+    Ok(OptionTerms {
+        within_days: o.within_days,
+        to_age: o.to_age,
+        once_in_days: o.once_in_days,
+        max_uses: Some(o.max_uses),
+        per_use_percent: o.max_percent_of_original.get(),
+        per_use_minor: o.max_increase_minor,
+        total_percent: o.max_total_percent_of_original.clone(),
+        total_minor: o.max_total_increase_minor,
+        every_years: None,
+        requires_feature: None,
+    })
+}
+
 /// A life uses its cover's insurability option: a new layer from today on
 /// the terms of the cover the life started with, with no underwriting,
 /// inside the product's limits for the option.
@@ -161,19 +218,14 @@ pub(crate) fn exercise_option(ledger: &mut Ledger, catalog: &Catalog, policy: &m
     let product = catalog
         .product(&policy.product_hash)
         .ok_or_else(|| Reject::new("unknown_product", "product version not active"))?;
-    let Some(option) = product.cover(&spec.cover).and_then(|c| c.insurability_option.clone()) else {
+    let Some(def) = product.cover(&spec.cover) else {
         return Err(Reject::new("no_option", format!("cover {} has no insurability option", spec.cover)));
     };
-    if !option.events.contains(&spec.event) {
-        return Err(Reject::new(
-            "event_not_covered",
-            format!("{} is not an event the option is given for", spec.event),
-        ));
-    }
-    if spec.event_date > ctx.date || (ctx.date - spec.event_date).num_days() > i64::from(option.within_days) {
+    let terms = option_terms(def, &spec)?;
+    if spec.event_date > ctx.date || (ctx.date - spec.event_date).num_days() > i64::from(terms.within_days) {
         return Err(Reject::new(
             "option_window",
-            format!("the option is used within {} days of the event", option.within_days),
+            format!("the option is used within {} days of the event", terms.within_days),
         ));
     }
     let Some(born) = policy
@@ -185,8 +237,8 @@ pub(crate) fn exercise_option(ledger: &mut Ledger, catalog: &Catalog, policy: &m
     else {
         return Err(Reject::new("unknown_life", format!("life {} is not on the policy", spec.life)));
     };
-    if ic_product::schedule::age_on(born, ctx.date) >= option.to_age {
-        return Err(Reject::new("option_age", format!("the option ends at age {}", option.to_age)));
+    if ic_product::schedule::age_on(born, ctx.date) >= terms.to_age {
+        return Err(Reject::new("option_age", format!("the option ends at age {}", terms.to_age)));
     }
     let theirs = |u: &&OptionUse| u.cover == spec.cover && u.life == spec.life;
     if policy
@@ -197,9 +249,28 @@ pub(crate) fn exercise_option(ledger: &mut Ledger, catalog: &Catalog, policy: &m
     {
         return Err(Reject::new("option_used", "the option has already been used for this event"));
     }
-    let uses = policy.option_uses.values().filter(theirs).count() as u32;
-    if uses >= option.max_uses {
-        return Err(Reject::new("options_exhausted", format!("the option can be used {} times", option.max_uses)));
+    if let Some(days) = terms.once_in_days {
+        if policy
+            .option_uses
+            .values()
+            .filter(theirs)
+            .any(|u| (ctx.date - u.used_on).num_days() < i64::from(days))
+        {
+            return Err(Reject::new(
+                "option_too_soon",
+                format!("the cover is increased without evidence at most once in {days} days"),
+            ));
+        }
+    }
+    // Uses of the same kind: the anniversary option, or the event option.
+    let anniversary = spec.event == ANNIVERSARY_EVENT;
+    let same_kind = |u: &&OptionUse| (u.event == ANNIVERSARY_EVENT) == anniversary;
+    let uses = policy.option_uses.values().filter(theirs).filter(same_kind).count() as u32;
+    if terms.max_uses.is_some_and(|most| uses >= most) {
+        return Err(Reject::new(
+            "options_exhausted",
+            format!("the option can be used {} times", terms.max_uses.unwrap_or_default()),
+        ));
     }
     // The terms and the measure are the cover the life started with.
     let original: Vec<&Layer> = policy
@@ -213,16 +284,63 @@ pub(crate) fn exercise_option(ledger: &mut Ledger, catalog: &Catalog, policy: &m
             format!("life {} does not hold cover {} from the start", spec.life, spec.cover),
         ));
     };
+    if anniversary {
+        let began = original.iter().map(|l| l.start).min().unwrap_or(first.start);
+        let every = terms.every_years.unwrap_or(1);
+        let on_one = (1..=200u32)
+            .map(|k| began.checked_add_months(chrono::Months::new(12 * every * k)))
+            .take_while(|d| d.is_some_and(|d| d <= spec.event_date))
+            .any(|d| d == Some(spec.event_date));
+        if !on_one {
+            return Err(Reject::new(
+                "not_an_anniversary",
+                format!("the option is used at each {every} years from {began}"),
+            ));
+        }
+        if let Some(feature) = &terms.requires_feature {
+            let chose = first.excess_option.as_deref().and_then(|code| def.option(code).ok());
+            if !chose.is_some_and(|o| o.has_feature(feature)) {
+                return Err(Reject::new("no_option", format!("the cover for life {} was taken without {feature}", spec.life)));
+            }
+        }
+    }
     let began: i128 = original.iter().map(|l| i128::from(l.sum_insured_minor)).sum();
-    let scale = ic_money::dec_i128(10i128.pow(policy.currency.minor_digits()));
-    let share = ic_money::dec_i128(began) * option.max_percent_of_original.get() / ic_money::Dec::from(100i64) / scale;
-    let by_share = ic_money::round_to_money(share, policy.currency, ic_money::RoundingMode::Down)?.minor;
-    let most = i128::from(by_share.min(option.max_increase_minor));
+    let share_of = |percent: ic_money::Dec| -> Result<i64, Reject> {
+        let scale = ic_money::dec_i128(10i128.pow(policy.currency.minor_digits()));
+        let share = ic_money::dec_i128(began) * percent / ic_money::Dec::from(100i64) / scale;
+        Ok(ic_money::round_to_money(share, policy.currency, ic_money::RoundingMode::Down)?.minor)
+    };
+    let by_share = share_of(terms.per_use_percent)?;
+    let most = i128::from(if anniversary {
+        by_share.max(terms.per_use_minor)
+    } else {
+        by_share.min(terms.per_use_minor)
+    });
     if i128::from(spec.sum_insured_minor) > most {
         return Err(Reject::new(
             "option_limit",
             format!("the most one use of the option adds is {most} in minor units"),
         ));
+    }
+    let total = match (&terms.total_percent, terms.total_minor) {
+        (Some(p), Some(m)) => Some(share_of(p.get())?.min(m)),
+        (Some(p), None) => Some(share_of(p.get())?),
+        (None, m) => m,
+    };
+    if let Some(total) = total {
+        let so_far: i128 = policy
+            .option_uses
+            .values()
+            .filter(theirs)
+            .filter(same_kind)
+            .map(|u| i128::from(u.sum_insured_minor))
+            .sum();
+        if so_far + i128::from(spec.sum_insured_minor) > i128::from(total) {
+            return Err(Reject::new(
+                "option_total",
+                format!("all uses of the option add at most {total} in minor units, and {so_far} is used"),
+            ));
+        }
     }
     let layer = UnderwrittenLayer {
         policy: spec.policy.clone(),

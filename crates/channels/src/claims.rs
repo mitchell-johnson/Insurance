@@ -74,6 +74,10 @@ pub trait Partitions: Send + Sync {
     /// Whether this partition's directory holds the policy, and where it lives.
     fn locate(&self, partition: PartitionId, policy: PolicyId) -> Asked<'_, Option<PartitionId>>;
     fn propose(&self, partition: PartitionId, envelope: Envelope) -> Asked<'_, Proposed>;
+    /// The underwriting loadings on one partition's covers on a date, a
+    /// page of policies at a time (pass `next` back as `after`). They imply
+    /// health: pass them on for the one purpose asked and keep nothing.
+    fn loadings(&self, partition: PartitionId, after: Option<PolicyId>, as_at: chrono::NaiveDate) -> Asked<'_, ic_core::loadings::LoadingsPage>;
 }
 
 /// The core on the ledger nodes.
@@ -96,6 +100,15 @@ impl Partitions for Hosted {
         Box::pin(async move {
             let entry = self.client.locate(partition, &policy).await.map_err(|e| e.to_string())?;
             Ok(entry.map(|e| e.partition))
+        })
+    }
+
+    fn loadings(&self, partition: PartitionId, after: Option<PolicyId>, as_at: chrono::NaiveDate) -> Asked<'_, ic_core::loadings::LoadingsPage> {
+        Box::pin(async move {
+            self.client
+                .loadings(partition, after, ic_core::loadings::MAX_PAGE, Some(as_at))
+                .await
+                .map_err(|e| e.to_string())
         })
     }
 

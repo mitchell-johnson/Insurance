@@ -532,6 +532,97 @@ fn a_limited_pay_cover_is_made_paid_up_for_the_share_of_the_term_paid() {
     assert_eq!(p.outstanding_minor(), 0);
 }
 
+/// Close days to `to`, the customers paying what is owed each day under a receipt named for it.
+fn close_to(c: &mut Cluster, to: NaiveDate) {
+    while c.state(0).business_date.unwrap() < to {
+        let today = c.state(0).business_date.unwrap();
+        let owing: Vec<(PolicyId, i64)> = c.state(0).policies.iter().map(|(id, p)| (id.clone(), p.outstanding_minor())).filter(|(_, o)| *o > 0).collect();
+        for (id, minor) in owing {
+            let pay = Command::ApplyReceipt {
+                policy: id,
+                receipt: format!("on-{today}"),
+                amount: Money::new(minor, NZD),
+            };
+            c.submit(0, "cash-matching", pay).unwrap();
+        }
+        let close = c.end_of_day().unwrap();
+        assert!(close.breaks.is_empty(), "{:?}", close.breaks);
+    }
+}
+
+/// Ask to use a cover's option on `policy` for life-1.
+fn exercise(c: &mut Cluster, policy: &PolicyId, reference: &str, event: &str, on: NaiveDate, amount: i64) -> Result<(), Reject> {
+    let ask = ic_core::command::OptionExercise {
+        policy: policy.clone(),
+        cover: "life".to_string(),
+        life: ic_core::LifeId("life-1".to_string()),
+        event: event.to_string(),
+        event_date: on,
+        sum_insured_minor: amount,
+        evidence: "vault/evidence-1".to_string(),
+        reference: reference.to_string(),
+    };
+    c.submit(0, "policy-servicing", Command::ExerciseOption(Box::new(ask)))
+}
+
+/// The sum insured of each layer of a policy's life cover, oldest first, leaving out the
+/// yearly indexation increases.
+fn life_layers(c: &Cluster, id: &PolicyId) -> Vec<i64> {
+    let layers = &c.state(0).policies[id].covers["life"].layers;
+    layers.iter().filter(|l| l.origin != ic_core::LayerOrigin::Indexation).map(|l| l.sum_insured_minor).collect()
+}
+
+/// Purpose: AIA Living Life Cover's special events increases stop at the lower of the original
+/// cover and $750,000 in total, and come at most once in 12 months; the Optional Life Future
+/// Insurability Benefit adds the greater of 20% and $100,000 at each third anniversary, only
+/// where the life chose it, only on the anniversary itself, and is itself one of the increases
+/// that keep 12 months apart.
+/// Why it matters: these are AIA's limits on cover given without evidence of health (1101
+/// AL-LIFE, sections 6, 13 and 16). A third increase past the total, two in one year, or an
+/// anniversary increase for a life that never paid for the option is risk nobody priced.
+#[test]
+fn special_events_and_future_insurability_increases_keep_to_aias_limits() {
+    let mut c = cluster();
+    let living = product("aia_living.star");
+    let plain = pick(&living, "life", &[]);
+    let with_fi = pick(&living, "life", &[("future-insurability", "yes")]);
+    let born = d(1987, 6, 1);
+    let events = issue(&mut c, policy(1, "aia-living", born, &[("life", 400_000_00, Some(plain))])).unwrap();
+    let fi = issue(&mut c, policy(2, "aia-living", born, &[("life", 300_000_00, Some(with_fi))])).unwrap();
+    let code = |r: Result<(), Reject>| r.unwrap_err().code;
+
+    // Special events: half the original each time, the original in all, once in 12 months.
+    exercise(&mut c, &events, "se-1", "marriage", start(), 200_000_00).unwrap();
+    close_to(&mut c, start() + chrono::Days::new(30));
+    let birth = c.state(0).business_date.unwrap();
+    assert_eq!(code(exercise(&mut c, &events, "se-2", "birth_or_adoption", birth, 1_00)), "option_too_soon");
+    close_to(&mut c, start() + chrono::Days::new(370));
+    let home = c.state(0).business_date.unwrap();
+    exercise(&mut c, &events, "se-3", "mortgage", home, 200_000_00).unwrap();
+    close_to(&mut c, start() + chrono::Days::new(736));
+    let raise = c.state(0).business_date.unwrap();
+    assert_eq!(code(exercise(&mut c, &events, "se-4", "salary_increase", raise, 1_00)), "option_total");
+    assert_eq!(life_layers(&c, &events), vec![400_000_00, 200_000_00, 200_000_00]);
+
+    // Future insurability: at the third anniversary, within 60 days.
+    let third = d(2030, 11, 15);
+    close_to(&mut c, third + chrono::Days::new(10));
+    let today = c.state(0).business_date.unwrap();
+    assert_eq!(code(exercise(&mut c, &fi, "fi-1", "anniversary", today, 100_000_00)), "not_an_anniversary");
+    assert_eq!(code(exercise(&mut c, &events, "fi-1", "anniversary", third, 100_000_00)), "no_option");
+    // The greater of 20% of $300,000 and $100,000.
+    assert_eq!(code(exercise(&mut c, &fi, "fi-1", "anniversary", third, 100_000_01)), "option_limit");
+    exercise(&mut c, &fi, "fi-1", "anniversary", third, 100_000_00).unwrap();
+    exercise(&mut c, &fi, "fi-1", "anniversary", third, 100_000_00).unwrap();
+    assert_eq!(code(exercise(&mut c, &fi, "se-1", "marriage", today, 10_000_00)), "option_too_soon");
+    assert_eq!(life_layers(&c, &fi), vec![300_000_00, 100_000_00]);
+    let used = c.state(0).policies[&fi].option_uses["fi-1"].clone();
+    assert_eq!((used.event.as_str(), used.event_date), ("anniversary", third));
+    // Billed from the anniversary's use: the policy owes for the new layer.
+    close_to(&mut c, third + chrono::Days::new(11));
+    assert!(billed(&c, &fi, "life").last().is_some_and(|b| *b > 0));
+}
+
 /// Purpose: an AIA Living policy a year old is suspended at the owner's request for dated
 /// days: nothing is billed for them and premium billed ahead comes back, a claim's cover
 /// check answers not in force for an event inside them and in force the day before and the

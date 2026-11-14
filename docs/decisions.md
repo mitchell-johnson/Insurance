@@ -257,3 +257,15 @@ Mitchell asked on 13 Nov 2026 for open items to carry best-estimate placeholders
   - The same benefit held on two other policies counts as one sum: the sums are added. AIA's terms say the minimum "can be on" those policies.
   - Only policies in the same group count, because a group's policies share a partition.
   - A change counts from the next bill, as AIA's terms say.
+
+## AIA special events totals and Life Future Insurability (14 Nov 2026)
+
+- An insurability option may now cap all its uses together (`max_total_percent_of_original`, `max_total_increase`; the lower applies) and keep increases apart (`once_in_days`). AIA Living's special events use the wording's limits: the lower of 100% of the original cover and $750,000 in all, one increase in any 12 months.
+- A lump sum cover may declare `anniversary_option(every_years, max_percent_of_original, at_least, max_total_percent_of_original, max_total_increase, within_days, to_age, requires, once_in_days)`. It is used through the same `ExerciseOption` command with the reserved event `anniversary` and the anniversary as the event date. AIA Living Life Cover declares it for lives that chose Optional Life Future Insurability: each third anniversary, the greater of 20% and $100,000, within 60 days after, before 60, the lower of twice the original and $1,000,000 in all.
+- **Why one command:** the anniversary option is the same act as a special events increase (a layer on the original terms, no evidence), and the wording makes the two share the 12-month rule, so one record of uses serves both.
+- **Choices made where the wording is silent:**
+  - Anniversaries count from the day the life's original cover started.
+  - "In any 12 month period" is read as 365 days between the days increases were made.
+  - The special events totals and the anniversary totals are counted separately, as the wording gives each its own total.
+  - The wording sets no number of special events increases, so the count is set high (99) and the money and the 12 months bound them.
+- **Not built:** the wording's per-event caps (the home loan amount, five times a salary increase) are for the sender to check against the evidence; the totals across all of a life's AIA policies count only this policy; the notice AIA sends before each third anniversary.

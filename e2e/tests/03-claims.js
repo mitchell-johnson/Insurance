@@ -271,7 +271,7 @@ test({ id: "E2E-086", area: A, persona: "ST4", story: "US-ST02-1", title: "A sec
   await s.stopped("#act-msg", "no decision on this claim is waiting for a signature", 409);
 });
 
-test({ id: "E2E-087", area: A, persona: "ST3", story: "US-ST03-1", title: "The health assessor takes a hospital claim from the health queue and admits it within their limit", matrix: ["HLT-003"],
+test({ id: "E2E-087", area: A, persona: "ST3", story: "US-ST03-1", title: "The health assessor takes a hospital claim from the health queue and admits it within their limit", matrix: [],
   purpose: "As the health assessor, find a provider's $1,700 hospital invoice in the health queue, take it, record cause and cover check, and admit it less the $500 excess.",
   why: "Most claims are small health claims decided by one assessor; the whole path must work at the screen for the person whose authority is smallest." }, async (t) => {
   const c = await notified(t, HEALTH);
@@ -432,7 +432,7 @@ test({ id: "E2E-097", area: A, persona: "ST4", story: "US-ST04-1", title: "Evide
   if (row[4] !== t.stack.opening) throw new Error(`the evidence shows received "${row[4]}"`);
 });
 
-test({ id: "E2E-098", area: A, persona: "ST4", story: "US-ST04-1", title: "A rehabilitation task has a due date and shows complete once done", matrix: ["INC-006"],
+test({ id: "E2E-098", area: A, persona: "ST4", story: "US-ST04-1", title: "A rehabilitation task has a due date and shows complete once done", matrix: [],
   purpose: "Open a rehabilitation task due in a month on a claim, read it, and complete it with its outcome.",
   why: "Reviews come to the case manager as tasks on their dates so nobody has to remember; the file must show each task's date and whether it was done." }, async (t) => {
   const c = await owned(t);
@@ -519,7 +519,7 @@ test({ id: "E2E-104", area: A, persona: "ST4", story: "US-ST03-1", title: "A cla
   if (/no such resource/i.test(words)) throw new Error(`the screen answers a mistyped claim reference with "${words}", which tells the assessor nothing`);
 });
 
-test({ id: "E2E-105", area: A, persona: "ST4", story: "US-ST04-1", title: "An income protection claim is admitted as a monthly benefit from the console", matrix: ["INC-001"],
+test({ id: "E2E-105", area: A, persona: "ST4", story: "US-ST04-1", title: "An income protection claim is admitted as a monthly benefit from the console", matrix: [],
   purpose: "Take an income protection claim through cause and cover check and admit it as a benefit in payment from the Act form.",
   why: "Income protection is paid monthly for years; if the console cannot admit a benefit in payment, case managers cannot do their main job at the screen." }, async (t) => {
   const c = await assessed(t, { kind: "income_protection", party: "cust-p1", cover: "income", type: "income_protection", cause: "CC-0204" });
@@ -543,7 +543,7 @@ test({ id: "E2E-106", area: A, persona: "ST4", story: "US-ST04-1", title: "Premi
   await s.stopped("#act-msg", "premiums are waived beside a benefit in payment", 409);
 });
 
-test({ id: "E2E-107", area: A, persona: "ST3", story: "US-PR1-1", title: "A provider is verified and paid a health claim in two payments", matrix: ["HLT-005"], lock: "claims:provider-run",
+test({ id: "E2E-107", area: A, persona: "ST3", story: "US-PR1-1", title: "A provider is verified and paid a health claim in two payments", matrix: [], lock: "claims:provider-run",
   purpose: "On an admitted hospital claim, verify the provider as payee and pay the admitted amount in two parts.",
   why: "Providers are paid directly so patients are not out of pocket; part payments must add up to the admitted amount and no further." }, async (t) => {
   const c = await healthClaim(t);

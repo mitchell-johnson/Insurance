@@ -222,6 +222,44 @@ fn exact_lines(command: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Who may price a proposed rate table against the book.
+pub const DRY_RUN_ROLES: [&str; 2] = ["finance_lead", "appointed_actuary"];
+
+/// The ledger's dry-run question from what the page sent: the date, the
+/// cover codes the table rates, how it rates them, and the two versions as
+/// their reviewed Starlark sources (the files under `products/rates`),
+/// which are loaded here exactly as the product loader reads them. A table
+/// is never typed in as JSON. `loadings` are the core's rows for the date.
+pub fn dry_run(body: &Value, loadings: Vec<Value>) -> Result<Value, String> {
+    let as_at = body["as_at"]
+        .as_str()
+        .and_then(|d| d.parse::<chrono::NaiveDate>().ok())
+        .ok_or("give the date to price the book on")?;
+    let covers: Vec<&str> = body["covers"]
+        .as_array()
+        .map(|c| c.iter().filter_map(Value::as_str).filter(|c| !c.trim().is_empty()).collect())
+        .unwrap_or_default();
+    if covers.is_empty() {
+        return Err("name at least one cover code the table rates".to_string());
+    }
+    let table = |which: &str| -> Result<Value, String> {
+        let source = body[which]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or(format!("attach the {which} version's .star file"))?;
+        let table = ic_product::load_rate_table(&format!("{which}.star"), source).map_err(|e| format!("the {which} version does not load: {e}"))?;
+        serde_json::to_value(table).map_err(|e| e.to_string())
+    };
+    Ok(serde_json::json!({ "q": "table_dry_run", "as_at": as_at, "request": {
+        "covers": covers,
+        "per_life": body["per_life"] == true,
+        "age_at_start": body["age_at_start"] == true,
+        "current": table("current")?,
+        "proposed": table("proposed")?,
+        "loadings": loadings,
+    } }))
+}
+
 /// The envelope that carries one person's command to the finance ledger:
 /// who they are and the roles they hold. Commands that module takes only
 /// from its own services are refused.

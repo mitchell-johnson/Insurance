@@ -51,6 +51,10 @@ pub trait Master: Send + Sync {
     /// `view`): the master's `allow`, `refuse` or `route`. Asked as `staff`
     /// for the member of staff who took the call, and logged there.
     fn speaks_for(&self, staff: &PartyId, party: &PartyId, caller: &PartyId) -> Asked<'_>;
+    /// Whether the person signed in holds an authority in force to view
+    /// `party`'s affairs. Asked as the portal for that person, and logged
+    /// by the master against them.
+    fn represents(&self, representative: &PartyId, party: &PartyId) -> Asked<'_>;
 }
 
 /// What a member of staff may do with someone who has called about a
@@ -344,6 +348,17 @@ impl Master for Hosted {
                 ),
             };
             self.call_as("staff", None, &staff, method, path, "vulnerability_support", extra, body).await
+        })
+    }
+
+    fn represents(&self, representative: &PartyId, party: &PartyId) -> Asked<'_> {
+        let (who, path) = (
+            representative.clone(),
+            format!("/v1/parties/{}/authority?actor={}&act=view", encode(party), encode(representative)),
+        );
+        Box::pin(async move {
+            self.call_as("portal", Some(&who), &who, reqwest::Method::GET, path, "representative", vec![], None)
+                .await
         })
     }
 

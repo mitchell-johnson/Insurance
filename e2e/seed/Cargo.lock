@@ -1936,7 +1936,9 @@ name = "ic-e2e-config"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "ic-core",
  "ic-finance",
+ "ic-group",
  "ic-product",
  "ic-raft",
  "ic-reinsurance",
