@@ -155,7 +155,7 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
 
 // --- compute ------------------------------------------------------------------
 
-resource aks 'Microsoft.ContainerService/managedClusters@2024-05-01' = {
+resource aks 'Microsoft.ContainerService/managedClusters@2026-08-01' = {
   name: '${name}-aks'
   location: location
   tags: tags
@@ -181,6 +181,24 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-05-01' = {
       networkPluginMode: 'overlay'
       networkPolicy: 'cilium'
       networkDataplane: 'cilium'
+      // Pod-to-pod traffic that leaves a node is encrypted with WireGuard
+      // (Advanced Container Networking Services). The services talk plain
+      // HTTP inside the cluster and carry bearer tokens, so this is what
+      // keeps those tokens and the ledger's commands off the wire in the
+      // clear. Traffic between two pods on one node never leaves it.
+      // WireGuard uses UDP 51871 between nodes; nothing here blocks it.
+      // As `az aks create --enable-acns --acns-transit-encryption-type
+      // wireguard` sets it (docs: aks/how-to-apply-wireguard). Check after
+      // deploying: `kubectl -n kube-system exec ds/cilium -- cilium-dbg
+      // encrypt status` shows WireGuard with one peer per other node.
+      advancedNetworking: {
+        enabled: true
+        observability: { enabled: true }
+        security: {
+          enabled: true
+          transitEncryption: { type: 'WireGuard' }
+        }
+      }
     }
     agentPoolProfiles: [
       {

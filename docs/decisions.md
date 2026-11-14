@@ -10,7 +10,7 @@ The daily close needs a Temporal service. The choices are Temporal Cloud (least 
 
 ### Encryption in transit inside the cluster
 
-Traffic between the API, the workers and the ledger nodes is HTTP carrying the cluster token. Network policies restrict who can connect, but do not encrypt. Before production the cluster needs pod-to-pod encryption: a service mesh with mutual TLS (Istio add-on for AKS) or transparent encryption in the CNI (Cilium WireGuard). This is a platform choice, so it is not baked into the manifests.
+Traffic between the services inside the cluster is HTTP carrying bearer tokens (the cluster token, Entra tokens). Network policies restrict who can connect; WireGuard encrypts. `infra/main.bicep` turns on Advanced Container Networking Services with `transitEncryption: WireGuard` on the Cilium dataplane, so every pod-to-pod packet that leaves a node is encrypted. Traffic between two pods on the same node never leaves it and is not encrypted; traffic from host-network pods and the nodes themselves is not covered (none of ours run on the host network). WireGuard needs UDP 51871 open between nodes. Turning it on for a running cluster restarts the Cilium agent on every node: do it in a quiet hour. Check it with `kubectl -n kube-system exec ds/cilium -- cilium-dbg encrypt status` (WireGuard, peers = nodes - 1). WireGuard was chosen over a service mesh because it needs nothing in the manifests and adds no sidecar to the ledger's latency path.
 
 ### A second region
 

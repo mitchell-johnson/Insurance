@@ -2,9 +2,9 @@
 # is not listed here.
 #
 # These policies restrict reachability; they do not encrypt. Traffic between
-# pods is plain HTTP carrying the cluster token, so the cluster must encrypt
-# pod-to-pod traffic underneath (docs/decisions.md, "Encryption in transit
-# inside the cluster").
+# pods is plain HTTP carrying bearer tokens; the cluster encrypts it
+# underneath with WireGuard (infra/main.bicep; docs/decisions.md,
+# "Encryption in transit inside the cluster").
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
