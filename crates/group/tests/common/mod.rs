@@ -225,10 +225,15 @@ impl Harness {
         };
         let mut issue = group_scheme(30, d(2027, 11, 1), vec![first]);
         issue.product_code = product.code.clone();
-        // A health-only scheme is issued with no cover: members choose theirs.
-        if ic_group::benefit::formula_covers(&product).next().is_none() {
-            issue.covers.clear();
-        }
+        // The scheme holds every cover its product drives by member data; a
+        // health-only scheme is issued with none, and members choose theirs.
+        let template = issue.covers[0].clone();
+        issue.covers = ic_group::benefit::formula_covers(&product)
+            .map(|c| ic_core::command::CoverSpec {
+                code: c.code.clone(),
+                ..template.clone()
+            })
+            .collect();
         let (p, policy, group) = (c.partition_of(&issue.group), issue.policy.clone(), issue.group.clone());
         c.submit(p, "new-business", issue_command(issue)).unwrap();
         c.take_events();

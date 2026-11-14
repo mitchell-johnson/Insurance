@@ -36,6 +36,7 @@ use crate::repayment_letters::{run_repayment_letters, ClusterClaimsLetters, Clus
 use crate::requested_letters::run_requested_letters;
 use crate::required_documents::{run_required_documents, ClusterPolicies};
 use crate::vault::{BlobVault, ObjectStore, VaultError};
+use crate::wordings::WordingLibrary;
 
 /// Where everything is. Read from the environment; nothing here is secret
 /// except the webhook key, which comes from a mounted Key Vault secret.
@@ -171,6 +172,7 @@ struct Web<M, S, W, C, D> {
     /// whatever was presented.
     key_hash: [u8; 32],
     downloads: Option<Downloads>,
+    wordings: Arc<WordingLibrary>,
 }
 
 fn hash(text: &[u8]) -> [u8; 32] {
@@ -289,6 +291,45 @@ where
         .into_response()
 }
 
+/// `GET /v1/wordings/{text_hash}`: the words of the definition a cover is
+/// bound to, by the hash the cover holds, for staff assessing a claim or
+/// answering a customer. Staff ask as a named person for a stated purpose,
+/// as for a download; each read is logged. A hash the library does not
+/// hold is not found: no other version's words stand in for it.
+async fn wording<M, S, W, C, D>(State(web): State<Arc<Web<M, S, W, C, D>>>, Path(text_hash): Path<String>, headers: HeaderMap) -> Response
+where
+    M: Module + 'static,
+    S: ObjectStore + 'static,
+    W: KeyWrap + 'static,
+    C: Channels + 'static,
+    D: ContactDirectory + 'static,
+{
+    let Some(downloads) = &web.downloads else {
+        return refuse(StatusCode::NOT_FOUND, "sign-in is not configured");
+    };
+    let caller = match downloads.entra.authenticate(&headers).await {
+        Ok(caller) => caller,
+        Err(e @ AuthError::Keys(_)) => return refuse(StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
+        Err(e) => return refuse(StatusCode::UNAUTHORIZED, e.to_string()),
+    };
+    if caller.role != "staff" {
+        return refuse(StatusCode::FORBIDDEN, format!("the role {} may not read wordings here", caller.role));
+    }
+    let (Some(actor), Some(purpose)) = (auth::header(&headers, "x-ic-actor"), auth::header(&headers, "x-ic-purpose")) else {
+        return refuse(StatusCode::BAD_REQUEST, "x-ic-actor and x-ic-purpose name who is asking and why");
+    };
+    let Some(found) = web.wordings.get(&text_hash) else {
+        return refuse(StatusCode::NOT_FOUND, "no wording with that hash is held");
+    };
+    tracing::info!(definition = %found.id, version = found.version, subject = %caller.subject, actor, purpose, "wording read");
+    (
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600"))],
+        Json(json!(found)),
+    )
+        .into_response()
+}
+
 /// The service's routes: `POST /v1/delivery-reports` for Event Grid, and
 /// `GET /healthz`.
 pub fn router<M, S, W, C, D>(driver: Arc<Driver<M, S, W, C, D>>, webhook_key: &str) -> Router
@@ -302,7 +343,8 @@ where
     router_with(driver, webhook_key, None)
 }
 
-/// The routes, with `GET /v1/documents/{id}/pdf` when `downloads` is given.
+/// The routes, with `GET /v1/documents/{id}/pdf` and `GET /v1/wordings/{text_hash}`
+/// signed in when `downloads` is given.
 pub fn router_with<M, S, W, C, D>(driver: Arc<Driver<M, S, W, C, D>>, webhook_key: &str, downloads: Option<Downloads>) -> Router
 where
     M: Module + 'static,
@@ -311,14 +353,20 @@ where
     C: Channels + 'static,
     D: ContactDirectory + 'static,
 {
+    let wordings = WordingLibrary::shipped().unwrap_or_else(|e| {
+        tracing::error!(error = %e, "the definitions library could not be read; no wording is served");
+        WordingLibrary::default()
+    });
     let web = Arc::new(Web {
         driver,
         key_hash: hash(webhook_key.as_bytes()),
         downloads,
+        wordings: Arc::new(wordings),
     });
     Router::new()
         .route("/v1/delivery-reports", post(reports::<M, S, W, C, D>))
         .route("/v1/documents/{id}/pdf", get(download::<M, S, W, C, D>))
+        .route("/v1/wordings/{text_hash}", get(wording::<M, S, W, C, D>))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(web)
 }

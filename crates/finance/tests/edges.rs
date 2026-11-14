@@ -596,7 +596,8 @@ fn a_rate_table_activated_without_a_validation_shows_at_the_close() {
 }
 
 /// Purpose: in March the core bills health premiums with $15.00 of GST and a $2.00 levy,
-/// each under its own posting type. In April something credits GST payable under the
+/// each under its own posting type, and withholds $30.00 of tax from an income benefit
+/// under `withholding_benefit`, which reconciles to withholding tax payable. In April something credits GST payable under the
 /// posting type `premium`, and the levy account moves with no posting type at all.
 /// March's reconciliation shows each account's movement by posting type and product,
 /// nothing unexplained and the check green; April's names both stray postings and the
@@ -620,6 +621,11 @@ fn tax_accounts_reconcile_to_the_posting_types_that_may_move_them() {
         typed("unearned_premium", AccountClass::Liability, -100_00, "premium"),
         typed("gst_payable", AccountClass::Liability, -15_00, "gst"),
         typed("levy_payable", AccountClass::Liability, -2_00, "levy"),
+    ]);
+    // An income benefit paid with tax withheld from it.
+    s.entry(vec![
+        typed("benefit_payable", AccountClass::Liability, 30_00, "withholding_benefit"),
+        typed("withholding_tax_payable", AccountClass::Liability, -30_00, "withholding_benefit"),
     ]);
     while s.date < d(2028, 4, 10) {
         s.close();
@@ -659,6 +665,10 @@ fn tax_accounts_reconcile_to_the_posting_types_that_may_move_them() {
         .collect();
     assert_eq!(lines, [(Some("gst"), Some("health"), -15_00 * FINE_PER_MINOR)]);
     assert_eq!(march["accounts"][1]["movement"], serde_json::json!(-2_00 * FINE_PER_MINOR));
+    let withholding = &march["accounts"][2];
+    assert_eq!(withholding["account"].as_str(), Some("2220"));
+    assert_eq!(withholding["movement"], serde_json::json!(-30_00 * FINE_PER_MINOR));
+    assert_eq!(withholding["lines"][0]["posting_type"].as_str(), Some("withholding_benefit"));
     assert!(march["unexplained"].as_array().unwrap().is_empty());
 
     let CheckStatus::Red { items } = status(&b, apr, check) else {

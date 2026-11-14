@@ -49,7 +49,7 @@ A period moves to closing when its last day has closed on every partition. `conf
 
 ## Reports
 
-All are questions to the module (`{"q": "..."}`): `status`, `dashboard` (steps by status, owner and due date, blockers, waivers, sign-offs still needed, control days, prior-period items, aged items by party, extracts, journals), `checks`, `trial_balance` (optionally one fund), `movements` (opening, activity, prior-period columns, closing, year to date), `sources` (the partition days behind a period), `backdated`, `journal`, `conduct`, `return`, `return_line`, `tax_reconciliation`, `work`, `extract`, `accounting_groups`, `accounting_group`.
+All are questions to the module (`{"q": "..."}`): `status`, `dashboard` (steps by status, owner and due date, blockers, waivers, sign-offs still needed, control days, prior-period items, aged items by party, extracts, journals), `checks`, `trial_balance` (optionally one fund), `movements` (opening, activity, prior-period columns, closing, year to date), `sources` (the partition days behind a period), `backdated`, `journal`, `conduct`, `return`, `return_line`, `tax_reconciliation`, `work`, `extract`, `accounting_groups`, `accounting_group`, `proposals` (configurations waiting for approval: id, kind, version, hash, proposer).
 
 ## Regulatory returns and conduct
 
