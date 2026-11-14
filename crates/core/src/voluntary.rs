@@ -204,6 +204,27 @@ pub(crate) fn close_all(ledger: &mut Ledger, product: &ProductDefinition, policy
     Ok(())
 }
 
+/// Tell payments that nothing more is to be collected from this member.
+pub(crate) fn end_collection(policy: &Policy, ctx: &mut Ctx<'_>, life: LifeId, reason: &str) {
+    ctx.emit(Event::PaymentAuthorityCancelled {
+        policy: policy.id.clone(),
+        claim: reason.to_string(),
+        life: Some(life),
+    });
+}
+
+/// A member who has left, was billed for cover of their own and owes
+/// nothing more: their collection can end now. One who still owes is left to
+/// the arrears run, which ends it when it writes the debt off.
+pub(crate) fn end_collection_on_leaving(policy: &Policy, ctx: &mut Ctx<'_>, life: &LifeId) {
+    let theirs = |r: &&crate::policy::Receivable| r.payer.as_ref() == Some(life);
+    let billed = policy.receivables.iter().any(|r| theirs(&r));
+    let owing = policy.receivables.iter().filter(theirs).any(|r| !r.closed && r.outstanding_minor > 0);
+    if billed && !owing {
+        end_collection(policy, ctx, life.clone(), "member_left");
+    }
+}
+
 /// Record a member's standing and say so when it changed.
 fn announce(policy: &mut Policy, ctx: &mut Ctx<'_>, life: &LifeId, to: Option<Standing>) {
     let from = match to {
@@ -264,11 +285,12 @@ pub(crate) fn run_arrears(
                 announce(policy, ctx, &life, None);
                 ctx.emit(Event::MemberCoverLapsed {
                     policy: policy.id.clone(),
-                    life,
+                    life: life.clone(),
                     layers,
                     effective,
                     arrears_minor,
                 });
+                end_collection(policy, ctx, life, "member_lapsed");
             }
         }
     }

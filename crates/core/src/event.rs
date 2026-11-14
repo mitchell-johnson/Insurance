@@ -820,10 +820,16 @@ pub enum Event {
         bank_account: String,
     },
     /// Collection from the payer's account must stop: the payments module
-    /// cancels the direct debit authority.
+    /// cancels the direct debit authority. With no `life` the payer of the
+    /// policy has died and `claim` is the claim. With a `life`, only that
+    /// scheme member's own collection ends (their cover lapsed or they left
+    /// owing nothing) and `claim` is the reason, `member_lapsed` or
+    /// `member_left`: the employer's authority and other members' stay.
     PaymentAuthorityCancelled {
         policy: PolicyId,
         claim: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        life: Option<LifeId>,
     },
 
     /// The reinsurance module recorded the cession on a cover from a date.

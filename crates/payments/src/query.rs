@@ -197,7 +197,8 @@ fn payout_waiting(policy: &ic_core::PolicyId, policyholder: &ic_core::PartyId, p
 /// the event: the host shows every member the same events in the same order.
 pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
     let command = match &record.event {
-        ic_core::Event::PaymentAuthorityCancelled { policy, claim } => crate::Command::PayerDeceased {
+        // A member's own collection ending (`life` named) is not a death on the policy.
+        ic_core::Event::PaymentAuthorityCancelled { policy, claim, life: None } => crate::Command::PayerDeceased {
             policy: policy.clone(),
             claim: claim.clone(),
         },

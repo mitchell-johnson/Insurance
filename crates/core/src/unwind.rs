@@ -331,6 +331,7 @@ pub(crate) fn terminate_on_claim(
         ctx.emit(Event::PaymentAuthorityCancelled {
             policy: policy.id.clone(),
             claim: claim.to_string(),
+            life: None,
         });
     }
     Ok(())

@@ -2,7 +2,7 @@
 //! the member, and kept apart from the employer's invoice and balance.
 
 use chrono::NaiveDate;
-use ic_core::command::ExcessLayer;
+use ic_core::command::{ExcessLayer, MemberChange};
 use ic_core::event::Event;
 use ic_core::voluntary::credit_minor;
 use ic_core::{accounts, Command, GroupId, LifeId, MemberPays, PolicyId, PolicyStatus, Reject, Standing};
@@ -365,6 +365,15 @@ fn a_member_who_does_not_pay_loses_only_the_cover_they_pay_for() {
         .iter()
         .any(|e| matches!(e, Event::MemberStandingChanged { to: None, life, .. } if *life == exec())));
     assert!(
+        seen.iter().any(|e| matches!(e,
+            Event::PaymentAuthorityCancelled { claim, life: Some(l), .. } if claim == "member_lapsed" && *l == exec())),
+        "payments ends the member's own collection"
+    );
+    assert!(
+        !seen.iter().any(|e| matches!(e, Event::PaymentAuthorityCancelled { life: None, .. })),
+        "the employer's collection is not touched"
+    );
+    assert!(
         !seen.iter().any(|e| matches!(e, Event::StandingChanged { .. })),
         "the scheme's standing never moved"
     );
@@ -380,4 +389,59 @@ fn a_member_who_does_not_pay_loses_only_the_cover_they_pay_for() {
     });
     assert_eq!(lines.unwrap(), vec![(exec(), 90_62), (LifeId("staff-1".into()), 11_00)]);
     assert!(!seen.iter().any(|e| matches!(e, Event::MemberPremiumBilled { .. })));
+}
+
+/// Purpose: a member who pays for cover of their own and leaves the scheme owing nothing
+/// has their own collection ended at once (`PaymentAuthorityCancelled` naming the life,
+/// reason `member_left`); one who leaves owing is not, because what they owe can still
+/// be collected, and their collection ends only when the arrears run writes it off.
+/// Why it matters: payments asked for the life on this event because without it the
+/// only signal was the payer's death, which ends every authority on the policy, the
+/// employer's included. A member who has gone must not go on being debited, and one who
+/// owes must not have the authority that would pay it cancelled first.
+#[test]
+fn a_member_who_leaves_has_only_their_own_collection_ended() {
+    let ended = |seen: &[Event], reason: &str| {
+        seen.iter().any(|e| matches!(e,
+            Event::PaymentAuthorityCancelled { claim, life: Some(l), .. } if claim == reason && *l == exec()))
+    };
+    // Paid up, then gone.
+    let mut c = cluster();
+    let (p, id) = scheme(&mut c);
+    c.submit(p, "group-admin", layer(&id, None, MemberPays::All)).unwrap();
+    c.submit(p, "cash-matching", member_receipt(&id, &exec(), "m-1", 25_38)).unwrap();
+    days(&mut c, 2);
+    c.take_events();
+    let leave = Command::ApplyMembership {
+        policy: id.clone(),
+        changes: vec![MemberChange::Left {
+            life: exec(),
+            effective: d(2027, 11, 3),
+        }],
+    };
+    c.submit(p, "group-admin", leave.clone()).unwrap();
+    let seen = events(&mut c);
+    assert!(ended(&seen, "member_left"), "{seen:?}");
+    assert!(!seen.iter().any(|e| matches!(e, Event::PaymentAuthorityCancelled { life: None, .. })));
+
+    // Billed, unpaid, then gone: collection carries on until the debt is written off.
+    let mut c = cluster();
+    let (p, id) = scheme(&mut c);
+    c.submit(p, "group-admin", layer(&id, None, MemberPays::All)).unwrap();
+    // The employer pays a year ahead, so the scheme itself never lapses.
+    let employer_pays = Command::ApplyReceipt {
+        policy: id.clone(),
+        receipt: "emp-1".into(),
+        amount: Money::new(12 * (11_00 + 90_62), NZD),
+    };
+    c.submit(p, "cash-matching", employer_pays).unwrap();
+    days(&mut c, 2);
+    c.take_events();
+    c.submit(p, "group-admin", leave).unwrap();
+    assert!(member_owes(&c, p, &id) > 0, "what was covered before leaving is still owed");
+    let seen = events(&mut c);
+    assert!(!seen.iter().any(|e| matches!(e, Event::PaymentAuthorityCancelled { .. })), "{seen:?}");
+    days(&mut c, 150);
+    assert_eq!(member_owes(&c, p, &id), 0);
+    assert!(ended(&events(&mut c), "member_lapsed"));
 }

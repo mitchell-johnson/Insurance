@@ -659,6 +659,7 @@ pub(crate) fn apply_membership(
             .lives
             .get(&s.life)
             .map(|l| LifeInfo::with_factors(l.id.clone(), party_of(&l.kind), l.factors.as_of(NaiveDate::MAX)));
+        let left = matches!(s.outcome, Outcome::Left);
         ctx.emit(match s.outcome {
             Outcome::Joined { covers, party } => Event::MemberJoined {
                 policy: policy.id.clone(),
@@ -700,6 +701,10 @@ pub(crate) fn apply_membership(
             });
         }
         post_deltas(ledger, policy, ctx, &s.life, s.effective, s.deltas)?;
+        if left {
+            // After the adjustment, so a credit back for the rest of a paid period counts as paid.
+            crate::voluntary::end_collection_on_leaving(policy, ctx, &s.life);
+        }
     }
     Ok(())
 }
