@@ -13,7 +13,8 @@ const O = "ordinary", P = "personal", F = "financial", S = "insurance_sensitive"
 const templates = [
   ["administrator", ["staff.manage", "staff.approve_grant", "service.approve_change"], [O]],
   ["service", ["policy.view", "service.enter_change"], [O, P]],
-  ["collections", ["policy.view", "service.enter_change", "payments.collections", "payments.view"], [O, F]],
+  ["service-lead", ["policy.view", "service.enter_change", "service.approve_change"], [O, P]],
+  ["collections", ["policy.view", "service.enter_change", "payments.collections", "payments.view"], [O, P, F]],
   ["hardship", ["policy.view", "service.enter_change", "service.vulnerability_kind"], [O, P]],
   ["held-balance", ["held_balance.view", "held_balance.prepare", "held_balance.approve"], [O, F]],
   ["held-balance-legal", ["held_balance.view", "held_balance.approve", "held_balance.approve_legal"], [O, F]],
@@ -72,6 +73,7 @@ const staff = [
   ["n7", "N7", "Leilani Fonoti, claims assessor who is also a customer", ["claims"]],
   ["st5", "ST5", "Collections officer", ["collections"]],
   ["st5b", "ST5", "Service officer", ["service"]],
+  ["st5l", "ST5", "Service team lead", ["service-lead"]],
   ["st6", "ST6", "Hardship and vulnerable customer specialist", ["hardship"]],
   ["st7", "ST7", "Group administrator", ["group-admin"]],
   ["st7r", "ST7", "Group administrator (read only)", ["group-reader"]],
