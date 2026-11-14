@@ -76,9 +76,13 @@ ENV CARGO_HOME=/data/cargo \
     RUSTUP_HOME=/data/rustup \
     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/usr/local/bin/clang-mold \
     PATH=/data/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    RUNNER_ALLOW_RUNASROOT=0
+    RUNNER_ALLOW_RUNASROOT=0 \
+    ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/runner-job-cleanup \
+    ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/bin/runner-job-cleanup
 
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/runner-entrypoint
+# Kills what a timed-out job left running; see the script.
+COPY --chmod=0755 job-cleanup.sh /usr/local/bin/runner-job-cleanup
 
 USER runner
 WORKDIR /opt/actions-runner
