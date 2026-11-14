@@ -30,6 +30,7 @@ This document is shared by every area of the build. The sections above the line 
 | Unit pricing | `pricing` | `unit-pricing.md` | its own section |
 | Customer master | `customers` | `customers.md` | its own section |
 | Persona test pack (matrix, stories, traceability) | none; `tools/persona_matrix.py` | `testing/personas/README.md` | "How far the build reaches" in that README |
+| Persona end-to-end suite (300 journeys through the web pages) | none; top-level `e2e/` | `../e2e/README.md` | "Persona end-to-end suite" at the end |
 
 ### Checks every area shares
 
@@ -811,3 +812,48 @@ Of the 40 group rows in `docs/testing/personas/`, 26 are carried out in full and
 ### Known failing checks
 
 None known. When last run locally on 13 November, format, clippy for the crate, the test documentation check and all the crate's tests passed. Things that catch people out: the crate's tests now build `ic-finance`, which needs `protoc` (`apt-get install protobuf-compiler` in the cloud container); `tests/entra_app.rs` needs `jq`; the customer master test in `tests/driver.rs` skips unless `IC_TEST_POSTGRES_URL` is set (CI sets it); the crate's `clippy.toml` forbids `Instant::now`, `SystemTime::now`, `HashMap` and `HashSet`, in tests too, so waits are counted loops; the `ic-group` binary must install its signal handlers before its first pass, or the SIGTERM test in `tests/cluster.rs` fails; and underwriting does not store a refusal under its key, so a refused `open_proposal` (for example `no_rules`) leaves the request waiting and is sent again.
+
+## Persona end-to-end suite (`e2e/`): state and hand-over
+
+Mitchell asked on 13 November 2026 for 300 end-to-end UI tests based on the personas, and on 14 November that some follow whole policy lifecycles with separately written code checking the maths. Both are built. How to run it, how it is put together and what it leaves out are in [`e2e/README.md`](../e2e/README.md); this section is the state and what to do next.
+
+### What is built
+
+- 300 tests (E2E-001 to E2E-300) in 13 areas: platform and access, complaints and conduct, claims, staff console, finance, payments, unit pricing, policy lifecycle, reinsurance, adviser portal, commission console, replacement matches, underwriting. Each names its persona, story and the matrix rows it bears on, with its purpose and why it is worth having.
+- A stack of the real binaries (three ledger nodes, API, portal, a stand-in for Azure sign-in and storage), seeded through the system's own routes.
+- An independent calculator (`e2e/lib/oracle.js`) for premiums, billing periods, grace, suspension and lapse days, reinstatement arrears, claim payable after unpaid premium, and unit prices. It reads `products/` as text and shares no code with the system.
+- `ic-e2e-close` (in `e2e/seed`), which closes a business day by calling `ic_workflows::run_end_of_day` over the real nodes, so lifecycle tests can move through months and years in seconds without Temporal.
+- A manually started workflow, `.github/workflows/e2e.yml`. It has not yet been run on the Mac mini runners: their image has no Node or Chromium, and the workflow installs both. The first run there is the test of it.
+
+### Decisions taken
+
+- The suite is not part of `ci.yml`. It needs a browser, takes about a quarter of an hour, and a failing journey is a finding about the product, some of which are left failing on purpose until the owner fixes the defect.
+- `e2e/` is not a workspace member, so it is outside the coverage floor and the test documentation check; its tests carry `purpose` and `why` fields instead.
+- End of day is driven directly, not through Temporal. The workflow's own durability is covered by the failure drill, not here.
+- Where a driver is not part of the stack (bank pump, unit pricing intake, reinsurance driver), the seed or the test sends what the driver would send, through the same internal route, and says so in a comment.
+
+### Defects it found, and who has them
+
+| Defect | Tests | Owner | State on 14 Nov 2026 |
+|---|---|---|---|
+| Rounding looks only at the first dropped digit: about one premium in twenty is a cent low (`ic_money::round_integer`) | E2E-238, 239 | core | reported |
+| The same fault leaves a unit buy price not rounded up (`crates/pricing/src/strike.rs`) | E2E-232 | unit pricing | reported |
+| No accounting group for `income-protection` in `config/finance/close.star`, so those policies stay ungrouped | E2E-157 | finance | reported |
+| Overpayment memos keyed by reference alone | E2E-143 | commission | fixed on main at e2b3f44 |
+| Payments page: reconciliation view reads the wrong field names; "Send what is unpaid again" sends no date | E2E-205, 186 | portal | reported |
+| Staff console shows its forms to an unregistered sign-in | E2E-009 | portal | reported |
+| Mistyped references answered "No such resource" | E2E-104, 119 | portal | reported |
+| Claims console cannot admit a benefit in payment or enter a health invoice | E2E-105 | portal | reported |
+| Access log drops a second decision on the same record in the same second | none (timing) | portal | reported |
+| Complaints register accepts a period that ends before it starts | E2E-056 | complaints | reported |
+| No deployed tool activates module configuration (payments, complaints, finance, claims, staff); `ic-admin activate-shipped` covers the core only | the seed does it by hand | core | open |
+
+### Not covered
+
+The customer app (no screens exist to drive), group schemes and the customer master (their services are not started by this stack), the underwriting intake, the document service, and the drivers between modules. Adding `ic-group` and `ic-customers` (with PostgreSQL) to `e2e/stack/stack.js` is the next step that would widen coverage most; the employer portal and group console tests would then have real schemes to work on.
+
+### Working notes
+
+- Restart the stack after any run that included the policy lifecycle area: those tests move the business date and every other test assumes the opening date.
+- A matrix reference on a test was checked to exist in `test-matrix.csv`; it means the test bears on the row, and `traceability.md` is still the record of what proves a row.
+- When a defect above is fixed its test should pass unchanged. If it does not, the test's expectation is the first thing to check.

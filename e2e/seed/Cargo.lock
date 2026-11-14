@@ -1852,6 +1852,7 @@ dependencies = [
  "ic-azure",
  "ic-cashmatch",
  "ic-core",
+ "ic-entra",
  "ic-finance",
  "ic-ledger",
  "ic-log",
@@ -1948,6 +1949,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-entra"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "ic-azure",
+ "jsonwebtoken",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "ic-finance"
 version = "0.1.0"
 dependencies = [
@@ -1985,6 +2000,7 @@ dependencies = [
  "hex",
  "ic-azure",
  "ic-core",
+ "ic-entra",
  "ic-ledger",
  "ic-log",
  "ic-money",
@@ -2055,6 +2071,7 @@ dependencies = [
  "chrono",
  "chrono-tz 0.10.4",
  "futures",
+ "hex",
  "ic-azure",
  "ic-cashmatch",
  "ic-core",
@@ -2096,6 +2113,7 @@ dependencies = [
  "hex",
  "ic-azure",
  "ic-core",
+ "ic-entra",
  "ic-ledger",
  "ic-log",
  "ic-money",
