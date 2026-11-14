@@ -1,0 +1,17 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+Before you replace policy {{replaced_policy}} with new cover, please read this. It is about application {{reference}}.
+
+What you keep: {{kept}}
+What you gain: {{gained}}
+What you may lose: {{lost}}
+
+Your premium now is {{old_premium|money}}. Your new premium will be {{new_premium|money}}.
+
+New cover may have new stand down periods and exclusions. A health condition you have now may not be covered. Do not cancel your old policy until your new cover has started.
+
+Your adviser does not earn commission on the cover you are replacing. They only earn on cover that is new.
+
+By signing, you confirm you have read this and want to go ahead.

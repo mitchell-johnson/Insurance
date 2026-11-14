@@ -1,0 +1,11 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+We have still not received your premium ({{reference}}).{{#each policies}}
+Policy: {{this}}{{/each}}
+
+Because of this, your cover is now on hold from {{date|date}}. While it is on hold, we will not pay claims for events that happen. Please pay what is owed to restart your cover. If you are in hardship, call us to talk about your options.
+
+Yours sincerely,
+Customer Care

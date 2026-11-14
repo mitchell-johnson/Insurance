@@ -1,0 +1,12 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+Good news. Your cover has started. Your application ({{reference}}) is now a policy.
+
+Your policy schedule and wording come with this letter or will follow soon. Please read them and check that everything you told us is right. If anything is wrong, tell us now. A wrong answer could mean a claim is not paid.
+
+You have 15 days to change your mind. If you cancel in that time, we will refund your premium unless you have made a claim.
+
+Yours sincerely,
+New Business

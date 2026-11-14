@@ -1,0 +1,12 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+We have not been able to resolve your complaint ({{reference}}) as of {{date|date}}. This letter is our final response.
+
+You can now take your complaint to our free and independent dispute resolution scheme. You do not have to pay to use it. Their decision is binding on us if you accept it. You should contact them within three months of this letter.
+
+[Scheme name and contact details]
+
+Yours sincerely,
+Customer Care

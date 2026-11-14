@@ -1,0 +1,12 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+Thank you for telling us about your concern. We have recorded it as complaint {{reference}}, received on {{date|date}}.
+
+A member of our team will look into it and keep you updated. We will give you our answer as soon as we can.
+
+If you are not happy with our answer, or we have not answered within two months, you can take your complaint to our free and independent dispute resolution scheme.
+
+Yours sincerely,
+Customer Care

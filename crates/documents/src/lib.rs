@@ -24,6 +24,7 @@ pub mod listing;
 pub mod model;
 pub mod module;
 pub mod pdf;
+pub mod placeholders;
 pub mod render;
 pub mod repayment_letters;
 pub mod report;

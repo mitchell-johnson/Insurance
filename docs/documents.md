@@ -27,6 +27,8 @@ Nobody approves their own template. `DisableTemplate` stops a version being used
 
 
 **Where a clause is used.** `Query::PartUsage { part }` (`DocumentsState::part_usage`) lists every template version that is not disabled and uses a shared part, the product versions their documents serve, and `behind`: the products whose newest template still uses an older version of the part than the newest registered. A change to a clause is one `RegisterPart`; the register then shows every product it has still to reach.
+**Placeholder wording** (`placeholders.rs`, `templates/<id>.txt`). Every template the service issues from has best-estimate wording for legal, product and compliance to start from. Each one starts with the line `[Placeholder wording for legal review. Not for issue.]`, and `ActivateTemplate` refuses any template whose wording still carries it (`placeholder_wording`), so a placeholder can be submitted and tested but never reach a customer. `tests/placeholders.rs` renders each one from the data its letter is really given, so each placeholder also records that letter's data contract. `|money` takes whole minor units as a number, or as the text of one, because a requested letter's detail is text.
+
 ## Issuing
 
 A caller asks the driver to issue a document with a stable document id and the data to render from. The driver renders from the active template version, encrypts the text and the data snapshot together, writes the object, and then proposes `IssueDocument` with the hashes, the object name and the wrapped key. The same request again returns the same document. A request the module refuses leaves no object behind.

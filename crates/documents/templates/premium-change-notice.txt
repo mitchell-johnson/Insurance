@@ -1,0 +1,12 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+We are writing to tell you about a change to your premium on policy {{policy}}.
+
+{{#if tier}}Your {{tier}} discount ends{{/if}}{{#unless tier}}A discount you have ends{{/unless}} on {{from|date}}. Your premium will go up from the first bill on or after that date. The discounts you have had so far are not affected.
+
+If you have questions, or think this is wrong, please call us.
+
+Yours sincerely,
+Customer Care

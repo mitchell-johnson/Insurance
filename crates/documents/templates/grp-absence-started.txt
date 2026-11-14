@@ -1,0 +1,10 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+Your employer has told us you have been on leave since {{since|date}}. Your cover under the scheme continues while you are on leave, but only until {{cover_ends|date}}.
+
+If you are not back at work by then, your cover will stop on that day. You may be able to keep some cover by taking out your own policy. Please call us before that date to find out more.
+
+Yours sincerely,
+Group Schemes

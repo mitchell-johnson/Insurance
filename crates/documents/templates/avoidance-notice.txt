@@ -1,0 +1,12 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+We have decided to avoid policy {{policy}} from the start, as of {{date|date}}. This means we treat it as if it was never in force. We will not pay any claim under it.
+
+We made this decision because information given to us when you applied was not correct or complete. If we had known the full facts, we would not have offered this cover on these terms. We will write to you separately about the full reasons and about your premium.
+
+You can ask us to review this decision. If you are not happy, you can make a complaint and take it to our free and independent dispute resolution scheme.
+
+Yours sincerely,
+Claims

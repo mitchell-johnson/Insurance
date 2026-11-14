@@ -1,0 +1,10 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+We wrote to you about your leave, which started on {{since|date}}. Your cover under the scheme stopped on {{cover_ends|date}}, as you had not returned to work.
+
+If you are back at work now, ask your employer to tell us and your cover can start again. You may be able to take out your own policy. Please call us to find out how.
+
+Yours sincerely,
+Group Schemes

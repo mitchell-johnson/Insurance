@@ -1,0 +1,10 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+Policy {{policy}} has ended ({{ended}}) as of {{date|date}}. You are no longer covered under it.
+
+If you think this is wrong, or you want to ask about starting cover again, please call us.
+
+Yours sincerely,
+Customer Care

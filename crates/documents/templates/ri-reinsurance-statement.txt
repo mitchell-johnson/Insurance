@@ -1,0 +1,11 @@
+[Placeholder wording for legal review. Not for issue.]
+
+To {{reinsurer}},
+
+Statement {{reference}} for treaty {{treaty}}, for the period {{period}}.
+
+The net amount we owe you for the period is {{currency}} {{net_owed_to_reinsurer_minor|money}}. A negative figure is owed to us. Please quote {{payment_reference}} with any payment or query.
+
+The detailed listing for this statement ({{record}}) is on the secure listing service. It is not sent by email.
+
+Reinsurance
