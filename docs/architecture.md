@@ -774,7 +774,7 @@ Written 12 November 2026 by the thread "Build claims operations". The full descr
     - The premium basis comes from the option, and limited pay stops billing.
     - Each life's sums insured are passed to the discount chain.
 - **Tests:** `crates/product/tests/aia.rs` (products, menus, loader refusals, discount) and `crates/sim/tests/aia.rs` (issue, five years of billing and expiry, limited pay, discount on the bill, claim facts).
-- **Left for other owners:** see "Not built yet" in `docs/aia-products.md`. This covers claims enforcing the option terms and built-in benefits, the underwriting occupation and age tests, a Vitality wellness module, Cover for Life paid-up and premium suspension in the core, and reinsurance treaties for the AIA products.
+- **Left for other owners:** see "Not built yet" in `docs/aia-products.md`. This covers claims enforcing the option terms and built-in benefits, the underwriting occupation and age tests, a Vitality wellness module, Cover for Life paid-up and premium suspension in the core. The reinsurance thread has already added treaty entries for the AIA products.
 - **Needs Mitchell:** the real rates and factors, and the right to use AIA's names.
 
 ## Area: group scheme administration (`ic-group`)

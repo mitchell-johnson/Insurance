@@ -102,7 +102,7 @@ Every AIA wording is at `https://documents.aia.co.nz/<slug>/`. Versions current 
   - Multi-Benefit Discount counting of cover a life holds on another policy.
   - Special events increases capped in money in total, which is approximated by two uses.
   - The Life Future Insurability anniversary option, which is declared only as a facility.
-- **Reinsurance:** treaties naming the AIA products. None of the shipped treaties covers them yet.
+- **Reinsurance:** done by the reinsurance thread (14 Nov). The shipped synthetic treaties name the AIA range: life, trauma and TPD on the retail products go to the retail surplus treaty, and aia-corporate group life goes to the group treaty. Income, health and accidental injury are retained. Real AIA treaty terms would replace these.
 
 ## Questions for Mitchell
 
