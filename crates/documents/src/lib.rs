@@ -28,6 +28,7 @@ pub mod placeholders;
 pub mod render;
 pub mod repayment_letters;
 pub mod report;
+pub mod representatives;
 pub mod requested_letters;
 pub mod required_documents;
 pub mod service;

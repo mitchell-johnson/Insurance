@@ -68,7 +68,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | SVC Policy servicing | 6 | 5 | 15 | 4 |
 | ANV The anniversary window | 3 | 2 | 14 | 3 |
 | ANN Annuities | 2 | 2 | 9 | 4 |
-| VUL Vulnerable customers, support people and representatives | 11 | 10 | 0 | 4 |
+| VUL Vulnerable customers, support people and representatives | 13 | 8 | 0 | 4 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
 | STF Staff authorisation and permissions | 17 | 0 | 1 | 0 |
 | PAY Payment runs and bank connectivity | 14 | 0 | 0 | 0 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **351** | **97** | **129** | **97** |
+| **Total** | **353** | **95** | **129** | **97** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 35 | 25 | 9 |
 | B | 108 | 18 | 16 |
-| C | 206 | 51 | 89 |
+| C | 208 | 49 | 89 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area

@@ -130,6 +130,16 @@ fn bad_values_are_refused_at_start() {
     assert!(load(&[NODES, OPEN, DEV]).unwrap().definitions.is_empty());
     let own = load(&[NODES, OPEN, DEV, ("IC_DEFINITIONS", "/config/own.star, ")]).unwrap().definitions;
     assert_eq!(own, vec![("/config/own.star".to_string(), "DEFINITIONS = []".to_string())]);
+    assert_eq!(
+        load(&[NODES, OPEN, DEV, ("IC_RETURN_DEFINITIONS", "/config/own.star")])
+            .unwrap()
+            .return_definitions
+            .len(),
+        1
+    );
+    assert!(load(&[NODES, OPEN, DEV, ("IC_RETURN_DEFINITIONS", "/config/missing.star")])
+        .unwrap_err()
+        .starts_with("IC_RETURN_DEFINITIONS: /config/missing.star"));
     assert!(load(&[NODES, OPEN, DEV, ("IC_DEFINITIONS", "/config/missing.star")])
         .unwrap_err()
         .starts_with("IC_DEFINITIONS: /config/missing.star"));

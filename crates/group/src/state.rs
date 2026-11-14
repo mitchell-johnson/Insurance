@@ -370,6 +370,10 @@ pub struct Scheme {
     /// A split under way: no files are taken until it is done.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub splitting: Option<Splitting>,
+    /// Mappings (by content hash) that passed a trial on a sample and may
+    /// replace a layout the scheme already has.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub tried_mappings: BTreeSet<String>,
 }
 
 /// A split of a scheme the core is working through, part by part.
@@ -435,6 +439,7 @@ impl Scheme {
             short_payments: 0,
             joiners_suspended: false,
             splitting: None,
+            tried_mappings: BTreeSet::new(),
         }
     }
 
@@ -820,6 +825,13 @@ impl GroupState {
                 if held.as_ref().is_some_and(|m| m.version >= mapping.version) {
                     return Err(Reject::new("mapping_version", "a mapping is replaced only by a later version"));
                 }
+                // A layout in use is replaced only by one that read a sample whole.
+                if held.is_some() && !s.tried_mappings.remove(&mapping.content_hash) {
+                    return Err(Reject::new(
+                        "mapping_not_tried",
+                        "try the new version on a sample of the employer's file before it replaces the one in use",
+                    ));
+                }
                 st.emit(GroupEvent::MappingSet {
                     scheme: s.id.clone(),
                     mapping: mapping.id.clone(),
@@ -831,6 +843,14 @@ impl GroupState {
                 } else {
                     s.second_mapping = Some(*mapping);
                 }
+                Ok(())
+            }),
+            RecordMappingTrial { scheme, content_hash } => self.with_scheme(&scheme, |_, s| {
+                // The last few trials are enough: a version is set soon after it is tried.
+                while s.tried_mappings.len() >= 16 {
+                    s.tried_mappings.pop_first();
+                }
+                s.tried_mappings.insert(content_hash);
                 Ok(())
             }),
             Freeze { scheme, reason } => self.with_scheme(&scheme, |st, s| {
