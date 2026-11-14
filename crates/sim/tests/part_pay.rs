@@ -206,7 +206,8 @@ fn a_member_who_does_not_pay_their_share_leaves_and_can_come_back() {
         .unwrap();
     assert!(billed > 0);
     assert!(
-        seen.iter().any(|e| matches!(e, Event::PremiumAdjusted { life, total_minor, .. } if *life == staff() && *total_minor > 0)),
+        seen.iter()
+            .any(|e| matches!(e, Event::PremiumAdjusted { life, total_minor, .. } if *life == staff() && *total_minor > 0)),
         "the employer is billed its part again"
     );
     days(&mut c, 31);
