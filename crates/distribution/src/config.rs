@@ -70,6 +70,9 @@ pub struct Config {
     /// `product/cover_type` (which wins).
     #[serde(default)]
     pub product_schedules: BTreeMap<String, String>,
+    /// The old system's agent codes and where each now points.
+    #[serde(default)]
+    pub legacy_agents: BTreeMap<String, crate::migration::LegacyAgent>,
 }
 
 impl Default for Config {
@@ -86,6 +89,7 @@ impl Default for Config {
             staff_paths: BTreeMap::new(),
             release_owed_elsewhere: OwedElsewhere::default(),
             product_schedules: BTreeMap::new(),
+            legacy_agents: BTreeMap::new(),
         }
     }
 }
@@ -189,6 +193,12 @@ pub enum Change {
         #[serde(default)]
         cover_type: Option<String>,
         schedule: Option<String>,
+    },
+    /// Where an old system's agent code points for the migration load:
+    /// an engagement and the book it is paid into. None removes it.
+    MapLegacyAgent {
+        code: String,
+        agent: Option<crate::migration::LegacyAgent>,
     },
 }
 
@@ -439,6 +449,27 @@ impl Config {
                     }
                 }
             }
+            Change::MapLegacyAgent { code, agent } => match agent {
+                Some(a) if !self.structure.engagements.contains_key(&a.engagement) => {
+                    reject("unknown_engagement", format!("engagement {} does not exist", a.engagement))
+                }
+                Some(a)
+                    if self
+                        .books
+                        .get(&a.book)
+                        .is_none_or(|b| b.engagement.as_ref().is_some_and(|e| *e != a.engagement)) =>
+                {
+                    reject("unknown_book", format!("book {} does not exist or belongs to another engagement", a.book))
+                }
+                Some(a) => {
+                    self.legacy_agents.insert(code.clone(), a.clone());
+                    Ok(())
+                }
+                None => {
+                    self.legacy_agents.remove(code);
+                    Ok(())
+                }
+            },
             Change::SetStaffPaths { staff, paths } => {
                 self.staff_paths.insert(staff.clone(), paths.clone());
                 Ok(())
@@ -1017,8 +1048,11 @@ impl DistributionState {
         }
         let mut terms = LayerTerms::from_schedule(schedule, &w.option, w.annual_premium_minor)
             .ok_or_else(|| Reject::new("unknown_option", format!("schedule {} has no option {}", w.schedule, w.option)))?;
-        if w.replacement || (layer.indexation && !schedule.initial_on_indexation) {
-            // Replacement cover and indexation steps earn trail only.
+        let migrated = self.policies.get(&w.policy).is_some_and(|p| p.migrated.is_some());
+        if w.replacement || migrated || (layer.indexation && !schedule.initial_on_indexation) {
+            // Replacement cover, indexation steps and cover loaded from
+            // another system (its initial commission was paid there) earn
+            // trail only.
             terms.rates.initial_ppm = 0;
         }
         let from = layer.start;
@@ -1050,7 +1084,7 @@ impl DistributionState {
                 });
             }
         }
-        if !w.replacement && !self.layers.get(&key).is_some_and(|l| l.indexation) {
+        if !w.replacement && !migrated && !self.layers.get(&key).is_some_and(|l| l.indexation) {
             let today = self.date()?;
             self.match_replacement(ctx, &key, today);
         }

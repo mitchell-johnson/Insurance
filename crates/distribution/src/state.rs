@@ -171,6 +171,9 @@ pub enum Command {
         policy: PolicyId,
         advice: crate::newbusiness::NewBusiness,
     },
+    /// The migration load writes a migrated policy's layers from the old
+    /// system's agent code (see `migration.rs`).
+    MigrateCommission(Box<crate::migration::MigrateCommission>),
     /// The writing adviser disputes a match made by the replacement rule.
     /// The initial commission on the matched amount is held until decided.
     DisputeReplacement {
@@ -281,6 +284,7 @@ impl Command {
             Command::Ingest(_) | Command::PostingRefused { .. } | Command::PostingDelivered { .. } => &["event-relay"],
             Command::WriteLayer(_) | Command::LinkReplacement { .. } => &["new-business", "policy-servicing", "migration", "group-admin"],
             Command::AdviseNewBusiness { .. } => &["new-business", "migration"],
+            Command::MigrateCommission(_) => &["migration"],
             Command::AttributeAlteration { .. } => &["policy-servicing"],
             Command::DisputeReplacement { .. } => &["new-business", "policy-servicing", "adviser-portal"],
             Command::AppointAdviser { .. } => &["customer-app", "policy-servicing"],
@@ -315,9 +319,11 @@ impl Command {
                 InstructionKind::Statutory => ("payee.restricted_instruction", party.0.clone()),
                 InstructionKind::Assignment => ("payee.manage", party.0.clone()),
             },
-            Command::WriteLayer(_) | Command::LinkReplacement { .. } | Command::AttributeAlteration { .. } | Command::AdviseNewBusiness { .. } => {
-                ("policy.assign", any())
-            }
+            Command::WriteLayer(_)
+            | Command::LinkReplacement { .. }
+            | Command::AttributeAlteration { .. }
+            | Command::AdviseNewBusiness { .. }
+            | Command::MigrateCommission(_) => ("policy.assign", any()),
             Command::ProposeChange { .. } | Command::RejectChange { .. } => ("config.propose", any()),
             Command::CutStatement { payee } => ("statement.cut", payee.0.clone()),
             Command::AttachDocument { party, .. } => ("workbench.document", party.0.clone()),
@@ -765,6 +771,10 @@ pub struct DistributionState {
     /// issued yet. Taken when the policy arrives.
     #[serde(default)]
     pub new_business: BTreeMap<PolicyId, crate::newbusiness::NewBusiness>,
+    /// What the migration load did for each policy loaded from another
+    /// system, with its check against what the old system last paid.
+    #[serde(default)]
+    pub migrations: BTreeMap<PolicyId, crate::migration::MigrationRecord>,
     idempotency: BTreeMap<String, StoredResult>,
 }
 
@@ -827,6 +837,7 @@ impl DistributionState {
             changed: BTreeMap::new(),
             history: Default::default(),
             new_business: BTreeMap::new(),
+            migrations: BTreeMap::new(),
             idempotency: BTreeMap::new(),
         }
     }
@@ -1177,6 +1188,7 @@ impl DistributionState {
 
             Command::WriteLayer(w) => self.write_layer(ctx, *w),
             Command::AdviseNewBusiness { policy, advice } => self.advise_new_business(ctx, policy, advice),
+            Command::MigrateCommission(m) => self.migrate_commission(ctx, *m),
             Command::AppointAdviser { policy, engagement, book } => self.appoint_adviser(ctx, policy, engagement, book),
             Command::LinkReplacement { policy, replaces } => {
                 if !self.policies.contains_key(&replaces) {
