@@ -56,7 +56,7 @@ fn positive_in_policy_currency(policy: &Policy, amount: Money, what: &str) -> Re
 }
 
 /// Bank account codes become part of a ledger account ID.
-fn valid_bank_account(code: &str) -> Result<(), Reject> {
+pub(crate) fn valid_bank_account(code: &str) -> Result<(), Reject> {
     let ok = !code.is_empty() && code.len() <= 64 && code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     if ok {
         Ok(())

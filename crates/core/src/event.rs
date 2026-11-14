@@ -485,6 +485,25 @@ pub enum Event {
         life: LifeId,
         amount_minor: i64,
     },
+    /// This partition's share of withheld tax was paid to the revenue
+    /// authority. `outstanding_minor` is what the partition still holds.
+    WithholdingRemitted {
+        kind: String,
+        period: String,
+        payment: String,
+        amount_minor: i64,
+        bank_account: String,
+        outstanding_minor: i128,
+    },
+    /// The bank sent a payment of withheld tax back; it is owed again.
+    WithholdingRemittanceReturned {
+        kind: String,
+        period: String,
+        payment: String,
+        amount_minor: i64,
+        bank_account: String,
+        outstanding_minor: i128,
+    },
     /// The owner suspended the policy: no premium for the days from `from`
     /// up to `to`, and nothing that happens in them is covered. The premium
     /// side is announced by `HardshipGranted` under the same name.
