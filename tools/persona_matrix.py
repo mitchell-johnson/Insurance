@@ -141,6 +141,18 @@ def validate_trace(tests, trace) -> list[str]:
                 errors.append(f"traceability {tid}: {ref} is not file::test")
                 continue
             file, name = ref.split("::", 1)
+            if file.startswith("e2e/"):
+                # An end-to-end test through the screens, named by its E2E id. It
+                # must exist and must itself list this matrix row.
+                src = REPO / file
+                if src not in sources:
+                    sources[src] = src.read_text() if src.is_file() else ""
+                m = re.search(rf'id: "{re.escape(name)}"(.*?)\}}, async', sources[src], re.S)
+                if not m:
+                    errors.append(f"traceability {tid}: no test {name} in {file}")
+                elif f'"{tid}"' not in (re.search(r"matrix: \[([^\]]*)\]", m.group(1)) or [None, ""])[1]:
+                    errors.append(f"traceability {tid}: {name} in {file} does not list {tid} in its matrix rows")
+                continue
             src = CRATES / file
             if src not in sources:
                 sources[src] = src.read_text() if src.is_file() else ""

@@ -478,7 +478,8 @@ fn an_offset_is_taken_only_by_decision_and_within_the_cap() {
 /// Purpose: an overpayment on a closed claim is offset against the same person's benefit on
 /// another claim, and the instruction names the claim and policy the receivable sits on.
 /// Why it matters: the receivable is on the old claim's policy. The core has to credit that
-/// policy's receivable, not the paying claim's, or the daily ledger control breaks.
+/// policy's receivable, not the paying claim's, or the daily ledger control breaks; and the
+/// recovery is published on the old claim so reinsurers share in it.
 #[test]
 fn an_offset_can_recover_another_claims_overpayment() {
     let mut w = World::new();
@@ -511,6 +512,18 @@ fn an_offset_can_recover_another_claims_overpayment() {
         ("ip-2", "ip-1", "pol-2", op.as_str(), 300)
     );
     assert_eq!(w.claim("ip-1").overpayments[0].recovered_minor, 300);
+    // Published for the overpayment's own claim, so reinsurers share in what came back.
+    let recovered = w.core.noticed("overpayment_recovered");
+    let last = recovered.last().expect("published");
+    assert_eq!(
+        (
+            last["claim"].as_str(),
+            last["amount_minor"].as_str(),
+            last["outstanding_minor"].as_str(),
+            last["source"].as_str()
+        ),
+        ("ip-1", "300", "1151", "offset")
+    );
 }
 
 /// Purpose: ending a benefit in the past closes the claim and raises what was paid beyond the
@@ -2079,4 +2092,81 @@ fn tax_is_withheld_from_late_interest_at_the_payees_rate() {
         })
     ));
     assert_eq!(w.state.report().interest_withheld_minor, 111);
+}
+
+/// Purpose: where the rules keep back tax from income benefits, each period in a run carries the
+/// tax, the core is told it with the period, the bank is sent the benefit less the tax, a
+/// returned period is reissued for exactly what came back, and the report totals the tax;
+/// with no rate set the benefit is paid gross.
+/// Why it matters: persona test FIN-014. Tax kept back has to reach its own account and the tax
+/// reconciliation; a reissue that added the tax back would pay the payee money owed to Inland
+/// Revenue.
+#[test]
+fn tax_is_kept_back_from_an_income_benefit_where_the_rules_set_a_rate() {
+    let mut w = World::new();
+    w.benefit_in_payment("ip-0");
+    w.pay_run("run-0", d(2027, 3, 1));
+    assert!(matches!(
+        w.core.instructions.iter().rev().find(|i| matches!(i, Instruction::PayBenefit { .. })),
+        Some(Instruction::PayBenefit { tax_withheld_minor: 0, .. })
+    ));
+
+    let mut r = rules();
+    r.version = 2;
+    r.benefit_withholding_bp = 1_750;
+    w.ok(Command::ActivateRules { rules: Box::new(r) });
+    w.on(d(2027, 4, 1));
+    w.pay_run("run-1", d(2027, 4, 1));
+    assert!(matches!(
+        w.core.instructions.iter().rev().find(|i| matches!(i, Instruction::PayBenefit { .. })),
+        Some(Instruction::PayBenefit {
+            gross_minor: 3_000,
+            tax_withheld_minor: 525,
+            ..
+        })
+    ));
+    let paid = w.core.noticed("claim_paid");
+    assert_eq!(paid.last().expect("paid")["net_minor"], "2475");
+    assert_eq!(w.state.runs["run-1"].submitted_minor, 2_475);
+    assert_eq!(w.state.report().benefit_tax_withheld_minor, 525);
+    let payment = "run-1/ip-0/2027-04-01";
+    w.ok(Command::PaymentReturned {
+        claim: "ip-0".into(),
+        payment_ref: payment.into(),
+    });
+    assert_eq!(w.state.report().benefit_tax_withheld_minor, 0, "a returned period kept nothing back");
+    assert_eq!(w.refused(pay("ip-0", "ana", "again-1", 3_000, Some(payment))), "reissue_amount");
+    w.ok(pay("ip-0", "ana", "again-1", 2_475, Some(payment)));
+}
+
+/// Purpose: a living benefit for a policyholder who has a guardian is paid to the payee the
+/// owner verified, the policyholder on their own account, and the payment names that party and
+/// account and no other.
+/// Why it matters: persona test VUL-012. Michael's money is his; payments pays whoever claims
+/// releases, so the claim must name him and his account, and a guardian can be paid only as a
+/// payee the owner checked and recorded in their own right.
+#[test]
+fn a_benefit_is_paid_to_the_payee_verified_and_their_own_account() {
+    let mut w = World::new();
+    admitted(&mut w, "t-1", 10_000);
+    w.ok(Command::VerifyPayee {
+        claim: "t-1".into(),
+        party: "party-holder".into(),
+        kind: PayeeKind::Policyholder,
+        account_ref: "acct-michael".into(),
+        name_check_ref: "name-michael".into(),
+        screening_ref: "screen-michael".into(),
+        authority_doc: None,
+        actor: actor("ana"),
+    });
+    w.ok(pay("t-1", "ana", "p-1", 10_000, None));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::Pay { payee, .. }) if payee == "party-holder"
+    ));
+    let paid = w.core.noticed("claim_paid");
+    let paid = paid.last().expect("published");
+    assert_eq!((paid["payee"].as_str(), paid["account_ref"].as_str()), ("party-holder", "acct-michael"));
+    let payee = w.claim("t-1").payee.clone().expect("verified");
+    assert_eq!((payee.name_check_ref.as_str(), payee.verified_by.as_str()), ("name-michael", "ana"));
 }

@@ -28,6 +28,7 @@ pub mod placeholders;
 pub mod render;
 pub mod repayment_letters;
 pub mod report;
+pub mod representatives;
 pub mod requested_letters;
 pub mod required_documents;
 pub mod service;
@@ -35,6 +36,7 @@ pub mod state;
 pub mod template;
 pub mod triggers;
 pub mod vault;
+pub mod wordings;
 
 pub use command::{Command, Envelope, Settings};
 pub use event::{Event, EventRecord};

@@ -276,6 +276,19 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
             rejected: mapped.rejected,
         };
         let mut answer = self.module.ask(question).await?;
+        // A sample every row of which the mapping reads is a passed trial:
+        // only a version that passed one may replace the scheme's layout.
+        let passed = answer["rejected"].as_array().is_some_and(Vec::is_empty);
+        if passed {
+            let record = GroupCommand::RecordMappingTrial {
+                scheme: scheme.to_string(),
+                content_hash: mapping.content_hash.clone(),
+            };
+            self.send(format!("trial:{scheme}:{}", mapping.content_hash), record)
+                .await?
+                .map_err(DriverError::Refused)?;
+        }
+        answer["passed"] = json!(passed);
         answer["mapping"] = json!({ "id": mapping.id, "version": mapping.version, "kind": mapping.kind, "content_hash": mapping.content_hash });
         Ok(answer)
     }
@@ -426,9 +439,17 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
                 };
                 match result {
                     Ok(()) => delivered.push(id),
-                    Err(_) => {
+                    Err(e) => {
                         pass.failed += 1;
                         left += 1;
+                        // A refusal only a person can put right is raised for staff.
+                        if let (Outbound::Underwriting { key, .. }, Some(code)) = (out, e.strip_prefix("underwriting refused: ")) {
+                            let held = GroupCommand::UnderwritingHeld {
+                                key: key.clone(),
+                                code: code.to_string(),
+                            };
+                            self.send(format!("held:{key}:{code}:{today}"), held).await?.map_err(DriverError::Refused)?;
+                        }
                     }
                 }
             }

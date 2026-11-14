@@ -100,6 +100,7 @@ async fn a_translation_is_rendered_from_the_same_data_and_says_what_controls() {
         wordings: vec![tref("wording", 1)],
         components: vec![],
         notice: None,
+        copy_of: None,
     };
     let english = driver.issue(request("s-en", "en")).await.unwrap();
     let arabic = driver.issue(request("s-ar", "ar")).await.unwrap();

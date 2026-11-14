@@ -871,3 +871,53 @@ fn settings_from_an_older_snapshot_take_the_new_defaults() {
     let read: Settings = serde_json::from_value(old).unwrap();
     assert_eq!(read, Settings::default());
 }
+
+/// Purpose: the starter commission schedules shipped for the AIA products load as one change
+/// set the module activates, every AIA product the repository ships either has a schedule
+/// named for its new business or is listed as earning no commission, and income cover on AIA
+/// Living is written under the income schedule. The file says plainly that its rates are
+/// placeholders, and naming a schedule that was never activated is refused.
+/// Why it matters: a product with no schedule cannot have its layers written, so advisers
+/// could sell it and never be paid; and a placeholder rate mistaken for an agreed one is paid
+/// to every adviser until someone notices.
+#[test]
+fn the_shipped_aia_schedules_activate_and_cover_every_aia_product() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let file: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{root}/config/distribution/aia-schedules.json")).unwrap()).unwrap();
+    assert_eq!(file["placeholder"], true);
+    let changes: Vec<Change> = serde_json::from_value(file["changes"].clone()).unwrap();
+    let mut w = World::new();
+    w.activate("aia-starter-schedules", changes).unwrap();
+    let named = &w.dist.config.product_schedules;
+    assert_eq!(named["aia-living/income_protection"], "aia-income");
+    let mut covered: BTreeSet<String> = named.keys().filter(|k| !k.contains('/')).cloned().collect();
+    covered.extend(file["no_commission"].as_array().unwrap().iter().filter_map(|v| v.as_str()).map(String::from));
+    let mut shipped = BTreeSet::new();
+    for entry in std::fs::read_dir(format!("{root}/products")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.file_name().unwrap().to_string_lossy().starts_with("aia_") {
+            let text = std::fs::read_to_string(&path).unwrap();
+            let code = text.lines().find_map(|l| {
+                l.trim()
+                    .strip_prefix("code = \"aia-")
+                    .map(|r| format!("aia-{}", r.trim_end_matches(['"', ','])))
+            });
+            shipped.insert(code.unwrap());
+        }
+    }
+    assert_eq!(covered, shipped, "every AIA product has a schedule or is named as earning none");
+
+    let unknown = Change::SetProductSchedule {
+        product: "aia-living".into(),
+        cover_type: None,
+        schedule: Some("never-activated".into()),
+    };
+    assert_eq!(code(w.activate("bad", vec![unknown])), "unknown_schedule");
+    let cleared = Change::SetProductSchedule {
+        product: "aia-starter".into(),
+        cover_type: None,
+        schedule: None,
+    };
+    w.activate("clear", vec![cleared]).unwrap();
+    assert!(!w.dist.config.product_schedules.contains_key("aia-starter"));
+}

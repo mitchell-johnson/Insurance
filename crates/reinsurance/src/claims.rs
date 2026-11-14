@@ -78,6 +78,16 @@ pub enum ClaimFact {
         #[serde(default)]
         insurer_error: bool,
     },
+    /// Money got back against an overpayment on the claim: repaid by the
+    /// person or provider, or offset from a payment on another partition.
+    /// Where the treaty says so ([`crate::treaty::ClaimTerms::share_recoveries`])
+    /// it comes off what the claim cost before recoveries are worked out.
+    Recovered {
+        claim: ClaimId,
+        /// Unique to this receipt, so the same fact twice counts once.
+        reference: String,
+        amount_minor: i64,
+    },
     /// A closed claim was opened again. The reserve follows as its own fact.
     Reopened {
         claim: ClaimId,
@@ -155,6 +165,13 @@ pub fn fact_from_event(kind: &str, subject: &str, detail: &BTreeMap<String, Stri
             amount_minor: amount("amount_minor")?,
             insurer_error: flag("insurer_error"),
         },
+        // What is still owed only ever falls, so the overpayment and what is
+        // left of it name each receipt.
+        "overpayment_recovered" | "overpayment_offset_received" => ClaimFact::Recovered {
+            claim,
+            reference: format!("recovered:{}:{}", need("overpayment")?, amount("outstanding_minor")?),
+            amount_minor: amount("amount_minor")?,
+        },
         _ => return Ok(None),
     }))
 }
@@ -169,6 +186,7 @@ impl ClaimFact {
             | ClaimFact::Closed { claim, .. }
             | ClaimFact::AdmissionReversed { claim, .. }
             | ClaimFact::OverpaymentWrittenOff { claim, .. }
+            | ClaimFact::Recovered { claim, .. }
             | ClaimFact::Reopened { claim } => claim,
         }
     }
@@ -217,6 +235,9 @@ pub struct ClaimBook {
     /// again, so what is billed in all is the recovery plus these.
     #[serde(default, with = "pairs")]
     pub repaid: BTreeMap<(TreatyId, ReinsurerId), i64>,
+    /// Money got back against overpayments on the claim.
+    #[serde(default)]
+    pub recovered_minor: i64,
 }
 
 impl ClaimBook {
@@ -342,7 +363,8 @@ impl Reinsurance {
         }
         for (tref, (sum_at_risk, retained, ceded, facultative)) in by_treaty {
             let Some(treaty) = self.treaty(tref) else { continue };
-            let amount = normal + if treaty.claims.ex_gratia_recoverable { ex_gratia } else { 0 };
+            let recovered = if treaty.claims.share_recoveries { book.recovered_minor } else { 0 };
+            let amount = (normal - recovered).max(0) + if treaty.claims.ex_gratia_recoverable { ex_gratia } else { 0 };
             let mut add = |r: &ReinsurerId, v: i64| {
                 if v != 0 {
                     *out.entry((tref.id.clone(), r.clone())).or_default() += v;
@@ -444,6 +466,7 @@ impl Reinsurance {
                             consent: BTreeMap::new(),
                             aggregate: BTreeMap::new(),
                             repaid: BTreeMap::new(),
+                            recovered_minor: 0,
                         },
                     );
                 }
@@ -485,6 +508,16 @@ impl Reinsurance {
                 }
                 *paid += amount_minor;
                 book.payments.insert(payment_ref);
+            }
+            ClaimFact::Recovered { reference, amount_minor, .. } => {
+                if book.payments.contains(&reference) {
+                    return Ok(());
+                }
+                if amount_minor <= 0 {
+                    return Err(Reject::new("invalid_amount", "a recovery is more than nothing"));
+                }
+                book.recovered_minor += amount_minor;
+                book.payments.insert(reference);
             }
             ClaimFact::Closed { .. } => {
                 if book.status == ClaimStatus::Open {

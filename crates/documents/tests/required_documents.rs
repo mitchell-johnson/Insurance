@@ -11,7 +11,7 @@ use chrono::NaiveDate;
 use ic_core::interest::InterestEvent;
 use ic_core::{Event as CoreEvent, EventRecord, PolicyId, Standing};
 use ic_documents::channels::{Channels, Contact, MemoryDirectory, Outbound, SendError};
-use ic_documents::command::Command;
+use ic_documents::command::{ApprovalRole, Command};
 use ic_documents::complaint_letters::LetterPass;
 use ic_documents::crypto::{self, LocalWrap};
 use ic_documents::driver::{Driver, LocalModule, Module};
@@ -93,14 +93,55 @@ impl World {
     /// A core with one term life policy issued, a documents module with
     /// the templates given active, and the policyholder in the directory.
     async fn new(templates: &[(&str, DocumentKind, &str)]) -> Self {
+        let templates = templates
+            .iter()
+            .map(|(id, kind, body)| {
+                let mut t = template(id, *kind, body);
+                if *kind == DocumentKind::LapseNotice {
+                    t.minimum_notice_days = Some(14);
+                }
+                t
+            })
+            .collect();
+        Self::with(templates).await
+    }
+
+    /// The same, with the templates as written.
+    async fn with(templates: Vec<ic_documents::template::Template>) -> Self {
         let mut kit = Kit::new();
         let now = kit.now;
-        for (id, kind, body) in templates {
-            let mut t = template(id, *kind, body);
-            if *kind == DocumentKind::LapseNotice {
-                t.minimum_notice_days = Some(14);
+        for t in templates {
+            if t.bodies.len() == 1 {
+                kit.activate(t, &sample());
+                continue;
             }
-            kit.activate(t, &sample());
+            // A template with translations is tested in every language.
+            let r = t.reference();
+            kit.ok("config", "author", Command::SubmitTemplate(Box::new(t.clone())));
+            kit.approve(&r, &[ApprovalRole::Legal, ApprovalRole::Product, ApprovalRole::Compliance]);
+            let en = kit.case_for(&t, &sample());
+            let cases = t
+                .bodies
+                .keys()
+                .map(|language| {
+                    let text = t.render(&kit.state.parts, language, &sample()).unwrap();
+                    ic_documents::command::RenderCase {
+                        language: language.clone(),
+                        expected_sha256: ic_documents::template::sha256_hex(text.as_bytes()),
+                        ..en.clone()
+                    }
+                })
+                .collect();
+            kit.ok("config", "author", Command::RunRenderingTests { template: r.clone(), cases });
+            let today = kit.today();
+            kit.ok(
+                "config",
+                "product",
+                Command::ActivateTemplate {
+                    template: r,
+                    effective_from: today,
+                },
+            );
         }
         let module = LocalModule::default();
         for envelope in &kit.log {
@@ -374,6 +415,156 @@ async fn a_lost_discount_is_noticed_before_the_bill_it_raises() {
         w.driver.read(&notice.id).await.unwrap().text,
         "Dear Aroha Ngata. Your gold discount on KTL00000001 ends on 15 January 2028."
     );
+}
+
+/// Purpose: a customer served by post only, with an attorney who may see
+/// what they are sent, gets the arrears notice by post with proof of
+/// delivery and the clock, and the attorney is a recipient of that same
+/// notice; an attorney not yet in force, or whose authority has ended,
+/// is not.
+/// Why it matters: a customer in prison or in care can lose cover through
+/// a notice nobody reads; the representative seeing it, within the scope
+/// the customer master holds, is what keeps the policy in order (VUL-019).
+#[tokio::test]
+async fn a_post_only_customer_and_their_representative_both_get_the_notice() {
+    let w = World::new(&[("lapse", DocumentKind::LapseNotice, LAPSE)]).await;
+    w.driver.directory.remove("party-00000001", Channel::Email);
+    w.driver
+        .directory
+        .set("party-00000001", Channel::Post, "Aroha Ngata", "Private Bag 1\nRimutaka");
+    w.driver.directory.set("attorney-1", Channel::Post, "Hemi Ngata", "PO Box 1\nWellington");
+    w.driver.directory.set("attorney-2", Channel::Post, "Former Attorney", "PO Box 2\nWellington");
+    w.driver.directory.set("attorney-3", Channel::Post, "Future Attorney", "PO Box 3\nWellington");
+    w.driver
+        .directory
+        .set_representative("party-00000001", "attorney-1", NaiveDate::from_ymd_opt(2027, 1, 1).unwrap(), None);
+    w.driver
+        .directory
+        .set_representative("party-00000001", "attorney-2", NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), Some(open()));
+    w.driver
+        .directory
+        .set_representative("party-00000001", "attorney-3", NaiveDate::from_ymd_opt(2028, 1, 1).unwrap(), None);
+    let grace = CoreEvent::StandingChanged {
+        policy: the_policy(),
+        from: Some(Standing::Paid),
+        to: Some(Standing::InGrace),
+        oldest_unpaid_due: Some(open()),
+    };
+    w.observe(9, vec![event(1, grace)]).await;
+    let pass = w.pass().await;
+    assert_eq!(pass.issued, 1, "{pass:?}");
+    let notice = w.driver.document("required:9-1:LapseNotice").await.unwrap();
+    assert!(notice.requires_proof());
+    assert_eq!(notice.notice.as_ref().unwrap().purpose, "lapse");
+    let to: Vec<(String, RecipientRole)> = notice.deliveries.iter().map(|d| (d.recipient.party.0.clone(), d.recipient.role)).collect();
+    assert_eq!(
+        to,
+        vec![
+            ("party-00000001".to_string(), RecipientRole::Addressee),
+            ("attorney-1".to_string(), RecipientRole::Representative)
+        ]
+    );
+
+    // The customer master is down: nothing is issued, and the next pass
+    // tries again.
+    w.driver.directory.set_down(true);
+    let grace = CoreEvent::StandingChanged {
+        policy: the_policy(),
+        from: Some(Standing::Paid),
+        to: Some(Standing::InGrace),
+        oldest_unpaid_due: Some(open()),
+    };
+    w.observe(9, vec![event(2, grace)]).await;
+    let pass = w.pass().await;
+    assert!(pass.errors.iter().any(|e| e.contains("down")), "{pass:?}");
+}
+
+/// Purpose: a representative who reads another language gets the
+/// document as a copy in their own language, rendered from the same data
+/// as the original, naming its event but with no clock of its own, and in
+/// the ordinary format when theirs is not offered; a representative with
+/// no contact point, who has died, or already a recipient gets nothing more;
+/// the policyholder's notice keeps its clock and clears the trigger.
+/// Why it matters: a household where one reads Mandarin and the other
+/// English must both understand what the insurer says, and say the same
+/// thing to each (VUL-021); a second clock would let a translation decide
+/// when cover lapses.
+#[tokio::test]
+async fn a_representative_gets_the_notice_in_their_own_language() {
+    let mut lapse = template("lapse", DocumentKind::LapseNotice, LAPSE);
+    lapse.minimum_notice_days = Some(14);
+    lapse
+        .bodies
+        .insert("zh".into(), "{{name}}，您的保单 {{policy}} 自 {{oldest_unpaid_due|date}} 起未付。".into());
+    lapse.controlling_statements.insert("zh".into(), "如有不同，以英文版本为准。".into());
+    let w = World::with(vec![lapse]).await;
+    w.driver.directory.set_contact(
+        "lin",
+        Channel::Email,
+        Contact {
+            name: "Lin Chen".into(),
+            destination: "lin@example.nz".into(),
+            language: Some("zh".into()),
+            ..Contact::default()
+        },
+    );
+    w.driver
+        .directory
+        .set_representative("party-00000001", "lin", NaiveDate::from_ymd_opt(2027, 1, 1).unwrap(), None);
+    // Lin reads braille, which the template is not offered in: her copy
+    // goes in the ordinary format rather than not at all.
+    w.driver.directory.set_contact(
+        "lin",
+        Channel::Email,
+        Contact {
+            name: "Lin Chen".into(),
+            destination: "lin@example.nz".into(),
+            language: Some("zh".into()),
+            format: Some("braille".into()),
+            ..Contact::default()
+        },
+    );
+    // A representative with no contact point, one who has died, and one
+    // already a recipient get nothing more.
+    let since = NaiveDate::from_ymd_opt(2027, 1, 1).unwrap();
+    w.driver.directory.set_representative("party-00000001", "nowhere", since, None);
+    w.driver.directory.set_contact(
+        "gone",
+        Channel::Email,
+        Contact {
+            name: "Gone".into(),
+            destination: "gone@example.nz".into(),
+            deceased: true,
+            ..Contact::default()
+        },
+    );
+    w.driver.directory.set_representative("party-00000001", "gone", since, None);
+    w.driver.directory.set_representative("party-00000001", "party-00000001", since, None);
+    let grace = CoreEvent::StandingChanged {
+        policy: the_policy(),
+        from: Some(Standing::Paid),
+        to: Some(Standing::InGrace),
+        oldest_unpaid_due: Some(open()),
+    };
+    w.observe(9, vec![event(1, grace)]).await;
+    let pass = w.pass().await;
+    assert_eq!(pass.issued, 1, "{pass:?}");
+    let original = w.driver.document("required:9-1:LapseNotice").await.unwrap();
+    let copy = w.driver.document("required:9-1:LapseNotice:copy:lin").await.unwrap();
+    assert_eq!((original.language.as_str(), copy.language.as_str()), ("en", "zh"));
+    assert_eq!(original.data_sha256, copy.data_sha256, "both render from the same data");
+    assert!(original.notice.is_some() && copy.notice.is_none());
+    assert_eq!(copy.trigger_event, original.trigger_event);
+    assert_eq!(copy.deliveries.len(), 1);
+    assert_eq!(copy.format, None);
+    assert_eq!(original.deliveries.len(), 1, "nobody else is added to the original");
+    assert_eq!(copy.deliveries[0].recipient.role, RecipientRole::Addressee);
+    assert_eq!(copy.deliveries[0].recipient.relationship.as_deref(), Some("representative"));
+    // The same data: the letter is about the policyholder, in Lin's language.
+    assert!(w.driver.read(&copy.id).await.unwrap().text.contains("Aroha Ngata，您的保单 KTL00000001"));
+    assert!(w.driver.module.state().triggers.values().all(|t| t.kind != DocumentKind::LapseNotice));
+    // Only the policy's schedule still waits, for its template.
+    assert_eq!(w.pass().await.issued, 0);
 }
 
 /// Purpose: a document whose product has no active template of its kind

@@ -41,7 +41,11 @@ const ROLES: [(&str, &str); 4] = [
 
 /// Commands that module takes from its own services and feeds, never from
 /// a person at the console.
-const SERVICE_ONLY: [&str; 7] = [
+const SERVICE_ONLY: [&str; 9] = [
+    // A chart and a close configuration are reviewed source, proposed by an
+    // operator's program; the lead approves them here.
+    "propose_chart",
+    "propose_close_config",
     "configure",
     "ingest",
     "core_event",
@@ -55,7 +59,7 @@ const SERVICE_ONLY: [&str; 7] = [
 /// whole numbers that may be.
 type Fields = (&'static [&'static str], &'static [&'static str], &'static [&'static str]);
 
-const QUESTIONS: [(&str, Fields); 15] = [
+const QUESTIONS: [(&str, Fields); 18] = [
     ("status", (&[], &[], &[])),
     ("work", (&[], &[], &[])),
     ("dashboard", (&["period", "today"], &[], &[])),
@@ -67,6 +71,11 @@ const QUESTIONS: [(&str, Fields); 15] = [
     ("journal", (&["id"], &[], &[])),
     ("conduct", (&["period"], &["product"], &[])),
     ("return", (&["id"], &[], &[])),
+    // One figure on a filed return and what is behind it.
+    ("return_line", (&["id", "code"], &[], &["version"])),
+    ("tax_reconciliation", (&["period"], &[], &[])),
+    // Charts and close configurations waiting for the lead's approval.
+    ("proposals", (&[], &[], &[])),
     ("aged_suspense", (&["as_at"], &[], &[])),
     ("extract", (&["kind", "period"], &[], &["offset", "limit"])),
     // How many policies are in each accounting group, and one policy's group
@@ -74,6 +83,74 @@ const QUESTIONS: [(&str, Fields); 15] = [
     ("accounting_groups", (&[], &[], &[])),
     ("accounting_group", (&["policy"], &[], &["partition"])),
 ];
+
+/// The return definitions shipped in this repository. A deployment adds its
+/// own with `IC_RETURN_DEFINITIONS`.
+pub const SHIPPED_RETURNS: [(&str, &str); 1] = [(
+    "returns/insurer_quarterly.star",
+    include_str!("../../../config/finance/returns/insurer_quarterly.star"),
+)];
+
+/// The return definitions a person may file a return on. They are written
+/// as reviewed source, never typed at the console: the person names one and
+/// the service sends the definition as it was loaded, with the hash of its
+/// source.
+#[derive(Debug, Default)]
+pub struct Returns {
+    held: BTreeMap<(String, u32), Value>,
+}
+
+impl Returns {
+    /// Load definitions, each a file name and its source, with that
+    /// module's own loader and checks.
+    pub fn load<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> Result<Self, String> {
+        let mut held = BTreeMap::new();
+        for (file, source) in files {
+            let d = ic_finance::returns::ReturnDefinition::load(file, source).map_err(|e| format!("{file}: {e}"))?;
+            let key = (d.id.clone(), d.version);
+            let value = serde_json::to_value(&d).map_err(|e| format!("{file}: {e}"))?;
+            if held.get(&key).is_some_and(|had: &Value| had["content_hash"] != value["content_hash"]) {
+                return Err(format!(
+                    "{file}: return definition {} version {} is already loaded from different source",
+                    d.id, d.version
+                ));
+            }
+            held.insert(key, value);
+        }
+        Ok(Returns { held })
+    }
+
+    /// What may be filed on: each definition's name as the console sends it,
+    /// without its lines' mappings.
+    pub fn list(&self) -> Vec<Value> {
+        self.held
+            .iter()
+            .map(|((id, version), d)| {
+                json!({ "name": format!("{id}@{version}"), "id": id, "version": version, "title": d["title"], "currency": d["currency"],
+                    "effective_from": d["effective_from"], "effective_to": d["effective_to"], "hash": d["content_hash"],
+                    "lines": d["lines"].as_array().map(|lines| lines.iter().map(|l| json!({ "code": l["code"], "label": l["label"] })).collect::<Vec<_>>()) })
+            })
+            .collect()
+    }
+
+    /// Put the named definition into a command that files or restates a
+    /// return. A definition given any other way is refused.
+    fn fill(&self, command: &mut Value) -> Result<(), String> {
+        for name in ["file_return", "restate_return"] {
+            let Some(fields) = command.get_mut(name).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            let found = fields
+                .get("definition")
+                .and_then(Value::as_str)
+                .and_then(|named| named.rsplit_once('@'))
+                .and_then(|(id, version)| self.held.get(&(id.to_string(), version.parse().ok()?)))
+                .ok_or("name the return definition as it is listed, such as insurer-quarterly@1: a definition is not written at the console")?;
+            fields.insert("definition".to_string(), found.clone());
+        }
+        Ok(())
+    }
+}
 
 /// What a member of staff may do in the console: whether they may open it,
 /// and the roles they act in.
@@ -148,7 +225,7 @@ fn exact_lines(command: &mut Value) -> Result<(), String> {
 /// The envelope that carries one person's command to the finance ledger:
 /// who they are and the roles they hold. Commands that module takes only
 /// from its own services are refused.
-pub fn envelope(key: &str, actor: &PartyId, roles: &Value, mut command: Value) -> Result<Value, String> {
+pub fn envelope(key: &str, actor: &PartyId, roles: &Value, returns: &Returns, mut command: Value) -> Result<Value, String> {
     let name = match &command {
         Value::Object(fields) if fields.len() == 1 => fields.keys().next().cloned(),
         // A command with no fields may be sent by its name alone.
@@ -160,5 +237,32 @@ pub fn envelope(key: &str, actor: &PartyId, roles: &Value, mut command: Value) -
         return Err(format!("{name} is not sent by a person"));
     }
     exact_lines(&mut command)?;
+    returns.fill(&mut command)?;
     Ok(json!({ "key": key, "caller": CALLER, "actor": actor, "roles": roles, "command": command }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Purpose: return definitions load with the finance module's own
+    /// loader, and a file that does not pass it, or a second source for a
+    /// name and version already held, stops the load with the file named.
+    /// Why it matters: a return is filed on the definition the service
+    /// holds. Two sources under one name would let a return be filed on a
+    /// mapping nobody reviewed, with nothing on screen to show it.
+    #[test]
+    fn return_definitions_are_one_reviewed_source_each() {
+        let (file, shipped) = SHIPPED_RETURNS[0];
+        let held = Returns::load(SHIPPED_RETURNS).unwrap();
+        assert_eq!(held.list()[0]["name"], "insurer-quarterly@1");
+        assert_eq!(Returns::load([(file, shipped), ("again.star", shipped)]).unwrap().list().len(), 1);
+        let changed = shipped.replace("Quarterly insurer return", "Another title");
+        assert_eq!(
+            Returns::load([(file, shipped), ("changed.star", changed.as_str())]).unwrap_err(),
+            "changed.star: return definition insurer-quarterly version 1 is already loaded from different source"
+        );
+        assert!(Returns::load([("bad.star", "RETURN = {")]).unwrap_err().starts_with("bad.star: "));
+        assert!(Returns::default().list().is_empty());
+    }
 }

@@ -134,6 +134,11 @@ pub enum Command {
         party: PartyId,
         reason: Option<String>,
     },
+    /// What the payee declared for withholding tax on commission.
+    SetWithholding {
+        party: PartyId,
+        withholding: Withholding,
+    },
     SetAccrualHold {
         party: PartyId,
         hold: Option<(NaiveDate, HeldReason, String)>,
@@ -159,6 +164,12 @@ pub enum Command {
     LinkReplacement {
         policy: PolicyId,
         replaces: PolicyId,
+    },
+    /// New business says who wrote a policy: the module writes its layers
+    /// (see `newbusiness.rs`).
+    AdviseNewBusiness {
+        policy: PolicyId,
+        advice: crate::newbusiness::NewBusiness,
     },
     /// The writing adviser disputes a match made by the replacement rule.
     /// The initial commission on the matched amount is held until decided.
@@ -269,6 +280,7 @@ impl Command {
         match self {
             Command::Ingest(_) | Command::PostingRefused { .. } | Command::PostingDelivered { .. } => &["event-relay"],
             Command::WriteLayer(_) | Command::LinkReplacement { .. } => &["new-business", "policy-servicing", "migration", "group-admin"],
+            Command::AdviseNewBusiness { .. } => &["new-business", "migration"],
             Command::AttributeAlteration { .. } => &["policy-servicing"],
             Command::DisputeReplacement { .. } => &["new-business", "policy-servicing", "adviser-portal"],
             Command::AppointAdviser { .. } => &["customer-app", "policy-servicing"],
@@ -276,6 +288,7 @@ impl Command {
             Command::DescribePosition { .. } => &["claims", "reinsurance", "group-admin", "collections", "payments"],
             Command::RecordDailyControl => &["end-of-day"],
             Command::RecordLicence { .. } => &["regulator-register"],
+            Command::SetWithholding { .. } => &["customer-master"],
             Command::AddParty { .. } | Command::Relate(_) | Command::StartEngagement { .. } => &["migration", "customer-master"],
             _ => &[],
         }
@@ -295,13 +308,16 @@ impl Command {
             Command::RegisterPayee { party, .. }
             | Command::AddPayeeAccount { party, .. }
             | Command::SetPaymentHold { party, .. }
+            | Command::SetWithholding { party, .. }
             | Command::SetAccrualHold { party, .. }
             | Command::RemovePaymentInstruction { party, .. } => ("payee.manage", party.0.clone()),
             Command::AddPaymentInstruction { party, instruction } => match instruction.kind {
                 InstructionKind::Statutory => ("payee.restricted_instruction", party.0.clone()),
                 InstructionKind::Assignment => ("payee.manage", party.0.clone()),
             },
-            Command::WriteLayer(_) | Command::LinkReplacement { .. } | Command::AttributeAlteration { .. } => ("policy.assign", any()),
+            Command::WriteLayer(_) | Command::LinkReplacement { .. } | Command::AttributeAlteration { .. } | Command::AdviseNewBusiness { .. } => {
+                ("policy.assign", any())
+            }
             Command::ProposeChange { .. } | Command::RejectChange { .. } => ("config.propose", any()),
             Command::CutStatement { payee } => ("statement.cut", payee.0.clone()),
             Command::AttachDocument { party, .. } => ("workbench.document", party.0.clone()),
@@ -636,6 +652,18 @@ pub struct Settings {
     /// reach is let go once a month (see `history.rs`). Zero keeps all of it.
     #[serde(default = "seven_years")]
     pub history_days: u32,
+    /// Tax is withheld from commission when it is paid, at the payee's
+    /// declared rate (`SetWithholding`). A placeholder until the tax review
+    /// the design names; see docs/distribution.md, "Withholding tax".
+    #[serde(default = "yes")]
+    pub commission_withholding: bool,
+    /// The rate for a natural person who has declared nothing, in basis points.
+    #[serde(default = "no_declaration_rate")]
+    pub no_declaration_withholding_bp: u32,
+}
+
+fn no_declaration_rate() -> u32 {
+    4_500
 }
 
 fn seven_years() -> u32 {
@@ -671,6 +699,8 @@ impl Default for Settings {
             replacement_amount_tolerance_ppm: five_percent(),
             rule_examples_required: true,
             history_days: seven_years(),
+            commission_withholding: true,
+            no_declaration_withholding_bp: no_declaration_rate(),
         }
     }
 }
@@ -731,6 +761,10 @@ pub struct DistributionState {
     /// What has been let go of to keep the state bounded.
     #[serde(default)]
     pub history: crate::history::History,
+    /// What new business said about who wrote a policy the core has not
+    /// issued yet. Taken when the policy arrives.
+    #[serde(default)]
+    pub new_business: BTreeMap<PolicyId, crate::newbusiness::NewBusiness>,
     idempotency: BTreeMap<String, StoredResult>,
 }
 
@@ -792,6 +826,7 @@ impl DistributionState {
             memo: BTreeMap::new(),
             changed: BTreeMap::new(),
             history: Default::default(),
+            new_business: BTreeMap::new(),
             idempotency: BTreeMap::new(),
         }
     }
@@ -1069,6 +1104,17 @@ impl DistributionState {
                 });
                 Ok(())
             }
+            Command::SetWithholding { party, withholding } => {
+                if matches!(withholding, Withholding::Rate(bp) if bp > 10_000) {
+                    return reject("invalid_rate", "a withholding rate is between 0 and 10,000 basis points");
+                }
+                self.payee_mut(&party)?.withholding = withholding;
+                ctx.emit(Event::PayeeChanged {
+                    party,
+                    what: "withholding".into(),
+                });
+                Ok(())
+            }
             Command::SetAccrualHold { party, hold } => {
                 if let Some((_, reason, reference)) = &hold {
                     if !matches!(reason, HeldReason::MissingPaymentDetails | HeldReason::LegalHold) || reference.trim().is_empty() {
@@ -1130,6 +1176,7 @@ impl DistributionState {
             }
 
             Command::WriteLayer(w) => self.write_layer(ctx, *w),
+            Command::AdviseNewBusiness { policy, advice } => self.advise_new_business(ctx, policy, advice),
             Command::AppointAdviser { policy, engagement, book } => self.appoint_adviser(ctx, policy, engagement, book),
             Command::LinkReplacement { policy, replaces } => {
                 if !self.policies.contains_key(&replaces) {

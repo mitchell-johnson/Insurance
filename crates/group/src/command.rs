@@ -132,6 +132,12 @@ pub enum GroupCommand {
         mapping: Box<FileMapping>,
     },
     /// Stop taking files while a mistake is put right.
+    /// A proposed mapping read every row of a sample: it may now replace
+    /// the scheme's layout of its kind.
+    RecordMappingTrial {
+        scheme: String,
+        content_hash: String,
+    },
     Freeze {
         scheme: String,
         reason: String,
@@ -352,6 +358,12 @@ pub enum GroupCommand {
         offer: u64,
         outcome: String,
     },
+    /// Underwriting refused a request in the outbox for a reason a person
+    /// must put right; the request stays and is tried again.
+    UnderwritingHeld {
+        key: String,
+        code: String,
+    },
     /// Outbox entries that were delivered.
     Ack {
         ids: Vec<u64>,
@@ -387,6 +399,8 @@ impl GroupCommand {
             | CoreResult { .. }
             | CommissionRefused { .. }
             | LetterRefused { .. }
+            | RecordMappingTrial { .. }
+            | UnderwritingHeld { .. }
             | ObserveCore { .. }
             | Ack { .. }
             | Tick => &[DRIVER],

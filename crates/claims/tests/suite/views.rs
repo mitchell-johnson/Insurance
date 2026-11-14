@@ -237,10 +237,12 @@ fn published_codes_match_the_json_form() {
 
 /// Purpose: the staff working view of a claim shows who has it, the tasks, the evidence, the
 /// decision waiting for signatures, the payee, the interested parties, the payments and the
-/// benefit, and is absent for a claim that does not exist.
+/// benefit, the wordings the cover is bound to and each decision relied on, and is absent for
+/// a claim that does not exist.
 /// Why it matters: the claims screen is built from this view. If it left out the waiting
 /// decision or the unpaid lender, staff would work from memory; if it carried the cause or a
 /// vault reference, the clinical file would be readable without the logged step of opening it.
+/// The wording list is what the assessor opens to read the exact version a claim is bound to.
 #[test]
 fn the_working_view_shows_the_work_and_not_the_clinical_file() {
     let mut w = World::new();
@@ -270,6 +272,9 @@ fn the_working_view_shows_the_work_and_not_the_clinical_file() {
         (3_000, d(2027, 4, 1), false)
     );
     assert_eq!(view.evidence[0].0, "e-1");
+    // The wording the cover is bound to, and the wording the admission relied on.
+    assert_eq!(view.definitions, vec!["trauma-def@3".to_string()]);
+    assert_eq!(view.decision_definitions.values().next(), Some(&vec!["trauma-def@3".to_string()]));
     assert!(view.waiting.is_none() && view.interests.is_empty());
     let json = serde_json::to_string(&view).expect("it serialises");
     assert!(!json.contains("CC-0002") && !json.contains("R-OK") && !json.contains("vault"), "{json}");

@@ -89,6 +89,11 @@ pub enum ExceptionKind {
     /// module: the member is not linked to a person yet, or the module
     /// refused it. Staff send it another way. The subject is the request.
     LetterNotRequested,
+    /// Underwriting will not take a member's request under the broker's
+    /// delegated authority (it is not in force). The request is tried again
+    /// each pass; staff put the authority right or take it off the terms.
+    /// The subject is the request's key.
+    DelegatedAuthorityRefused,
 }
 
 /// A leaver's underwritten cover as underwriting's `group_continuation`

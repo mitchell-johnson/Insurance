@@ -112,8 +112,59 @@ fn a_replacements_progress_shows_what_it_adds() {
     let life = rows(&w, "P1").into_iter().find(|r| r.kind == "proposal_life").unwrap();
     assert_eq!(
         life.body["replacement"],
-        serde_json::json!({"cover": "life", "sum_insured_minor": 200_000_00, "premium_minor": 85_00})
+        serde_json::json!({"cover": "life", "sum_insured_minor": 200_000_00, "premium_minor": 85_00, "replaced_policy": "POL-P1"})
     );
     let other = rows(&w, "P2").into_iter().find(|r| r.kind == "proposal_life").unwrap();
     assert!(other.body.get("replacement").is_none());
+}
+
+/// Purpose: a new policy may be advised as replacing cover on another of our policies only by
+/// naming that cover: each named cover must be on another policy, match a cover on the
+/// application and give up an amount; naming replaced cover without advising a replacement,
+/// or advising a new-policy replacement that names none, is refused. The life's progress row
+/// names the policy replaced, for the disclosure statement.
+/// Why it matters: the replaced amount carries the old cession on in reinsurance. A record
+/// pointing at the same policy or at no cover on the application would carry on a cession
+/// that does not exist, and one made without a signed disclosure would be a replacement the
+/// customer was never told about.
+#[test]
+fn a_new_policy_replaces_only_the_cover_it_names() {
+    let mut w = World::new();
+    let replacing = |w: &World, id: &str, replaced_policy: &str, cover: &str, amount: i64| {
+        let mut open = w.open_command(id, &["L1"], &[("L1", "life", "life", 300_000_00)], true);
+        open.replacement = true;
+        open.replaces = vec![ic_underwriting::model::ReplacedCover {
+            life: "L1".into(),
+            cover: cover.into(),
+            replaced_policy: PolicyId::from(replaced_policy),
+            replaced_life: "L1".into(),
+            replaced_cover: "life".into(),
+            replaced_sum_insured_minor: amount,
+        }];
+        open
+    };
+    let refused = |w: &mut World, open| w.err("new-business", Command::OpenProposal(Box::new(open)));
+    let same = replacing(&w, "N1", "POL-N1", "life", 100_000_00);
+    assert_eq!(refused(&mut w, same), "replacement", "the same policy");
+    let other_cover = replacing(&w, "N1", "POL-OLD", "trauma", 100_000_00);
+    assert_eq!(refused(&mut w, other_cover), "replacement", "no such cover applied for");
+    let nothing = replacing(&w, "N1", "POL-OLD", "life", 0);
+    assert_eq!(refused(&mut w, nothing), "replacement", "nothing given up");
+    let mut unadvised = replacing(&w, "N1", "POL-OLD", "life", 100_000_00);
+    unadvised.replacement = false;
+    assert_eq!(refused(&mut w, unadvised), "replacement", "names cover without advising a replacement");
+    let mut unnamed = replacing(&w, "N1", "POL-OLD", "life", 100_000_00);
+    unnamed.replaces.clear();
+    assert_eq!(refused(&mut w, unnamed), "replacement", "a new policy names what it replaces");
+    let open = replacing(&w, "N1", "POL-OLD", "life", 100_000_00);
+    w.ok("new-business", Command::OpenProposal(Box::new(open)));
+    let row = ic_underwriting::progress::rows(w.p("N1"))
+        .into_iter()
+        .find(|r| r.kind == "proposal_life")
+        .unwrap();
+    assert_eq!(row.body["replacement"]["replaced_policy"], "POL-OLD", "the statement names the policy replaced");
+    assert_eq!(
+        w.err("new-business", Command::SubmitDisclosure(Box::new(w.disclosure("N1", "L1", &clean())))),
+        "replacement_disclosure"
+    );
 }

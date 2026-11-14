@@ -669,6 +669,16 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             effective: d(2027, 11, 15),
             reference: "enrol-1".into(),
         })),
+        Command::RecordReplacement(Box::new(ic_core::command::Replacement {
+            policy: p.clone(),
+            replaced_policy: PolicyId("pol-old".into()),
+            life: LifeId("life-1".into()),
+            replaced_life: LifeId("life-1".into()),
+            cover: "life".into(),
+            replaced_cover: "life".into(),
+            replaced_sum_insured_minor: 1,
+            evidence: "vault/r-1".into(),
+        })),
         Command::ExerciseOption(Box::new(ic_core::command::OptionExercise {
             policy: p.clone(),
             cover: "life".into(),
@@ -716,7 +726,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 56, "{names:?}");
+    assert_eq!(names.len(), 57, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail

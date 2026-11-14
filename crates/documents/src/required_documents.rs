@@ -252,13 +252,11 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
             wordings,
             components: vec![],
             notice: trigger.purpose.clone().map(|purpose| NoticeSpec { purpose, corrects: None }),
+            copy_of: None,
         };
-        match self.issue(request.clone()).await {
-            // Not offered in the format asked for: the ordinary one rather
-            // than none.
-            Err(DriverError::Refused(reject)) if reject.code == "no_format" => self.issue(IssueRequest { format: None, ..request }).await?,
-            other => other?,
-        };
+        // The policyholder's representatives see what they are sent; a
+        // format not offered falls back to the ordinary one.
+        self.issue_with_representatives(request, on).await?;
         Ok(Ok(()))
     }
 

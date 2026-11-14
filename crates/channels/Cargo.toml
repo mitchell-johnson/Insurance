@@ -21,6 +21,8 @@ ic-raft.workspace = true
 ic-azure.workspace = true
 ic-entra.workspace = true
 ic-product.workspace = true
+# For its return definition loader only: the service reads that module as JSON.
+ic-finance = { path = "../finance" }
 reqwest.workspace = true
 cedar-policy.workspace = true
 chrono.workspace = true
@@ -44,7 +46,6 @@ ic-distribution = { path = "../distribution" }
 # For the unit pricing console's contract test only, as above.
 ic-pricing = { path = "../pricing" }
 ic-complaints = { path = "../complaints" }
-ic-finance = { path = "../finance" }
 ic-reinsurance = { path = "../reinsurance" }
 ic-underwriting = { path = "../underwriting" }
 ic-payments = { path = "../payments" }

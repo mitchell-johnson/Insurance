@@ -626,6 +626,19 @@ fn the_core_refuses_a_counterparty_posting_that_is_not_well_formed() {
         ),
         (
             bad,
+            posting(
+                "r",
+                vec![
+                    (held("p-1"), 10_00),
+                    (
+                        CounterpartyAccount::Internal(InternalLedger::WithholdingTax { kind: "no such/kind".into() }),
+                        -10_00,
+                    ),
+                ],
+            ),
+        ),
+        (
+            bad,
             CounterpartyPosting {
                 value_date: w.today().succ_opt(),
                 ..posting("r", good())

@@ -406,6 +406,7 @@ fn portal_signed_in_by(
     let tick = clock.clone();
     let app = router(Arc::new(AppState {
         wordings: shipped_wordings(),
+        returns: Arc::new(ic_channels::finance::Returns::load(ic_channels::finance::SHIPPED_RETURNS).unwrap()),
         channel: local.clone(),
         customers,
         workforce,
@@ -1619,6 +1620,7 @@ async fn the_unit_pricing_console() {
     let now = portal.now();
     let down = router(Arc::new(AppState {
         wordings: Arc::default(),
+        returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -1833,6 +1835,7 @@ async fn the_complaints_and_conduct_workbench() {
     let now = portal.now();
     let down = router(Arc::new(AppState {
         wordings: Arc::default(),
+        returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -1933,6 +1936,7 @@ async fn the_reinsurance_exceptions_console() {
     let now = portal.now();
     let down = router(Arc::new(AppState {
         wordings: Arc::default(),
+        returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -2097,6 +2101,11 @@ async fn the_claims_console() {
         (StatusCode::OK, &json!(1), &json!("cl-1")),
         "{work}"
     );
+    // The page links each wording from these: the cover's, and what each decision relied on.
+    assert!(
+        work["view"]["definitions"].is_array() && work["view"]["decision_definitions"].is_object(),
+        "{work}"
+    );
     // Investigation cases are answered for whoever signed in, gathered from every partition.
     let (status, cases) = ask("sub-cl1", "cases").await;
     assert_eq!((status, cases["rows"].is_array()), (StatusCode::OK, true), "{cases}");
@@ -2169,6 +2178,7 @@ async fn the_claims_console() {
     let now = portal.now();
     let down = router(Arc::new(AppState {
         wordings: Arc::default(),
+        returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -2277,9 +2287,40 @@ async fn the_finance_console() {
         "movements?period=2027-11",
         "aged_suspense?as_at=2027-11-30",
         "accounting_groups",
+        "tax_reconciliation?period=2027-11",
+        "proposals",
     ] {
         assert_eq!(ask("sub-aud", fine).await.0, StatusCode::OK, "{fine}");
     }
+    // A return is filed on a definition the service loaded from reviewed source, named, never typed.
+    let (status, definitions) = ask("sub-aud", "return_definitions").await;
+    let listed = &definitions["rows"][0];
+    assert_eq!((status, &listed["name"]), (StatusCode::OK, &json!("insurer-quarterly@1")), "{definitions}");
+    assert_eq!(listed["lines"][0], json!({ "code": "A1", "label": "Cash and settlement balances" }));
+    assert_eq!(listed["hash"].as_str().map(str::len), Some(64));
+    let file = |definition: Value| json!({ "file_return": { "id": "q-2027-4", "definition": definition, "period": "2027-11" } });
+    for typed in [
+        json!({ "id": "mine", "version": 1, "lines": [] }),
+        json!("insurer-quarterly"),
+        json!("insurer-quarterly@9"),
+        json!("nothing@1"),
+    ] {
+        let (status, problem) = tell("sub-gl1", file(typed.clone())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{typed}");
+        assert!(problem["detail"].as_str().unwrap().contains("as it is listed"), "{problem}");
+    }
+    // The named one reaches the ledger whole, which refuses only because the period is still open.
+    let (status, problem) = tell("sub-gl1", file(json!("insurer-quarterly@1"))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    let (status, problem) = tell(
+        "sub-gllead",
+        json!({ "restate_return": { "id": "q-2027-4", "definition": "insurer-quarterly@1", "reason": "late claim" } }),
+    )
+    .await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("return")), "{problem}");
+    // A figure on a return nobody has filed is the ledger's refusal.
+    assert_eq!(ask("sub-aud", "return_line?id=q-2027-4&code=A1").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(ask("sub-aud", "return_line?id=q-2027-4").await.0, StatusCode::BAD_REQUEST);
     // One policy's accounting group: the partition is a number.
     // A policy not yet placed has no group: the ledger answers nothing rather than a guess.
     assert_eq!(ask("sub-aud", "accounting_group?policy=nope&partition=1").await, (StatusCode::OK, Value::Null));
@@ -2299,6 +2340,8 @@ async fn the_finance_console() {
     for not_theirs in [
         json!({ "configure": { "partitions": 9, "year_end_month": 6 } }),
         json!({ "ingest": { "partition": 0, "events": [] } }),
+        json!({ "propose_chart": { "chart": {} } }),
+        json!({ "propose_close_config": { "config": {} } }),
         json!({ "report_aged_items": { "kind": "suspense", "as_at": "2027-11-30", "items": [], "total_minor": 0, "count": 0 } }),
         json!({ "approve_journal": { "id": "j1" }, "close_period": { "period": "2027-11" } }),
         json!("close_period"),
@@ -2363,6 +2406,7 @@ async fn the_finance_console() {
     let now = portal.now();
     let down = router(Arc::new(AppState {
         wordings: Arc::default(),
+        returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -2548,6 +2592,7 @@ async fn a_person_keeps_their_own_customer_record() {
     let now = portal.now();
     let bare = router(Arc::new(AppState {
         wordings: Arc::default(),
+        returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -2607,6 +2652,7 @@ async fn the_conduct_officer_decides_disputed_replacements() {
     let now = portal.now();
     let down = router(Arc::new(AppState {
         wordings: Arc::default(),
+        returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -2875,6 +2921,7 @@ async fn the_person_insured_signs_their_disclosure() {
     // A portal with no intake configured.
     let bare = router(Arc::new(AppState {
         wordings: Arc::default(),
+        returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -2971,6 +3018,7 @@ async fn documents_are_downloaded_by_their_owner_or_by_staff_with_a_purpose() {
     let now = portal.now();
     let bare = router(Arc::new(AppState {
         wordings: Arc::default(),
+        returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -3255,6 +3303,7 @@ async fn an_employer_runs_the_scheme_membership() {
     let now = portal.now();
     let bare = router(Arc::new(AppState {
         wordings: Arc::default(),
+        returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -3538,6 +3587,7 @@ async fn the_underwriting_console() {
     let now = portal.now();
     let down = router(Arc::new(AppState {
         wordings: Arc::default(),
+        returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -3702,6 +3752,7 @@ async fn the_payments_console() {
     let now = portal.now();
     let down = router(Arc::new(AppState {
         wordings: Arc::default(),
+        returns: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,

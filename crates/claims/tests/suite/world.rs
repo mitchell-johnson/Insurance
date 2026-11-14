@@ -250,6 +250,7 @@ pub fn facts(cover_type: &str) -> CoverFacts {
         health_limits: vec![],
         event_cap_minor: None,
         built_in: vec![],
+        known_then: None,
     }
 }
 

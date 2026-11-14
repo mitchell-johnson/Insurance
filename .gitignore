@@ -3,3 +3,4 @@ target/
 .env
 *.profraw
 lcov.info
+__pycache__/

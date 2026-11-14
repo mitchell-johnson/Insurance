@@ -24,6 +24,7 @@ pub mod insolvency;
 pub mod intake;
 pub mod iso20022;
 pub mod machine;
+pub mod manual;
 pub mod model;
 pub mod notices;
 mod payee;

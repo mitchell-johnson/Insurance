@@ -678,3 +678,57 @@ fn a_direct_credit_from_an_authoritys_account_names_its_policy() {
     desk.ok(&svc(), statement(a, d(2027, 11, 15), open, open + 150_00, vec![line("l1", 150_00, "top up")]));
     assert_eq!(payer_policy_of_first_match(&desk), None);
 }
+
+/// Purpose: a drill's token payment that the bank took is expected on the
+/// statements: leaving the channel's operating account and, where the drill
+/// account is one of the insurer's own, arriving there, so both lines
+/// reconcile with no exception; a probe that failed expects nothing.
+/// Why it matters: a weekly drill through every channel from every region
+/// would otherwise leave reconcilers several exceptions a week for money
+/// that only moved between the insurer's own accounts.
+#[test]
+fn a_drills_token_payment_reconciles_itself() {
+    let mut desk = Desk::new();
+    let mut c = config();
+    c.accounts.get_mut("anz-sf1-claims").unwrap().at_bank = Some(ic_payments::iso20022::OrderingAccount {
+        name: "Insurer Operating".into(),
+        number: "01-0000-0001".into(),
+        bic: None,
+    });
+    desk.ok(
+        &cal(),
+        Command::ActivateConfig {
+            version: 2,
+            config: Box::new(c),
+        },
+    );
+    desk.ok(
+        &svc(),
+        Command::StartDrill {
+            drill: "d1".into(),
+            region: "syd".into(),
+        },
+    );
+    for (channel, ok) in [("anz-file", true), ("bnz-file", false)] {
+        desk.ok(
+            &svc(),
+            Command::RecordDrillProbe {
+                drill: "d1".into(),
+                channel: channel.into(),
+                probe: probe(ok),
+            },
+        );
+    }
+    let opening = |desk: &Desk, a: &str| desk.state.books.get(a).map_or(0, |b| b.closing_minor);
+    let at = opening(&desk, "anz-sf1-operating");
+    let out = desk.statement("anz-sf1-operating", d(2027, 11, 15), at, &[("l1", -1_00, "drill-d1-anz-file")]);
+    let at = opening(&desk, "anz-sf1-claims");
+    let back = desk.statement("anz-sf1-claims", d(2027, 11, 15), at, &[("l1", 1_00, "drill-d1-anz-file")]);
+    for events in [out, back] {
+        assert!(
+            matches!(&events[..], [Event::StatementReconciled { matched: 1, exceptions: 0, .. }]),
+            "{events:?}"
+        );
+    }
+    assert!(desk.state.books.values().all(|b| !b.expected.keys().any(|k| k.contains("bnz-file"))));
+}

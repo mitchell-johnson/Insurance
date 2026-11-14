@@ -114,6 +114,7 @@ fn request(id: &str, owner: &str, others: &[&str], class: DataClass) -> IssueReq
         wordings: vec![],
         components: vec![],
         notice: None,
+        copy_of: None,
     }
 }
 
@@ -452,4 +453,83 @@ async fn the_token_check_refuses_what_it_cannot_vouch_for() {
     assert!(refused(check(signed(&authority, &["portal"], None), None).await).contains("key id"));
     assert!(refused(check(signed(&authority, &["portal"], Some("k9")), None).await).contains("unknown key"));
     assert_eq!(entra.authenticate(&axum::http::HeaderMap::new()).await, Err(AuthError::Missing));
+}
+
+/// Purpose: the definitions library built into the service holds every
+/// file in `products/definitions`, including AIA's published wordings,
+/// each under the hash of its text.
+/// Why it matters: the core keeps only the hash a cover is bound to; a
+/// definitions file left out of the service would leave claims staff with
+/// a cover whose words nobody can read.
+#[test]
+fn the_service_holds_every_definition_by_its_hash() {
+    use ic_documents::wordings::{WordingLibrary, SOURCES};
+    use sha2::{Digest, Sha256};
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../products/definitions");
+    let mut files: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|f| f.ends_with(".star"))
+        .collect();
+    files.sort();
+    let mut built: Vec<String> = SOURCES.iter().map(|(f, _)| f.to_string()).collect();
+    built.sort();
+    assert_eq!(built, files, "every definitions file is built into the service");
+    for (file, source) in SOURCES {
+        assert_eq!(std::fs::read_to_string(format!("{dir}/{file}")).unwrap(), *source);
+    }
+    let library = WordingLibrary::shipped().unwrap();
+    assert!(!library.is_empty() && library.len() > 34, "{}", library.len());
+    let source = SOURCES.iter().find(|(f, _)| *f == "aia_wordings.star").unwrap().1;
+    let umbrella = ic_product::load_definitions("aia_wordings.star", source).unwrap().remove(0);
+    let found = library.get(&umbrella.text_hash).unwrap();
+    assert_eq!((found.id.as_str(), found.version), (umbrella.id.as_str(), umbrella.version));
+    assert_eq!(hex::encode(Sha256::digest(found.text.as_bytes())), umbrella.text_hash);
+    assert!(library.get("not-a-hash").is_none());
+}
+
+/// Purpose: staff read a cover's wording by the hash the cover holds,
+/// naming who asks and why; another role, a missing name or purpose, no
+/// token, and a hash the library does not hold are refused; without
+/// sign-in configured the route is absent.
+/// Why it matters: claims are assessed against the exact words a cover
+/// was bound to, and the core stores only their hash; the words must be
+/// readable by the people deciding, and by nobody unnamed.
+#[tokio::test]
+async fn staff_read_a_covers_wording_by_its_hash() {
+    use ic_documents::wordings::WordingLibrary;
+    let library = WordingLibrary::shipped().unwrap();
+    let hash = ic_product::load_definitions("library.star", ic_documents::wordings::SOURCES[0].1).unwrap()[0]
+        .text_hash
+        .clone();
+    let expected = library.get(&hash).unwrap().clone();
+    let site = Site::start(driver().await, true).await;
+    let ask = |roles: &'static [&'static str], headers: &'static [(&'static str, &'static str)], hash: String| {
+        let mut request = site.http.get(format!("{}/v1/wordings/{hash}", site.base));
+        if !roles.is_empty() {
+            request = request.bearer_auth(token(&site.authority, roles));
+        }
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        request.send()
+    };
+    let who: &[(&str, &str)] = &[("x-ic-actor", "assessor-1"), ("x-ic-purpose", "claim cl-1")];
+    let ok = ask(&["staff"], who, hash.clone()).await.unwrap();
+    assert_eq!(ok.status().as_u16(), 200);
+    let body: Value = ok.json().await.unwrap();
+    assert_eq!(body["id"], json!(expected.id));
+    assert_eq!(body["text"], json!(expected.text));
+    assert_eq!(body["text_hash"], json!(hash));
+    assert_eq!(
+        ask(&["staff"], &[("x-ic-actor", "assessor-1")], hash.clone()).await.unwrap().status().as_u16(),
+        400
+    );
+    assert_eq!(ask(&["portal"], who, hash.clone()).await.unwrap().status().as_u16(), 403);
+    assert_eq!(ask(&[], who, hash.clone()).await.unwrap().status().as_u16(), 401);
+    assert_eq!(ask(&["staff"], who, "0".repeat(64)).await.unwrap().status().as_u16(), 404);
+
+    let bare = Site::start(driver().await, false).await;
+    let status = bare.http.get(format!("{}/v1/wordings/{hash}", bare.base)).send().await.unwrap().status();
+    assert_eq!(status.as_u16(), 404);
 }
