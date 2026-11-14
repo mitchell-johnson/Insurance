@@ -1415,6 +1415,23 @@ impl FinanceState {
         }
     }
 
+    /// Configurations proposed and not yet approved, for the finance lead to
+    /// review: what each is, its version and content hash, and who proposed it.
+    pub fn pending_proposals(&self) -> serde_json::Value {
+        let rows: Vec<serde_json::Value> = self
+            .proposals
+            .iter()
+            .map(|(id, p)| {
+                let (kind, version, hash) = match &p.item {
+                    ConfigItem::Chart(c) => ("chart", c.version, c.content_hash.clone()),
+                    ConfigItem::Close(c) => ("close_config", c.version, c.content_hash.clone()),
+                };
+                serde_json::json!({ "id": id, "kind": kind, "version": version, "hash": hash, "proposer": p.by })
+            })
+            .collect();
+        serde_json::Value::Array(rows)
+    }
+
     /// Policies by accounting group, and how many have none.
     pub fn accounting_group_counts(&self) -> serde_json::Value {
         let mut counts: BTreeMap<String, u64> = BTreeMap::new();
