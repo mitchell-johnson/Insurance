@@ -424,3 +424,80 @@ fn one_net_payment_covers_credits_and_debts_on_different_partitions() {
     assert_eq!(w.internal(InternalLedger::Settlement), cash - net);
     w.assert_reconciled();
 }
+
+fn withholding(who: &str, withholding: ic_distribution::model::Withholding) -> Command {
+    Command::SetWithholding {
+        party: party(who),
+        withholding,
+    }
+}
+
+/// Purpose: tax is withheld from commission when it is paid, at the payee's declared rate,
+/// rounded down: the statement shows it, the payment is the rest, and the tax sits in
+/// withholding tax payable under its own posting type. A payment the bank returns gives the
+/// tax back with the money, so the next payment withholds once on the whole. A natural person
+/// who declared nothing is withheld from at the no-declaration rate, a business or an exempt
+/// payee is not, a rate above 100% is refused, and the setting turns it all off.
+/// Why it matters: commission to advisers is a schedular payment, so the insurer owes the tax
+/// whether or not it withheld it. Withholding twice on a returned payment, or never giving it
+/// back, misstates both the payee's money and the tax return.
+#[test]
+fn tax_is_withheld_from_commission_at_the_payees_rate_and_given_back_on_a_return() {
+    use ic_distribution::model::Withholding;
+    let (mut w, _, _) = advised_in(worked_example());
+    w.days(7);
+    let tax = || InternalLedger::WithholdingTax { kind: "schedular".into() };
+    assert_eq!(w.dist.withholding_bp(&party("a-co")), 0, "a business that declared nothing");
+    assert_eq!(code(w.send(admin(), withholding("a-co", Withholding::Rate(10_001)))), "invalid_rate");
+    assert_eq!(
+        code(w.send(module("claims"), withholding("a-co", Withholding::Rate(2_000)))),
+        "caller_not_allowed"
+    );
+    w.send(module("customer-master"), withholding("a-co", Withholding::Rate(2_000))).unwrap();
+
+    let owed = w.payable("a-co");
+    let withheld = owed * 2_000 / 10_000;
+    w.cut("a-co").unwrap();
+    let s = w.statement("a-co", 1).clone();
+    assert_eq!(s.withheld_minor, withheld);
+    assert_eq!(s.payments.iter().map(|p| p.amount_minor).sum::<i64>(), owed - withheld);
+    assert_eq!(w.internal(tax()), -withheld, "owed to the revenue authority");
+    assert_eq!(w.dist.requested["wht:a-co.1:0"].posting.kind, "withholding_schedular");
+    let part = s.payments[0].reference.clone();
+    w.send(
+        module("payments"),
+        Command::PaymentReturned {
+            reference: part,
+            reason: "account closed".into(),
+        },
+    )
+    .unwrap();
+    w.sync();
+    assert_eq!(w.payable("a-co"), owed, "the money and its tax come back");
+    assert_eq!(w.internal(tax()), 0);
+    w.assert_reconciled();
+
+    w.cut("a-co").unwrap();
+    let s = w.statement("a-co", 2).clone();
+    assert_eq!(s.withheld_minor, withheld, "withheld once on the whole");
+    w.settle(&s.payments[0].reference);
+    assert_eq!((w.payable("a-co"), w.ledger("a-co", PartyLedger::Clearing)), (0, 0));
+    assert_eq!(w.internal(tax()), -withheld);
+    w.assert_reconciled();
+
+    // Who is withheld from, and at what rate.
+    w.payee("adviser-a");
+    assert_eq!(w.dist.withholding_bp(&party("adviser-a")), 4_500, "a person who declared nothing");
+    w.send(admin(), withholding("adviser-a", Withholding::Exempt)).unwrap();
+    assert_eq!(w.dist.withholding_bp(&party("adviser-a")), 0);
+    let off = World::with(
+        1,
+        Settings {
+            commission_withholding: false,
+            ..Settings::default()
+        },
+    );
+    let (mut w, _, _) = advised_in(worked_example_in(off));
+    w.send(admin(), withholding("a-co", Withholding::Rate(2_000))).unwrap();
+    assert_eq!(w.dist.withholding_bp(&party("a-co")), 0, "turned off");
+}
