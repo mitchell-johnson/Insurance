@@ -672,3 +672,73 @@ pub(crate) fn reinstated_terms(ledger: &mut Ledger, catalog: &Catalog, policy: &
         done => done,
     }
 }
+
+/// Record that cover on this policy replaces cover on another policy for
+/// the same person. Nothing is priced or posted: the record is for
+/// reinsurance, which carries the old cession on, and for anyone asking
+/// later what a policy replaced. The same replacement again changes nothing.
+pub(crate) fn record_replacement(policy: &mut Policy, ctx: &mut Ctx<'_>, spec: crate::command::Replacement) -> Result<(), Reject> {
+    let plain = |s: &str| !s.is_empty() && s.len() <= 128 && s.chars().all(|c| c.is_ascii_graphic());
+    if spec.replaced_sum_insured_minor <= 0
+        || !plain(&spec.evidence)
+        || !plain(&spec.replaced_cover)
+        || !plain(&spec.replaced_policy.0)
+        || !plain(&spec.replaced_life.0)
+    {
+        return Err(Reject::new(
+            "invalid_replacement",
+            "a replacement names the replaced policy, life and cover, an amount above zero and where the disclosure is kept",
+        ));
+    }
+    if spec.replaced_policy == policy.id {
+        return Err(Reject::new("invalid_replacement", "a policy does not replace itself"));
+    }
+    if matches!(policy.status, PolicyStatus::Transferred | PolicyStatus::Avoided) {
+        return Err(Reject::new("not_in_force", "the policy is not here to record a replacement on"));
+    }
+    let same = |r: &crate::command::Replacement| {
+        r.replaced_policy == spec.replaced_policy
+            && r.replaced_cover == spec.replaced_cover
+            && r.replaced_life == spec.replaced_life
+            && r.cover == spec.cover
+            && r.life == spec.life
+    };
+    if let Some(known) = policy.replaces.iter().find(|r| same(r)) {
+        return if known == &spec {
+            Ok(())
+        } else {
+            Err(Reject::new(
+                "replacement_recorded",
+                "this replacement is recorded with a different amount or disclosure",
+            ))
+        };
+    }
+    let cover = policy
+        .covers
+        .get(&spec.cover)
+        .ok_or_else(|| Reject::new("unknown_cover", format!("the policy has no cover {}", spec.cover)))?;
+    let sum_insured_minor: i64 = cover
+        .layers
+        .iter()
+        .filter(|l| l.life == spec.life && l.end.is_none_or(|e| e > ctx.date))
+        .map(|l| l.sum_insured_minor)
+        .sum();
+    if sum_insured_minor <= 0 {
+        return Err(Reject::new(
+            "life_not_covered",
+            format!("{} has no cover {} on the policy", spec.life, spec.cover),
+        ));
+    }
+    ctx.emit(Event::CoverReplaced {
+        policy: policy.id.clone(),
+        cover: spec.cover.clone(),
+        life: spec.life.clone(),
+        replaced_policy: spec.replaced_policy.clone(),
+        replaced_cover: spec.replaced_cover.clone(),
+        replaced_life: spec.replaced_life.clone(),
+        replaced_sum_insured_minor: spec.replaced_sum_insured_minor,
+        sum_insured_minor,
+    });
+    policy.replaces.push(spec);
+    Ok(())
+}

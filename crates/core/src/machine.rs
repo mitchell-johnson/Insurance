@@ -564,6 +564,10 @@ impl CoreState {
                     underwritten::change_excess(&mut s.ledger, &s.catalog, p, ctx, *spec)
                 })
             }
+            Command::RecordReplacement(spec) => {
+                let policy = spec.policy.clone();
+                self.with_policy(&policy, false, |_, p| underwritten::record_replacement(p, ctx, *spec))
+            }
             Command::ExerciseOption(spec) => {
                 let policy = spec.policy.clone();
                 self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
