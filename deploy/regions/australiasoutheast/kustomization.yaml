@@ -1,0 +1,25 @@
+# The second cluster, Australia Southeast: voters ic-node-3 and ic-node-4,
+# and every other workload except the one-off bootstrap, which runs from home.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: insurance-core
+resources:
+  - ../../k8s
+  - peers.yaml
+patches:
+  - target:
+      kind: StatefulSet
+      name: ic-node
+    patch: |-
+      - op: replace
+        path: /spec/ordinals/start
+        value: 3
+  - target:
+      kind: Job
+      name: ic-bootstrap
+    patch: |-
+      $patch: delete
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: ic-bootstrap

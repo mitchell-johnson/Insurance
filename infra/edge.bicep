@@ -10,6 +10,9 @@
 //        privateLinkServiceResourceGroup=<the cluster's node resource group> \
 //        dnsZoneName=<zone> portalHost=<host> apiHost=<host> ...
 // then approve Front Door's connection once (docs/operations.md, "The way in").
+// With the ledger's second region (infra/second-region.bicep), pass that
+// cluster's Private Link Service too: both regions then serve requests, and
+// Front Door stops sending to one whose health probe fails.
 
 targetScope = 'resourceGroup'
 
@@ -28,6 +31,12 @@ param privateLinkServiceName string = 'insurance-core-ingress'
 
 @description('The resource group it is in: the cluster\'s node resource group (MC_...).')
 param privateLinkServiceResourceGroup string
+
+@description('The second region\'s Private Link Service resource group (its cluster\'s node resource group). Empty: one region only.')
+param secondPrivateLinkServiceResourceGroup string = ''
+
+@description('The second region, where that Private Link Service is.')
+param secondLocation string = 'australiasoutheast'
 
 @description('The Azure DNS zone the public names live in, in this resource group. Empty: the names are made by whoever runs DNS, from the outputs (a CNAME to the endpoint and a TXT record to validate each).')
 param dnsZoneName string = ''
@@ -62,6 +71,13 @@ resource pls 'Microsoft.Network/privateLinkServices@2024-05-01' existing = {
   name: privateLinkServiceName
 }
 
+var twoRegions = !empty(secondPrivateLinkServiceResourceGroup)
+
+resource secondPls 'Microsoft.Network/privateLinkServices@2024-05-01' existing = if (twoRegions) {
+  scope: resourceGroup(twoRegions ? secondPrivateLinkServiceResourceGroup : resourceGroup().name)
+  name: privateLinkServiceName
+}
+
 resource profile 'Microsoft.Cdn/profiles@2024-09-01' = {
   name: '${name}-edge'
   location: 'global'
@@ -86,7 +102,15 @@ resource origins 'Microsoft.Cdn/profiles/originGroups@2024-09-01' = {
   properties: {
     loadBalancingSettings: { sampleSize: 4, successfulSamplesRequired: 3, additionalLatencyInMilliseconds: 50 }
     // One origin: Front Door recommends no health probe, since there is
-    // nowhere else to send a request. A second region's origin would add one.
+    // nowhere else to send a request. With two, each region's portal is
+    // probed (deploy/k8s/ingress.yaml, the host-less /healthz rule), and a
+    // region that fails three of four probes is left out until it passes.
+    healthProbeSettings: twoRegions ? {
+      probePath: '/healthz'
+      probeRequestType: 'HEAD'
+      probeProtocol: 'Http'
+      probeIntervalInSeconds: 30
+    } : null
     sessionAffinityState: 'Disabled'
   }
 }
@@ -114,6 +138,28 @@ resource origin 'Microsoft.Cdn/profiles/originGroups/origins@2024-09-01' = {
   }
 }
 
+// The second region's controller, served alike: the ledger leads from both
+// regions, and either region's services reach any partition's leader.
+resource secondOrigin 'Microsoft.Cdn/profiles/originGroups/origins@2024-09-01' = if (twoRegions) {
+  parent: origins
+  name: 'ingress-second'
+  properties: {
+    hostName: twoRegions ? secondPls!.properties.alias : 'unset'
+    originHostHeader: null
+    httpPort: 80
+    httpsPort: 443
+    priority: 1
+    weight: 1000
+    enabledState: 'Enabled'
+    enforceCertificateNameCheck: true
+    sharedPrivateLinkResource: {
+      privateLink: { id: secondPls!.id }
+      privateLinkLocation: secondLocation
+      requestMessage: 'Front Door ${profile.name} for the insurance core'
+    }
+  }
+}
+
 resource zone 'Microsoft.Network/dnsZones@2018-05-01' existing = if (!empty(dnsZoneName)) {
   name: empty(dnsZoneName) ? 'unset' : dnsZoneName
 }
@@ -134,7 +180,7 @@ resource domains 'Microsoft.Cdn/profiles/customDomains@2024-09-01' = [for h in h
 resource routes 'Microsoft.Cdn/profiles/afdEndpoints/routes@2024-09-01' = [for (h, i) in hosts: {
   parent: endpoint
   name: h.key
-  dependsOn: [origin]
+  dependsOn: [origin, secondOrigin]
   properties: {
     customDomains: [{ id: domains[i].id }]
     originGroup: { id: origins.id }

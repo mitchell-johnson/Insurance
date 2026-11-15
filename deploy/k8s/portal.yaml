@@ -76,11 +76,12 @@ data:
   # employer-portal and group-admin (deploy/entra/group-app.sh, docs/group.md).
   IC_GROUP_URL: http://ic-group
   IC_GROUP_SCOPE: api://REPLACE-group-application-id/.default
-  # With ledger nodes in two regions, name which node is where and which
-  # region normally leads, so the operations console and the status page can
-  # say when a region is lost (docs/operations.md, "Losing a region"):
-  # IC_REGIONS: "australiaeast=ic-node-1.ic-node:7000,ic-node-2.ic-node:7000;australiasoutheast=ic-node-3.ic-node:7000"
-  # IC_HOME_REGION: australiaeast
+  # Which ledger voter is in which region, and the two regions that share the
+  # leaders, so the operations console and the status page can say when a
+  # region is lost (docs/operations.md, "Losing a region"). The witness in
+  # Australia Central never keeps a lead, so it is shown but not a home.
+  IC_REGIONS: "australiaeast=ic-node-1.ledger.internal:7000,ic-node-2.ledger.internal:7000;australiasoutheast=ic-node-3.ledger.internal:7000,ic-node-4.ledger.internal:7000;australiacentral=ic-witness.ledger.internal:7000"
+  IC_HOME_REGION: "australiaeast,australiasoutheast"
 ---
 apiVersion: v1
 kind: Service

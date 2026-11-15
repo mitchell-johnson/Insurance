@@ -1378,6 +1378,17 @@ var coreAlerts = [
     dimensions: [{ name: 'Partition', operator: 'Include', values: ['*'] }]
   }
   {
+    key: 'witness-log'
+    displayName: 'Witness log growing'
+    description: 'The witness in the third region holds more of a partition\'s log than the ic-watch limit, because a data voter has been down long enough that the witness keeps the log for it. Bring the voter back or replace it. See docs/operations.md, "Losing a region".'
+    severity: 2
+    frequency: 'PT15M'
+    window: 'PT30M'
+    query: '${containerLines}| where Line has "ledger.watch" and Line has "witness log growing"\n| extend Partition = extract(@\'"partition":(\\d+)\', 1, Line)\n| project TimeGenerated, Partition'
+    threshold: 0
+    dimensions: [{ name: 'Partition', operator: 'Include', values: ['*'] }]
+  }
+  {
     key: 'unit-orders-left'
     displayName: 'Unit orders left unpriced'
     description: 'Unit orders are still waiting for a price after the close or the unit-orders run. See docs/operations.md, "Alerts", and docs/unit-pricing.md.'

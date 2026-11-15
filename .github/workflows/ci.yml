@@ -157,4 +157,13 @@ jobs:
       - name: Compile its parameters
         run: bicep build-params infra/main.bicepparam --stdout > /dev/null
       - name: Render the Kubernetes manifests
-        run: kubectl kustomize deploy/k8s > /dev/null
+        run: |
+          kubectl kustomize deploy/k8s > /dev/null
+          for region in deploy/regions/*/; do
+            echo "$region"
+            kubectl kustomize "$region" > /dev/null
+          done
+      # The ledger's voters are named in the templates, the overlays and the
+      # settings; they must agree (deploy/regions/README.md).
+      - name: Check the regions agree
+        run: python3 tools/check_regions.py

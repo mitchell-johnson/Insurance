@@ -1,0 +1,42 @@
+# ic-node-1 and ic-node-2, each at its fixed address (deploy/regions/README.md).
+apiVersion: v1
+kind: Service
+metadata:
+  name: ic-node-1-peer
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+    service.beta.kubernetes.io/azure-load-balancer-internal-subnet: ledger-peers
+    service.beta.kubernetes.io/azure-load-balancer-ipv4: 10.40.6.4
+spec:
+  type: LoadBalancer
+  # The caller's address is kept, so the network policy can check it.
+  externalTrafficPolicy: Local
+  loadBalancerSourceRanges: ["10.40.0.0/16", "10.41.0.0/16", "10.42.0.0/24"]
+  selector:
+    app: ic-node
+    statefulset.kubernetes.io/pod-name: ic-node-1
+  ports:
+    - name: raft
+      port: 7000
+      targetPort: raft
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ic-node-2-peer
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+    service.beta.kubernetes.io/azure-load-balancer-internal-subnet: ledger-peers
+    service.beta.kubernetes.io/azure-load-balancer-ipv4: 10.40.6.5
+spec:
+  type: LoadBalancer
+  # The caller's address is kept, so the network policy can check it.
+  externalTrafficPolicy: Local
+  loadBalancerSourceRanges: ["10.40.0.0/16", "10.41.0.0/16", "10.42.0.0/24"]
+  selector:
+    app: ic-node
+    statefulset.kubernetes.io/pod-name: ic-node-2
+  ports:
+    - name: raft
+      port: 7000
+      targetPort: raft

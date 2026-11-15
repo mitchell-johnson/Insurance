@@ -91,7 +91,8 @@ impl PortalSettings {
     ///   for; default `<audience>/.default`.
     /// - `IC_AUTH=dev`: trust caller headers instead. Refused in Kubernetes.
     /// - `IC_REGIONS`: `auckland=host:port,host:port;sydney=...`, and
-    ///   `IC_HOME_REGION`: the region that normally holds the leaders. Without
+    ///   `IC_HOME_REGION`: the regions, comma-separated, that normally hold
+    ///   the leaders between them. Without
     ///   them every node is taken to be in one region.
     /// - `IC_PORTAL_HEARTBEAT_SECS`: default 15.
     /// - `IC_PORTAL_FORWARD_SECS`: how often the commission module's changes

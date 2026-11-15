@@ -57,3 +57,16 @@ spec:
                 name: ic-documents
                 port:
                   name: http
+    # Front Door's health probe, which reaches each region's controller by
+    # its Private Link alias rather than a public name (infra/edge.bicep).
+    # This one path, on any other host name, answers whether the portal in
+    # this region is up; when it is not, Front Door sends people to the other.
+    - http:
+        paths:
+          - path: /healthz
+            pathType: Exact
+            backend:
+              service:
+                name: ic-portal
+                port:
+                  name: http
