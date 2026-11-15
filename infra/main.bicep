@@ -202,6 +202,24 @@ resource portalIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-0
   tags: tags
 }
 
+// ic-watch, the ledger watch (deploy/k8s/admin.yaml): reads its own cluster
+// token, whose grant lets it ask the nodes' status and nothing else.
+resource watchIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${name}-watch'
+  location: location
+  tags: tags
+}
+
+resource watchFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: watchIdentity
+  name: 'aks-${workloadNamespace}-ic-watch'
+  properties: {
+    issuer: aks.properties.oidcIssuerProfile.issuerURL
+    subject: 'system:serviceaccount:${workloadNamespace}:ic-watch'
+    audiences: ['api://AzureADTokenExchange']
+  }
+}
+
 resource nodeFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
   parent: nodeIdentity
   name: 'aks-${workloadNamespace}-ic-node'
@@ -924,6 +942,21 @@ resource nodeToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (cl
   }
 }
 
+resource watchTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
+  parent: vault
+  name: 'cluster-token-ic-watch'
+}
+
+resource watchToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (clusterTokensIssued) {
+  scope: watchTokenSecret
+  name: guid(watchTokenSecret.id, watchIdentity.id, roles.keyVaultSecretsUser)
+  properties: {
+    principalId: watchIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsUser)
+  }
+}
+
 resource workerTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
   parent: vault
   name: 'cluster-token-ic-worker'
@@ -1624,6 +1657,7 @@ output nodeClientId string = nodeIdentity.properties.clientId
 output workerClientId string = workerIdentity.properties.clientId
 output apiClientId string = apiIdentity.properties.clientId
 output portalClientId string = portalIdentity.properties.clientId
+output watchClientId string = watchIdentity.properties.clientId
 output keyVaultName string = vault.name
 output paymentsClientId string = paymentsIdentity.properties.clientId
 output paymentsKeyVaultName string = paymentsVault.name

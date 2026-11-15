@@ -2,6 +2,7 @@
   "mode": "report",
   "shared_token": "refuse",
   "workloads": {
+    "ic-watch": {},
     "ic-node": {
       "peer": true
     },

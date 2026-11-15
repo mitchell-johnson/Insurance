@@ -66,7 +66,9 @@ spec:
 # status and logs what is wrong (a node it cannot reach, a partition with no
 # leader, a backlog of housekeeping, voters whose state hashes differ). The
 # core's alert rules (infra/main.bicep, "alerts: the core") read those lines.
-# The argument is the backlog limit per partition.
+# The argument is the backlog limit per partition. It runs under its own
+# identity and token (ic-watch), whose grant lets it read a node's status
+# and nothing else.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -88,7 +90,7 @@ spec:
             azure.workload.identity/use: "true"
         spec:
           restartPolicy: Never
-          serviceAccountName: ic-node
+          serviceAccountName: ic-watch
           securityContext:
             runAsNonRoot: true
             runAsUser: 65532
@@ -125,4 +127,4 @@ spec:
                 driver: secrets-store.csi.k8s.io
                 readOnly: true
                 volumeAttributes:
-                  secretProviderClass: ic-node-token
+                  secretProviderClass: ic-watch-token

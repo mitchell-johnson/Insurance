@@ -3,7 +3,9 @@
 #   ic-node    writes sealed journal segments and events
 #   ic-worker  signs and publishes the daily Merkle root
 #   ic-api     reads the cluster token and nothing else
-# The client IDs are the nodeClientId, workerClientId and apiClientId outputs.
+#   ic-watch   reads its own cluster token, which may only ask a node's status
+# The client IDs are the nodeClientId, workerClientId, apiClientId and
+# watchClientId outputs.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -24,6 +26,13 @@ metadata:
   name: ic-api
   annotations:
     azure.workload.identity/client-id: REPLACE-apiClientId
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ic-watch
+  annotations:
+    azure.workload.identity/client-id: REPLACE-watchClientId
 ---
 # Each workload's cluster token is its own Key Vault secret,
 # `cluster-token-<workload>` (deploy/cluster-access/issue.sh), mounted as a file
@@ -78,5 +87,22 @@ spec:
       array:
         - |
           objectName: cluster-token-ic-api
+          objectAlias: cluster-token
+          objectType: secret
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: ic-watch-token
+spec:
+  provider: azure
+  parameters:
+    clientID: REPLACE-watchClientId
+    keyvaultName: REPLACE-keyVaultName
+    tenantId: REPLACE-tenantId
+    objects: |
+      array:
+        - |
+          objectName: cluster-token-ic-watch
           objectAlias: cluster-token
           objectType: secret

@@ -123,7 +123,7 @@ kubectl -n insurance-core logs job/status-now
 
 `ic-admin status` prints, for each node and partition: the leader, the last log index, the state hash and the housekeeping backlog. All nodes should agree on the state hash at the same index.
 
-`ic-admin watch [limit]` asks the same of every node and logs only what is wrong, one JSON line each (target `ledger.watch`), then a summary line `ledger watch`. The `ic-watch` CronJob (`deploy/k8s/admin.yaml`) runs it every five minutes with a backlog limit of 5,000 entries per partition, and the alerts below read its lines.
+`ic-admin watch [limit]` asks the same of every node and logs only what is wrong, one JSON line each (target `ledger.watch`), then a summary line `ledger watch`. The `ic-watch` CronJob (`deploy/k8s/admin.yaml`) runs it every five minutes with a backlog limit of 5,000 entries per partition, and the alerts below read its lines. It runs under its own service account and managed identity (`ic-watch`, output `watchClientId`) with its own cluster token, `cluster-token-ic-watch`, whose grant lets it ask a node's status and nothing else.
 
 **The daily close** runs from the `ic-close` CronJob at 00:05 New Zealand time. It closes every business day whose midnight has passed, oldest first, so a missed night is caught up by the next run. Check it with `kubectl -n insurance-core get jobs` and read the report in the job's log.
 
