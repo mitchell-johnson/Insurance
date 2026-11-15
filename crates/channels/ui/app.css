@@ -293,8 +293,7 @@ ul.checks li:last-child { border-bottom: 0; }
 .picks li { display: flex; flex-direction: column; gap: 2px; padding: var(--s2) var(--s3); border-radius: var(--r-s); cursor: pointer; font-size: var(--t-s); color: var(--ink); }
 .picks li span { color: var(--muted); font-size: var(--t-xs); }
 .picks li[aria-selected="true"], .picks li:hover { background: var(--accent-soft); }
-.picks li.none { cursor: default; color: var(--muted); }
-.picks li.none:hover { background: none; }
+.pick-note { display: block; margin-top: var(--s1); font-size: var(--t-xs); color: var(--muted); max-width: 40ch; }
 .picked { display: flex; flex-wrap: wrap; gap: var(--s1); margin-top: var(--s1); }
 .picked .pill button { padding: 0 var(--s1); min-height: 0; border: 0; background: none; color: inherit; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

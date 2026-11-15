@@ -231,22 +231,34 @@ fn portal_signed_in_by(
                     &[ic_channels::pricing::actions::VIEW, ic_channels::pricing::actions::LEAD],
                     &[DataClass::Ordinary],
                 ),
-                template("frontline", &[workbench_complaints::RECORD], &[DataClass::Ordinary]),
+                template(
+                    "frontline",
+                    &[workbench_complaints::RECORD, staff_actions::FIND_CUSTOMER],
+                    &[DataClass::Ordinary, DataClass::Personal],
+                ),
                 template(
                     "complaints-team",
-                    &[workbench_complaints::HANDLE, workbench_complaints::TRAINED],
+                    &[workbench_complaints::HANDLE, workbench_complaints::TRAINED, staff_actions::FIND_CUSTOMER],
                     &[DataClass::Ordinary, DataClass::Personal],
                 ),
                 Template {
                     default_profile: "junior".into(),
                     ..template(
                         "complaints-junior",
-                        &[workbench_complaints::HANDLE],
+                        &[workbench_complaints::HANDLE, staff_actions::FIND_CUSTOMER],
                         &[DataClass::Ordinary, DataClass::Personal],
                     )
                 },
-                template("complaints-legal", &[workbench_complaints::LEGAL], &[DataClass::Ordinary]),
-                template("conduct", &[workbench_complaints::CONDUCT], &[DataClass::Ordinary]),
+                template(
+                    "complaints-legal",
+                    &[workbench_complaints::LEGAL, staff_actions::FIND_CUSTOMER],
+                    &[DataClass::Ordinary, DataClass::Personal],
+                ),
+                template(
+                    "conduct",
+                    &[workbench_complaints::CONDUCT, staff_actions::FIND_CUSTOMER],
+                    &[DataClass::Ordinary, DataClass::Personal],
+                ),
                 template("ledger-operator", &[ic_channels::finance::actions::OPERATE], &[DataClass::Financial]),
                 template("ledger-approver", &[ic_channels::finance::actions::APPROVE], &[DataClass::Financial]),
                 template(

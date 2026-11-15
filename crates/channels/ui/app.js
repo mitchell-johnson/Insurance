@@ -274,25 +274,32 @@ const portal = (() => {
     const id = (input.id || "pick") + "-picks-" + (++picks);
     const list = h("ul", { class: "picks", role: "listbox", id, hidden: true });
     const status = h("span", { class: "visually-hidden", "aria-live": "polite" });
+    // When there is nothing to choose, say so under the field, in the flow of the form, never over it.
+    const note = h("small", { class: "pick-note", id: id + "-note", "aria-live": "polite", hidden: true });
     let items = [], at = -1, timer = null, asked = 0;
     input.setAttribute("role", "combobox"); input.setAttribute("aria-autocomplete", "list");
     input.setAttribute("aria-expanded", "false"); input.setAttribute("aria-controls", id); input.autocomplete = "off";
-    const holder = input.parentElement; holder.classList.add("pick-holder"); holder.append(list, status);
+    const holder = input.parentElement; holder.classList.add("pick-holder"); holder.append(list, status, note);
+    const tell = (words) => { note.textContent = words || ""; note.hidden = !words; };
     const close = () => { list.hidden = true; input.setAttribute("aria-expanded", "false"); input.removeAttribute("aria-activedescendant"); at = -1; };
     const mark = (n) => {
       at = n; [...list.children].forEach((li, i) => li.setAttribute("aria-selected", String(i === n)));
       if (n >= 0 && list.children[n]) { input.setAttribute("aria-activedescendant", list.children[n].id); list.children[n].scrollIntoView({ block: "nearest" }); }
     };
     const choose = (item) => {
-      input.value = item.value; input.dataset.label = item.label || item.value; close();
+      // A person is shown by name once chosen; the page reads their reference from what onPick kept.
+      tell(""); input.value = opts.label ? item.label || item.value : item.value; input.dataset.label = item.label || item.value; close();
       input.dispatchEvent(new Event("change", { bubbles: true }));
       if (opts.onPick) opts.onPick(item);
     };
     function show(found, text) {
+      // A value typed in full is chosen already: the list would only stand in front of what comes next.
+      if (text && found.some((i) => String(i.value).toLowerCase() === text.toLowerCase())) { tell(""); return close(); }
       items = found.slice(0, opts.max || 12);
-      put(list, items.length ? items.map((item, n) => h("li", { role: "option", id: id + "-" + n, "aria-selected": "false",
-        on: { mousedown: (ev) => { ev.preventDefault(); choose(item); } } }, h("strong", {}, item.label || item.value), item.hint ? h("span", {}, item.hint) : null))
-        : h("li", { class: "none", role: "option", "aria-disabled": "true", "aria-selected": "false", id: id + "-none" }, text ? opts.none || "Nothing matches that." : opts.empty || "Nothing to choose from yet."));
+      if (!items.length) { close(); return tell(text ? opts.none || "Nothing matches that." : opts.empty || "Nothing to choose from yet."); }
+      tell("");
+      put(list, items.map((item, n) => h("li", { role: "option", id: id + "-" + n, "aria-selected": "false",
+        on: { mousedown: (ev) => { ev.preventDefault(); choose(item); } } }, h("strong", {}, item.label || item.value), item.hint ? h("span", {}, item.hint) : null)));
       list.hidden = false; input.setAttribute("aria-expanded", "true"); at = -1;
       status.textContent = items.length ? `${items.length} to choose from.` : "";
     }
@@ -302,9 +309,9 @@ const portal = (() => {
         const want = text.toLowerCase();
         return show(source.filter((i) => !want || `${i.value} ${i.label || ""} ${i.hint || ""}`.toLowerCase().includes(want)), text);
       }
-      if (text.length < (opts.min == null ? 2 : opts.min)) return close();
+      if (text.length < (opts.min == null ? 2 : opts.min)) { tell(""); return close(); }
       try { const found = await source(text); if (mine === asked) show(found || [], text); }
-      catch (e) { if (mine === asked) put(list, h("li", { class: "none", role: "option", "aria-disabled": "true", "aria-selected": "false", id: id + "-err" }, e.message)), list.hidden = false; }
+      catch (e) { if (mine === asked) { close(); tell(e.message); } }
     }
     input.addEventListener("input", () => { delete input.dataset.label; clearTimeout(timer); timer = setTimeout(lookup, typeof source === "function" ? 250 : 0); });
     input.addEventListener("focus", () => { if (typeof source !== "function" || opts.min === 0) lookup(); });
@@ -319,10 +326,10 @@ const portal = (() => {
   }
   // A field that takes several picks, kept as a comma-separated value.
   function pickMany(input, source, opts = {}) {
-    const chosen = h("div", { class: "picked" }), all = () => String(input.dataset.many || "").split(",").filter(Boolean);
-    const draw = () => put(chosen, all().map((v) => h("span", { class: "pill" }, v, h("button", { type: "button", class: "quiet", "aria-label": "Remove " + v, on: { click: () => { input.dataset.many = all().filter((x) => x !== v).join(","); draw(); } } }, "×"))));
+    const chosen = h("div", { class: "picked" }), all = () => String(input.dataset.many || "").split(",").filter(Boolean), names = {};
+    const draw = () => put(chosen, all().map((v) => h("span", { class: "pill" }, names[v] || v, h("button", { type: "button", class: "quiet", "aria-label": "Remove " + v, on: { click: () => { input.dataset.many = all().filter((x) => x !== v).join(","); draw(); } } }, "×"))));
     input.parentElement.append(chosen);
-    picker(input, source, { ...opts, onPick: (item) => { input.dataset.many = [...new Set([...all(), item.value])].join(","); input.value = ""; draw(); } });
+    picker(input, source, { ...opts, onPick: (item) => { names[item.value] = item.label || item.value; input.dataset.many = [...new Set([...all(), item.value])].join(","); input.value = ""; draw(); } });
     return { values: () => [...all(), ...String(input.value).split(",").map((x) => x.trim()).filter(Boolean)], clear: () => { input.dataset.many = ""; input.value = ""; draw(); } };
   }
 

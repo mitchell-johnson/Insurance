@@ -8,13 +8,13 @@
 <form id="intake"><div class="row">
 <div><label for="i-id">Complaint reference</label><input id="i-id" required></div>
 <div><label for="i-channel">Heard by</label><select id="i-channel"><option value="call">Call</option><option value="email">Email</option><option value="letter">Letter</option><option value="app">App</option><option value="portal">Portal</option><option value="social_media">Social media</option><option value="adviser">Adviser</option><option value="in_conversation">In conversation</option><option value="external_scheme">External scheme</option></select></div>
-<div><label for="i-who">Complainant (customer reference)</label><input id="i-who" required></div>
+<div><label for="i-who">Complainant (find them by name and birth date)</label><input id="i-who" required size="32"></div>
 <div><label for="i-kind">Complainant is the</label><select id="i-kind"><option value="policyholder">Policyholder</option><option value="life_insured">Life insured</option><option value="claimant">Claimant</option><option value="beneficiary">Beneficiary</option><option value="scheme_member">Scheme member</option><option value="employer">Employer</option><option value="adviser">Adviser</option><option value="third_party">Third party</option></select></div>
 <div><label for="i-process">About</label><select id="i-process"><option value="service">Service</option><option value="claims">Claims</option><option value="underwriting">Underwriting</option><option value="billing">Billing</option><option value="sales">Sales</option><option value="privacy">Privacy</option><option value="adviser_conduct">Adviser conduct</option></select></div>
-<div><label for="i-policies">Policies (comma separated)</label><input id="i-policies"></div>
+<div><label for="i-policies">Policies it is about</label><input id="i-policies"></div>
 <div><label for="i-doc">Summary document</label><input id="i-doc" required></div>
 <div><label for="i-vulnerable">Vulnerable?</label><select id="i-vulnerable"><option value="false">No</option><option value="true">Yes</option></select></div>
-<div><label for="i-adjust">Adjustments needed (comma separated)</label><input id="i-adjust"></div>
+<div><label for="i-adjust">Adjustments needed</label><input id="i-adjust"></div>
 <button>Record</button></div></form><div id="intake-msg" aria-live="polite"></div></section></div>
 
 <div data-view="Queue">
@@ -25,7 +25,7 @@
 
 <div data-view="Register and report">
 <section><h2>Register and report</h2><form id="period"><div class="row"><div><label for="p-from">From</label><input id="p-from" type="date" required></div><div><label for="p-to">To</label><input id="p-to" type="date" required></div><button>Show</button></div></form><div id="period-msg" aria-live="polite"></div><div id="register"></div><div id="report"></div></section>
-<section><h2>A customer's complaints</h2><form id="of"><div class="row"><div><label for="of-party">Customer reference</label><input id="of-party" required></div><button>Find</button></div></form><div id="of-out"></div></section></div>
+<section><h2>A customer's complaints</h2><form id="of"><div class="row"><div><label for="of-party">Customer (find them by name and birth date)</label><input id="of-party" required size="32"></div><button>Find</button></div></form><div id="of-msg" aria-live="polite"></div><div id="of-out"></div></section></div>
 
 <div data-view="Conduct cases">
 <section><h2>Open conduct cases</h2><p class="muted">Open to the conduct function and legal only. Act on a case from the Queue tab, as conduct or legal.</p><div id="cases"></div><div id="case-msg" aria-live="polite"></div><div id="case" hidden><h2 id="case-title"></h2><div id="case-summary"></div><div id="case-raw"></div></div></section></div>
@@ -90,6 +90,20 @@ const ACTIONS = {
 };
 const forSeat = (seat) => seat === "complaints" ? { ...ACTIONS.complaints, ...ACTIONS.referral } : seat === "legal" ? { ...ACTIONS.referral, ...ACTIONS.conduct } : seat === "conduct" ? ACTIONS.conduct : {};
 
+// What fields are filled from: the complaint or case open now, colleagues, and customers found by name.
+let opened = null, openCase = null, queued = [], cases = [];
+const STAFF_FIELDS = new Set(["handler", "to", "from", "owner", "reviewed_by", "authorised_by"]);
+function helpers(spec) {
+  spec.forEach(([key], n) => {
+    const input = $("f-" + n);
+    if (!input || input.tagName !== "INPUT") return;
+    if (key === "complaint") { input.value = opened || ""; portal.picker(input, () => Promise.resolve(queued.map((q) => ({ value: q.complaint, label: q.complaint, hint: [words(q.process), q.owner || "unassigned"].join(" · ") }))), { min: 0 }); }
+    else if (key === "case") { input.value = openCase || ""; portal.picker(input, () => Promise.resolve(cases.map((c) => ({ value: c, label: c }))), { min: 0 }); }
+    else if (STAFF_FIELDS.has(key)) portal.picker(input, () => portal.colleagues(), { min: 0 });
+    else if (key === "representative.party" || key === "customer") portal.picker(input, portal.people);
+    else if (key === "month") input.value = portal.month(1);
+  });
+}
 function fields() {
   const spec = forSeat($("a-seat").value)[$("a-command").value] || [];
   put($("a-fields"), spec.map(([key, label, kind, options], n) => {
@@ -100,6 +114,7 @@ function fields() {
           required: !["optional", "optdate", "list", "finding"].includes(kind) });
     return h("div", {}, h("label", { for: id }, label), input);
   }));
+  helpers(spec);
 }
 function commands() { put($("a-command"), Object.keys(forSeat($("a-seat").value)).map((c) => h("option", { value: c }, words(c)))); fields(); }
 $("a-seat").addEventListener("change", commands); $("a-command").addEventListener("change", fields);
@@ -122,23 +137,35 @@ $("act").addEventListener("submit", run($("act-msg"), async () => {
 
 async function open(id) {
   const [file, timers] = await Promise.all([ask("complaint", { id }), ask("running", { id })]);
-  $("o-id").value = id; $("file").hidden = false; $("file-title").textContent = `${id}: ${words(file.status)}`;
+  opened = id; fields();
+  $("o-id").value = id; $("file").hidden = false; $("file-title").textContent = `${id}: ${words(typeof file.status === "string" ? file.status : Object.keys(file.status || {})[0])}`;
   put($("file-timers"), table(["Timer", "Due"], (timers || []).map(([timer, due]) => [words(typeof timer === "string" ? timer : JSON.stringify(timer)), due])));
   portal.put($("file-raw"), portal.details(file));
 }
 async function queue() {
   const rows = await ask("queue");
+  queued = rows;
   put($("queue"), table(["Complaint", "Owner", "About", "Adjustments", "Needs a trained handler", "Authority needed", "Next due", ""], rows.map((q) => [q.complaint, q.owner || "unassigned", words(q.process), (q.adjustments || []).join(", "), q.needs_trained_handler ? "yes" : "", q.authority_needed,
     q.next_due ? `${words(typeof q.next_due[0] === "string" ? q.next_due[0] : JSON.stringify(q.next_due[0]))} by ${q.next_due[1]}` : "",
-    h("button", { class: "quiet", on: { click: run($("open-msg"), () => open(q.complaint)) } }, "Open")])));
+    h("button", { class: "quiet", on: { click: run($("open-msg"), async () => { await open(q.complaint); $("file-title").scrollIntoView({ behavior: "smooth" }); }) } }, "Open")])));
 }
+portal.picker($("o-id"), () => Promise.resolve(queued.map((q) => ({ value: q.complaint, label: q.complaint, hint: [words(q.process), q.owner || "unassigned"].join(" · ") }))), { min: 0, onPick: (item) => run($("open-msg"), () => open(item.value))() });
 $("open").addEventListener("submit", run($("open-msg"), () => open($("o-id").value)));
 $("subject").addEventListener("click", run($("open-msg"), async () => { $("file").hidden = false; $("file-title").textContent = "The complainant's own record"; put($("file-timers")); portal.put($("file-raw"), portal.details(await ask("subject_record", { id: $("o-id").value }))); }));
 
+// Recording: a reference made here, the complainant found by name, their policies offered, adjustments from the fixed list.
+const ADJUSTMENTS = ["more_time", "plain_language", "large_print", "speak_to_trained_person", "pause_before_large_withdrawal", "no_phone_calls", "support_person_present", "written_follow_up", "check_understanding"];
+let theirs = [];
+const fresh = () => { $("i-id").value = portal.reference("CMP"); };
+if (!portal.working()) portal.workOn(portal.reference("COMPLAINT"));
+portal.picker($("i-who"), portal.people, { label: true, onPick: (item) => { $("i-who").dataset.party = item.value; theirs = (item.person && item.person.policies) || []; } });
+$("i-who").addEventListener("input", () => { delete $("i-who").dataset.party; theirs = []; });
+const policiesPicked = portal.pickMany($("i-policies"), () => Promise.resolve(theirs.map((p) => ({ value: p.policy, label: p.number || p.policy, hint: [p.product, p.as].join(" · ") }))), { min: 0, empty: "Find the complainant first to see their policies." });
+const adjustPicked = portal.pickMany($("i-adjust"), ADJUSTMENTS.map((a) => ({ value: a, label: words(a) })), { min: 0 });
 $("intake").addEventListener("submit", run($("intake-msg"), async () => {
-  await send("intake", { record_complaint: { complaint: $("i-id").value, channel: $("i-channel").value, complainant: $("i-who").value, complainant_kind: $("i-kind").value, links: { policies: list($("i-policies").value) },
-    category: { process: $("i-process").value }, summary_document: $("i-doc").value, vulnerable: $("i-vulnerable").value === "true", adjustments: list($("i-adjust").value) } });
-  const id = $("i-id").value; $("intake").reset();
+  await send("intake", { record_complaint: { complaint: $("i-id").value, channel: $("i-channel").value, complainant: $("i-who").dataset.party || $("i-who").value.trim(), complainant_kind: $("i-kind").value, links: { policies: policiesPicked.values() },
+    category: { process: $("i-process").value }, summary_document: $("i-doc").value, vulnerable: $("i-vulnerable").value === "true", adjustments: adjustPicked.values() } });
+  const id = $("i-id").value; $("intake").reset(); policiesPicked.clear(); adjustPicked.clear(); delete $("i-who").dataset.party; fresh();
   return `Recorded ${id}. The complaints team will acknowledge it.`;
 }));
 $("period").addEventListener("submit", run($("period-msg"), async () => {
@@ -146,12 +173,19 @@ $("period").addEventListener("submit", run($("period-msg"), async () => {
   put($("register"), table(["Complaint", "Received", "Heard by", "About", "Status", "Outcome", "Days to acknowledge", "Days to decide", "Closed"], rows.map((r) => [r.complaint, r.received_on, words(r.channel), words(r.process), words(typeof r.status === "string" ? r.status : Object.keys(r.status)[0]), words(r.outcome), r.days_to_acknowledge, r.days_to_decide, r.closed_on || ""])));
   portal.put($("report"), portal.details(report));
 }));
-$("of").addEventListener("submit", run($("period-msg"), async () => { const ids = await ask("complaints_of", { party: $("of-party").value }); put($("of-out"), table(["Complaint"], ids.map((id) => [id]))); }));
+portal.picker($("of-party"), portal.people, { label: true, onPick: (item) => { $("of-party").dataset.party = item.value; } });
+$("of-party").addEventListener("input", () => { delete $("of-party").dataset.party; });
+async function complaintsOf(party) {
+  const ids = await ask("complaints_of", { party });
+  put($("of-out"), ids.length ? table(["Complaint", ""], ids.map((id) => [id, h("button", { class: "quiet", type: "button", on: { click: run($("of-msg"), async () => { portal.view("queue"); await open(id); }) } }, "Open")])) : portal.empty("No complaints from this customer."));
+}
+$("of").addEventListener("submit", run($("of-msg"), () => complaintsOf($("of-party").dataset.party || $("of-party").value.trim())));
 
 async function conduct() {
   const ids = await ask("open_conduct_cases");
+  cases = ids;
   put($("cases"), table(["Case", ""], ids.map((id) => [id, h("button", { class: "quiet", on: { click: run($("case-msg"), async () => {
-    const c = await ask("conduct_case", { id }); $("case").hidden = false; $("case-title").textContent = `${c.id}: ${words(typeof c.kind === "string" ? c.kind : Object.keys(c.kind)[0])}`;
+    const c = await ask("conduct_case", { id }); $("case").hidden = false; openCase = id; fields(); $("case-title").textContent = `${c.id}: ${words(typeof c.kind === "string" ? c.kind : Object.keys(c.kind)[0])}`;
     put($("case-summary"), h("p", {}, `Owner ${c.owner}. Opened ${c.opened_on}. ${Object.keys(c.customers).length} customer(s), ${c.policies.length} policy(ies), population ${c.population_complete ? "complete" : "not complete"}. ${Object.keys(c.sample).length} file(s) sampled.`));
     portal.put($("case-raw"), portal.details(c));
   }) } }, "Open")])));
@@ -163,5 +197,15 @@ signIn(R).then(async () => {
   me = await ask("me");
   $("seats").textContent = `${me.seats.map(words).join(", ")}. Authority level ${me.authority}${me.trained ? ", trained to work with vulnerable customers" : ""}.`;
   put($("a-seat"), me.seats.filter((s) => s !== "intake").map((s) => h("option", { value: s }, words(s)))); commands();
+  fresh();
+  $("p-from").value = portal.month() + "-01"; $("p-to").value = portal.today();
+  // Opened from another console: a complaint from someone found there, or that person's complaints.
+  const sent = portal.params();
+  if (sent.complainant) {
+    $("i-who").dataset.party = sent.complainant; $("i-who").value = sent.complainant;
+    if (sent.policies) $("i-policies").value = sent.policies;
+  }
+  if (sent.party) { $("of-party").value = sent.party; $("of-party").dataset.party = sent.party; await run($("of-msg"), () => complaintsOf(sent.party))(); }
+  else if (!sent.complainant && (has("complaints") || has("legal") || has("conduct"))) portal.view("queue");
 }).catch(portal.refuse);
 </script></body></html>
