@@ -70,6 +70,7 @@ impl Nodes {
                 events: EventTarget::Discard,
                 segment_entries: 10,
                 snapshot_every: 1000,
+                witnesses: Default::default(),
             };
             running.insert(id, server::start_with(settings, vec![module_spec().unwrap()]).await.unwrap());
         }

@@ -21,7 +21,8 @@ fn row(partition: u16, role: &str, leader: Option<u64>, applied: u64, hash: &str
 /// Purpose: from every node's status the watch finds the unreachable nodes, the partitions no
 /// node names a leader for, the partitions whose leader holds more than the backlog limit (the
 /// leader's backlog, not a follower's), and the partitions where members at the same applied
-/// index disagree on state; a healthy cluster gives no findings. `watch` parses with and
+/// index disagree on state, leaving out a witness's hash and backlog and reporting a witness
+/// whose log has grown too long; a healthy cluster gives no findings. `watch` parses with and
 /// without a limit, and its log lines are written without failing.
 /// Why it matters: these findings are the only signal the "no leader", "node down" and
 /// "housekeeping backlog" alerts have; a false negative leaves a partition refusing writes
@@ -56,6 +57,29 @@ fn the_watch_finds_what_needs_a_person() {
     assert_eq!(watch.backlogged, BTreeMap::from([(2, 9_003)]));
     assert_eq!(watch.largest_backlog, 9_003);
     assert_eq!(watch.diverged, vec![3]);
+    assert!(!watch.healthy());
+    log(&watch, DEFAULT_BACKLOG_LIMIT);
+
+    // A witness reports the hash of an empty partition and holds the log since the data
+    // voters' last mark: its hash is never compared, its log is reported once too long.
+    let witness = |partition: u16, first: u64, last: u64| {
+        let mut r = row(partition, "follower", Some(1), last, "empty", 0);
+        r.witness = true;
+        r.first_log_index = Some(first);
+        r.last_log_index = Some(last);
+        r.backlog.events = 1_000_000;
+        r
+    };
+    let with_witness = BTreeMap::from([
+        (
+            "ic-node-1".to_string(),
+            Ok(vec![row(0, "leader", Some(1), 30, "a", 0), row(1, "leader", Some(1), 300_000, "b", 0)]),
+        ),
+        ("ic-node-5".to_string(), Ok(vec![witness(0, 25, 30), witness(1, 1, 300_000)])),
+    ]);
+    let watch = findings(&with_witness, DEFAULT_BACKLOG_LIMIT);
+    assert!(watch.diverged.is_empty() && watch.backlogged.is_empty(), "{watch:?}");
+    assert_eq!(watch.witness_log, BTreeMap::from([(1, 299_999)]));
     assert!(!watch.healthy());
     log(&watch, DEFAULT_BACKLOG_LIMIT);
 

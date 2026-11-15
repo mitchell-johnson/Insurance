@@ -74,6 +74,7 @@ async fn the_service_works_against_a_real_node() {
         events: EventTarget::Discard,
         segment_entries: 10,
         snapshot_every: 1000,
+        witnesses: Default::default(),
     };
     let node = server::start_with(settings, vec![ic_payments_service::module_spec().unwrap()]).await.unwrap();
     let client = ClusterClient::new(vec![addr.clone()])

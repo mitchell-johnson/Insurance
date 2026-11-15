@@ -57,6 +57,7 @@ async fn a_command_and_its_events_carry_the_callers_trace() {
         events: EventTarget::Discard,
         segment_entries: 1_000,
         snapshot_every: 10_000,
+        witnesses: Default::default(),
     })
     .await
     .unwrap();

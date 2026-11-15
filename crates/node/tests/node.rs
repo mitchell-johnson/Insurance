@@ -42,6 +42,7 @@ async fn the_deployed_node_hosts_every_module() {
         events: EventTarget::Discard,
         segment_entries: 10,
         snapshot_every: 1000,
+        witnesses: Default::default(),
     };
     let node = server::start_with(settings, modules).await.unwrap();
     let client = ClusterClient::new(vec![addr.clone()]).with_auth(auth);

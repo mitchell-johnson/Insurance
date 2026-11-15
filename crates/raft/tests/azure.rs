@@ -60,6 +60,7 @@ async fn a_ledger_node_holds_its_output_through_an_azure_outage() {
         events: EventTarget::EventHubs(azure.base.clone(), "policy-events".to_string()),
         segment_entries: 4,
         snapshot_every: 10_000,
+        witnesses: Default::default(),
     };
     let node = server::start(settings).await.unwrap();
     let client = ClusterClient::new(vec![addr.clone()]).with_auth(auth);

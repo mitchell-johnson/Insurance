@@ -161,6 +161,7 @@ impl Cluster {
             events: EventTarget::Discard,
             segment_entries: 10,
             snapshot_every: self.snapshot_every,
+            witnesses: Default::default(),
         }
     }
 
@@ -459,6 +460,7 @@ async fn a_module_refuses_state_that_is_not_its_own() {
         events: EventTarget::Discard,
         segment_entries: 10,
         snapshot_every: 5,
+        witnesses: Default::default(),
     };
     let twice = vec![ModuleSpec::new("tally", tally).unwrap(), ModuleSpec::new("tally", tally).unwrap()];
     let refused = server::start_with(settings.clone(), twice).await.err().unwrap();

@@ -1,10 +1,12 @@
 //! Raft replication for one ledger partition.
 //!
-//! Each partition is a Raft group. The shipped deployment runs three voters
-//! per group, one in each availability zone of Azure New Zealand North, so a
-//! zone can be lost without losing a committed entry. Surviving the loss of
-//! the region needs voters in a second and third region, which the software
-//! supports and the infrastructure does not yet provision (docs/decisions.md).
+//! Each partition is a Raft group. The shipped deployment runs five voters
+//! per group: two in Australia East (Sydney), two in Australia Southeast
+//! (Melbourne) and a witness in a third region, which votes and keeps the
+//! log but holds no state ([`witness`]). Either main region can be lost with
+//! a majority left, and the groups' leadership is shared between the two
+//! main regions so both take writes ([`failback`]). See docs/decisions.md,
+//! "Where the ledger's voters run".
 //!
 //! The pieces:
 //! - [`types`]: what is replicated (a command envelope) and what comes back.
@@ -18,7 +20,8 @@
 //! - [`server`]: a node process hosting a member of every partition's group.
 //! - [`auth`]: the cluster token every caller of a node must present.
 //! - [`client`]: how callers find a partition's leader and retry safely.
-//! - [`failback`]: handing leadership back to the preferred region.
+//! - [`failback`]: sharing leadership between regions and handing it back home.
+//! - [`witness`]: the tiebreaker that votes and keeps the log, and no state.
 //! - [`module`]: a replicated group for a module whose state spans partitions.
 //!
 //! The state machine is held in memory. It is snapshotted to disk as the log
@@ -42,6 +45,7 @@ pub mod query;
 pub mod server;
 pub mod store;
 pub mod types;
+pub mod witness;
 
 pub use auth::ClusterAuth;
 pub use client::{ClusterClient, EndOfDayView};

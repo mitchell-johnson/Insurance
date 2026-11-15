@@ -1,4 +1,13 @@
-// The insurance core on Azure: one region's worth of platform.
+// The insurance core on Azure: the home region's platform.
+//
+// The ledger runs in two regions and a witness in a third (docs/decisions.md,
+// "Where the ledger's voters run"). This template is the home region,
+// Australia East (Sydney): it holds every stateful service (the ledger's
+// write-once evidence, the event stream, the vaults, the databases) and a
+// cluster with two ledger voters. infra/second-region.bicep adds Australia
+// Southeast (Melbourne): a cluster with two more voters and the stateless
+// services, reaching these services over peering. infra/ledger-witness.bicep
+// adds the witness, and infra/regions.bicep joins the three networks.
 //
 // Deploy at resource group scope:
 //   az deployment group create -g <rg> -f infra/main.bicep -p infra/main.bicepparam
@@ -8,7 +17,7 @@
 
 targetScope = 'resourceGroup'
 
-@description('Azure region. The primary is New Zealand North; data stays in New Zealand unless a second region is added deliberately.')
+@description('Azure region of the home: Australia East (Sydney). Its pair, Australia Southeast, is the second region, which is where the geo-redundant copies of the ledger evidence go.')
 param location string = resourceGroup().location
 
 @description('Short name used as a prefix for every resource. Lowercase letters and digits.')
@@ -34,7 +43,7 @@ param clusterTokensIssued bool = false
 @description('The system pool runs only AKS\'s own pods (it is tainted CriticalAddonsOnly). One node per zone.')
 param systemVmSize string = 'Standard_D2ds_v5'
 
-@description('The ledger pool runs only the ic-node voters, one per zone, each with its Premium SSD v2 disk. Fixed at three: a voter cannot move to another zone, because its disk is zonal.')
+@description('The ledger pool runs only the ic-node voters, one per zone, each with its Premium SSD v2 disk. A voter cannot move to another zone, because its disk is zonal.')
 param ledgerVmSize string = 'Standard_D8ds_v5'
 
 @description('The apps pool runs every other workload. The cluster autoscaler keeps it between these counts, balancing the zones.')
@@ -64,8 +73,17 @@ param logInteractiveDays int = 90
 @description('Days logs and traces are kept in all, the rest in the archive tier. PLACEHOLDER: seven years, the best estimate of the insurer\'s audit need (docs/decisions.md, "Log retention"); confirm with compliance. Allowed values are 4 to 730, or whole years up to 4383.')
 param logTotalRetentionDays int = 2556
 
-@description('Ledger nodes expected to be running. An alert fires when fewer are.')
-param ledgerVoters int = 3
+@description('Ledger data voters expected to be running in both regions\' clusters, which both report to this workspace. An alert fires when fewer are. The witness is a virtual machine and is watched by ic-watch instead.')
+param ledgerVoters int = 4
+
+@description('The second region (infra/second-region.bicep).')
+param secondRegion string = 'australiasoutheast'
+
+@description('Keep copies of the event stream and the container images in the second region, so that it carries on when this one is lost. On in prod.')
+param geoReplicate bool = environment == 'prod'
+
+@description('Machines in the ledger pool: one per voter in this region, in different zones.')
+param ledgerPoolCount int = 2
 
 // --- protection -------------------------------------------------------------------
 
@@ -324,6 +342,13 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
           privateLinkServiceNetworkPolicies: 'Disabled'
         }
       }
+      {
+        // The fixed private addresses at which the other regions reach each
+        // ledger node: one internal load balancer address per voter
+        // (deploy/regions), named in the ledger.internal zone (infra/regions.bicep).
+        name: 'ledger-peers'
+        properties: { addressPrefix: cidrSubnet(vnetAddressSpace, 24, 6) }
+      }
     ]
   }
 }
@@ -572,6 +597,19 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   }
 }
 
+// The images in the second region too: its cluster pulls there, and still
+// can when this region is lost.
+resource registryReplica 'Microsoft.ContainerRegistry/registries/replications@2023-07-01' = if (geoReplicate) {
+  parent: registry
+  name: secondRegion
+  location: secondRegion
+  tags: tags
+  properties: {
+    zoneRedundancy: 'Enabled'
+    regionEndpointEnabled: true
+  }
+}
+
 // --- compute ------------------------------------------------------------------
 
 resource aks 'Microsoft.ContainerService/managedClusters@2026-08-01' = {
@@ -672,11 +710,12 @@ resource aks 'Microsoft.ContainerService/managedClusters@2026-08-01' = {
       {
         name: 'ledger'
         mode: 'User'
-        count: 3
+        count: ledgerPoolCount
         vmSize: ledgerVmSize
         osType: 'Linux'
         osSKU: 'AzureLinux'
-        // One voter per zone: a zone can be lost without losing quorum.
+        // One voter per zone. A zone, or this whole region, can be lost
+        // without losing quorum: the other region and the witness hold it.
         availabilityZones: ['1', '2', '3']
         vnetSubnetID: nodeSubnetId
         nodeLabels: { 'insurance-core/pool': 'ledger' }
@@ -1014,10 +1053,11 @@ resource apiToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (clu
 
 // --- event stream -------------------------------------------------------------------
 
+
 // Premium: 64 hub partitions, one per ledger partition, so order within a
 // ledger partition survives the stream. The Kafka endpoint is on by default
 // at this tier for consumers that prefer it.
-resource eventHubs 'Microsoft.EventHub/namespaces@2024-01-01' = {
+resource eventHubs 'Microsoft.EventHub/namespaces@2024-05-01-preview' = {
   name: '${name}-${unique}-events'
   location: location
   tags: tags
@@ -1027,6 +1067,16 @@ resource eventHubs 'Microsoft.EventHub/namespaces@2024-01-01' = {
     minimumTlsVersion: '1.2'
     zoneRedundant: true
     publicNetworkAccess: privateNetworking ? 'Disabled' : 'Enabled'
+    // Geo-replication to the second region: the stream is kept there too,
+    // and promoting that copy makes it the primary when this region is lost
+    // (docs/operations.md, "Losing a region").
+    geoDataReplication: !geoReplicate ? null : {
+      maxReplicationLagDurationInSeconds: 60
+      locations: [
+        { locationName: location, roleType: 'Primary' }
+        { locationName: secondRegion, roleType: 'Secondary' }
+      ]
+    }
   }
 }
 
@@ -1691,3 +1741,8 @@ output privateNetwork object = privateNetworking ? {
 output postgresHost string = deployPostgres ? postgres!.properties.fullyQualifiedDomainName : ''
 output temporalClientId string = deployPostgres && selfHostedTemporal ? temporalIdentity!.properties.clientId : ''
 output egressPrefix string = egress.properties.ipPrefix
+// What infra/second-region.bicep and infra/regions.bicep build on.
+output oidcIssuer string = aks.properties.oidcIssuerProfile.issuerURL
+output registryName string = registry.name
+output privateDnsZoneNames array = privateNetworking ? zoneNames : []
+output ledgerPeerSubnet string = cidrSubnet(vnetAddressSpace, 24, 6)

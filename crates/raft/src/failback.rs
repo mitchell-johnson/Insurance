@@ -1,10 +1,12 @@
-//! Returning leadership to the preferred region without an operator.
+//! Returning leadership to each group's home region without an operator.
 //!
-//! Normally the voters in one region lead every group, because that is
-//! where the callers are. When that region is lost the other voters take
-//! over within seconds. When it comes back, its voters rejoin as followers
-//! and catch up; this controller then hands leadership back to them, group
-//! by group.
+//! Every group has a home: the voters that should lead it. With one home
+//! (`IC_PREFERRED_NODES`) one region leads every group. With several
+//! (`IC_LEADER_REGIONS`) the groups are shared out between the regions, so
+//! each region leads part of the ledger and both take writes: active-active.
+//! When a region is lost the other voters take over its groups within
+//! seconds. When it comes back, its voters rejoin as followers and catch up;
+//! this controller then hands its groups back to them, group by group.
 //!
 //! Each node runs it for the groups it leads itself. A node outside the
 //! preferred set that leads a group hands it to a preferred voter once that
@@ -44,8 +46,10 @@ const HANDOVER_GRACE: Duration = Duration::from_secs(5);
 /// How fail-back is configured. Read from the environment by the binary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FailbackSettings {
-    /// The voters that should lead: those in the preferred region.
-    pub preferred: BTreeSet<NodeId>,
+    /// The voters that should lead, by home. A group's home is chosen from
+    /// this list by [`FailbackSettings::home_of`]; with one entry it is the
+    /// home of every group.
+    pub homes: Vec<BTreeSet<NodeId>>,
     /// The share of this node's groups moved in one round, in percent. At
     /// least one group moves per round.
     pub share_percent: u32,
@@ -60,10 +64,16 @@ pub struct FailbackSettings {
 }
 
 impl FailbackSettings {
-    /// Read settings through `get`. `None` when no preferred nodes are set:
-    /// leadership then stays wherever elections put it.
+    /// Read settings through `get`. `None` when no home is set: leadership
+    /// then stays wherever elections put it.
     ///
-    /// - `IC_PREFERRED_NODES`: `1,2` — the node numbers in the preferred region.
+    /// - `IC_PREFERRED_NODES`: `1,2` — the node numbers in the one region
+    ///   that leads every group. Or:
+    /// - `IC_LEADER_REGIONS`: `australiaeast,australiasoutheast` — the regions
+    ///   that share the groups' leadership, in order, with
+    ///   `IC_REGION_NODES`: `australiaeast=1,2;australiasoutheast=3,4;australiacentral=5`,
+    ///   the node numbers in each region. A region named there but not in
+    ///   `IC_LEADER_REGIONS` (the witness's) never leads.
     /// - `IC_FAILBACK_SHARE_PERCENT`: default 20.
     /// - `IC_FAILBACK_LATENCY_MS`: default 2000.
     /// - `IC_FAILBACK_SETTLE_SECONDS`: default 120.
@@ -71,13 +81,40 @@ impl FailbackSettings {
     /// - `IC_FAILBACK_TIMEZONE`: default `Pacific/Auckland`.
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Option<Self>, String> {
         let get = |key: &str| get(key).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
-        let Some(list) = get("IC_PREFERRED_NODES") else {
-            return Ok(None);
+        let nodes = |key: &str, list: &str| -> Result<BTreeSet<NodeId>, String> {
+            let mut set = BTreeSet::new();
+            for id in list.split(',').filter(|id| !id.trim().is_empty()) {
+                set.insert(id.trim().parse::<NodeId>().map_err(|e| format!("{key}: {e}"))?);
+            }
+            if set.is_empty() {
+                return Err(format!("{key}: a home needs at least one node"));
+            }
+            Ok(set)
         };
-        let mut preferred = BTreeSet::new();
-        for id in list.split(',') {
-            preferred.insert(id.trim().parse::<NodeId>().map_err(|e| format!("IC_PREFERRED_NODES: {e}"))?);
-        }
+        let homes = match (get("IC_PREFERRED_NODES"), get("IC_LEADER_REGIONS")) {
+            (None, None) => return Ok(None),
+            (Some(_), Some(_)) => return Err("set IC_PREFERRED_NODES or IC_LEADER_REGIONS, not both".to_string()),
+            (Some(list), None) => vec![nodes("IC_PREFERRED_NODES", &list)?],
+            (None, Some(regions)) => {
+                let mut by_region = BTreeMap::new();
+                for pair in get("IC_REGION_NODES").ok_or("IC_LEADER_REGIONS needs IC_REGION_NODES")?.split(';') {
+                    let (region, list) = pair
+                        .split_once('=')
+                        .ok_or_else(|| format!("IC_REGION_NODES: expected region=1,2, got {pair:?}"))?;
+                    by_region.insert(region.trim().to_string(), nodes("IC_REGION_NODES", list)?);
+                }
+                let mut homes = Vec::new();
+                for region in regions.split(',').map(str::trim) {
+                    homes.push(
+                        by_region
+                            .get(region)
+                            .cloned()
+                            .ok_or_else(|| format!("IC_LEADER_REGIONS: {region} has no nodes in IC_REGION_NODES"))?,
+                    );
+                }
+                homes
+            }
+        };
         let number = |key: &str, default: u64| -> Result<u64, String> { get(key).map_or(Ok(default), |v| v.parse().map_err(|e| format!("{key}: {e}"))) };
         let share_percent = number("IC_FAILBACK_SHARE_PERCENT", 20)?;
         if share_percent == 0 || share_percent > 100 {
@@ -96,13 +133,24 @@ impl FailbackSettings {
             .parse()
             .map_err(|e| format!("IC_FAILBACK_TIMEZONE: {e}"))?;
         Ok(Some(Self {
-            preferred,
+            homes,
             share_percent: share_percent as u32,
             latency_budget: Duration::from_millis(number("IC_FAILBACK_LATENCY_MS", 2000)?),
             settle: Duration::from_secs(number("IC_FAILBACK_SETTLE_SECONDS", 120)?),
             frozen,
             timezone,
         }))
+    }
+
+    /// The voters that should lead a group. Partitions take the homes in
+    /// turn; a module takes the home its name falls to, so every node
+    /// agrees without being told.
+    pub fn home_of(&self, key: &GroupKey) -> &BTreeSet<NodeId> {
+        let turn = match key {
+            GroupKey::Partition(p) => usize::from(*p),
+            GroupKey::Module(m) => m.bytes().map(usize::from).sum(),
+        };
+        &self.homes[turn % self.homes.len()]
     }
 
     /// Whether `now` falls in a frozen period of the calendar.
@@ -138,7 +186,7 @@ impl std::fmt::Display for GroupKey {
 /// What fail-back is doing on one node.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct FailbackStatus {
-    /// Preferred nodes are configured.
+    /// Homes are configured.
     pub enabled: bool,
     pub paused: bool,
     /// Why fail-back stopped itself. Cleared by an operator's resume.
@@ -146,7 +194,8 @@ pub struct FailbackStatus {
     /// Why nothing was moved on the last pass, when there was something to move.
     pub waiting: Option<String>,
     /// Groups this node has handed back since it started, each confirmed to
-    /// answer under its new leader.
+    /// answer under its new leader. On a witness: groups it handed to a
+    /// data voter after leading them.
     pub moved: u64,
 }
 
@@ -166,13 +215,13 @@ pub struct Failback {
 }
 
 /// What the leader of a group knows about its followers.
-struct Lead {
-    last_log_index: u64,
-    matched: BTreeMap<NodeId, u64>,
+pub(crate) struct Lead {
+    pub(crate) last_log_index: u64,
+    pub(crate) matched: BTreeMap<NodeId, u64>,
     addrs: BTreeMap<NodeId, String>,
 }
 
-fn lead_of<SM: RaftStateMachine<TypeConfig>>(raft: &GroupOf<SM>) -> Option<Lead> {
+pub(crate) fn lead_of<SM: RaftStateMachine<TypeConfig>>(raft: &GroupOf<SM>) -> Option<Lead> {
     let metrics = raft.metrics().borrow_watched().clone();
     let replication = metrics.replication.filter(|_| metrics.state.is_leader())?;
     Some(Lead {
@@ -198,8 +247,18 @@ impl Failback {
         self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// The voters that should lead a group, or none when no home is set.
+    pub fn home_of(&self, key: &GroupKey) -> BTreeSet<NodeId> {
+        self.settings.as_ref().map(|s| s.home_of(key).clone()).unwrap_or_default()
+    }
+
     pub fn status(&self) -> FailbackStatus {
         self.lock().status.clone()
+    }
+
+    /// Count a group a witness handed to a data voter.
+    pub(crate) fn witness_handed(&self) {
+        self.lock().status.moved += 1;
     }
 
     /// Stop handing groups back until resumed. Groups already moved stay moved.
@@ -270,7 +329,7 @@ impl Failback {
     fn target(&self, settings: &FailbackSettings, key: &GroupKey, lead: &Lead) -> Option<NodeId> {
         let mut inner = self.lock();
         let mut chosen = None;
-        for id in &settings.preferred {
+        for id in settings.home_of(key) {
             let level = lead.matched.get(id).is_some_and(|m| m + LEVEL_WITHIN >= lead.last_log_index && *m > 0);
             let slot = (key.clone(), *id);
             if !level {
@@ -329,15 +388,25 @@ impl Failback {
             self.lock().unconfirmed = still;
             return 0;
         }
-        if settings.preferred.contains(&host.id) {
+        // A witness hands over whatever it leads at once, by its own rule
+        // (Host::hand_off_as_witness); it never waits for a quiet window.
+        if host.witness {
             return self.wait(None);
         }
+        // The groups this node leads away from their home.
+        let away = |key: &GroupKey| !settings.home_of(key).contains(&host.id);
         let mut led: Vec<(GroupKey, Lead)> = Vec::new();
         for (partition, member) in &host.groups {
-            led.extend(lead_of(&member.raft).map(|lead| (GroupKey::Partition(*partition), lead)));
+            let key = GroupKey::Partition(*partition);
+            if away(&key) {
+                led.extend(lead_of(&member.raft).map(|lead| (key, lead)));
+            }
         }
         for (name, module) in &host.modules {
-            led.extend(lead_of(&module.raft).map(|lead| (GroupKey::Module(name.clone()), lead)));
+            let key = GroupKey::Module(name.clone());
+            if away(&key) {
+                led.extend(lead_of(&module.raft).map(|lead| (key, lead)));
+            }
         }
         if led.is_empty() {
             return self.wait(None);
@@ -371,14 +440,16 @@ impl Failback {
             };
             match handed {
                 Ok(()) => {
-                    tracing::info!(group = %key, to, "leadership handed back to the preferred region");
+                    tracing::info!(group = %key, to, "leadership handed back to the group's home region");
                     moved.push(key);
                 }
                 Err(error) => tracing::warn!(group = %key, to, %error, "leadership could not be handed back; will retry"),
             }
         }
         let mut inner = self.lock();
-        inner.status.waiting = moved.is_empty().then(|| "no preferred voter has been level for long enough".to_string());
+        inner.status.waiting = moved
+            .is_empty()
+            .then(|| "no voter in the home region has been level for long enough".to_string());
         let count = moved.len();
         inner.unconfirmed = moved.into_iter().map(|key| (key, Instant::now())).collect();
         count

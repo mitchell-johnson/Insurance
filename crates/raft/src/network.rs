@@ -259,6 +259,11 @@ impl RaftNetworkV2<TypeConfig> for Connection {
         _cancel: impl Future<Output = ReplicationClosed> + Send + 'static,
         option: RPCOption,
     ) -> Result<SnapshotResponse<TypeConfig>, StreamingError<TypeConfig>> {
+        // A witness leading for a moment has no state to send: a member that
+        // needs one waits for a data voter to lead (crate::witness).
+        if crate::witness::is_marker(&snapshot.snapshot) {
+            return Err(unreachable("a witness holds no state to send; a data voter's leader will bring this member up").into());
+        }
         match &self.transport {
             Transport::Local(net) => Ok(net
                 .route(&self.from, self.to)?

@@ -1,10 +1,11 @@
 //! Region health for the operations console and the public status page.
 //!
-//! The ledger's voters sit in more than one region, with one home region
-//! that normally holds every leader. When the home region is lost the other
-//! regions elect leaders within seconds and nothing committed is lost; reads
-//! and writes cross to the surviving regions and are slower for the
-//! duration. The operations console shows that; the status page says it in
+//! The ledger's voters sit in more than one region. The home regions
+//! normally hold every leader between them: one region, or two that share
+//! the partitions (crates/raft/src/failback.rs). When a home region is lost
+//! the other regions elect leaders within seconds and nothing committed is
+//! lost; reads and writes cross to the surviving regions and are slower for
+//! the duration. The operations console shows that; the status page says it in
 //! plain words.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,16 +18,21 @@ use ic_raft::{ClusterClient, NodeStatus};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-/// Which nodes are in which region, and which region is home.
+/// Which nodes are in which region, and which regions are home.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Regions {
+    /// The first home region.
     pub home: String,
+    /// Every region that normally leads: `home` alone, or the regions that
+    /// share the leadership. A witness's region is never one.
+    pub homes: BTreeSet<String>,
     /// region -> node addresses.
     pub nodes: BTreeMap<String, Vec<String>>,
 }
 
 impl Regions {
-    /// Parse `auckland=node-0:7000,node-1:7000;sydney=node-2:7000`.
+    /// Parse `auckland=node-0:7000,node-1:7000;sydney=node-2:7000`, with the
+    /// home region, or the home regions separated by commas.
     pub fn parse(spec: &str, home: &str) -> Result<Self, String> {
         let mut nodes = BTreeMap::new();
         for part in spec.split(';').map(str::trim).filter(|p| !p.is_empty()) {
@@ -37,16 +43,25 @@ impl Regions {
             }
             nodes.insert(region.trim().to_string(), addrs);
         }
-        if !nodes.contains_key(home) {
+        let homes: Vec<String> = home.split(',').map(str::trim).filter(|h| !h.is_empty()).map(str::to_string).collect();
+        if homes.is_empty() {
             return Err(format!("the home region {home:?} is not one of the regions"));
         }
-        Ok(Self { home: home.to_string(), nodes })
+        if let Some(missing) = homes.iter().find(|h| !nodes.contains_key(*h)) {
+            return Err(format!("the home region {missing:?} is not one of the regions"));
+        }
+        Ok(Self {
+            home: homes[0].clone(),
+            homes: homes.into_iter().collect(),
+            nodes,
+        })
     }
 
     /// One region holding every node: a cluster that is not spread out.
     pub fn single(nodes: Vec<String>) -> Self {
         Self {
             home: "local".to_string(),
+            homes: ["local".to_string()].into(),
             nodes: [("local".to_string(), nodes)].into(),
         }
     }
@@ -69,7 +84,7 @@ pub struct RegionReport {
     pub partitions_with_leader: usize,
     /// A majority of the voters answered.
     pub quorum: bool,
-    /// The home region answers and leads every partition.
+    /// Every home region answers, and between them they lead every partition.
     pub at_home: bool,
 }
 
@@ -82,7 +97,7 @@ pub fn assess(regions: &Regions, observed: &BTreeMap<String, Option<Vec<NodeStat
     for (name, addrs) in &regions.nodes {
         let mut health = RegionHealth {
             name: name.clone(),
-            home: name == &regions.home,
+            home: regions.homes.contains(name),
             nodes: addrs.len(),
             reachable: 0,
             leaders: 0,
@@ -101,12 +116,13 @@ pub fn assess(regions: &Regions, observed: &BTreeMap<String, Option<Vec<NodeStat
         }
         out.push(health);
     }
-    let home = out.iter().find(|r| r.home);
+    let homes: Vec<&RegionHealth> = out.iter().filter(|r| r.home).collect();
+    let led_at_home: usize = homes.iter().map(|h| h.leaders).sum();
     RegionReport {
         partitions: partitions.len(),
         partitions_with_leader: led.len(),
         quorum: reachable_total * 2 > total,
-        at_home: home.is_some_and(|h| h.reachable == h.nodes && h.leaders == partitions.len()) && !partitions.is_empty(),
+        at_home: homes.iter().all(|h| h.reachable == h.nodes) && led_at_home == partitions.len() && !partitions.is_empty(),
         regions: out,
     }
 }

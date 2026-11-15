@@ -42,6 +42,7 @@ async fn a_death_is_accepted_on_every_partition_of_a_real_node() {
             events: EventTarget::Discard,
             segment_entries: 1000,
             snapshot_every: 1000,
+            witnesses: Default::default(),
         },
         vec![ic_channels::query::module_spec().unwrap()],
     )

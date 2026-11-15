@@ -151,6 +151,7 @@ impl Cluster {
             events: EventTarget::Discard,
             segment_entries: 10,
             snapshot_every: 1000,
+            witnesses: Default::default(),
         };
         self.running.insert(id, server::start_with(settings, specs()).await.unwrap());
     }
