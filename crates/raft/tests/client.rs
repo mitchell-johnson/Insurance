@@ -73,3 +73,18 @@ async fn a_node_tried_last_is_still_tried() {
     // With an answering node first, the lost one is never needed.
     client.acknowledge_events(0, "drill", 1).await.unwrap();
 }
+
+/// Purpose: a node that answers success with a body the client cannot read
+/// is a failure that names the node, not an answer.
+/// Why it matters: a proxy or a mismatched version answering 200 with
+/// something else must not be taken as the ledger having confirmed a call.
+#[tokio::test]
+async fn a_success_the_client_cannot_read_is_a_failure() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let app = Router::new().route("/v1/partitions/{partition}/consumers/{consumer}", put(|| async { "not json" }));
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = ClusterClient::new(vec![addr.clone()]);
+    let error = client.acknowledge_events(0, "drill", 1).await.unwrap_err().to_string();
+    assert!(error.contains(&addr), "{error}");
+}
