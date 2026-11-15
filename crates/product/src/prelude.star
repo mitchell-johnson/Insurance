@@ -60,7 +60,7 @@ def benefit_category(code, salary_multiple, max_sum_insured, member_pays_percent
 def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, levies = [],
           expiry_age = None, min_sum_insured = 0, max_sum_insured = None, categories = [],
           automatic_acceptance_limit = None, excess_options = [], premium_waiver = None,
-          shared_counter = None, reduces = [], joint_first_event = False, insurability_option = None, anniversary_option = None, adds_cover = None,
+          shared_counter = None, reduces = [], joint_first_event = False, insurability_option = None, anniversary_option = None, adds_cover = None, buybacks = [],
           option_axes = [], min_entry_age = None, max_entry_age = None, built_in = [], paid_up_option = None):
     return {
         "paid_up_option": paid_up_option,
@@ -84,6 +84,7 @@ def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, 
         "insurability_option": insurability_option,
         "anniversary_option": anniversary_option,
         "adds_cover": adds_cover,
+        "buybacks": buybacks,
         "option_axes": option_axes,
         "min_entry_age": min_entry_age,
         "max_entry_age": max_entry_age,
@@ -189,6 +190,17 @@ def adds_cover_option(events, covers, max_percent_of_original, max_increase, max
     for key, value in [("days_before", days_before), ("from_age", from_age), ("once_in_days", once_in_days)]:
         if value != None:
             option[key] = value
+    return option
+
+def buyback(restores, requires, after_days, within_days, max = None, only_after_nil = False):
+    """After a claim on the cover took `restores` (the cover itself, or one it reduces) off the
+    life, write it again without evidence, once, where the life chose the feature: asked for
+    within `within_days` after surviving one of `after_days`."""
+    option = {"restores": restores, "requires_feature": requires, "after_days": after_days, "within_days": within_days}
+    if max != None:
+        option["max_minor"] = max
+    if only_after_nil:
+        option["only_after_nil"] = True
     return option
 
 def anniversary_option(every_years, max_percent_of_original, at_least, max_total_percent_of_original, max_total_increase,

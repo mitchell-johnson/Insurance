@@ -246,6 +246,10 @@ pub struct CoverDefinition {
     /// The right to add another cover without evidence after an event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adds_cover: Option<CoverAddingOption>,
+    /// Rights to have cover a claim on this cover took off written again
+    /// without evidence (AIA's buy-back options).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub buybacks: Vec<BuybackOption>,
     /// The right to stop paying a limited-pay premium early and keep a
     /// reduced sum insured for life. Absent: the cover has no such option.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -426,6 +430,29 @@ pub struct CoverAddingOption {
     pub to_age: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub once_in_days: Option<u32>,
+}
+
+/// After a claim on this cover took cover off the life, the right to have
+/// it written again without evidence of health, once, on the terms it had.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BuybackOption {
+    /// The cover written again: this cover, or one it reduces.
+    pub restores: String,
+    /// The option feature the life's cover must have chosen.
+    pub requires_feature: String,
+    /// The days after the claim took the cover off that the life must
+    /// survive; which applies depends on the condition claimed for, and the
+    /// request says which.
+    pub after_days: Vec<u32>,
+    /// Days after that within which it is asked for.
+    pub within_days: u32,
+    /// The most written again. Absent: all the claim took off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_minor: Option<i64>,
+    /// Only where the claim took the whole of the cover.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub only_after_nil: bool,
 }
 
 /// The event an anniversary option is used under, in place of one of the

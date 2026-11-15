@@ -697,7 +697,8 @@ fn the_loader_refuses_unsound_benefit_categories_and_one_of_a_set_rules() {
 /// empty, an empty feature, an anniversary option with no period or minimum or on a cover that
 /// pays an income, an event option naming the reserved `anniversary` event, and a cover-adding
 /// option that adds itself, a cover the product lacks, a choice the cover does not offer, or
-/// adds nothing.
+/// adds nothing; and a buy-back of a cover the claimed cover does not reduce, with no feature,
+/// no waits, a zero window or maximum, twice for one cover, or on an income cover.
 /// Why it matters: these limits are what keep cover given without evidence of health inside
 /// what AIA priced; a limit that loaded broken would let a life add cover without end, or never.
 #[test]
@@ -791,6 +792,28 @@ fn the_loader_refuses_unsound_option_totals_and_anniversary_options() {
         let err = mini(&[("LIFE_AXES", axes), ("GROUP", trauma)]).unwrap_err();
         assert!(err.contains(why), "{axes}: {err}");
     }
+    // Buy-backs: this cover or one it reduces, once each, with a feature, waits and a window.
+    let cc = living.cover("critical-conditions-accelerated").unwrap();
+    let restores: Vec<(&str, bool, Option<i64>)> = cc.buybacks.iter().map(|b| (b.restores.as_str(), b.only_after_nil, b.max_minor)).collect();
+    assert_eq!(restores, vec![("critical-conditions-accelerated", true, Some(2_000_000_00)), ("life", false, Some(2_000_000_00))]);
+    assert!(living.cover("progressive-care").unwrap().buybacks.is_empty());
+    let back = |b: &str| format!(r#"[], buybacks = [{b}]"#);
+    assert!(mini(&[("LIFE_AXES", &back(r#"buyback("life", "x", [183, 365], 60, max = 100, only_after_nil = True)"#))]).is_ok());
+    let buyback_wrong = "a buy-back is on a lump sum cover";
+    for b in [
+        r#"buyback("income", "x", [365], 60)"#,
+        r#"buyback("life", "", [365], 60)"#,
+        r#"buyback("life", "x", [], 60)"#,
+        r#"buyback("life", "x", [0], 60)"#,
+        r#"buyback("life", "x", [365], 0)"#,
+        r#"buyback("life", "x", [365], 60, max = 0)"#,
+        r#"buyback("life", "x", [365], 60), buyback("life", "y", [365], 60)"#,
+    ] {
+        let err = mini(&[("LIFE_AXES", &back(b)), ("GROUP", trauma)]).unwrap_err();
+        assert!(err.contains(buyback_wrong), "{b}: {err}");
+    }
+    let err = mini(&[("INCOME_AXES", &back(r#"buyback("income", "x", [365], 60)"#)), ("GROUP", trauma)]).unwrap_err();
+    assert!(err.contains(buyback_wrong), "{err}");
     // On a cover that pays an income.
     let err = mini(&[("INCOME_AXES", &yearly("")), ("GROUP", trauma)]).unwrap_err();
     assert!(err.contains(anniversary_wrong), "{err}");

@@ -81,11 +81,13 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
 
     let cover_type = cover.cover_type.clone();
     let id = cover.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
-    // More of a cover the life holds comes at the excess level it holds it at.
+    // More of a cover the life holds comes at the excess level it holds it at;
+    // a cover a claim took all of, written again, at the one it had last.
     let excess_option = cover
         .layers
         .iter()
         .find(|l| l.life == spec.life && l.in_force_on(effective))
+        .or_else(|| cover.layers.iter().filter(|l| l.life == spec.life).max_by_key(|l| (l.start, l.id)))
         .and_then(|l| l.excess_option.clone());
     if !def.accepts_excess(excess_option.as_deref()) {
         return Err(Reject::new(

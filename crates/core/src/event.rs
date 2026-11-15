@@ -603,6 +603,21 @@ pub enum Event {
         sum_insured_minor: i64,
         paid_up_minor: i64,
     },
+    /// Cover a closed claim took off a life was written again without
+    /// evidence under the product's buy-back option. The layer it wrote is
+    /// announced by `LayerAdded` before it.
+    CoverBoughtBack {
+        policy: PolicyId,
+        claim: String,
+        /// The cover the claim was on.
+        cover: String,
+        /// The cover written again.
+        restores: String,
+        life: LifeId,
+        layer: u32,
+        sum_insured_minor: i64,
+        reference: String,
+    },
     /// A settled payment went to the wrong person. The payable it paid is
     /// owed again and the holder owes the amount back.
     PayeeDebtRaised {

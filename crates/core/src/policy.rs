@@ -702,6 +702,9 @@ pub struct Policy {
     /// Each cover made paid up, by the request's reference.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub paid_up: BTreeMap<String, crate::paid_up::PaidUpRecord>,
+    /// Each buy-back made, by the request's reference.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub buybacks: BTreeMap<String, crate::buyback::BuybackRecord>,
     /// What people paid by mistake owe back, by debt ID.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub payee_debts: BTreeMap<String, crate::payee_debt::PayeeDebt>,

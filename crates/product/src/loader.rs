@@ -346,6 +346,25 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                 ));
             }
         }
+        let mut restored = BTreeSet::new();
+        for b in &c.buybacks {
+            let sound = (b.restores == c.code || c.reduces.contains(&b.restores))
+                && restored.insert(b.restores.as_str())
+                && !b.requires_feature.is_empty()
+                && !b.after_days.is_empty()
+                && b.after_days.iter().all(|d| *d > 0)
+                && b.within_days > 0
+                && b.max_minor.is_none_or(|m| m > 0);
+            if !sound || !lump_sum(&c.code) {
+                return Err(invalid(
+                    file,
+                    format!(
+                        "cover {}: a buy-back is on a lump sum cover and writes again that cover or one it reduces, once each, with a feature, waits and a window above zero",
+                        c.code
+                    ),
+                ));
+            }
+        }
     }
     let mut kinds = BTreeSet::new();
     for f in &p.features {

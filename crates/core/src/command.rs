@@ -450,6 +450,9 @@ pub enum Command {
     ExerciseOption(Box<OptionExercise>),
     /// Stop paying for a limited-pay cover and keep it at a reduced sum insured.
     MakePaidUp(Box<crate::paid_up::MakePaidUp>),
+    /// Write again, without evidence, cover a closed claim took off a life,
+    /// under the product's buy-back option.
+    BuyBack(Box<crate::buyback::BuyBack>),
     /// Suspend the whole policy for a dated period where the product
     /// allows it: no premium, and no cover for what happens meanwhile.
     SuspendCover(Box<crate::suspension::SuspendCover>),
@@ -747,7 +750,7 @@ impl Command {
             Command::ReduceCover(_) => &["policy-servicing"],
             Command::Migration(_) => &["migration"],
             Command::AddCover(_) | Command::ExerciseOption(_) => &["underwriting", "policy-servicing"],
-            Command::ChangeExcess(_) | Command::MakePaidUp(_) | Command::SuspendCover(_) | Command::ResumeCover { .. } | Command::ChangeBilling(_) => {
+            Command::ChangeExcess(_) | Command::MakePaidUp(_) | Command::BuyBack(_) | Command::SuspendCover(_) | Command::ResumeCover { .. } | Command::ChangeBilling(_) => {
                 &["policy-servicing"]
             }
             Command::RecordReplacement(_) => &["underwriting", "new-business"],
@@ -810,6 +813,7 @@ impl Command {
             Command::ExerciseOption(_) => "exercise_option",
             Command::ChangeExcess(_) => "change_excess",
             Command::MakePaidUp(_) => "make_paid_up",
+            Command::BuyBack(_) => "buy_back",
             Command::SuspendCover(_) => "suspend_cover",
             Command::ChangeBilling(_) => "change_billing",
             Command::Migration(_) => "migration",

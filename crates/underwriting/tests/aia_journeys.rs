@@ -413,13 +413,12 @@ impl Bench {
         self.with_cluster(|c| {
             let mut paid = 0;
             let until = c.business_date().unwrap().checked_add_months(chrono::Months::new(n)).unwrap();
-            let mut day = 0;
             while c.business_date().unwrap() < until {
                 let owing = c.state(0).policies[policy].outstanding_minor();
                 if owing > 0 {
                     let pay = CoreCommand::ApplyReceipt {
                         policy: policy.clone(),
-                        receipt: format!("{policy}-r{day}"),
+                        receipt: format!("{policy}-r{}", c.business_date().unwrap()),
                         amount: Money::new(owing, NZD),
                     };
                     c.submit(0, "cash-matching", pay).unwrap();
@@ -427,7 +426,6 @@ impl Bench {
                 }
                 let close = c.end_of_day().unwrap();
                 assert!(close.breaks.is_empty(), "breaks on {}: {:?}", close.closed, close.breaks);
-                day += 1;
             }
             assert_eq!(c.state(0).policies[policy].status, PolicyStatus::InForce, "still in force after {n} months");
             paid
@@ -880,4 +878,83 @@ async fn aia_corporate_from_scheme_to_a_paid_member_death_claim() {
     });
     b.settle(&issued.policy, "clm-corp-pay", benefit);
     b.with_cluster(|c| assert_eq!(c.state(0).policies[&issued.policy].status, PolicyStatus::InForce, "the scheme goes on"));
+}
+
+/// Purpose: an AIA Living life with accelerated Critical Conditions and both buy-backs chosen
+/// has a full trauma claim paid, which takes the trauma cover and as much life cover off; a year
+/// on, the life cover and then the trauma cover are written again without evidence, at most
+/// once each, and only inside the window after the survival period; the new cover is billed.
+/// Why it matters: the buy-backs are optional benefits the customer pays extra for (1105 AL-CC
+/// sections 18 and 19). Without them the customer pays for a promise the system cannot keep;
+/// given early, twice or outside the window they are cover nobody priced.
+#[tokio::test]
+async fn aia_living_cover_is_bought_back_a_year_after_an_accelerated_trauma_claim() {
+    use ic_core::buyback::BuyBack;
+    let b = bench();
+    let issued = b
+        .apply(
+            "BBK",
+            "aia-living",
+            &[
+                ("life", "life", 500_000_00, None),
+                ("critical-conditions-accelerated", "trauma", 200_000_00, Some("buyback=yes,life-buyback=yes")),
+            ],
+            40,
+            Some("2"),
+        )
+        .await;
+    let policy = issued.policy.clone();
+    b.months(1, &policy);
+    b.lump_sum("clm-bbk", &policy, "critical-conditions-accelerated", "L1", ClaimType::Trauma, 200_000_00);
+    let held = |b: &Bench, cover: &str| {
+        b.with_cluster(|c| {
+            let on = c.business_date().unwrap();
+            c.state(0).policies[&policy].covers[cover].layers.iter().filter(|l| l.in_force_on(on)).map(|l| l.sum_insured_minor).sum::<i64>()
+        })
+    };
+    assert_eq!((held(&b, "life"), held(&b, "critical-conditions-accelerated")), (300_000_00, 0));
+    let paid_on = b.today();
+    let ask = |restores: &str, after_days: u32, reference: &str| {
+        CoreCommand::BuyBack(Box::new(BuyBack {
+            policy: policy.clone(),
+            claim: "clm-bbk".into(),
+            restores: restores.into(),
+            life: LifeId::from("L1"),
+            after_days,
+            reference: reference.into(),
+        }))
+    };
+    let send = |b: &Bench, command: CoreCommand| b.with_cluster(|c| c.submit(0, "policy-servicing", command));
+    let refused = |r: Result<(), ic_core::Reject>| r.unwrap_err().code;
+
+    assert_eq!(refused(send(&b, ask("life", 365, "bb-1"))), "buyback_window");
+    assert_eq!(refused(send(&b, ask("income", 365, "bb-1"))), "no_buyback");
+    assert_eq!(refused(send(&b, ask("life", 90, "bb-1"))), "buyback_window");
+    assert_eq!(refused(send(&b, ask("life", 365, "bb 1"))), "invalid_request");
+    let other = CoreCommand::BuyBack(Box::new(BuyBack {
+        policy: policy.clone(),
+        claim: "clm-none".into(),
+        restores: "life".into(),
+        life: LifeId::from("L1"),
+        after_days: 365,
+        reference: "bb-9".into(),
+    }));
+    assert_eq!(refused(send(&b, other)), "unknown_claim");
+    // Twelve months and a day after the claim took the cover.
+    while b.today() <= paid_on + chrono::Days::new(365) {
+        b.months(1, &policy);
+    }
+    assert!(b.today() <= paid_on + chrono::Days::new(365 + 60));
+    // What the claim took is written again beside the cover left (indexed at the anniversary).
+    let left = held(&b, "life");
+    send(&b, ask("life", 365, "bb-1")).unwrap();
+    send(&b, ask("life", 365, "bb-1")).unwrap();
+    assert_eq!(refused(send(&b, ask("life", 365, "bb-2"))), "buyback_used");
+    assert_eq!(refused(send(&b, ask("critical-conditions-accelerated", 365, "bb-1"))), "duplicate_request");
+    assert_eq!(held(&b, "life"), left + 200_000_00);
+    send(&b, ask("critical-conditions-accelerated", 365, "bb-3")).unwrap();
+    assert_eq!(held(&b, "critical-conditions-accelerated"), 200_000_00);
+    let before = b.with_cluster(|c| c.state(0).policies[&policy].outstanding_minor());
+    assert!(before > 0, "the days left of the period billed are billed for the cover written again");
+    b.months(1, &policy);
 }

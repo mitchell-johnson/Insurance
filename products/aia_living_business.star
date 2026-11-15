@@ -108,6 +108,22 @@ def trauma_cover(code, table, definitions, accelerated, max_sum_insured, ends_co
         built_in = trauma_built_ins() + extra_built_ins,
     )
 
+# Buy-back (1105 AL-CC sections 18 and 19, 1119 AL-ST; the business wordings the same):
+# once, without evidence, within 60 days after the life survives six months (for the
+# conditions the wording names) or twelve months from the claim, at most the lower of
+# what the claim took and $2,000,000. Life Cover Buy-back writes the life cover an
+# accelerated claim took off again; trauma buy-back writes the trauma cover again,
+# only after a claim took all of it.
+def trauma_buybacks(code, accelerated):
+    backs = [buyback(code, "trauma-buyback", [183, 365], 60, max = dollars(2000000), only_after_nil = True)]
+    if accelerated:
+        backs.append(buyback("life", "life-buyback", [183, 365], 60, max = dollars(2000000)))
+    return backs
+
+def with_buybacks(c, accelerated):
+    c["buybacks"] = trauma_buybacks(c["code"], accelerated)
+    return c
+
 def critical_conditions(code, accelerated):
     axes = [
         optional("early-cancer-upgrade", "Early Cancer Upgrade", "1.04"),  # PH
@@ -128,7 +144,7 @@ def critical_conditions(code, accelerated):
     ]
     if accelerated:
         extra.append(built_in("life-buyback", "Life Cover Buy-back Benefit", "facility", requires = "life-buyback"))
-    return trauma_cover(code, "aia-trauma", ["aia-critical-conditions"], accelerated, dollars(2000000), True, axes, extra)
+    return with_buybacks(trauma_cover(code, "aia-trauma", ["aia-critical-conditions"], accelerated, dollars(2000000), True, axes, extra), accelerated)
 
 def progressive_care(code, accelerated):
     axes = [
@@ -155,7 +171,7 @@ def severe_trauma(code, accelerated):
     if accelerated:
         extra.append(built_in("life-buyback", "Life Cover Buy-back Benefit", "facility", requires = "life-buyback"))
     # Severe Trauma has no partial payments.
-    return trauma_cover(code, "aia-severe-trauma", ["aia-severe-trauma"], accelerated, dollars(2000000), True, axes, extra)
+    return with_buybacks(trauma_cover(code, "aia-severe-trauma", ["aia-severe-trauma"], accelerated, dollars(2000000), True, axes, extra), accelerated)
 
 def tpd(code, own_occupation, accelerated):
     return cover(
