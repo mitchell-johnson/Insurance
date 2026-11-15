@@ -31,7 +31,7 @@ pub mod machine;
 pub mod model;
 pub mod query;
 
-pub use config::{Channel, EarlyCall, Sequence, Step, StepKind};
+pub use config::{parse_sequences, shipped_sequences, Channel, EarlyCall, Sequence, Step, StepKind, SHIPPED_SEQUENCES};
 pub use machine::{Applied, CollectionsState, Command, CoreFact, Envelope, Event, EventRecord, Reject};
 pub use model::{Reason, Relief, Role};
 pub use query::{module_spec, MODULE};

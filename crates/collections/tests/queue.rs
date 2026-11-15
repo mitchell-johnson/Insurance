@@ -295,6 +295,12 @@ fn every_question_is_answered_and_others_refused() {
         1
     );
     assert!(answer(state, json!({"q": "everything"})).is_err());
+    // the sequence in force for each product, as the configuration screen shows it
+    let sequences = answer(state, json!({"q": "sequences"})).unwrap();
+    assert_eq!(sequences.as_object().unwrap().len(), state.sequences.len());
+    for (product, sequence) in &state.sequences {
+        assert_eq!(sequences[product]["lapse_day"], sequence.lapse_day);
+    }
 }
 
 /// Purpose: a command's key is answered once while it is remembered, and is
