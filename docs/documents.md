@@ -11,6 +11,7 @@
 | Module host | `module.rs` | The questions the module answers, and how core events reach it. |
 | Vault | `crypto.rs`, `vault.rs` | Every document encrypted under its own key in Azure Blob Storage. |
 | Channels | `channels.rs` | Email and SMS through Azure Communication Services, post through a print outbox, the contact directory, provider delivery reports. |
+| Composer | `compose.rs` | What turns a filled template into the document: the built-in renderer, or an external document service. |
 | Driver | `driver.rs` | Renders, stores, sends, reports, publishes and deletes. Stateless and safe to stop anywhere. |
 
 ## Templates
@@ -37,6 +38,25 @@ Nobody approves their own template. `DisableTemplate` stops a version being used
 
 A caller asks the driver to issue a document with a stable document id and the data to render from. The driver renders from the active template version, encrypts the text and the data snapshot together, writes the object, and then proposes `IssueDocument` with the hashes, the object name and the wrapped key. The same request again returns the same document. A request the module refuses leaves no object behind.
 
+## Composing: the seam for an external document service
+
+How a letter is made is chosen in configuration; what may be issued is not. Whatever composes a document, the driver first fills the active, approved template version with the letter's data, so a missing field stops the letter, a template with no active version cannot be used, and placeholder wording never gets that far because it cannot be activated. It then stores what was composed in the vault and records the issue with the template version and its content hash, the hashes of the text and the data and, for an external composer, what composed it. None of these controls move to the composer.
+
+- **Built-in** (`IC_DOCUMENTS_COMPOSER` unset or `built_in`, the default): the filled template's text is the document, and its PDF is set from the text whenever it is wanted (see PDF).
+- **External** (`IC_DOCUMENTS_COMPOSER=external`, with `IC_DOCUMENTS_COMPOSER_URL`, an `https://` address, and `IC_DOCUMENTS_COMPOSER_SCOPE`, the Entra ID scope of its API, both required): a document generation or customer communications platform. The service calls it under its own workload identity.
+
+The external service is called as `POST {url}/v1/compose` with a bearer token for the scope and `Idempotency-Key` (SHA-256 of `document|template content hash|language`, so the same document is composed once however often it is asked). The body is:
+
+```json
+{ "document": "required:…", "template": { "id": "receipt", "version": 3, "content_hash": "…" },
+  "kind": "premium_receipt", "title": "…", "language": "en", "format": null,
+  "source": "the approved wording in that language", "data": { … }, "filled": "the template filled with the data" }
+```
+
+It answers `{ "text": "…", "pdf": "<base64, optional>", "composer": { "name": "…", "version": "…" } }`. The text is the body of an email or SMS and what the document's content hash is taken over. The PDF, when given, is the document exactly as issued: it is stored encrypted with the text, served by the download route, attached to email and written to the print outbox (the print instruction still carries the name and address, so the print house can address the envelope whatever the layout). Without a PDF, one is set from the text as for the built-in renderer. The document records `rendition` `{composer, version, pdf_sha256}`, and reading it back checks the PDF against that hash as it checks the text.
+
+An answer with no text, a PDF that is not base64 of a PDF, or no `composer` name and version is refused, as is any 4xx other than 408 and 429: nothing is issued and the caller sees `DriverError::Compose` with the reason. 408, 429, 5xx and a service that cannot be reached are `DriverError::Unavailable`: nothing is issued or stored and the next pass asks again. `Driver::verify` renders a built-in document again and compares it; for a composed one, whose answer cannot be re-run, it checks that the template version is still the approved one, after reading has checked the text and PDF against their recorded hashes. Tests: `crates/documents/tests/compose.rs`.
+
 A correction is a new document that supersedes the old one. Both stay visible; nothing is edited.
 
 The module state holds ids, hashes, dates and delivery results. Names, addresses and the text are only in the vault, so a snapshot or a state hash exposes nobody.
@@ -56,7 +76,7 @@ Every provider call carries an id derived from the document, party, channel and 
 
 ## PDF
 
-The text is the document: it is what is rendered, hashed and stored. `pdf.rs` sets that text on A4 pages whenever a PDF is wanted, and the PDF is never stored. The first page carries the name and address 45 mm down, where a DL envelope's window shows them, then the title and the text; every page has the document id and `n / total` at its foot. Large print (`AlternateFormat::LargePrint`) is 18 point. The fonts are embedded as subsets with a map back to characters, so the file is small (about 20 KB), searchable and readable by a screen reader, and the same letter always gives the same bytes.
+The text is the document: it is what is rendered, hashed and stored. `pdf.rs` sets that text on A4 pages whenever a PDF is wanted, and that PDF is never stored. (A PDF an external composer set is the exception: it is stored and used as it is; see Composing.) The first page carries the name and address 45 mm down, where a DL envelope's window shows them, then the title and the text; every page has the document id and `n / total` at its foot. Large print (`AlternateFormat::LargePrint`) is 18 point. The fonts are embedded as subsets with a map back to characters, so the file is small (about 20 KB), searchable and readable by a screen reader, and the same letter always gives the same bytes.
 
 - **Email** that may carry the text attaches `<document>.pdf`. An email that only points to the secure inbox attaches nothing.
 - **Post** writes `print/<document>/<party>-<attempt>.pdf` to the print outbox before the JSON instruction, which names it in `pdf`.
@@ -154,4 +174,5 @@ A clinical letter goes to the person alone (`clinical_to_adviser` otherwise). Ot
 - **Tagged PDF.** Built 2026-11-13 (`pdf.rs`): every PDF is marked and has a structure tree (Document; a P for each address line and paragraph, the title as the one H1, in reading order; a paragraph crossing a page is one element), the page foot is a pagination artifact, pages tab in structure order, and XMP metadata gives the title, language and `pdfuaid:part` 1. Not done: a run through a PDF/UA checker such as veraPDF or PAC before go-live, which this environment does not have.
 - **Scripts outside the typeface.** Text in a script the font lacks (Chinese, for example) goes as text without a PDF, and the download route answers 500 for it. A second face for such scripts is not set.
 - **The documents app registration.** The portal and staff tools call the route inside the cluster; it is not routed through the ingress. `deploy/k8s/documents.yaml` sets the two Entra settings; `deploy/entra/apps.sh workforce` makes the app registration (audience, app roles `portal` and `staff`) and `apps.sh grant` gives those roles to the callers' identities. Running the script is a person's step, with their Entra rights.
+- **Choosing an external document service.** The seam is built and tested against a stand-in; no product is chosen. Connecting one is configuration plus a person's steps: an Entra app registration for its API with an app role the documents identity is granted, the three settings above, and the service itself answering the contract above (an adapter in front of it if it speaks another shape).
 - **Loading history.** A module added to a running cluster starts at the oldest event each partition still holds.

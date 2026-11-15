@@ -16,6 +16,7 @@ fn contents() -> Contents {
     Contents {
         text: "Dear Aroha. Your premium will be $123.45.".into(),
         data: json!({"name": "Aroha", "premium": 12345}),
+        pdf: None,
     }
 }
 
@@ -242,4 +243,64 @@ async fn the_blob_vault_writes_once_locks_and_deletes() {
     assert!(matches!(nowhere.get("n").await, Err(VaultError::Storage(_))));
     assert!(matches!(nowhere.put_new("n", vec![], None).await, Err(VaultError::Storage(_))));
     assert!(matches!(nowhere.delete("n").await, Err(VaultError::Storage(_))));
+}
+
+/// Purpose: a PDF an external composer set is read back only when the
+/// record says that composer set it and its hash matches; a PDF where the
+/// record has none, a different PDF, a missing one, or one that is not
+/// base64 is reported as tampered.
+/// Why it matters: the composed PDF is the document as issued, so it must
+/// be held to the same proof as the text. A swapped attachment that read
+/// back without complaint would be served to a customer or a court as
+/// what was sent.
+#[tokio::test]
+async fn a_composed_pdf_reads_back_only_as_recorded() {
+    let pdf = b"%PDF-1.7 composed".to_vec();
+    let objects = MemoryStore::default();
+    let owner = crypto::new_key();
+    let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pdf);
+    let composed = Contents {
+        pdf: Some(encoded),
+        ..contents()
+    };
+    let stored = vault::store(&objects, &owner, "d1", &composed, None).await.unwrap();
+    let mut doc = record("d1", &stored);
+    assert_eq!(
+        vault::fetch(&objects, &owner, &doc).await,
+        Err(VaultError::Tampered),
+        "the record names no composer"
+    );
+
+    let rendition = ic_documents::compose::Rendition {
+        composer: "Compose Platform".into(),
+        version: "24.3".into(),
+        pdf_sha256: Some(ic_documents::template::sha256_hex(&pdf)),
+    };
+    doc.rendition = Some(rendition.clone());
+    let read = vault::fetch(&objects, &owner, &doc).await.unwrap();
+    assert_eq!(read.issued_pdf().unwrap(), Some(pdf));
+
+    doc.rendition = Some(ic_documents::compose::Rendition {
+        pdf_sha256: Some("0".repeat(64)),
+        ..rendition.clone()
+    });
+    assert_eq!(vault::fetch(&objects, &owner, &doc).await, Err(VaultError::Tampered), "another PDF");
+    doc.rendition = Some(ic_documents::compose::Rendition {
+        pdf_sha256: None,
+        ..rendition.clone()
+    });
+    assert_eq!(
+        vault::fetch(&objects, &owner, &doc).await,
+        Err(VaultError::Tampered),
+        "a PDF where none was set"
+    );
+
+    let garbled = Contents {
+        pdf: Some("%%% not base64".into()),
+        ..contents()
+    };
+    let stored = vault::store(&objects, &owner, "d2", &garbled, None).await.unwrap();
+    let mut doc = record("d2", &stored);
+    doc.rendition = Some(rendition);
+    assert_eq!(vault::fetch(&objects, &owner, &doc).await, Err(VaultError::Tampered));
 }

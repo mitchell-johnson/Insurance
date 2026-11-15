@@ -176,6 +176,7 @@ impl World {
             actor: "documents-driver".into(),
             clock: Arc::new(move || now),
             batch: 100,
+            composer: Default::default(),
         });
         let mut cluster = Cluster::in_memory(1, 7);
         cluster.open(open()).unwrap();

@@ -46,6 +46,7 @@ async fn driver() -> TestDriver {
         actor: "documents-service".into(),
         clock: Arc::new(move || now),
         batch: 50,
+        composer: Default::default(),
     }
 }
 

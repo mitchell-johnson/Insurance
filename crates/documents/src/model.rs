@@ -184,6 +184,10 @@ pub struct Document {
     pub destroy_after: Option<NaiveDate>,
     pub destroyed_on: Option<NaiveDate>,
     pub legacy: bool,
+    /// What composed it, where an external composer did. None when the
+    /// built-in renderer did, and for a legacy document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rendition: Option<crate::compose::Rendition>,
 }
 
 impl Document {

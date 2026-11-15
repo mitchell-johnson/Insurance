@@ -123,6 +123,7 @@ impl World {
             actor: "documents-service".into(),
             clock: Arc::new(move || now),
             batch: 100,
+            composer: Default::default(),
         });
         let relay = NoticeRelay {
             collections: collections_through(through),

@@ -136,6 +136,7 @@ async fn driver() -> Arc<TestDriver> {
         actor: "documents-service".into(),
         clock: Arc::new(move || now),
         batch: 50,
+        composer: Default::default(),
     });
     driver.issue(request("mere-1", "mere", &["tama"], DataClass::Personal)).await.unwrap();
     driver.issue(request("mere-clinical", "mere", &[], DataClass::Clinical)).await.unwrap();

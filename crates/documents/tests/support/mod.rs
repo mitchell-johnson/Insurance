@@ -264,6 +264,7 @@ impl Kit {
             components: vec![],
             notice: None,
             copy_of: None,
+            rendition: None,
         }
     }
 

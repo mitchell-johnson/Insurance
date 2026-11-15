@@ -102,6 +102,7 @@ impl World {
             actor: "documents-driver".into(),
             clock: Arc::new(move || *clock.lock().unwrap()),
             batch: 100,
+            composer: Default::default(),
         };
         Self {
             driver,
@@ -515,6 +516,7 @@ async fn a_locked_object_waits_and_an_erased_person_is_unreadable() {
         actor: driver.actor,
         clock: driver.clock,
         batch: driver.batch,
+        composer: Default::default(),
     };
     let request = World::new().await.request("r1", "receipt");
     driver.issue(request).await.unwrap();
@@ -663,6 +665,7 @@ async fn verification_detects_a_changed_document() {
         actor: "other".into(),
         clock: w.driver.clock.clone(),
         batch: 10,
+        composer: Default::default(),
     };
     assert_eq!(other.read("n1").await, Err(DriverError::Crypto(CryptoError::Unreadable)));
 }

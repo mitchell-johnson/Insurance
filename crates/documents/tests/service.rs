@@ -51,6 +51,7 @@ async fn driver_with_notice() -> Arc<TestDriver> {
         actor: "documents-service".into(),
         clock: Arc::new(move || now),
         batch: 50,
+        composer: Default::default(),
     });
     // The parties' keys in the prepared kit are placeholders: use a party
     // whose key the driver makes itself.
@@ -86,6 +87,14 @@ async fn driver_with_notice() -> Arc<TestDriver> {
     driver
 }
 
+fn config_of(env: &BTreeMap<&'static str, String>) -> Config {
+    Config::from_lookup(|k| env.get(k).cloned()).unwrap()
+}
+
+fn config_err(env: &BTreeMap<&'static str, String>) -> String {
+    Config::from_lookup(|k| env.get(k).cloned()).unwrap_err()
+}
+
 fn settings() -> BTreeMap<&'static str, String> {
     BTreeMap::from([
         ("IC_CLUSTER_NODES", "node-0:7000,node-1:7000".to_string()),
@@ -103,7 +112,9 @@ fn settings() -> BTreeMap<&'static str, String> {
 
 /// Purpose: the service reads its settings from the environment, applies
 /// the documented defaults, refuses to start when a required one is
-/// missing or unusable, and never prints the webhook key.
+/// missing or unusable, and never prints the webhook key. The built-in
+/// renderer composes documents unless an external composer is chosen
+/// with its https address and Entra scope.
 /// Why it matters: a service that started without its vault or key would
 /// fail at the first customer document instead of at deployment, and a
 /// webhook key in a log is a key anyone with log access can use to forge
@@ -141,6 +152,29 @@ fn settings_are_required_defaulted_and_never_printed() {
     let mut short = env.clone();
     short.insert("IC_DOCUMENTS_WEBHOOK_KEY", "short".into());
     assert!(Config::from_lookup(|k| short.get(k).cloned()).unwrap_err().contains("at least 32"));
+    assert_eq!(config_of(&env).composer, None, "the built-in renderer is the default");
+    let mut external = env.clone();
+    external.insert("IC_DOCUMENTS_COMPOSER", "external".into());
+    assert_eq!(config_err(&external), "IC_DOCUMENTS_COMPOSER_URL is not set");
+    external.insert("IC_DOCUMENTS_COMPOSER_URL", "http://compose.internal".into());
+    assert!(config_err(&external).contains("https://"));
+    external.insert("IC_DOCUMENTS_COMPOSER_URL", "https://compose.internal".into());
+    assert_eq!(config_err(&external), "IC_DOCUMENTS_COMPOSER_SCOPE is not set");
+    external.insert("IC_DOCUMENTS_COMPOSER_SCOPE", "api://compose/.default".into());
+    assert_eq!(
+        config_of(&external).composer,
+        Some(ic_documents::compose::ExternalSettings {
+            base: "https://compose.internal".into(),
+            scope: "api://compose/.default".into(),
+        })
+    );
+    external.insert("IC_DOCUMENTS_COMPOSER", "built_in".into());
+    assert!(
+        config_err(&external).contains("are for IC_DOCUMENTS_COMPOSER=external"),
+        "settings for a composer not chosen"
+    );
+    external.insert("IC_DOCUMENTS_COMPOSER", "word".into());
+    assert_eq!(config_err(&external), "IC_DOCUMENTS_COMPOSER is built_in or external, not word");
     for bad in ["0", "soon", "-5"] {
         let mut wrong = env.clone();
         wrong.insert("IC_DOCUMENTS_CYCLE_SECONDS", bad.into());
@@ -326,6 +360,10 @@ fn run_config(cluster: &str) -> Config {
     // As deployed: downloads on.
     env.insert("IC_ENTRA_TENANT", "tenant-1".into());
     env.insert("IC_DOCUMENTS_AUDIENCE", "api://ic-documents".into());
+    // And composed by an external document service.
+    env.insert("IC_DOCUMENTS_COMPOSER", "external".into());
+    env.insert("IC_DOCUMENTS_COMPOSER_URL", "https://compose.example".into());
+    env.insert("IC_DOCUMENTS_COMPOSER_SCOPE", "api://compose/.default".into());
     let mut config = Config::from_lookup(|k| env.get(k).cloned()).unwrap();
     config.cycle_every = Duration::from_millis(10);
     config.cluster_wait = Duration::from_millis(300);

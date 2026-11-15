@@ -27,6 +27,7 @@ use crate::channels::{delivery_reports, subscription_validation, AzureChannels, 
 use crate::collections_notices::{run_notices, ClusterCollections, NoticeRelay};
 use crate::complaint_letters::{run_letters, LetterIssuer, LetterTemplates};
 use crate::complaints_relay::{run_relay, ClusterComplaints, ClusterLicences, Relay};
+use crate::compose::{Composer, ExternalSettings};
 use crate::crypto::{KeyVaultWrap, KeyWrap};
 use crate::driver::{ClusterCore, ClusterModule, CoreLink, Cycle, Driver, DriverError, EventHubsPublisher, EventPublisher, Module};
 use crate::kinds::DataClass;
@@ -72,6 +73,9 @@ pub struct Config {
     /// The insurer's typeface, regular and bold TrueType files. None sets
     /// documents in the bundled Liberation Sans.
     pub fonts: Option<(String, String)>,
+    /// The external document composer, when one composes documents. None
+    /// leaves the built-in renderer composing them.
+    pub composer: Option<ExternalSettings>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +127,25 @@ impl Config {
             (None, None) => None,
             _ => return Err("IC_DOCUMENTS_FONT_REGULAR and IC_DOCUMENTS_FONT_BOLD are set together or not at all".into()),
         };
+        let composer = match get("IC_DOCUMENTS_COMPOSER").as_deref() {
+            None | Some("built_in") => {
+                if get("IC_DOCUMENTS_COMPOSER_URL").is_some() || get("IC_DOCUMENTS_COMPOSER_SCOPE").is_some() {
+                    return Err("IC_DOCUMENTS_COMPOSER_URL and IC_DOCUMENTS_COMPOSER_SCOPE are for IC_DOCUMENTS_COMPOSER=external".into());
+                }
+                None
+            }
+            Some("external") => {
+                let base = need("IC_DOCUMENTS_COMPOSER_URL")?;
+                if !base.starts_with("https://") {
+                    return Err("IC_DOCUMENTS_COMPOSER_URL must be an https:// address".into());
+                }
+                Some(ExternalSettings {
+                    base,
+                    scope: need("IC_DOCUMENTS_COMPOSER_SCOPE")?,
+                })
+            }
+            Some(other) => return Err(format!("IC_DOCUMENTS_COMPOSER is built_in or external, not {other}")),
+        };
         Ok(Self {
             cluster: need("IC_CLUSTER_NODES")?,
             vault_endpoint: need("IC_DOCUMENTS_VAULT_ENDPOINT")?,
@@ -145,6 +168,7 @@ impl Config {
             cluster_wait: Duration::from_secs(60),
             entra,
             fonts,
+            composer,
         })
     }
 }
@@ -474,6 +498,7 @@ pub async fn run(config: Config, credential: AzureCredential, auth: ClusterAuth,
         actor: "documents-service".to_string(),
         clock: Arc::new(chrono::Utc::now),
         batch: 100,
+        composer: Composer::from_settings(config.composer.as_ref(), credential.clone()),
     });
     let relay = Relay {
         module: ClusterComplaints::new(client.clone(), patience),

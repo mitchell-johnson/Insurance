@@ -137,6 +137,9 @@ pub struct Issue {
     /// are the original's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copy_of: Option<String>,
+    /// What composed it, where an external composer did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rendition: Option<crate::compose::Rendition>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

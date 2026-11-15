@@ -30,6 +30,7 @@ fn message(channel: Channel, destination: &str) -> Outbound {
         data_class: DataClass::Personal,
         title: "Your renewal".into(),
         text: "Dear Aroha. Your premium will be $123.45.".into(),
+        pdf: None,
         format: None,
         language: "en".into(),
         contact: Contact {

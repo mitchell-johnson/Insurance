@@ -120,6 +120,7 @@ async fn driver() -> Arc<TestDriver> {
         actor: "documents-service".into(),
         clock: Arc::new(move || now),
         batch: 50,
+        composer: Default::default(),
     });
     driver.issue(request("r1", &["pol-1"], DataClass::Personal)).await.unwrap();
     driver.issue(request("household", &["pol-1", "pol-2"], DataClass::Financial)).await.unwrap();

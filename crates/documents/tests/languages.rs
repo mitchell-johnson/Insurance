@@ -77,6 +77,7 @@ async fn a_translation_is_rendered_from_the_same_data_and_says_what_controls() {
         actor: "documents-service".into(),
         clock: Arc::new(move || now),
         batch: 50,
+        composer: Default::default(),
     };
     let request = |id: &str, language: &str| IssueRequest {
         document: id.into(),

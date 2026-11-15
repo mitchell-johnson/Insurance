@@ -290,6 +290,7 @@ impl World {
             actor: "documents-driver".into(),
             clock: Arc::new(move || now),
             batch: 100,
+            composer: Default::default(),
         });
         Self {
             driver,

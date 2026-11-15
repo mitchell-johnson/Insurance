@@ -1127,6 +1127,7 @@ impl DocumentsState {
             destroy_after: None,
             destroyed_on: None,
             legacy: false,
+            rendition: issue.rendition,
         };
         self.store(document);
         self.open_deliveries.insert(issue.document);
@@ -1180,6 +1181,7 @@ impl DocumentsState {
             destroy_after: None,
             destroyed_on: None,
             legacy: true,
+            rendition: None,
         });
         Ok(())
     }

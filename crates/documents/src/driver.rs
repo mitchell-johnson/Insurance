@@ -11,6 +11,8 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use chrono::{DateTime, Utc};
 use ic_core::{PartyId, PolicyId, Reject};
 use ic_log::StateMachine;
@@ -21,6 +23,7 @@ use serde_json::Value;
 
 use crate::channels::{mask, Channels, ContactDirectory, DeliveryReport, Outbound, SendError};
 use crate::command::{Command, Envelope, Issue, NoticeSpec};
+use crate::compose::{ComposeError, Composer, Composition};
 use crate::crypto::{self, CryptoError, Key, KeyWrap};
 use crate::event::EventRecord;
 use crate::kinds::DataClass;
@@ -48,6 +51,9 @@ pub enum DriverError {
     Crypto(#[from] CryptoError),
     #[error(transparent)]
     Pdf(#[from] crate::pdf::PdfError),
+    /// The document composer refused the document. Nothing was issued.
+    #[error(transparent)]
+    Compose(ComposeError),
     #[error("unexpected answer from the module: {0}")]
     Answer(String),
 }
@@ -238,6 +244,8 @@ pub struct Driver<M, S, W, C, D> {
     pub clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
     /// How many outstanding items one step takes at a time.
     pub batch: usize,
+    /// What composes a document once the approved template is filled.
+    pub composer: Composer,
 }
 
 fn decode<T: DeserializeOwned>(value: Value) -> Result<T, DriverError> {
@@ -347,14 +355,40 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
         } else {
             record.template.primary_language.clone()
         };
-        let text = record.template.render(&parts, &language, &request.data)?;
+        // The approved template is filled here whatever composes the
+        // document, so a missing field stops the letter either way.
+        let filled = record.template.render(&parts, &language, &request.data)?;
         let kind = record.template.kind;
+        let composed = self
+            .composer
+            .compose(&Composition {
+                document: &request.document,
+                template: &template_ref,
+                template_hash: &record.content_hash,
+                kind,
+                title: &record.template.title,
+                language: &language,
+                format: request.format,
+                source: record.template.bodies.get(&language).map(String::as_str).unwrap_or_default(),
+                data: &request.data,
+                filled: &filled,
+            })
+            .await
+            .map_err(|e| match e {
+                // Nothing was issued: the same request again is safe.
+                ComposeError::Unavailable(why) => DriverError::Unavailable(format!("the document composer: {why}")),
+                refused => DriverError::Compose(refused),
+            })?;
         let rule: RetentionRule = decode(self.module.ask(Query::Retention { kind }).await?)?;
         // Where the period runs from issue it is known now, and storage
         // itself is asked to refuse deletion before it ends.
         let keep_until = (rule.basis == RetentionBasis::Issue).then(|| today + chrono::Duration::days(rule.days as i64));
         let owner_key = self.owner_key(&request.owner).await?;
-        let contents = Contents { text, data: request.data };
+        let contents = Contents {
+            text: composed.text,
+            data: request.data,
+            pdf: composed.pdf.as_deref().map(|bytes| STANDARD.encode(bytes)),
+        };
         let stored = vault::store(&self.objects, &owner_key, &request.document, &contents, keep_until).await?;
         let issue = Issue {
             document: request.document.clone(),
@@ -382,6 +416,7 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
             components: request.components,
             notice: request.notice,
             copy_of: request.copy_of,
+            rendition: composed.rendition,
         };
         if let Err(e) = self.send(key, &request.caller, Command::IssueDocument(Box::new(issue))).await {
             if matches!(e, DriverError::Refused(_)) {
@@ -406,15 +441,20 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
         Ok(vault::fetch(&self.objects, &owner_key, document).await?)
     }
 
-    /// The document as a PDF to download: the text as issued, set in
-    /// large print if that is the format it was issued in.
+    /// The document as a PDF to download: the PDF an external composer
+    /// set, exactly as issued, or else the text as issued, set in large
+    /// print if that is the format it was issued in.
     pub async fn pdf(&self, id: &str, fonts: &crate::pdf::Fonts) -> Result<Vec<u8>, DriverError> {
         let document = self.document(id).await?;
+        let contents = self.contents(&document).await?;
+        if let Some(pdf) = contents.issued_pdf()? {
+            return Ok(pdf);
+        }
         let title = match &document.template {
             Some(r) => self.template(r).await?.0.template.title,
             None => "Your document".to_string(),
         };
-        let text = self.contents(&document).await?.text;
+        let text = contents.text;
         let letter = crate::pdf::Letter {
             document: &document.id,
             title: &title,
@@ -429,6 +469,10 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
 
     /// Render the document again from its stored data and the template
     /// version recorded for it, and say whether it comes out the same.
+    /// A document an external composer set is not composed again: reading
+    /// it has already checked its text and PDF against what was recorded at
+    /// issue, so what is left is that its template version is the approved
+    /// one.
     pub async fn verify(&self, id: &str) -> Result<bool, DriverError> {
         let document = self.document(id).await?;
         let contents = self.contents(&document).await?;
@@ -437,8 +481,12 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
             return Ok(true);
         };
         let (record, parts) = self.template(template_ref).await?;
+        let approved = Some(&record.content_hash) == document.template_hash.as_ref();
+        if document.rendition.is_some() {
+            return Ok(approved);
+        }
         let again = record.template.render(&parts, &document.language, &contents.data)?;
-        Ok(again == contents.text && Some(&record.content_hash) == document.template_hash.as_ref())
+        Ok(again == contents.text && approved)
     }
 
     async fn outcome(&self, send: &PendingSend, attempt: usize, outcome: AttemptOutcome) -> Result<(), DriverError> {
@@ -483,6 +531,8 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
             Some(r) => self.template(r).await?.0.template.title,
             None => "Your document".to_string(),
         };
+        let contents = self.contents(&document).await?;
+        let pdf = contents.issued_pdf()?;
         let message = Outbound {
             document: document.id.clone(),
             party: send.party.clone(),
@@ -490,7 +540,8 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
             kind: document.kind,
             data_class: document.data_class,
             title,
-            text: self.contents(&document).await?.text,
+            text: contents.text,
+            pdf,
             format: document.format,
             language: document.language.clone(),
             contact,

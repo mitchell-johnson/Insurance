@@ -197,6 +197,21 @@ impl ObjectStore for MemoryStore {
 pub struct Contents {
     pub text: String,
     pub data: Value,
+    /// The PDF an external composer set, base64, exactly as issued. None
+    /// when the PDF is set from the text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf: Option<String>,
+}
+
+impl Contents {
+    /// The issued PDF, if one was stored with the text.
+    pub fn issued_pdf(&self) -> Result<Option<Vec<u8>>, VaultError> {
+        use base64::Engine;
+        self.pdf
+            .as_deref()
+            .map(|encoded| base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|_| VaultError::Tampered))
+            .transpose()
+    }
 }
 
 /// The record of a stored document, for the module's state.
@@ -246,7 +261,13 @@ pub async fn fetch<S: ObjectStore>(objects: &S, owner_key: &Key, document: &crat
     let plain = crypto::open(&key, document.id.as_bytes(), &sealed)?;
     let contents: Contents = serde_json::from_slice(&plain).map_err(|_| VaultError::Tampered)?;
     let data_ok = document.data_sha256.as_ref().is_none_or(|h| *h == sha256_hex(&data_bytes(&contents.data)));
-    if sha256_hex(contents.text.as_bytes()) != document.content_sha256 || !data_ok {
+    // A PDF an external composer set is the document as issued too: it
+    // must be the one it answered, and there is none where it set none.
+    let pdf_ok = match &document.rendition {
+        Some(rendition) => contents.issued_pdf()?.map(|pdf| sha256_hex(&pdf)) == rendition.pdf_sha256,
+        None => contents.pdf.is_none(),
+    };
+    if sha256_hex(contents.text.as_bytes()) != document.content_sha256 || !data_ok || !pdf_ok {
         return Err(VaultError::Tampered);
     }
     Ok(contents)

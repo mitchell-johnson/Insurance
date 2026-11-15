@@ -300,6 +300,9 @@ pub struct Outbound {
     pub title: String,
     /// The document exactly as issued.
     pub text: String,
+    /// The PDF an external composer set, exactly as issued. None when the
+    /// PDF is set from the text.
+    pub pdf: Option<Vec<u8>>,
     pub format: Option<AlternateFormat>,
     /// The language of the text, as the document records it.
     pub language: String,
@@ -328,9 +331,15 @@ impl Outbound {
         }
     }
 
-    /// The document as a PDF for this recipient: addressed for the
-    /// envelope when it is posted, and in large print when that was asked for.
+    /// The document as a PDF for this recipient: the one an external
+    /// composer set, exactly as issued, or else one set from the text,
+    /// addressed for the envelope when it is posted, and in large print
+    /// when that was asked for. The print instruction carries the address
+    /// either way.
     pub fn pdf(&self, fonts: &Fonts) -> Result<Vec<u8>, PdfError> {
+        if let Some(pdf) = &self.pdf {
+            return Ok(pdf.clone());
+        }
         let address: Vec<String> = match self.channel {
             Channel::Post => self.contact.destination.lines().map(str::to_string).collect(),
             _ => vec![],
