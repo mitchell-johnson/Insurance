@@ -668,9 +668,18 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                     // Keyed by the proposal and cover, not the attempt: a cover the core has
                     // written is not written again when the rest is tried again.
                     let layer = if let Entry::InsurabilityOption {
-                        event, event_date, evidence, ..
+                        event,
+                        event_date,
+                        evidence,
+                        from_cover,
+                        ..
                     } = entry
                     {
+                        // A cover added under another cover's option carries the choices
+                        // the proposal names for it.
+                        let excess_option = from_cover
+                            .as_ref()
+                            .and_then(|_| held.covers.iter().find(|c| c.code == cover.code).and_then(|c| c.option.clone()));
                         // The core checks the option's window, age, uses and limits, and
                         // writes the layer on the terms of the life's original cover.
                         ic_core::Command::ExerciseOption(Box::new(ic_core::command::OptionExercise {
@@ -682,6 +691,8 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                             sum_insured_minor: cover.sum_insured_minor,
                             evidence: evidence.clone(),
                             reference: key.clone(),
+                            from_cover: from_cover.clone(),
+                            excess_option,
                         }))
                     } else if increase {
                         ic_core::Command::AddUnderwrittenLayer(Box::new(ic_core::command::UnderwrittenLayer {

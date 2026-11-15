@@ -102,6 +102,11 @@ pub enum Entry {
         /// Where the proof of the event is kept (the certificate, the loan
         /// documents).
         evidence: String,
+        /// Where the cover asked for is one the life does not hold, added
+        /// under this cover's cover-adding option (AIA's Special Events
+        /// TPD/Trauma Facility); the proposal's cover carries its choices.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_cover: Option<String>,
     },
 }
 

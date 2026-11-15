@@ -16,6 +16,7 @@ fn request(w: &World, id: &str, sum: i64, days: i64) -> ic_underwriting::command
         event: "marriage".into(),
         event_date: w.today() - chrono::Duration::days(days),
         evidence: "vault://PTY-L1/certificate/1".into(),
+        from_cover: None,
     };
     open
 }

@@ -145,6 +145,9 @@ pub struct OptionUse {
     pub used_on: NaiveDate,
     /// The layer the use wrote.
     pub layer: u32,
+    /// The cover whose cover-adding option added `cover`, where it was one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_cover: Option<String>,
 }
 
 /// Where a layer of cover came from.

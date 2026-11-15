@@ -706,6 +706,7 @@ async fn an_accepted_option_is_exercised_on_the_policy_in_force() {
                 event: "marriage".into(),
                 event_date: w.today(),
                 evidence: "vault://PTY-L1/certificate/1".into(),
+                from_cover: None,
             };
             open.policy = policy.clone();
             open.policy_number = number.clone();

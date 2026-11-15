@@ -689,80 +689,111 @@ fn the_loader_refuses_unsound_benefit_categories_and_one_of_a_set_rules() {
     }
 }
 
-/// Purpose: the loader takes AIA Living's special events totals, its once-in-12-months rule
-/// and its Life Future Insurability anniversary option as written, and refuses each unsound
-/// variant with the reason: totals below one use, a gap of zero days, an anniversary option
-/// with no period, no minimum, totals below one use, an empty feature, or on a cover that pays
-/// no lump sum, and an event option that names the reserved `anniversary` event.
+/// Purpose: the loader takes AIA Living's limits on cover added without evidence as the wording
+/// sets them (life special events totals and the 12-month gap, Life Future Insurability,
+/// trauma and TPD special events and Future Insurability, the Special Events TPD/Trauma
+/// Facility, and Business Safeguard), and refuses each unsound variant with the reason: totals
+/// below one use, a gap of zero days, a window count without a window, an age range that is
+/// empty, an empty feature, an anniversary option with no period or minimum or on a cover that
+/// pays an income, an event option naming the reserved `anniversary` event, and a cover-adding
+/// option that adds itself, a cover the product lacks, a choice the cover does not offer, or
+/// adds nothing.
 /// Why it matters: these limits are what keep cover given without evidence of health inside
 /// what AIA priced; a limit that loaded broken would let a life add cover without end, or never.
 #[test]
 fn the_loader_refuses_unsound_option_totals_and_anniversary_options() {
-    let path = format!("{}/../../products/aia_living.star", env!("CARGO_MANIFEST_DIR"));
-    let source = std::fs::read_to_string(path).unwrap();
-    let living = load_product("aia_living.star", &source).unwrap();
+    let read = |file: &str| {
+        let path = format!("{}/../../products/{file}", env!("CARGO_MANIFEST_DIR"));
+        load_product(file, &std::fs::read_to_string(path).unwrap()).unwrap()
+    };
+    let living = read("aia_living.star");
     let life = living.cover("life").unwrap();
     let events = life.insurability_option.as_ref().unwrap();
     assert_eq!(
-        (
-            events.max_total_increase_minor,
-            events.once_in_days,
-            events.max_total_percent_of_original.as_ref().map(|p| p.get())
-        ),
-        (Some(750_000_00), Some(365), Some(ic_money::Dec::from(100i64)))
+        (events.max_total_increase_minor, events.once_in_days, events.max_total_percent_of_original.as_ref().map(|p| p.get())),
+        (Some(750_000_00), Some(365), Some(Dec::from(100i64)))
     );
     let anniversary = life.anniversary_option.as_ref().unwrap();
     assert_eq!(
-        (
-            anniversary.every_years,
-            anniversary.at_least_minor,
-            anniversary.max_total_increase_minor,
-            anniversary.within_days,
-            anniversary.to_age
-        ),
-        (3, 100_000_00, 1_000_000_00, 60, 60)
+        (anniversary.every_years, anniversary.at_least_minor, anniversary.max_total_increase_minor, anniversary.within_days, anniversary.to_age, anniversary.lesser),
+        (3, 100_000_00, 1_000_000_00, 60, 60, false)
     );
     assert_eq!(anniversary.requires_feature.as_deref(), Some("future-insurability"));
+    let adds = life.adds_cover.as_ref().unwrap();
+    assert_eq!((adds.max_increase_minor, adds.max_uses, adds.days_before), (100_000_00, 1, Some(60)));
+    assert_eq!(adds.covers["tpd-any-occupation-accelerated"]["expiry"], "to-65");
+    for code in ["critical-conditions", "progressive-care-accelerated", "severe-trauma", "tpd-own-occupation"] {
+        let c = living.cover(code).unwrap();
+        let fi = c.anniversary_option.as_ref().unwrap();
+        assert_eq!((fi.lesser, fi.at_least_minor, fi.max_total_increase_minor, fi.days_before), (true, 200_000_00, 500_000_00, Some(60)), "{code}");
+        let se = c.insurability_option.as_ref().unwrap();
+        assert_eq!((se.within_days, se.days_before, se.to_age), (60, Some(60), 55), "{code}");
+    }
+    let business = read("aia_living_business.star");
+    for (code, cap) in [("life", 10_000_000_00), ("tpd-any-occupation", 5_000_000_00), ("critical-conditions-accelerated", 2_000_000_00), ("severe-trauma", 2_000_000_00)] {
+        let c = business.cover(code).unwrap();
+        let safeguard = c.insurability_option.as_ref().unwrap();
+        assert_eq!(
+            (safeguard.max_cover_after_minor, safeguard.uses_in_window, safeguard.not_before_days, safeguard.requires_feature.as_deref()),
+            (Some(cap), Some(2), Some(183), Some("business-safeguard")),
+            "{code}"
+        );
+        assert!(c.anniversary_option.is_none());
+    }
+    assert!(business.cover("progressive-care").unwrap().insurability_option.is_none());
+
+    let event = |extra: &str| format!(r#"[], insurability_option = insurability_option(["marriage"], "50", 100, 2, 60, 55{extra})"#);
+    let yearly = |extra: &str| format!(r#"[], anniversary_option = anniversary_option(3, "20", 100, "40", 200, 60, 60{extra})"#);
+    let trauma = r#"cover(code = "trauma", cover_type = "trauma", benefit = lump_sum(), rating = stepped("t"),
+              option_axes = [option_axis("expiry", "Expiry", [choice("to-65", "To 65", expiry_age = 65)])]),"#;
+    let adding = |covers: &str, extra: &str| format!(r#"[], adds_cover = adds_cover_option(["marriage"], {covers}, "50", 100, 1, 60, 55{extra})"#);
+    let good = [
+        event(r#", max_total_percent_of_original = "100", max_total_increase = 200, once_in_days = 365, uses_in_window = 2, days_before = 60, from_age = 16, requires = "x", not_before_days = 183, max_cover_after = 1000"#),
+        yearly(r#", lesser = True, days_before = 60, from_age = 16, once_in_days = 365, requires = "x""#),
+        adding(r#"{"trauma": {"expiry": "to-65"}}"#, ", days_before = 60, from_age = 16, once_in_days = 365"),
+    ];
+    for axes in &good {
+        assert!(mini(&[("LIFE_AXES", axes), ("GROUP", trauma)]).is_ok(), "{axes}");
+    }
     let events_wrong = "an insurability option is on a lump sum cover";
     let anniversary_wrong = "an anniversary option is on a lump sum cover";
+    let adding_wrong = "a cover-adding option is on a lump sum cover";
     let cases = [
-        (
-            "max_total_percent_of_original = \"100\",",
-            "max_total_percent_of_original = \"40\",",
-            events_wrong,
-        ),
-        ("max_total_increase = dollars(750000),", "max_total_increase = dollars(1000),", events_wrong),
-        ("        once_in_days = 365,\n    )", "        once_in_days = 0,\n    )", events_wrong),
-        ("\"separation\",", "\"separation\", \"anniversary\",", events_wrong),
-        ("every_years = 3,", "every_years = 0,", anniversary_wrong),
-        ("at_least = dollars(100000),", "at_least = 0,", anniversary_wrong),
-        (
-            "max_total_percent_of_original = \"200\",",
-            "max_total_percent_of_original = \"10\",",
-            anniversary_wrong,
-        ),
-        (
-            "max_total_increase = dollars(1000000),",
-            "max_total_increase = dollars(99999),",
-            anniversary_wrong,
-        ),
-        ("requires = \"future-insurability\",", "requires = \"\",", anniversary_wrong),
-        ("within_days = 60,", "within_days = 0,", anniversary_wrong),
-        ("to_age = 60,", "to_age = 0,", anniversary_wrong),
-        (
-            "                once_in_days = 365,\n            ),",
-            "                once_in_days = 0,\n            ),",
-            anniversary_wrong,
-        ),
+        (event(r#", max_total_percent_of_original = "40""#), events_wrong),
+        (event(", max_total_increase = 99"), events_wrong),
+        (event(", once_in_days = 0"), events_wrong),
+        (event(", uses_in_window = 2"), events_wrong),
+        (event(", once_in_days = 365, uses_in_window = 0"), events_wrong),
+        (event(", days_before = 0"), events_wrong),
+        (event(", from_age = 55"), events_wrong),
+        (event(r#", requires = """#), events_wrong),
+        (event(", not_before_days = 0"), events_wrong),
+        (event(", max_cover_after = 0"), events_wrong),
+        (r#"[], insurability_option = insurability_option(["anniversary"], "50", 100, 2, 60, 55)"#.to_string(), events_wrong),
+        (r#"[], anniversary_option = anniversary_option(0, "20", 100, "40", 200, 60, 60)"#.to_string(), anniversary_wrong),
+        (r#"[], anniversary_option = anniversary_option(3, "20", 0, "40", 200, 60, 60)"#.to_string(), anniversary_wrong),
+        (r#"[], anniversary_option = anniversary_option(3, "20", 100, "10", 200, 60, 60)"#.to_string(), anniversary_wrong),
+        (r#"[], anniversary_option = anniversary_option(3, "20", 100, "40", 99, 60, 60)"#.to_string(), anniversary_wrong),
+        (r#"[], anniversary_option = anniversary_option(3, "20", 100, "40", 200, 0, 60)"#.to_string(), anniversary_wrong),
+        (yearly(r#", requires = """#), anniversary_wrong),
+        (yearly(", once_in_days = 0"), anniversary_wrong),
+        (yearly(", days_before = 0"), anniversary_wrong),
+        (yearly(", from_age = 60"), anniversary_wrong),
+        (adding(r#"{"life": {}}"#, ""), adding_wrong),
+        (adding(r#"{"nope": {}}"#, ""), adding_wrong),
+        (adding(r#"{"income": {}}"#, ""), adding_wrong),
+        (adding(r#"{"trauma": {"expiry": "to-70"}}"#, ""), adding_wrong),
+        (adding("{}", ""), adding_wrong),
+        (r#"[], adds_cover = adds_cover_option(["marriage"], {"trauma": {}}, "50", 100, 0, 60, 55)"#.to_string(), adding_wrong),
+        (adding(r#"{"trauma": {}}"#, ", from_age = 55"), adding_wrong),
     ];
-    for (from, to, why) in cases {
-        assert_eq!(source.matches(from).count(), 1, "{from}");
-        let err = load_product("aia_living.star", &source.replace(from, to)).unwrap_err().to_string();
-        assert!(err.contains(why), "{to}: {err}");
+    for (axes, why) in &cases {
+        let err = mini(&[("LIFE_AXES", axes), ("GROUP", trauma)]).unwrap_err();
+        assert!(err.contains(why), "{axes}: {err}");
     }
-    // On a cover that pays an income, and on a lump sum cover in the same terms.
-    let option = r#"anniversary_option(1, "20", 100, "40", 200, 60, 60)"#;
-    assert!(mini(&[("LIFE_AXES", &format!("[], anniversary_option = {option}"))]).is_ok());
-    let err = mini(&[("INCOME_AXES", &format!("[], anniversary_option = {option}"))]).unwrap_err();
+    // On a cover that pays an income.
+    let err = mini(&[("INCOME_AXES", &yearly("")), ("GROUP", trauma)]).unwrap_err();
     assert!(err.contains(anniversary_wrong), "{err}");
+    let err = mini(&[("INCOME_AXES", &adding(r#"{"trauma": {}}"#, "")), ("GROUP", trauma)]).unwrap_err();
+    assert!(err.contains(adding_wrong), "{err}");
 }

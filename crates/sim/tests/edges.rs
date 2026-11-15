@@ -598,6 +598,8 @@ fn an_insurability_option_adds_cover_without_evidence_inside_the_products_limits
             sum_insured_minor: amount,
             evidence: "vault/certificate-1".to_string(),
             reference: reference.to_string(),
+            from_cover: None,
+            excess_option: None,
         }))
     };
     let wedding = d(2027, 11, 5);

@@ -60,7 +60,7 @@ def benefit_category(code, salary_multiple, max_sum_insured, member_pays_percent
 def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, levies = [],
           expiry_age = None, min_sum_insured = 0, max_sum_insured = None, categories = [],
           automatic_acceptance_limit = None, excess_options = [], premium_waiver = None,
-          shared_counter = None, reduces = [], joint_first_event = False, insurability_option = None, anniversary_option = None,
+          shared_counter = None, reduces = [], joint_first_event = False, insurability_option = None, anniversary_option = None, adds_cover = None,
           option_axes = [], min_entry_age = None, max_entry_age = None, built_in = [], paid_up_option = None):
     return {
         "paid_up_option": paid_up_option,
@@ -83,6 +83,7 @@ def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, 
         "joint_first_event": joint_first_event,
         "insurability_option": insurability_option,
         "anniversary_option": anniversary_option,
+        "adds_cover": adds_cover,
         "option_axes": option_axes,
         "min_entry_age": min_entry_age,
         "max_entry_age": max_entry_age,
@@ -146,7 +147,9 @@ def paid_up_option(min_share_of_term, factor):
     return {"min_share_of_term": min_share_of_term, "factor": factor}
 
 def insurability_option(events, max_percent_of_original, max_increase, max_uses, within_days, to_age,
-                        max_total_percent_of_original = None, max_total_increase = None, once_in_days = None):
+                        max_total_percent_of_original = None, max_total_increase = None, once_in_days = None,
+                        uses_in_window = None, days_before = None, from_age = None, requires = None,
+                        not_before_days = None, max_cover_after = None):
     """More of a lump sum cover without evidence of health, after an event in the life's own life.
     The totals cap all uses together; once_in_days keeps increases without evidence apart."""
     option = {
@@ -163,10 +166,34 @@ def insurability_option(events, max_percent_of_original, max_increase, max_uses,
         option["max_total_increase_minor"] = max_total_increase
     if once_in_days != None:
         option["once_in_days"] = once_in_days
+    for key, value in [("uses_in_window", uses_in_window), ("days_before", days_before), ("from_age", from_age),
+                       ("requires_feature", requires), ("not_before_days", not_before_days),
+                       ("max_cover_after_minor", max_cover_after)]:
+        if value != None:
+            option[key] = value
+    return option
+
+def adds_cover_option(events, covers, max_percent_of_original, max_increase, max_uses, within_days, to_age,
+                      days_before = None, from_age = None, once_in_days = None):
+    """The right to add one of `covers` (a dict of cover code to the choices, axis to choice, it must
+    carry) without evidence after an event, up to the lower of the share of this cover and the amount."""
+    option = {
+        "events": events,
+        "covers": covers,
+        "max_percent_of_original": max_percent_of_original,
+        "max_increase_minor": max_increase,
+        "max_uses": max_uses,
+        "within_days": within_days,
+        "to_age": to_age,
+    }
+    for key, value in [("days_before", days_before), ("from_age", from_age), ("once_in_days", once_in_days)]:
+        if value != None:
+            option[key] = value
     return option
 
 def anniversary_option(every_years, max_percent_of_original, at_least, max_total_percent_of_original, max_total_increase,
-                       within_days, to_age, requires = None, once_in_days = None):
+                       within_days, to_age, requires = None, once_in_days = None, days_before = None, from_age = None,
+                       lesser = False):
     """More of a lump sum cover without evidence of health every few years from the day the cover
     started: the greater of the share and at_least each time, the lower of the totals in all."""
     option = {
@@ -182,6 +209,12 @@ def anniversary_option(every_years, max_percent_of_original, at_least, max_total
         option["requires_feature"] = requires
     if once_in_days != None:
         option["once_in_days"] = once_in_days
+    if days_before != None:
+        option["days_before"] = days_before
+    if from_age != None:
+        option["from_age"] = from_age
+    if lesser:
+        option["lesser"] = True
     return option
 
 def excess_option(code, excess, premium_factor = "1"):

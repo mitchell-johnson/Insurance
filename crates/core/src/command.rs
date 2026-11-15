@@ -203,6 +203,13 @@ pub struct OptionExercise {
     pub evidence: String,
     /// The request's own reference. The same one again adds nothing.
     pub reference: String,
+    /// Where `cover` is one the life does not hold, added under this
+    /// cover's cover-adding option.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_cover: Option<String>,
+    /// The choices on the added cover (only with `from_cover`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excess_option: Option<String>,
 }
 
 /// A cover a life does not hold, added to a retail policy after issue.

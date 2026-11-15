@@ -761,6 +761,8 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             sum_insured_minor: 1,
             evidence: "vault/e-1".into(),
             reference: "opt-1".into(),
+            from_cover: None,
+            excess_option: None,
         })),
         Command::Loan(Box::new(ic_core::loan::LoanCommand::Draw {
             policy: p.clone(),

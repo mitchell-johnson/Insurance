@@ -567,6 +567,8 @@ fn exercise(c: &mut Cluster, policy: &PolicyId, reference: &str, event: &str, on
         sum_insured_minor: amount,
         evidence: "vault/evidence-1".to_string(),
         reference: reference.to_string(),
+        from_cover: None,
+        excess_option: None,
     };
     c.submit(0, "policy-servicing", Command::ExerciseOption(Box::new(ask)))
 }
@@ -829,4 +831,145 @@ fn the_life_index_shows_the_option_a_cover_is_held_at() {
     old.as_object_mut().unwrap().remove("option").unwrap();
     let read: ic_readmodel::LifeIndexRow = serde_json::from_value(old).unwrap();
     assert_eq!(read.option, None);
+}
+
+/// Ask to use an option on any cover of `policy` for life-1, or to add `cover` under the
+/// cover-adding option of `from` with the choices `option`.
+#[allow(clippy::too_many_arguments)]
+fn use_option(
+    c: &mut Cluster,
+    policy: &PolicyId,
+    cover: &str,
+    reference: &str,
+    event: &str,
+    on: NaiveDate,
+    amount: i64,
+    from: Option<(&str, String)>,
+) -> Result<(), Reject> {
+    let ask = ic_core::command::OptionExercise {
+        policy: policy.clone(),
+        cover: cover.to_string(),
+        life: ic_core::LifeId("life-1".to_string()),
+        event: event.to_string(),
+        event_date: on,
+        sum_insured_minor: amount,
+        evidence: "vault/evidence-1".to_string(),
+        reference: reference.to_string(),
+        from_cover: from.as_ref().map(|(f, _)| f.to_string()),
+        excess_option: from.map(|(_, o)| o),
+    };
+    c.submit(0, "policy-servicing", Command::ExerciseOption(Box::new(ask)))
+}
+
+/// The life's in-force sum insured on a cover of a policy, without indexation layers.
+fn held(c: &Cluster, id: &PolicyId, cover: &str) -> i64 {
+    let on = c.state(0).business_date.unwrap();
+    c.state(0).policies[id].covers.get(cover).map_or(0, |cv| {
+        cv.layers
+            .iter()
+            .filter(|l| l.in_force_on(on) && l.origin != ic_core::LayerOrigin::Indexation)
+            .map(|l| l.sum_insured_minor)
+            .sum()
+    })
+}
+
+/// Purpose: AIA Living trauma cover takes a special events increase asked for up to 60 days
+/// before the event and not more, at most half the original; a second trauma increase within
+/// 12 months is refused while a life cover increase in the same weeks is not; at the third
+/// policy anniversary the trauma Future Insurability Benefit adds the lower of 20% and
+/// $200,000, asked for up to 60 days before it.
+/// Why it matters: these are the trauma wordings' limits (1105 AL-CC sections 9 and 10). The
+/// 12 months are counted across a life's trauma increases, not its life cover, and the trauma
+/// anniversary limit is a lower-of where life cover's is a greater-of: getting either the
+/// wrong way round gives cover without evidence that AIA never offered.
+#[test]
+fn trauma_increases_without_evidence_keep_to_the_trauma_wording() {
+    let mut c = cluster();
+    let living = product("aia_living.star");
+    let (life, cc) = (pick(&living, "life", &[]), pick(&living, "critical-conditions", &[]));
+    let id = issue(&mut c, policy(1, "aia-living", d(1987, 6, 1), &[("life", 500_000_00, Some(life)), ("critical-conditions", 300_000_00, Some(cc))])).unwrap();
+    let code = |r: Result<(), Reject>| r.unwrap_err().code;
+    let wedding = start() + chrono::Days::new(30);
+    let too_early = start() + chrono::Days::new(61);
+
+    assert_eq!(code(use_option(&mut c, &id, "critical-conditions", "se-0", "marriage", too_early, 1_00, None)), "option_window");
+    assert_eq!(code(use_option(&mut c, &id, "critical-conditions", "se-0", "marriage", wedding, 150_000_01, None)), "option_limit");
+    use_option(&mut c, &id, "critical-conditions", "se-1", "marriage", wedding, 150_000_00, None).unwrap();
+    assert_eq!(code(use_option(&mut c, &id, "critical-conditions", "se-2", "mortgage", start(), 1_00, None)), "option_too_soon");
+    // Life cover keeps its own 12 months (and is asked for only after the event).
+    assert_eq!(code(use_option(&mut c, &id, "life", "se-3", "marriage", wedding, 1_00, None)), "option_window");
+    use_option(&mut c, &id, "life", "se-3", "birth_or_adoption", start(), 100_000_00, None).unwrap();
+    assert_eq!(held(&c, &id, "critical-conditions"), 450_000_00);
+
+    // Future Insurability: the lower of 20% of $300,000 and $200,000, asked 26 days ahead.
+    let third = d(2030, 11, 15);
+    close_to(&mut c, third - chrono::Days::new(26));
+    let today = c.state(0).business_date.unwrap();
+    assert_eq!(code(use_option(&mut c, &id, "critical-conditions", "fi-0", "anniversary", today, 1_00, None)), "not_an_anniversary");
+    assert_eq!(code(use_option(&mut c, &id, "critical-conditions", "fi-0", "anniversary", third, 60_000_01, None)), "option_limit");
+    use_option(&mut c, &id, "critical-conditions", "fi-1", "anniversary", third, 60_000_00, None).unwrap();
+    assert_eq!(held(&c, &id, "critical-conditions"), 510_000_00);
+}
+
+/// Purpose: the Special Events TPD/Trauma Facility on AIA Living Life Cover adds an accelerated
+/// trauma or TPD cover the life does not hold, once, without evidence, at most the lower of half
+/// the original life cover and $100,000, and only with the choices the wording names (any
+/// occupation TPD to age 65); a cover not named, a TPD to 70, too much, or a second use is
+/// refused with nothing written.
+/// Why it matters: this is cover for a new risk given with no evidence at all. Added twice, to
+/// age 70, or above $100,000, it is risk the reinsurer never agreed to take automatically.
+#[test]
+fn a_special_event_adds_accelerated_trauma_or_tpd_once_within_its_limit() {
+    let mut c = cluster();
+    let living = product("aia_living.star");
+    let life = pick(&living, "life", &[]);
+    let id = issue(&mut c, policy(1, "aia-living", d(1987, 6, 1), &[("life", 500_000_00, Some(life))])).unwrap();
+    let code = |r: Result<(), Reject>| r.unwrap_err().code;
+    let born = start() - chrono::Days::new(10);
+    let cc = pick(&living, "critical-conditions-accelerated", &[]);
+    let to_70 = pick(&living, "tpd-any-occupation-accelerated", &[("expiry", "to-70")]);
+    let to_65 = pick(&living, "tpd-any-occupation-accelerated", &[("expiry", "to-65")]);
+    let from = |o: &String| Some(("life", o.clone()));
+
+    assert_eq!(code(use_option(&mut c, &id, "severe-trauma-accelerated", "add-0", "birth_or_adoption", born, 1_00, from(&cc))), "no_option");
+    assert_eq!(code(use_option(&mut c, &id, "tpd-any-occupation-accelerated", "add-0", "birth_or_adoption", born, 1_00, from(&to_70))), "excess_option");
+    assert_eq!(code(use_option(&mut c, &id, "critical-conditions-accelerated", "add-0", "birth_or_adoption", born, 100_000_01, from(&cc))), "option_limit");
+    assert_eq!(code(use_option(&mut c, &id, "critical-conditions-accelerated", "add-0", "birth_or_adoption", born, 1_00, None)), "unknown_cover");
+    use_option(&mut c, &id, "critical-conditions-accelerated", "add-1", "birth_or_adoption", born, 100_000_00, from(&cc)).unwrap();
+    use_option(&mut c, &id, "critical-conditions-accelerated", "add-1", "birth_or_adoption", born, 100_000_00, from(&cc)).unwrap();
+    assert_eq!(held(&c, &id, "critical-conditions-accelerated"), 100_000_00);
+    assert_eq!(code(use_option(&mut c, &id, "tpd-any-occupation-accelerated", "add-2", "marriage", born, 50_000_00, from(&to_65))), "options_exhausted");
+    let used = &c.state(0).policies[&id].option_uses["add-1"];
+    assert_eq!(used.from_cover.as_deref(), Some("life"));
+    // The new cover is billed for the rest of the year already billed.
+    assert!(c.state(0).policies[&id].receivables.iter().any(|r| r.net_fine.get("trauma").is_some_and(|m| *m > 0)));
+}
+
+/// Purpose: AIA Living Business's Optional Business Safeguard Facility adds cover after a
+/// business event only where the life chose it, not in the first six months, at most twice in
+/// 12 months, and never to more than five times the original cover; AIA Living Business has no
+/// personal special events increase.
+/// Why it matters: Business Safeguard is priced as an option and its limits are the business
+/// wording's (1151 ALB-LIFE section 8); a key person cover grown without evidence past five
+/// times its start, or in its first months, is a risk no one underwrote.
+#[test]
+fn business_safeguard_grows_cover_with_the_business_inside_its_limits() {
+    let mut c = cluster();
+    let business = product("aia_living_business.star");
+    let with = pick(&business, "life", &[("safeguard", "yes")]);
+    let without = pick(&business, "life", &[]);
+    let id = issue(&mut c, policy(1, "aia-living-business", d(1980, 6, 1), &[("life", 1_000_000_00, Some(with))])).unwrap();
+    let plain = issue(&mut c, policy(2, "aia-living-business", d(1980, 6, 1), &[("life", 1_000_000_00, Some(without))])).unwrap();
+    let code = |r: Result<(), Reject>| r.unwrap_err().code;
+
+    assert_eq!(code(exercise(&mut c, &id, "m-0", "marriage", start(), 1_00)), "event_not_covered");
+    assert_eq!(code(exercise(&mut c, &id, "bs-0", "business_interest_increase", start(), 1_00)), "option_too_soon");
+    close_to(&mut c, start() + chrono::Days::new(183));
+    let today = c.state(0).business_date.unwrap();
+    assert_eq!(code(exercise(&mut c, &plain, "bs-0", "loan_guarantee_increase", today, 1_00)), "no_option");
+    exercise(&mut c, &id, "bs-1", "business_interest_increase", today, 3_000_000_00).unwrap();
+    assert_eq!(code(exercise(&mut c, &id, "bs-2", "loan_guarantee_increase", today, 1_000_000_01)), "option_total");
+    exercise(&mut c, &id, "bs-2", "loan_guarantee_increase", today, 500_000_00).unwrap();
+    assert_eq!(code(exercise(&mut c, &id, "bs-3", "value_to_business_increase", today, 1_00)), "option_too_soon");
+    assert_eq!(life_layers(&c, &id), vec![1_000_000_00, 3_000_000_00, 500_000_00]);
 }

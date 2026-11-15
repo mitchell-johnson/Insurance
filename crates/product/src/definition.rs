@@ -243,6 +243,9 @@ pub struct CoverDefinition {
     /// anniversaries. Absent: the cover has no such option.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anniversary_option: Option<AnniversaryOption>,
+    /// The right to add another cover without evidence after an event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adds_cover: Option<CoverAddingOption>,
     /// The right to stop paying a limited-pay premium early and keep a
     /// reduced sum insured for life. Absent: the cover has no such option.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -375,8 +378,52 @@ pub struct InsurabilityOption {
     /// And in money. Where both are set the lower applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_total_increase_minor: Option<i64>,
-    /// No use within this many days of an earlier increase of the cover for
-    /// the life without evidence, under this option or the anniversary one.
+    /// No use within this many days of an earlier increase without evidence
+    /// for the life on a cover of the same type, under any option.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub once_in_days: Option<u32>,
+    /// How many increases `once_in_days` allows in its window. Absent: one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uses_in_window: Option<u32>,
+    /// The request may come this many days before the event (a wedding
+    /// booked). Absent: only after it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub days_before: Option<u32>,
+    /// The life must be at least this old on the day of the event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_age: Option<u32>,
+    /// Only where the life's option on the cover has this feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires_feature: Option<String>,
+    /// Not used until this many days after the life's cover started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_before_days: Option<u32>,
+    /// The life's cover after a use may not be more than this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cover_after_minor: Option<i64>,
+}
+
+/// The right to add a cover the life does not hold, without evidence of
+/// health, after one of the events, measured against the cover that
+/// carries the right (AIA Living's Special Events TPD/Trauma Facility).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoverAddingOption {
+    pub events: Vec<String>,
+    /// The covers that may be added, each with the choices (axis to choice)
+    /// the added cover must carry.
+    pub covers: BTreeMap<String, BTreeMap<String, String>>,
+    /// The most added: the lower of this share of the carrying cover the
+    /// life started with and `max_increase_minor`.
+    pub max_percent_of_original: DecStr,
+    pub max_increase_minor: i64,
+    pub max_uses: u32,
+    pub within_days: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub days_before: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_age: Option<u32>,
+    pub to_age: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub once_in_days: Option<u32>,
 }
@@ -410,10 +457,21 @@ pub struct AnniversaryOption {
     /// Absent: every life on the cover has the option.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires_feature: Option<String>,
-    /// No use within this many days of an earlier increase of the cover for
-    /// the life without evidence.
+    /// No use within this many days of an earlier increase without evidence
+    /// for the life on a cover of the same type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub once_in_days: Option<u32>,
+    /// The request may come this many days before the event (a wedding
+    /// booked). Absent: only after it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub days_before: Option<u32>,
+    /// The life must be at least this old on the day of the event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_age: Option<u32>,
+    /// One use adds the lower of the share and `at_least_minor`, not the
+    /// greater (AIA's trauma and TPD Future Insurability).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lesser: bool,
 }
 
 /// One excess level on a cover's menu.

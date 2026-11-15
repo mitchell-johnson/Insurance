@@ -1,6 +1,6 @@
 //! Load Starlark configuration into typed, validated definitions.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ic_money::Dec;
 use serde::de::DeserializeOwned;
@@ -270,7 +270,13 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                 && option.to_age > 0
                 && option.max_total_percent_of_original.as_ref().is_none_or(|t| t.get() >= share)
                 && option.max_total_increase_minor.is_none_or(|t| t >= option.max_increase_minor)
-                && option.once_in_days.is_none_or(|d| d > 0);
+                && option.once_in_days.is_none_or(|d| d > 0)
+                && option.uses_in_window.is_none_or(|n| n > 0 && option.once_in_days.is_some())
+                && option.days_before.is_none_or(|d| d > 0)
+                && option.from_age.is_none_or(|a| a < option.to_age)
+                && option.requires_feature.as_ref().is_none_or(|f| !f.is_empty())
+                && option.not_before_days.is_none_or(|d| d > 0)
+                && option.max_cover_after_minor.is_none_or(|m| m > 0);
             if !sound || !lump_sum(&c.code) {
                 return Err(invalid(
                     file,
@@ -293,12 +299,48 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                 && option.within_days > 0
                 && option.to_age > 0
                 && option.requires_feature.as_ref().is_none_or(|f| !f.is_empty())
-                && option.once_in_days.is_none_or(|d| d > 0);
+                && option.once_in_days.is_none_or(|d| d > 0)
+                && option.days_before.is_none_or(|d| d > 0)
+                && option.from_age.is_none_or(|a| a < option.to_age);
             if !sound || !lump_sum(&c.code) {
                 return Err(invalid(
                     file,
                     format!(
                         "cover {}: an anniversary option is on a lump sum cover, its limits are above zero and its totals at least one use",
+                        c.code
+                    ),
+                ));
+            }
+        }
+        if let Some(option) = &c.adds_cover {
+            let plain = |e: &String| !e.is_empty() && e != crate::definition::ANNIVERSARY_EVENT && e.chars().all(|ch| ch.is_ascii_lowercase() || ch == '_');
+            let choices_offered = |code: &String, axes: &BTreeMap<String, String>| {
+                p.covers.iter().find(|d| &d.code == code).is_some_and(|d| {
+                    d.code != c.code
+                        && lump_sum(&d.code)
+                        && axes
+                            .iter()
+                            .all(|(axis, choice)| d.option_axes.iter().any(|a| &a.code == axis && a.choices.iter().any(|ch| &ch.code == choice)))
+                })
+            };
+            let sound = !option.events.is_empty()
+                && option.events.iter().all(plain)
+                && option.events.iter().collect::<BTreeSet<_>>().len() == option.events.len()
+                && !option.covers.is_empty()
+                && option.covers.iter().all(|(code, axes)| choices_offered(code, axes))
+                && option.max_percent_of_original.get() > ic_money::Dec::from(0i64)
+                && option.max_increase_minor > 0
+                && option.max_uses > 0
+                && option.within_days > 0
+                && option.to_age > 0
+                && option.days_before.is_none_or(|d| d > 0)
+                && option.from_age.is_none_or(|a| a < option.to_age)
+                && option.once_in_days.is_none_or(|d| d > 0);
+            if !sound || !lump_sum(&c.code) {
+                return Err(invalid(
+                    file,
+                    format!(
+                        "cover {}: a cover-adding option is on a lump sum cover, names its events once each, adds other lump sum covers of the product with choices they offer, and has limits above zero",
                         c.code
                     ),
                 ));

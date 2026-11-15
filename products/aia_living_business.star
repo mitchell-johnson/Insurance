@@ -57,8 +57,6 @@ def trauma_built_ins():
         built_in("medical-advancements", "Medical Advancements Provision", "facility"),
         built_in("standalone-conversion", "Standalone Conversion Facility", "facility"),
         built_in("premium-conversion", "Premium Conversion Facility (before age 65)", "facility"),
-        built_in("future-insurability", "Future Insurability Benefit (each third anniversary, the lower of 20% and $200,000)", "facility"),
-        built_in("special-events-increase", "Special Events Increase Facility", "facility"),
         built_in("childrens-trauma", "Children's Trauma Benefit", "additional", max = dollars(50000), percent_of_cover = "50"),
         built_in("childrens-trauma-conversion", "Children's Trauma Conversion Facility", "facility"),
         built_in("parents-grieving", "Parents Grieving Benefit", "additional", max = dollars(15000)),
@@ -66,27 +64,30 @@ def trauma_built_ins():
                  percent_of_cover = "100", requires = "tpd-condition", definitions = ["aia-tpd-own-occupation"]),
     ]
 
-# The special events that allow more cover without evidence of health, and the
-# limits AIA Living sets on each increase: half the original cover or $250,000,
-# whichever is less, within 12 months of the event, up to age 55. All increases
-# together are at most the original cover or $750,000, whichever is less, and
-# only one increase without evidence (this or Life Future Insurability) is made
-# in any 12 months. The wording sets no count of uses: the money and the 12
-# months bound them.
-SPECIAL_EVENTS = ["marriage", "birth_or_adoption", "separation", "death_of_partner", "child_secondary_school",
-                  "child_tertiary", "mortgage", "salary_increase"]
+# AIA Living Business has no special events increases and no Future Insurability
+# (1151, 1154, 1155, 1166 ALB wordings). Its Optional Business Safeguard Facility
+# adds cover without evidence when the life's financial interest in the business, a
+# loan guarantee or their value to the business grows: asked for within three
+# months of the business event, not in the first six months of cover, at most two
+# increases in any 12 months, and the cover after it at most the lower of five
+# times the original cover and the cap (life $10,000,000, TPD $5,000,000, Critical
+# Conditions and Severe Trauma $2,000,000). The wording sets no age limit.
+BUSINESS_EVENTS = ["business_interest_increase", "loan_guarantee_increase", "value_to_business_increase"]
 
-def special_events():
+def business_safeguard(cap):
     return insurability_option(
-        events = SPECIAL_EVENTS,
-        max_percent_of_original = "50",
-        max_increase = dollars(250000),
+        events = BUSINESS_EVENTS,
+        max_percent_of_original = "400",
+        max_increase = cap,
         max_uses = 99,
-        within_days = 365,
-        to_age = 55,
-        max_total_percent_of_original = "100",
-        max_total_increase = dollars(750000),
+        within_days = 92,
+        to_age = 120,
+        max_total_percent_of_original = "400",
         once_in_days = 365,
+        uses_in_window = 2,
+        requires = "business-safeguard",
+        not_before_days = 183,
+        max_cover_after = cap,
     )
 
 # ---- Lump sum benefits ---------------------------------------------------------
@@ -103,7 +104,6 @@ def trauma_cover(code, table, definitions, accelerated, max_sum_insured, ends_co
         min_sum_insured = dollars(10000),  # PH: no published minimum
         max_sum_insured = max_sum_insured,
         reduces = ["life"] if accelerated else [],
-        insurability_option = special_events(),
         option_axes = [premium_axis(), waiver_axis()] + extra_axes,
         built_in = trauma_built_ins() + extra_built_ins,
     )
@@ -174,7 +174,6 @@ def tpd(code, own_occupation, accelerated):
         min_sum_insured = dollars(10000),  # PH: no published minimum
         max_sum_insured = dollars(5000000),
         reduces = ["life"] if accelerated else [],
-        insurability_option = special_events(),
         option_axes = [
             premium_axis(level_to = [65]),
             waiver_axis(),
@@ -189,8 +188,6 @@ def tpd(code, own_occupation, accelerated):
             built_in("assistance", "Assistance Benefit (home, vehicle, equipment)", "reimbursement", max = dollars(15000)),
             built_in("waiver-of-waiting-period", "Waiver of the three-month waiting period", "facility"),
             built_in("premium-conversion", "Premium Conversion Facility (before age 65)", "facility"),
-            built_in("future-insurability", "Future Insurability Benefit (each third anniversary)", "facility"),
-            built_in("special-events-increase", "Special Events Increase Facility", "facility"),
         ],
     )
 
@@ -266,8 +263,9 @@ def MBD(count):
         count = count,
     )
 
-def with_safeguard(c):
+def with_safeguard(c, cap):
     c["option_axes"] = c["option_axes"] + [safeguard_axis()]
+    c["insurability_option"] = business_safeguard(cap)
     c["built_in"] = c["built_in"] + [SAFEGUARD]
     return c
 
@@ -316,24 +314,23 @@ PRODUCT = product(
             min_entry_age = 10,
             max_entry_age = 70,
             min_sum_insured = dollars(10000),  # PH
-            insurability_option = special_events(),
-            option_axes = [premium_axis(), waiver_axis()],
+                option_axes = [premium_axis(), waiver_axis()],
             built_in = common_built_ins() + [
                 built_in("terminal-illness", "Terminal Illness Benefit", "early_payment", percent_of_cover = "100",
                          definitions = ["aia-terminal-illness"]),
                 built_in("premium-conversion", "Premium Conversion Facility (before age 65)", "facility"),
             ],
-        )),
-        with_safeguard(critical_conditions("critical-conditions", False)),
-        with_safeguard(critical_conditions("critical-conditions-accelerated", True)),
+        ), dollars(10000000)),
+        with_safeguard(critical_conditions("critical-conditions", False), dollars(2000000)),
+        with_safeguard(critical_conditions("critical-conditions-accelerated", True), dollars(2000000)),
         progressive_care("progressive-care", False),
         progressive_care("progressive-care-accelerated", True),
-        with_safeguard(severe_trauma("severe-trauma", False)),
-        with_safeguard(severe_trauma("severe-trauma-accelerated", True)),
-        with_safeguard(tpd("tpd-own-occupation", True, False)),
-        with_safeguard(tpd("tpd-own-occupation-accelerated", True, True)),
-        with_safeguard(tpd("tpd-any-occupation", False, False)),
-        with_safeguard(tpd("tpd-any-occupation-accelerated", False, True)),
+        with_safeguard(severe_trauma("severe-trauma", False), dollars(2000000)),
+        with_safeguard(severe_trauma("severe-trauma-accelerated", True), dollars(2000000)),
+        with_safeguard(tpd("tpd-own-occupation", True, False), dollars(5000000)),
+        with_safeguard(tpd("tpd-own-occupation-accelerated", True, True), dollars(5000000)),
+        with_safeguard(tpd("tpd-any-occupation", False, False), dollars(5000000)),
+        with_safeguard(tpd("tpd-any-occupation-accelerated", False, True), dollars(5000000)),
         # For businesses trading more than three years; paid on top of ACC.
         business_income_cover("business-continuity-agreed-value", ["aia-business-continuity", "aia-ip-agreed-value"],
                               business_income_axes([4, 8, 13], [6, 12, 24]) + [

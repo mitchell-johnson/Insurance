@@ -29,6 +29,7 @@ pub(crate) fn door(open: &OpenProposal, cx: &Cx) -> Result<(), Reject> {
         event,
         event_date,
         evidence,
+        ..
     } = &open.entry
     else {
         return Ok(());

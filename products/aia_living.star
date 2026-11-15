@@ -70,7 +70,7 @@ def trauma_built_ins():
 # in any 12 months. The wording sets no count of uses: the money and the 12
 # months bound them.
 SPECIAL_EVENTS = ["marriage", "birth_or_adoption", "separation", "death_of_partner", "child_secondary_school",
-                  "child_tertiary", "mortgage", "salary_increase"]
+                  "child_tertiary", "mortgage", "close_relative_care", "salary_increase"]
 
 def special_events():
     return insurability_option(
@@ -82,6 +82,64 @@ def special_events():
         to_age = 55,
         max_total_percent_of_original = "100",
         max_total_increase = dollars(750000),
+        once_in_days = 365,
+    )
+
+# Trauma and TPD (1104 AL-TPD, 1105 AL-CC, 1106 AL-PC, 1119 AL-ST): special events
+# increases of the lower of half the original cover and $250,000, the lower of the
+# original cover and $750,000 in all, asked for within 60 days either side of the
+# event, for events from 16 (TPD: any age) and before 55; and Future Insurability
+# at each third policy anniversary, the lower of 20% and $200,000, the lower of the
+# original cover and $500,000 in all, within 60 days either side. Only one of these
+# increases is made for a life's trauma covers (or TPD covers) in any 12 months.
+def lump_sum_special_events(from_age):
+    return insurability_option(
+        events = SPECIAL_EVENTS,
+        max_percent_of_original = "50",
+        max_increase = dollars(250000),
+        max_uses = 99,
+        within_days = 60,
+        days_before = 60,
+        from_age = from_age,
+        to_age = 55,
+        max_total_percent_of_original = "100",
+        max_total_increase = dollars(750000),
+        once_in_days = 365,
+    )
+
+def lump_sum_future_insurability():
+    return anniversary_option(
+        every_years = 3,
+        max_percent_of_original = "20",
+        at_least = dollars(200000),
+        lesser = True,
+        max_total_percent_of_original = "100",
+        max_total_increase = dollars(500000),
+        within_days = 60,
+        days_before = 60,
+        from_age = 16,
+        to_age = 55,
+        once_in_days = 365,
+    )
+
+# The Special Events TPD/Trauma Facility on Life Cover (1101 AL-LIFE section 7): once
+# for a life, on a special event, add an accelerated Critical Conditions, accelerated
+# Progressive Care or accelerated any occupation TPD to age 65, the lower of half the
+# original life cover and $100,000, without evidence, within 60 days either side.
+def special_events_tpd_trauma():
+    return adds_cover_option(
+        events = SPECIAL_EVENTS,
+        covers = {
+            "critical-conditions-accelerated": {},
+            "progressive-care-accelerated": {},
+            "tpd-any-occupation-accelerated": {"expiry": "to-65"},
+        },
+        max_percent_of_original = "50",
+        max_increase = dollars(100000),
+        max_uses = 1,
+        within_days = 60,
+        days_before = 60,
+        to_age = 55,
         once_in_days = 365,
     )
 
@@ -99,7 +157,8 @@ def trauma_cover(code, table, definitions, accelerated, max_sum_insured, ends_co
         min_sum_insured = dollars(10000),  # PH: no published minimum
         max_sum_insured = max_sum_insured,
         reduces = ["life"] if accelerated else [],
-        insurability_option = special_events(),
+        insurability_option = lump_sum_special_events(16),
+        anniversary_option = lump_sum_future_insurability(),
         option_axes = [premium_axis(), waiver_axis()] + extra_axes,
         built_in = trauma_built_ins() + extra_built_ins,
     )
@@ -170,7 +229,8 @@ def tpd(code, own_occupation, accelerated):
         min_sum_insured = dollars(10000),  # PH: no published minimum
         max_sum_insured = dollars(5000000),
         reduces = ["life"] if accelerated else [],
-        insurability_option = special_events(),
+        insurability_option = lump_sum_special_events(None),
+        anniversary_option = lump_sum_future_insurability(),
         option_axes = [
             premium_axis(level_to = [65]),
             waiver_axis(),
@@ -398,6 +458,7 @@ PRODUCT = product(
             max_entry_age = 70,
             min_sum_insured = dollars(10000),  # PH: AIA publishes no minimum or maximum
             insurability_option = special_events(),
+            adds_cover = special_events_tpd_trauma(),
             # Optional Life Future Insurability (1101 AL-LIFE, sections 13 and 16): at each third
             # anniversary, the greater of 20% of the original cover and $100,000, accepted within
             # 60 days after it, before age 60, at most the lower of twice the original cover and
