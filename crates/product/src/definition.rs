@@ -712,6 +712,14 @@ impl ProductDefinition {
             _ => None,
         })
     }
+    /// Whether the owner may decline indexation: `None` when the product has
+    /// no indexation, else the product's `opt_out` setting.
+    pub fn indexation_opt_out(&self) -> Option<bool> {
+        self.features.iter().find_map(|f| match f {
+            Feature::Indexation { opt_out, .. } => Some(*opt_out),
+            _ => None,
+        })
+    }
     /// Whether an indexation step applied after an insured event that was
     /// not yet known stands at claim. See [`Feature::Indexation`].
     pub fn pays_step_applied_after_event(&self) -> bool {

@@ -651,7 +651,20 @@ impl CoreState {
                 Ok(())
             }),
             Command::Reinstate { policy } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| lifecycle::reinstate(&mut s.ledger, &s.catalog, p, ctx)),
-            Command::DeclineIndexation { policy, declined } => self.with_policy(&policy, true, |_, p| {
+            Command::DeclineIndexation { policy, declined } => self.with_policy(&policy, true, |s, p| {
+                // The product's own indexation feature says whether the owner
+                // may decline it: a product without indexation has nothing to
+                // decline, and one with `opt_out = False` makes it compulsory.
+                match s.catalog.product(&p.product_hash).and_then(|product| product.indexation_opt_out()) {
+                    None => return Err(Reject::new("no_indexation", format!("policy {} has no indexation to decline or accept", p.id))),
+                    Some(false) if declined => {
+                        return Err(Reject::new(
+                            "indexation_compulsory",
+                            format!("the product of policy {} does not let indexation be declined", p.id),
+                        ));
+                    }
+                    Some(_) => {}
+                }
                 p.indexation_declined = declined;
                 ctx.emit(Event::IndexationChoiceRecorded {
                     policy: p.id.clone(),
