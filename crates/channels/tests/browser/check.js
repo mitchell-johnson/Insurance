@@ -18,6 +18,7 @@ const personas = {
   "/status -": "Anyone | Is the service up? The public status page",
   "/ops sub-ops": "ST16 Platform engineer | Region health and fail-over readiness",
   "/ops sub-kiri": "P18 Kiri Parata, customer | Refused the operations console",
+  "/customer sub-kiri": "P18 Kiri Parata, customer | Her policy and bill, sets up this browser to sign, approves her adviser's changes, her details",
   "/adviser sub-adv": "D1 Tessa Maddox, adviser | Commission, a disputed replacement, a client's policy, a message",
   "/employer sub-hr": "E1 Kai Fresh Supermarkets, scheme administrator | A payroll file, its preview and approval, a member",
   "/staff sub-fin1": "ST10 Finance operator | Held commission for a suspended adviser, maker and checker",
@@ -152,6 +153,46 @@ const sees = async (page, text) => {
   await visit(browser, "/status", null, { run: async (p) => { await sees(p, "Last checked"); await p.locator(".banner.ok").waitFor(); } });
   await visit(browser, "/ops", { subject: "sub-ops", roles: "operations" }, { run: async (p) => { await sees(p, "auckland"); await sees(p, "sydney"); } });
   await visit(browser, "/ops", { subject: "sub-kiri" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
+  // The customer reads before she can sign: an approval fails until this browser is set up, then her phone approves the browser.
+  await visit(browser, "/customer", { subject: "sub-kiri" }, { run: async (p) => {
+    await sees(p, "2 changes are waiting for you to approve");
+    await p.locator("#covers table").waitFor();
+    await sees(p, "$500,000.00");
+    await sees(p, "$61.84 is due");
+    await sees(p, "Policy schedule");
+    await tab(p, "To approve");
+    await sees(p, "decline indexation");
+    await p.click("#approve-req-cover");
+    await sees(p, "Approving needs your signature");
+    await tab(p, "Signing");
+    await say(p, "She sets up this browser: the key is made here and never leaves it");
+    await p.click("#sg-make");
+    await sees(p, "Approve it from your phone to finish");
+    const device = await p.textContent("#sg-device"), key = await p.textContent("#sg-key");
+    // What her phone app does: it signs the new browser's key and sends it.
+    const signature = await (await fetch(base + "/test/v1/phone-signs", { method: "POST", body: `enrol\n${device}\n${key}` })).text();
+    const enrol = await fetch(base + "/app/v1/devices", { method: "POST", headers: { "content-type": "application/json", "x-dev-subject": "sub-kiri", "idempotency-key": "enrol-" + device },
+      body: JSON.stringify({ device, public_key: key, hardware_backed: false, approver: "phone", signature }) });
+    if (!enrol.ok) throw new Error("the phone could not approve the browser: " + enrol.status);
+    await p.click("#sg-check");
+    await sees(p, "This browser can sign for you");
+    await tab(p, "To approve");
+    await say(p, "Now each approval is signed by this browser");
+    await p.click("#approve-req-money");
+    await sees(p, "Approved: withdrawal");
+    await p.click("#decline-req-cover");
+    await p.click("dialog button.danger");
+    await sees(p, "Declined: decline indexation");
+    await sees(p, "Nothing is waiting for you");
+    await tab(p, "Your details");
+    await sees(p, "kiri@example.nz");
+    await p.click("#hold-on");
+    await sees(p, "A hold is on");
+    await tab(p, "Your policies");
+    await p.fill("#nc-date", "2027-11-10");
+    await p.click("#notify button");
+    await sees(p, "The claims team will be in touch");
+  } });
   await visit(browser, "/adviser", { subject: "sub-adv" }, { expectStatus: [404], run: async (p) => {
     await say(p, "Her commission by provider, and what is held back");
     await tab(p, "Engagements");

@@ -537,6 +537,8 @@ async fn callers_are_identified_before_anything_else() {
         (&me["party"], &me["staff"], &me["policies"][0]["number"]),
         (&json!(KIRI), &json!(false), &json!("KTL00000001"))
     );
+    // The service's clock, which a browser dates its device proofs by.
+    assert_eq!(me["now"], portal.now());
 
     // The identity service closes Kiri's sessions: a token issued before then is refused, a later one accepted.
     let before = portal.now() - 5;
@@ -1445,6 +1447,7 @@ async fn pages_are_served_locked_down() {
     let portal = portal();
     for path in [
         "/",
+        "/customer",
         "/adviser",
         "/employer",
         "/staff",
@@ -2554,7 +2557,7 @@ async fn serve_for_a_browser() {
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     // Staff's group console works against the group module itself, beside the employer's double.
     let staff = Arc::new(common::group_module::seeded());
-    let portal = portal_with(|employer| Arc::new(common::group_module::Beside { employer, staff }));
+    let mut portal = portal_with(|employer| Arc::new(common::group_module::Beside { employer, staff }));
     // The group was paid an override, on its first statement.
     let fap: ic_distribution::Statement = serde_json::from_value(json!({ "payee": "fap-1", "number": 1, "date": "2027-11-30", "cut_seq": 9,
         "opening_minor": 0, "lines": [{ "date": "2027-11-15", "reference": "r1", "kind": "commission", "ledger": "commission_payable",
@@ -2576,6 +2579,12 @@ async fn serve_for_a_browser() {
         .write("POST", "sub-kiri", &appoint, json!({ "adviser": "adv-1", "engagement": "e1" }))
         .await;
     assert_eq!(status, StatusCode::OK);
+    // The adviser prepared two changes for Kiri to approve: one that moves money and one that does not.
+    for (id, kind) in [("req-cover", "decline_indexation"), ("req-money", "withdrawal")] {
+        let prepared = json!({ "id": id, "policy": portal.retail, "kind": kind, "module": "policy-servicing", "payload": { "note": "as we discussed" } });
+        let (status, body) = portal.write("POST", "sub-adv", "/app/v1/requests", prepared).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    }
     // Underwriting has a proposal waiting on the applicant for this policy.
     let now = portal.now();
     let retail = portal.retail.clone();
@@ -2607,7 +2616,11 @@ async fn serve_for_a_browser() {
         "sum_insured_minor": 600_000_00, "reason": "same_group", "on": "2027-11-10", "replaced": ["pol-old/life/1"], "disputed": null, "overturned": false }]),
     );
     println!("policy {}", portal.retail);
-    axum::serve(listener, portal.app.clone()).await.unwrap();
+    // Kiri's phone, for the browser check: it signs what the phone app would, here an
+    // approval of a new browser (`enrol\n{device}\n{key}`). Never part of the service.
+    let phone = Arc::new(std::mem::replace(&mut portal.phone, Key::new()));
+    let signs = axum::routing::post(move |body: String| async move { phone.sign(body.as_bytes()) });
+    axum::serve(listener, portal.app.clone().route("/test/v1/phone-signs", signs)).await.unwrap();
 }
 
 /// Purpose: a customer reads their own record from the customer master, changes contact details and consents only from an enrolled
@@ -2932,6 +2945,8 @@ async fn advisers_and_employers_see_claim_status_and_nothing_more() {
         ["claim", "status", "notified_on", "closed_on"]
     );
     assert_eq!(row["claim"], "c-9");
+    // The policyholder sees the same status of a claim on their own policy.
+    assert_eq!(portal.get("sub-kiri", &path).await.1["rows"][0]["claim"], "c-9");
     let scheme = format!("/app/v1/policies/{}/claims", portal.scheme);
     assert_eq!(portal.get("sub-hr", &scheme).await, (StatusCode::OK, json!({ "rows": [] })));
     for (who, path) in [

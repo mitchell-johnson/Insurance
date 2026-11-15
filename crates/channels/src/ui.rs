@@ -11,6 +11,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 pub const INDEX: &str = include_str!("../ui/index.html");
+pub const CUSTOMER: &str = include_str!("../ui/customer.html");
 pub const ADVISER: &str = include_str!("../ui/adviser.html");
 pub const EMPLOYER: &str = include_str!("../ui/employer.html");
 pub const STAFF: &str = include_str!("../ui/staff.html");

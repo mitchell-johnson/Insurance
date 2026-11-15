@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Your policies · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
+<body data-shell="partner" data-page="customer" data-realm="customers">
+<main data-views="Your policies,To approve,Your details,Signing"><header class="page"><div><h1>Your policies</h1><p>Your cover, what you pay, your claims, and anything waiting for you to approve.</p></div></header><div id="msg" aria-live="polite"></div>
+
+<section data-view="Your policies"><h2>Policies</h2><div id="summary"></div><div id="policies"></div></section>
+<section data-view="Your policies" id="detail" hidden><h2 id="detail-title">Policy</h2><div id="standing"></div>
+  <h3>Cover</h3><div id="covers"></div>
+  <h3>What you pay</h3><div id="bills"></div>
+  <h3>Claims</h3><div id="claims"></div>
+  <h3>Documents</h3><div id="docs"></div><div id="docs-msg" aria-live="polite"></div>
+  <h3>Your adviser</h3><div id="advisers"></div>
+  <form id="appoint"><div class="row"><div><label for="ap-adviser">Adviser reference</label><input id="ap-adviser" required maxlength="64" autocomplete="off"></div>
+    <div><label for="ap-engagement">Their engagement reference</label><input id="ap-engagement" required maxlength="64" autocomplete="off"></div><button>Appoint</button></div>
+    <p class="muted">Your adviser gives you both references. Appointing them lets them see this policy and prepare changes for you to approve.</p></form>
+  <div id="ap-msg" aria-live="polite"></div>
+  <h3>Tell us about a claim</h3>
+  <form id="notify"><div class="row"><div><label for="nc-cover">Cover</label><select id="nc-cover" required></select></div>
+    <div><label for="nc-date">When it happened</label><input id="nc-date" type="date" required></div><button>Tell us</button></div>
+    <p class="muted">Only the date and the cover go from here. The claims team contacts you for the rest, so nothing about your health is typed into this page.</p></form>
+  <div id="nc-msg" aria-live="polite"></div>
+</section>
+
+<section data-view="To approve"><h2>Waiting for you</h2><p class="muted">Changes your adviser or our staff prepared for you. Nothing happens until you approve. Approving is signed, so set up this browser under Signing first, or approve on your phone.</p>
+  <div id="waiting"></div><div id="wait-msg" aria-live="polite"></div>
+  <h2>Your requests</h2><div id="requests"></div></section>
+
+<section data-view="Your details"><h2>Your details</h2><div id="record"></div>
+  <form id="contact"><div class="row"><div><label for="ct-email">Email</label><input id="ct-email" type="email" maxlength="200" autocomplete="email"></div>
+    <div><label for="ct-phone">Mobile phone</label><input id="ct-phone" type="tel" maxlength="40" autocomplete="tel"></div><button>Save</button></div></form>
+  <div id="ct-msg" aria-live="polite"></div>
+  <h2>Hold on money going out</h2><p class="muted">With a hold on, nothing is paid out of your policies, such as a withdrawal or a surrender, until you lift it. Lifting it takes a week, so anyone pressing you has to wait.</p>
+  <div id="hold"></div><div class="actions"><button type="button" id="hold-on">Put a hold on</button><button type="button" class="quiet" id="hold-off">Ask to lift it</button><button type="button" class="quiet" id="hold-keep">Keep the hold</button></div>
+  <div id="hold-msg" aria-live="polite"></div>
+  <h2>A copy of everything we hold</h2><p class="muted">Under the Privacy Act you can have a copy of everything we hold about you. It comes as a file.</p>
+  <button type="button" id="export">Download my record</button><div id="ex-msg" aria-live="polite"></div></section>
+
+<section data-view="Signing"><h2>Signing on this browser</h2><p class="muted">Approving a change that moves money, changing your details and taking a copy of your record need a signature from a device you have set up. The key is made in this browser and never leaves it.</p>
+  <div id="sign-state"></div>
+  <div class="actions"><button type="button" id="sg-make">Set up this browser</button><button type="button" class="quiet" id="sg-check">Check again</button><button type="button" class="quiet danger" id="sg-forget">Forget this browser</button></div>
+  <div id="sg-pending" hidden><p>To finish, approve this browser from your phone. It asks for these:</p>
+    <dl class="details"><dt>Browser</dt><dd id="sg-device"></dd><dt>Key</dt><dd><code id="sg-key"></code></dd></dl></div>
+  <div id="sg-msg" aria-live="polite"></div>
+  <h2>Your devices</h2><div id="devices"></div></section>
+
+<script src="/ui/app.js"></script>
+<script>
+"use strict";
+const { h, put, money, table, say, signIn, api, run } = portal;
+const $ = (id) => document.getElementById(id);
+const R = "customers";
+const words = (v) => String(v == null ? "" : v).replace(/_/g, " ");
+let me = null, skew = 0, current = null, record = null;
+
+// ---- This browser's signing key: made here, kept in IndexedDB, the private half never exported.
+let key = null, enrolled = false;
+function store(mode, fn) {
+  return new Promise((resolve) => {
+    let open;
+    try { open = indexedDB.open("ic-device", 1); } catch { return resolve(null); }
+    open.onupgradeneeded = () => open.result.createObjectStore("keys");
+    open.onerror = () => resolve(null);
+    open.onsuccess = () => {
+      try { const req = fn(open.result.transaction("keys", mode).objectStore("keys")); req.onsuccess = () => resolve(req.result || null); req.onerror = () => resolve(null); }
+      catch { resolve(null); }
+    };
+  });
+}
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+const sign = async (text) => b64(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key.privateKey, new TextEncoder().encode(text)));
+// Every call from an enrolled browser proves its key, dated by the service's clock.
+portal.prove(async (method, path, body) => {
+  if (!key || !enrolled) return {};
+  const at = Math.floor(Date.now() / 1000) + skew;
+  const digest = hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body)));
+  return { "x-device-id": key.device, "x-device-proof": `${at}.${await sign(`${at}\n${method}\n${path}\n${digest}`)}` };
+});
+// A signature over exactly one action, by a challenge the service issued for it.
+async function signed(action) {
+  const c = await api(R, "POST", "/app/v1/challenges", { action });
+  return { challenge: c.challenge, signature: await sign(`${c.challenge}\n${c.nonce}\n${c.action_hash}`) };
+}
+async function devices() {
+  const list = await api(R, "GET", "/app/v1/devices");
+  enrolled = !!key && list.some((d) => d.id === key.device && !d.revoked);
+  put($("devices"), table(["Device", "Kind", "Set up", "State"], list.map((d) => [d.id === (key && key.device) ? d.id + " (this browser)" : d.id,
+    d.hardware_backed ? "Phone with a hardware key" : "Browser", new Date(d.enrolled * 1000).toLocaleDateString(), d.revoked ? "Revoked" : "Active"])));
+  put($("sign-state"), enrolled ? h("div", { class: "banner ok", role: "status" }, "This browser can sign for you.")
+    : key ? h("div", { class: "banner warn", role: "status" }, "This browser has a key but is not set up yet.")
+    : h("p", { class: "muted" }, "This browser is not set up for signing."));
+  $("sg-pending").hidden = !key || enrolled;
+  if (key) { $("sg-device").textContent = key.device; $("sg-key").textContent = key.publicKey; }
+  $("sg-make").hidden = !!key; $("sg-forget").hidden = !key; $("sg-check").hidden = !key || enrolled;
+  return list;
+}
+$("sg-make").addEventListener("click", run($("sg-msg"), async () => {
+  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+  const made = { device: "browser-" + crypto.randomUUID().slice(0, 8), publicKey: b64(await crypto.subtle.exportKey("raw", pair.publicKey)), privateKey: pair.privateKey };
+  await store("readwrite", (s) => s.put(made, "me"));
+  key = made;
+  await devices();
+  return "A key was made in this browser. Approve it from your phone to finish.";
+}));
+$("sg-check").addEventListener("click", run($("sg-msg"), async () => { await devices(); return enrolled ? "This browser is set up." : "Not approved yet."; }));
+$("sg-forget").addEventListener("click", run($("sg-msg"), async () => {
+  if (!(await portal.ask({ title: "Forget this browser?", text: "Its key is deleted here and it can no longer sign for you.", confirm: "Forget it", danger: true }))) return;
+  if (enrolled) await api(R, "DELETE", "/app/v1/devices/" + encodeURIComponent(key.device));
+  await store("readwrite", (s) => s.delete("me"));
+  key = null; enrolled = false;
+  await devices();
+  return "This browser was forgotten.";
+}));
+
+// ---- Policies.
+const state = (s) => typeof s === "object" && s ? (s.status === "awaiting_approval" ? "waiting for " + words(s.from) : words(s.status)) : words(s);
+async function open(p) {
+  const view = await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(p.policy));
+  current = p.policy;
+  const rows = (kind) => view.rows.filter((r) => r.kind === kind).map((r) => r.body);
+  const head = rows("policy")[0] || {};
+  $("detail").hidden = false;
+  $("detail-title").textContent = `Policy ${p.number}`;
+  put($("standing"), portal.stats([["Status", words(head.status || p.status)], ["Payments", words(head.standing || "–")], ["Product", words(p.product)], ["You are", p.relationships.map(words).join(", ")]]));
+  const covers = rows("cover");
+  put($("covers"), table(["Cover", "Life insured", "Sum insured", "Held at", "In force"], covers.map((c) => [words(c.cover), c.life, money(c.sum_insured_minor),
+    c.options ? Object.entries(c.options).map(([k, v]) => `${words(k)} ${words(v)}`).join(", ") : "", c.in_force ? "yes" : "no"])));
+  put($("nc-cover"), covers.map((c) => h("option", { value: c.cover + "/" + c.layer }, `${words(c.cover)} (${c.life})`)));
+  const bills = rows("billing");
+  const owed = bills.find((b) => b.outstanding_minor !== undefined);
+  put($("bills"), owed && owed.outstanding_minor > 0 ? h("div", { class: "banner warn", role: "status" }, `${money(owed.outstanding_minor)} is due, the oldest from ${owed.oldest_unpaid_due}.`) : h("p", { class: "muted" }, "Nothing is overdue."),
+    table(["From", "To", "Amount"], bills.filter((b) => b.period_start).map((b) => [b.period_start, b.period_end, money(b.total_minor)])));
+  const claims = await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(p.policy) + "/claims");
+  put($("claims"), claims.rows.length ? table(["Claim", "Status", "Told us", "Closed"], claims.rows.map((c) => [c.claim, words(c.status), c.notified_on, c.closed_on || ""])) : h("p", { class: "muted" }, "No claims."));
+  put($("docs"), portal.documents(R, view.rows, $("docs-msg")));
+  const advisers = rows("adviser");
+  put($("advisers"), advisers.length ? table(["Adviser", "State", ""], advisers.map((a) => [a.adviser, a.state === "available" ? "Available" : "Not available: contact us",
+    h("button", { type: "button", class: "quiet", on: { click: run($("ap-msg"), () => removeAdviser(a.adviser)) } }, "Remove")])) : h("p", { class: "muted" }, "No adviser on this policy."));
+  return view;
+}
+async function removeAdviser(adviser) {
+  if (!(await portal.ask({ title: "Remove your adviser?", text: `${adviser} will no longer see this policy or prepare changes for it.`, confirm: "Remove", danger: true }))) return;
+  await api(R, "DELETE", `/app/v1/policies/${encodeURIComponent(current)}/advisers/${encodeURIComponent(adviser)}`);
+  await open(me.policies.find((p) => p.policy === current));
+  return "Your adviser was removed.";
+}
+$("appoint").addEventListener("submit", run($("ap-msg"), async () => {
+  await api(R, "POST", `/app/v1/policies/${encodeURIComponent(current)}/advisers`, { adviser: $("ap-adviser").value.trim(), engagement: $("ap-engagement").value.trim() });
+  $("appoint").reset();
+  await open(me.policies.find((p) => p.policy === current));
+  return "Your adviser was appointed.";
+}));
+$("notify").addEventListener("submit", run($("nc-msg"), async () => {
+  const [cover, layer] = $("nc-cover").value.split("/");
+  const id = crypto.randomUUID();
+  const payload = { cover, layer: Number(layer), event_date: $("nc-date").value };
+  await api(R, "POST", "/app/v1/requests", { id, policy: current, kind: "notify_claim", module: "claims", payload });
+  $("notify").reset();
+  await waiting();
+  return "Thank you. The claims team will be in touch, usually within two working days.";
+}));
+
+// ---- Changes waiting for the customer, from every policy, and their own requests.
+async function waiting() {
+  const views = await Promise.all(me.policies.map(async (p) => [p, await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(p.policy))]));
+  const open = views.flatMap(([p, v]) => v.rows.filter((r) => r.kind === "request" && r.body.state && r.body.state.status === "awaiting_approval" && r.body.state.from === "customer").map((r) => [p, r.body]));
+  put($("waiting"), open.length ? table(["Policy", "Change", "Asked", ""], open.map(([p, r]) => [p.number, words(r.kind), new Date(r.submitted * 1000).toLocaleDateString(),
+    h("div", { class: "actions" },
+      h("button", { type: "button", id: "approve-" + r.id, on: { click: run($("wait-msg"), () => approve(r)) } }, "Approve"),
+      h("button", { type: "button", class: "quiet", id: "decline-" + r.id, on: { click: run($("wait-msg"), () => decline(r)) } }, "Decline"))]))
+    : h("p", { class: "muted" }, "Nothing is waiting for you."));
+  const mine = await api(R, "GET", "/app/v1/requests");
+  put($("requests"), table(["Request", "Policy", "Change", "State"], mine.map((r) => [r.id.slice(0, 8), (me.policies.find((p) => p.policy === r.policy) || {}).number || r.policy || "", words(r.kind), state(r)])));
+  return open.length;
+}
+async function approve(r) {
+  // An approval is always signed: it is the customer's own say-so, whoever prepared the change.
+  if (!enrolled) throw new Error("Approving needs your signature. Set up this browser under Signing, or approve it on your phone.");
+  await api(R, "POST", "/app/v1/requests/" + encodeURIComponent(r.id) + "/approve", { signed: await signed({ action: "approve_request", id: r.id }) });
+  await waiting();
+  return `Approved: ${words(r.kind)}.`;
+}
+async function decline(r) {
+  if (!(await portal.ask({ title: "Decline this change?", text: `${words(r.kind)} will not go ahead. Whoever prepared it is told.`, confirm: "Decline", danger: true }))) return;
+  await api(R, "DELETE", "/app/v1/requests/" + encodeURIComponent(r.id));
+  await waiting();
+  return `Declined: ${words(r.kind)}.`;
+}
+
+// ---- The customer's own record in the customer master.
+async function details() {
+  try {
+    record = await api(R, "GET", "/app/v1/profile");
+    put($("record"), portal.details(record.record));
+    $("ct-email").value = record.record.email || ""; $("ct-phone").value = record.record.mobile_phone || "";
+  } catch (e) { say($("record"), "warn", "Your details cannot be shown just now. " + e.message); }
+  try {
+    const hold = await api(R, "GET", "/app/v1/profile/spending-hold");
+    put($("hold"), hold.held ? h("div", { class: "banner ok", role: "status" }, hold.removal ? `A hold is on. You asked to lift it; it lifts on ${new Date(hold.removal.ends_at).toLocaleDateString()}.` : "A hold is on.")
+      : h("p", {}, "No hold is on."));
+    $("hold-on").hidden = !!hold.held; $("hold-off").hidden = !hold.held || !!hold.removal; $("hold-keep").hidden = !hold.removal;
+  } catch (e) { say($("hold"), "warn", e.message); }
+}
+const signature = (what) => { if (!enrolled) throw new Error(`${what} needs your signature. Set up this browser under Signing first.`); };
+async function change(command) {
+  signature("Changing your details");
+  await api(R, "POST", "/app/v1/profile/commands", command);
+  await details();
+}
+$("contact").addEventListener("submit", run($("ct-msg"), async () => {
+  const facts = [["email", $("ct-email").value.trim()], ["mobile_phone", $("ct-phone").value.trim()]].filter(([f, v]) => v && v !== (record && record.record[f])).map(([field, value]) => ({ field, value }));
+  if (!facts.length) return "Nothing has changed.";
+  await change({ command: "record", facts });
+  return "Your details were saved.";
+}));
+$("hold-on").addEventListener("click", run($("hold-msg"), async () => { await change({ command: "place_spending_hold" }); return "A hold is on."; }));
+$("hold-keep").addEventListener("click", run($("hold-msg"), async () => { await change({ command: "cancel_hold_removal" }); return "The hold stays on."; }));
+$("hold-off").addEventListener("click", run($("hold-msg"), async () => {
+  const code = await portal.ask({ title: "Lift the hold", text: "We check it is you first. Enter the code we sent to your phone.", label: "Code", confirm: "Ask to lift it" });
+  if (!code) return;
+  await change({ command: "request_hold_removal", verification: code });
+  return "The hold lifts in a week, unless you keep it.";
+}));
+$("export").addEventListener("click", run($("ex-msg"), async () => {
+  signature("A copy of your record");
+  const copy = await api(R, "GET", "/app/v1/profile/export");
+  const url = URL.createObjectURL(new Blob([JSON.stringify(copy, null, 2)], { type: "application/json" }));
+  const a = h("a", { href: url, download: "my-record.json" });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  return "Downloaded my-record.json.";
+}));
+
+async function load() {
+  me = await api(R, "GET", "/app/v1/me");
+  skew = me.now - Math.floor(Date.now() / 1000);
+  key = await store("readonly", (s) => s.get("me"));
+  await devices();
+  const owed = me.policies.filter((p) => !p.ended);
+  put($("summary"), portal.stats([["Policies in force", String(owed.filter((p) => p.status === "in_force").length)], ["Ended", String(me.policies.length - owed.length)]]));
+  put($("policies"), table(["Policy", "Product", "Status", "You are", ""], me.policies.map((p) => [p.number, words(p.product), words(p.status), p.relationships.map(words).join(", "),
+    h("button", { type: "button", class: "quiet", id: "open-" + p.number, on: { click: run($("msg"), () => open(p)) } }, "Open")])));
+  if (me.policies.length === 1) await open(me.policies[0]);
+  const count = await waiting();
+  if (count) say($("msg"), "warn", `${count} change${count > 1 ? "s are" : " is"} waiting for you to approve.`);
+  await details();
+}
+signIn(R).then(load).catch(portal.refuse);
+</script></body></html>

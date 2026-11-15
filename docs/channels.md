@@ -428,7 +428,8 @@ node crates/channels/tests/browser/check.js
 ## Known gaps
 
 - **No clinical view in the claims console.** Staff work from the claims module's staff view (`work`), which carries nothing clinical. The cause, reason codes and evidence documents stay in that module until it offers a question for them after `open_file`.
-- **The native customer app is not here.** The API and sync protocol are complete and tested; the app itself belongs with the bank's app.
+- **The native customer app is not here.** The API and sync protocol are complete and tested; the app itself belongs with the bank's app. The web page `/customer` covers the same ground for a browser.
+- **A claim told us about from `/customer` waits for claims to collect it.** It is a request of kind `notify_claim` for the module `claims` (cover, layer and the date only), listed at `/internal/v1/pending` for that module. The claims module does not read that list yet.
 - **New business is not in the adviser portal.** Quotes and proposals are underwriting's API. The portal shows the book, standing, held money and servicing requests.
 - **A scheme member sees their cover only once they are a known person.** A member who joins from a membership file without being named gets their feed when group administration or claims identifies them (`IdentifyMember`).
 - **The browser check is not run by CI.** CI has no browser. Run it before changing anything under `ui/`.
@@ -463,6 +464,19 @@ An attorney under an activated enduring power, a guardian, or a person with a wr
 ### Reviewing vulnerability markers
 
 "Markers to review" on the staff console is for people whose role carries the vulnerability kind (`CareStaff`); anyone else is refused before the master is asked. `GET /staff/v1/care/reviews` lists the master's open `consider_marker` reviews (a marker at its review date, or a prompt after a death or a concern), each with how the person is served now, and the master's lists of kinds and adjustments. `POST /staff/v1/care/reviews/{review}` takes `{party, outcome, kind, review_on, adjustments}` where the outcome is `renew`, `change`, `remove` or `no_marker`. The portal calls the master as `staff` under the purpose `vulnerability_support` with the member of staff as actor, changes the marker first and closes the prompt after, so a refusal leaves the prompt open. A marker has no free text, and the recorded reason is the outcome and the review ID only.
+
+## The customer page
+
+`/customer` (realm `customers`, the partner frame) is the customer's own page over `/app/v1`, decided by Mitchell on 14 November so the customer journeys can be tested in a browser. Its views:
+
+- **Your policies**: the policies (`/app/v1/me`), and one policy's cover with what each is held at, the bill and anything overdue, claim status (`/app/v1/policies/{policy}/claims`, which the policyholder now reads as an adviser does: status and dates only), documents, the adviser with appoint and remove, and "Tell us about a claim".
+- **To approve**: every request row on the customer's policies waiting for them, with Approve and Decline, and their own requests.
+- **Your details**: the record from the customer master, email and mobile, the spending hold, and the Privacy Act copy.
+- **Signing**: this browser's key, the person's devices, and forgetting this browser.
+
+**Signing in a browser.** Approving, changing details and taking a copy need an enrolled device. The page makes a P-256 key with Web Crypto, keeps the private half in IndexedDB as a key that cannot be exported, and shows the device name and public key. An enrolled device (the phone) approves it by signing `enrol\n{device}\n{key}` and sending `POST /app/v1/devices`. From then on every call carries `x-device-id` and `x-device-proof`, dated by the service's clock (`now` in `/app/v1/me`) so a browser whose clock is wrong still proves in time, and every approval is signed through a challenge. Every approval needs a signature, money or not.
+
+Element ids, for tests: `#policies` (with `#open-{number}`), `#covers`, `#bills`, `#claims`, `#docs`, `#advisers`, `#appoint` (`#ap-adviser`, `#ap-engagement`), `#notify` (`#nc-cover`, `#nc-date`), `#waiting` (`#approve-{id}`, `#decline-{id}`, confirmed by the dialog's `button.danger`), `#requests`, `#record`, `#contact` (`#ct-email`, `#ct-phone`), `#hold` with `#hold-on`, `#hold-off`, `#hold-keep`, `#export`, `#sg-make`, `#sg-check`, `#sg-forget`, `#sg-device`, `#sg-key`, `#devices`, and messages in `#msg`, `#wait-msg`, `#ap-msg`, `#nc-msg`, `#ct-msg`, `#hold-msg`, `#ex-msg`, `#sg-msg`. The seeded browser server adds `POST /test/v1/phone-signs`, which signs a body with Kiri's phone key, so the browser check can approve a browser; it is in the ignored test only, never in the service.
 
 ## Staff work in other services
 

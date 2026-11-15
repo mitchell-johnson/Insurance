@@ -193,13 +193,18 @@ const portal = (() => {
     } else headers["authorization"] = "Bearer " + store.getItem("token:" + realm);
     return { cfg, headers };
   }
+  // A page that holds a device key proves it on each call: given the method,
+  // the path and the exact body sent, it returns the headers to add.
+  let prover = null;
   async function api(realm, method, path, body) {
     const { cfg, headers } = await signedIn(realm);
     if (method !== "GET") headers["idempotency-key"] = crypto.randomUUID();
     // A file goes as it is; anything else as JSON.
     const raw = typeof Blob !== "undefined" && body instanceof Blob;
     if (body !== undefined) headers["content-type"] = raw ? body.type || "application/octet-stream" : "application/json";
-    const res = await fetch(path, { method, headers, body: body === undefined ? undefined : raw ? body : JSON.stringify(body) });
+    const sent = body === undefined ? undefined : raw ? body : JSON.stringify(body);
+    if (prover && !raw) Object.assign(headers, await prover(method, path.split("?")[0], sent || ""));
+    const res = await fetch(path, { method, headers, body: sent });
     const data = await res.json().catch(() => null);
     if (res.status === 401 && cfg.mode !== "dev") { store.removeItem("token:" + realm); throw new Error("Your sign-in has expired. Reload the page to sign in again."); }
     if (!res.ok) {
@@ -214,6 +219,7 @@ const portal = (() => {
   // Fetch a file as the signed-in person and hand it to the browser to save.
   async function download(realm, path, name) {
     const { headers } = await signedIn(realm);
+    if (prover) Object.assign(headers, await prover("GET", path.split("?")[0], ""));
     const res = await fetch(path, { headers });
     if (res.status === 404) throw new Error("That document is not available to you.");
     if (!res.ok) { const data = await res.json().catch(() => null); throw new Error((data && data.detail) || "The download failed (" + res.status + ")."); }
@@ -247,7 +253,7 @@ const portal = (() => {
 
   // ---- The frame around every page: navigation, who is signed in, theme, and the page's views.
   // [path, name, icon, what it is for]
-  const PARTNERS = [["adviser", "Adviser portal", "briefcase", "Your book, your standing, and anything held from you."], ["employer", "Employer portal", "building", "Your scheme, its members and its administrators."]];
+  const PARTNERS = [["customer", "Your policies", "shield", "Your cover, bills and claims, changes waiting for you, and your details."], ["adviser", "Adviser portal", "briefcase", "Your book, your standing, and anything held from you."], ["employer", "Employer portal", "building", "Your scheme, its members and its administrators."]];
   const NAV = [
     ["Customers", [["staff", "Staff console", "user", "Policies, customer requests, your access and the held balance workbench."], ["claims", "Claims console", "shield", "Work queues, a claim, and acting on it as yourself."],
       ["underwriting", "Underwriting", "clipboard", "Queues, cases and decisions, disclosures, non-disclosure remedies and peer review."], ["group", "Group schemes", "users", "The exception queue, schemes, files, members, possible matches and file layouts."],
@@ -267,6 +273,7 @@ const portal = (() => {
     return button;
   }
   const who = h("div", { class: "who", hidden: true });
+  const here = () => document.body.dataset.page;
   // Shown once someone is signed in: their name where the token carries one, else their subject.
   function entered(realm) {
     let name = "";
@@ -275,7 +282,7 @@ const portal = (() => {
       if (dev) name = dev.subject;
       else { const claims = JSON.parse(atob(store.getItem("token:" + realm).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))); name = claims.name || claims.preferred_username || ""; }
     } catch { name = ""; }
-    if (name) { put(who, h("span", { class: "avatar", "aria-hidden": "true" }, name.replace(/^sub-/, "").slice(0, 2)), h("div", {}, h("strong", {}, name), h("span", {}, realm === "workforce" ? "Staff" : "Partner"))); who.hidden = false; }
+    if (name) { put(who, h("span", { class: "avatar", "aria-hidden": "true" }, name.replace(/^sub-/, "").slice(0, 2)), h("div", {}, h("strong", {}, name), h("span", {}, realm === "workforce" ? "Staff" : here() === "customer" ? "Customer" : "Partner"))); who.hidden = false; }
     if (window.location.hash.length > 1) view(window.location.hash.slice(1));
   }
 
@@ -345,5 +352,5 @@ const portal = (() => {
     put(el, [["Partners", PARTNERS], ...NAV].map(([group, items]) => [h("h2", { class: "group" }, group), h("div", { class: "launch" }, items.map(card))]));
   }
   frame();
-  return { h, clear, put, money, table, text, details, say, refuse, signIn, signOut, api, run, loadConfig, download, documents, icon, pill, stats, empty, ask, view, onView: (fn) => listeners.push(fn), launcher };
+  return { h, clear, put, money, table, text, details, say, refuse, signIn, signOut, api, run, loadConfig, download, documents, icon, pill, stats, empty, ask, view, onView: (fn) => listeners.push(fn), launcher, prove: (fn) => { prover = fn; } };
 })();

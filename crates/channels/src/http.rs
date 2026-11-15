@@ -432,7 +432,8 @@ async fn me(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Ur
             at: session.at,
         })
         .await?;
-    ok(json!({ "party": session.party, "device": session.device, "staff": session.staff, "policies": policies }))
+    // The service's clock, so a device can date its proofs by it rather than its own.
+    ok(json!({ "party": session.party, "device": session.device, "staff": session.staff, "now": session.at, "policies": policies }))
 }
 
 #[derive(Deserialize)]
@@ -1170,7 +1171,7 @@ async fn held_balance(State(s): State<Shared>, headers: HeaderMap, method: Metho
     ok(s.ask(Question::HeldBalance { party: session.party }).await?)
 }
 
-/// The claims on a policy as its adviser or a scheme's administrator may
+/// The claims on a policy as its policyholder, its adviser or a scheme's administrator may
 /// see them: each claim's ID, status, and the dates it was notified and
 /// closed, and never its cause (Mitchell's decision, 13 November 2026).
 /// Anyone else, including a policy the party has no part in, gets 404.
@@ -1186,7 +1187,7 @@ async fn policy_claims(State(s): State<Shared>, headers: HeaderMap, method: Meth
         p["policy"] == policy.as_str()
             && p["relationships"]
                 .as_array()
-                .is_some_and(|r| r.iter().any(|x| x == "adviser" || x == "employer_admin"))
+                .is_some_and(|r| r.iter().any(|x| x == "policyholder" || x == "adviser" || x == "employer_admin"))
     });
     if !allowed {
         return Err(Problem::not_found());
@@ -3567,6 +3568,7 @@ pub fn router(state: Shared) -> Router {
         .route("/status.json", get(status_json))
         .route("/status", get(|State(s): State<Shared>| async move { page(&s, crate::ui::STATUS) }))
         .route("/", get(|State(s): State<Shared>| async move { page(&s, crate::ui::INDEX) }))
+        .route("/customer", get(|State(s): State<Shared>| async move { page(&s, crate::ui::CUSTOMER) }))
         .route("/adviser", get(|State(s): State<Shared>| async move { page(&s, crate::ui::ADVISER) }))
         .route("/employer", get(|State(s): State<Shared>| async move { page(&s, crate::ui::EMPLOYER) }))
         .route("/staff", get(|State(s): State<Shared>| async move { page(&s, crate::ui::STAFF) }))
