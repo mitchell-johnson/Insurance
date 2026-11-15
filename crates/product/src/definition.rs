@@ -250,6 +250,11 @@ pub struct CoverDefinition {
     /// without evidence (AIA's buy-back options).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub buybacks: Vec<BuybackOption>,
+    /// Rights to convert all or part of the cover without evidence: to
+    /// another choice on one axis of this cover (a premium type), or to
+    /// another cover of the product.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conversions: Vec<ConversionOption>,
     /// The right to stop paying a limited-pay premium early and keep a
     /// reduced sum insured for life. Absent: the cover has no such option.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -453,6 +458,32 @@ pub struct BuybackOption {
     /// Only where the claim took the whole of the cover.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub only_after_nil: bool,
+}
+
+/// The right to convert all or part of a life's cover, without evidence of
+/// health, priced from the day of conversion at the life's age then.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionOption {
+    /// The cover converted to: this cover's own code for a change of choice
+    /// on `axis`, or another cover of the product.
+    pub to: String,
+    /// For a conversion within the cover: the axis whose choice changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis: Option<String>,
+    /// The choices on `axis` that may be converted to, longest commitment
+    /// first: from one of them, only to it or one after it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<String>,
+    /// The life must be younger than this.
+    pub before_age: u32,
+    /// Only where the life's cover carries no loading or exclusion.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub standard_terms_only: bool,
+    /// The same amount of this cover, which the life holds, is added with
+    /// the conversion (AIA: accelerated trauma comes with equal life cover).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub with_cover: Option<String>,
 }
 
 /// The event an anniversary option is used under, in place of one of the

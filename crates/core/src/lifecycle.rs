@@ -300,6 +300,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         payee_debts: BTreeMap::new(),
         paid_up: BTreeMap::new(),
         buybacks: Default::default(),
+        conversions: Default::default(),
         suspensions: BTreeMap::new(),
         billing_changes: Vec::new(),
         migration: None,

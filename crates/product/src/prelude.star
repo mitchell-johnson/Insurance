@@ -60,7 +60,7 @@ def benefit_category(code, salary_multiple, max_sum_insured, member_pays_percent
 def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, levies = [],
           expiry_age = None, min_sum_insured = 0, max_sum_insured = None, categories = [],
           automatic_acceptance_limit = None, excess_options = [], premium_waiver = None,
-          shared_counter = None, reduces = [], joint_first_event = False, insurability_option = None, anniversary_option = None, adds_cover = None, buybacks = [],
+          shared_counter = None, reduces = [], joint_first_event = False, insurability_option = None, anniversary_option = None, adds_cover = None, buybacks = [], conversions = [],
           option_axes = [], min_entry_age = None, max_entry_age = None, built_in = [], paid_up_option = None):
     return {
         "paid_up_option": paid_up_option,
@@ -85,6 +85,7 @@ def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, 
         "anniversary_option": anniversary_option,
         "adds_cover": adds_cover,
         "buybacks": buybacks,
+        "conversions": conversions,
         "option_axes": option_axes,
         "min_entry_age": min_entry_age,
         "max_entry_age": max_entry_age,
@@ -201,6 +202,18 @@ def buyback(restores, requires, after_days, within_days, max = None, only_after_
         option["max_minor"] = max
     if only_after_nil:
         option["only_after_nil"] = True
+    return option
+
+def conversion(to, before_age, axis = None, choices = [], standard_terms_only = False, with_cover = None):
+    """All or part of the cover converted without evidence: to another choice on `axis` of the
+    same cover (`to` is its own code; `choices` longest commitment first), or to cover `to`."""
+    option = {"to": to, "before_age": before_age, "choices": choices}
+    if axis != None:
+        option["axis"] = axis
+    if standard_terms_only:
+        option["standard_terms_only"] = True
+    if with_cover != None:
+        option["with_cover"] = with_cover
     return option
 
 def anniversary_option(every_years, max_percent_of_original, at_least, max_total_percent_of_original, max_total_increase,

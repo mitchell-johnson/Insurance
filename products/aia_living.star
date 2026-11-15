@@ -160,7 +160,8 @@ def trauma_cover(code, table, definitions, accelerated, max_sum_insured, ends_co
         insurability_option = lump_sum_special_events(16),
         anniversary_option = lump_sum_future_insurability(),
         option_axes = [premium_axis(), waiver_axis()] + extra_axes,
-        built_in = trauma_built_ins() + extra_built_ins,
+        # Accelerated trauma is already accelerated: only stand-alone trauma converts to it.
+        built_in = [b for b in trauma_built_ins() if not (accelerated and b["code"] == "standalone-conversion")] + extra_built_ins,
     )
 
 # Buy-back (1105 AL-CC sections 18 and 19, 1119 AL-ST; the business wordings the same):
@@ -450,8 +451,29 @@ WORDINGS = {
     "specialist-testing": ["aia-wording-1100-al-umb", "aia-wording-1118-al-sts"],
 }
 
+# ---- Conversions without evidence ---------------------------------------------------
+
+# Premium Conversion Facility (before age 65): all or part of a benefit moved from
+# rate for age to a level premium, or from a level premium to one level for a
+# shorter time, without evidence. Standalone Conversion Facility: stand-alone
+# trauma moved to the same trauma accelerated against life cover, with as much
+# life cover, without evidence, before age 60 and only where the cover was
+# accepted on standard terms.
+LEVEL_CHOICES = ["level-to-80", "level-to-65", "level-10y"]
+
+def with_conversions(c):
+    codes = [b["code"] for b in c["built_in"]]
+    convs = []
+    if "premium-conversion" in codes:
+        axis = [a for a in c["option_axes"] if a["code"] == "premium"][0]
+        offered = [ch["code"] for ch in axis["choices"]]
+        convs.append(conversion(c["code"], 65, axis = "premium", choices = [ch for ch in LEVEL_CHOICES if ch in offered]))
+    if "standalone-conversion" in codes:
+        convs.append(conversion(c["code"] + "-accelerated", 60, standard_terms_only = True, with_cover = "life"))
+    return dict(c, conversions = convs)
+
 def with_wordings(covers):
-    return [dict(c, definitions = c["definitions"] + WORDINGS[c["code"]]) for c in covers]
+    return [with_conversions(dict(c, definitions = c["definitions"] + WORDINGS[c["code"]])) for c in covers]
 
 PRODUCT = product(
     code = "aia-living",

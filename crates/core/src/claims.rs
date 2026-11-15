@@ -376,6 +376,13 @@ pub fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&s
                 applies: b.applies(chosen.as_ref()),
             })
             .collect();
+        // Waiver of premium on disability is the cover's own, or an option
+        // (the built-in `waiver-of-premium`): where the cover offers it as an
+        // option, only a life that chose it has it.
+        let offered = def.built_in.iter().find(|b| b.code == DISABILITY_WAIVER && b.kind == ic_product::BuiltInKind::PremiumWaiver);
+        if let Some(waiver) = offered {
+            facts.premium_waiver = Some(def.premium_waiver == Some(true) || waiver.applies(chosen.as_ref()));
+        }
     }
     facts.in_force = covered && c.start <= on && policy_live && !matches!(standing, Some("suspended" | "lapsed"));
     // The same question as the record stood on the event date: a leave
@@ -1044,6 +1051,10 @@ fn open_migrated(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, cl
     );
     Ok(())
 }
+
+/// The built-in benefit that waives premium while the life is disabled,
+/// where a product offers it as an option rather than on the whole cover.
+pub const DISABILITY_WAIVER: &str = "waiver-of-premium";
 
 /// Premium waiver: the premium was billed as usual, and what is owing for
 /// periods starting in the window is paid from claims expense, so earned

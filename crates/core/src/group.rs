@@ -1228,6 +1228,7 @@ pub(crate) fn split(
                 payee_debts: Default::default(),
                 paid_up: Default::default(),
                 buybacks: Default::default(),
+                conversions: Default::default(),
                 suspensions: Default::default(),
                 billing_changes: Vec::new(),
                 migration: None,

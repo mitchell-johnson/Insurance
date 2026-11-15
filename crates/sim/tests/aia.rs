@@ -973,3 +973,133 @@ fn business_safeguard_grows_cover_with_the_business_inside_its_limits() {
     assert_eq!(code(exercise(&mut c, &id, "bs-3", "value_to_business_increase", today, 1_00)), "option_too_soon");
     assert_eq!(life_layers(&c, &id), vec![1_000_000_00, 3_000_000_00, 500_000_00]);
 }
+
+/// Purpose: on AIA Living the claim cover check says premium is waived on disability only for
+/// a life that chose the optional Waiver of Premium on that cover, and says so for the cover of
+/// a life that chose it, so a premium waiver claim is admitted for one and refused for the other.
+/// Why it matters: Waiver of Premium is an option the customer pays 6% more for. Reported as
+/// absent, claims refuses the waiver the customer bought; reported as present for everyone, the
+/// insurer waives premium for customers who never paid for the option.
+#[test]
+fn the_waiver_of_premium_option_is_on_the_cover_check_only_where_chosen() {
+    let mut c = cluster();
+    let living = product("aia_living.star");
+    let with = pick(&living, "life", &[("waiver", "yes")]);
+    let without = pick(&living, "life", &[]);
+    let a = issue(&mut c, policy(1, "aia-living", d(1987, 6, 1), &[("life", 500_000_00, Some(with))])).unwrap();
+    let b = issue(&mut c, policy(2, "aia-living", d(1987, 6, 1), &[("life", 500_000_00, Some(without))])).unwrap();
+    let on = c.state(0).business_date.unwrap();
+    let waiver = |id: &PolicyId| ic_core::cover_facts(c.state(0), &id.0, "life", Some("life-1"), on).unwrap().premium_waiver;
+    assert_eq!((waiver(&a), waiver(&b)), (Some(true), Some(false)));
+}
+
+/// Ask to convert `amount` of life-1's `cover` on `policy` to `to` at the choices `option`.
+fn convert(c: &mut Cluster, policy: &PolicyId, cover: &str, to: &str, option: &str, amount: i64, reference: &str) -> Result<(), Reject> {
+    let ask = ic_core::conversion::ConvertCover {
+        policy: policy.clone(),
+        cover: cover.to_string(),
+        life: ic_core::LifeId("life-1".to_string()),
+        sum_insured_minor: amount,
+        to_cover: to.to_string(),
+        excess_option: option.to_string(),
+        reference: reference.to_string(),
+    };
+    c.submit(0, "policy-servicing", Command::ConvertCover(Box::new(ask)))
+}
+
+/// The life's in-force sum insured on a cover held at an option.
+fn held_at(c: &Cluster, id: &PolicyId, cover: &str, option: &str) -> i64 {
+    let on = c.state(0).business_date.unwrap();
+    c.state(0).policies[id].covers[cover]
+        .layers
+        .iter()
+        .filter(|l| l.in_force_on(on) && l.excess_option.as_deref() == Some(option))
+        .map(|l| l.sum_insured_minor)
+        .sum()
+}
+
+/// Close today, every customer paying what is owed.
+fn next_day(c: &mut Cluster) {
+    let today = c.state(0).business_date.unwrap();
+    close_to(c, today + chrono::Days::new(1));
+}
+
+/// Everything billed on a policy for a cover type.
+fn billed_for(c: &Cluster, id: &PolicyId, cover_type: &str) -> i128 {
+    c.state(0).policies[id].receivables.iter().map(|r| r.net_fine.get(cover_type).copied().unwrap_or(0)).sum()
+}
+
+/// Purpose: AIA Living's Premium Conversion Facility moves part of a life's cover from rate for
+/// age to a level premium, and later from level to age 80 to level to age 65, without evidence:
+/// the amount held is unchanged, the converted part is billed at its new premium type from today,
+/// and a conversion back to a stepped premium, to the same type, of more than is held at that
+/// type, of another option too, or from age 65 is refused with nothing written.
+/// Why it matters: the facility is a promise in the wording (1101 AL-LIFE) that customers rely
+/// on as premiums rise with age. A conversion the wording does not give (back to rate for age,
+/// after 65, or a waiver added on the way) is a change of risk no one underwrote.
+#[test]
+fn premium_conversion_moves_cover_to_a_level_premium_without_evidence() {
+    let mut c = cluster();
+    let living = product("aia_living.star");
+    let stepped = pick(&living, "life", &[]);
+    let to_80 = pick(&living, "life", &[("premium", "level-to-80")]);
+    let to_65 = pick(&living, "life", &[("premium", "level-to-65")]);
+    let with_waiver = pick(&living, "life", &[("premium", "level-to-80"), ("waiver", "yes")]);
+    let id = issue(&mut c, policy(1, "aia-living", d(1987, 6, 1), &[("life", 500_000_00, Some(stepped.clone()))])).unwrap();
+    let old = issue(&mut c, policy(2, "aia-living", d(1960, 6, 1), &[("life", 100_000_00, Some(stepped.clone()))])).unwrap();
+    let code = |r: Result<(), Reject>| r.unwrap_err().code;
+    assert_eq!(code(convert(&mut c, &id, "life", "life", &to_80, 200_000_00, "pc-0")), "premium_owing");
+    next_day(&mut c);
+    let billed = billed_for(&c, &id, "life");
+
+    assert_eq!(code(convert(&mut c, &id, "life", "life", &with_waiver, 200_000_00, "pc-0")), "excess_option");
+    assert_eq!(code(convert(&mut c, &id, "life", "life", &to_80, 500_000_01, "pc-0")), "life_not_covered");
+    assert_eq!(code(convert(&mut c, &old, "life", "life", &to_80, 50_000_00, "pc-0")), "conversion_age");
+    convert(&mut c, &id, "life", "life", &to_80, 200_000_00, "pc-1").unwrap();
+    convert(&mut c, &id, "life", "life", &to_80, 200_000_00, "pc-1").unwrap();
+    assert_eq!(code(convert(&mut c, &id, "life", "life", &to_65, 100_000_00, "pc-1")), "duplicate_request");
+    assert_eq!((held(&c, &id, "life"), held_at(&c, &id, "life", &to_80)), (500_000_00, 200_000_00));
+    // The level premium costs more than the stepped one for the rest of the year billed.
+    assert!(billed_for(&c, &id, "life") > billed);
+    next_day(&mut c);
+
+    assert_eq!(code(convert(&mut c, &id, "life", "life", &stepped, 100_000_00, "pc-2")), "excess_option");
+    assert_eq!(code(convert(&mut c, &id, "life", "life", &to_80, 100_000_00, "pc-2")), "excess_option");
+    assert_eq!(code(convert(&mut c, &id, "life", "life", &to_65, 200_000_01, "pc-2")), "life_not_covered");
+    convert(&mut c, &id, "life", "life", &to_65, 100_000_00, "pc-2").unwrap();
+    assert_eq!((held_at(&c, &id, "life", &to_80), held_at(&c, &id, "life", &to_65)), (100_000_00, 100_000_00));
+    assert_eq!(held(&c, &id, "life"), 500_000_00);
+}
+
+/// Purpose: AIA Living's Standalone Conversion Facility moves stand-alone Critical Conditions to
+/// accelerated Critical Conditions with as much Life Cover added, without evidence, before age
+/// 60; a conversion of more than is held, to a cover the facility does not name, or from age 60
+/// is refused with nothing written.
+/// Why it matters: the customer keeps their trauma cover and gains life cover the wording
+/// promises without evidence. Converted without the life cover, the accelerated claim would cut
+/// life cover the customer never had; converted too late, it is cover AIA does not offer.
+#[test]
+fn standalone_trauma_converts_to_accelerated_trauma_with_life_cover() {
+    let mut c = cluster();
+    let living = product("aia_living.star");
+    let life = pick(&living, "life", &[]);
+    let cc = pick(&living, "critical-conditions", &[]);
+    let cca = pick(&living, "critical-conditions-accelerated", &[]);
+    let covers = |l: &String, t: &String| vec![("life", 500_000_00, Some(l.clone())), ("critical-conditions", 200_000_00, Some(t.clone()))];
+    let id = issue(&mut c, policy(1, "aia-living", d(1987, 6, 1), &covers(&life, &cc))).unwrap();
+    let old = issue(&mut c, policy(2, "aia-living", d(1966, 6, 1), &covers(&life, &cc))).unwrap();
+    let code = |r: Result<(), Reject>| r.unwrap_err().code;
+    next_day(&mut c);
+
+    assert_eq!(code(convert(&mut c, &id, "critical-conditions", "severe-trauma-accelerated", &cca, 1_00, "sc-0")), "no_conversion");
+    assert_eq!(code(convert(&mut c, &id, "critical-conditions", "critical-conditions-accelerated", &cca, 200_000_01, "sc-0")), "life_not_covered");
+    assert_eq!(code(convert(&mut c, &old, "critical-conditions", "critical-conditions-accelerated", &cca, 1_00, "sc-0")), "conversion_age");
+    assert_eq!(held(&c, &id, "critical-conditions"), 200_000_00);
+    convert(&mut c, &id, "critical-conditions", "critical-conditions-accelerated", &cca, 200_000_00, "sc-1").unwrap();
+    assert_eq!(
+        (held(&c, &id, "critical-conditions"), held(&c, &id, "critical-conditions-accelerated"), held(&c, &id, "life")),
+        (0, 200_000_00, 700_000_00)
+    );
+    let done = &c.state(0).policies[&id].conversions["sc-1"];
+    assert_eq!((done.to_cover.as_str(), done.sum_insured_minor), ("critical-conditions-accelerated", 200_000_00));
+}

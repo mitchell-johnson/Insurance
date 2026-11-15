@@ -723,6 +723,12 @@ impl CoreState {
                 let policy = spec.policy.clone();
                 self.with_policy(&policy, false, |_, p| underwritten::record_replacement(p, ctx, *spec))
             }
+            Command::ConvertCover(spec) => {
+                let policy = spec.policy.clone();
+                self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                    crate::conversion::convert(&mut s.ledger, &s.catalog, p, ctx, *spec)
+                })
+            }
             Command::BuyBack(spec) => {
                 let policy = spec.policy.clone();
                 self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {

@@ -365,6 +365,32 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                 ));
             }
         }
+        let mut targets = BTreeSet::new();
+        for conv in &c.conversions {
+            let within = conv.to == c.code;
+            let axis = conv.axis.as_ref().and_then(|a| c.option_axes.iter().find(|x| &x.code == a));
+            let sound = targets.insert(conv.to.as_str())
+                && conv.before_age > 0
+                && if within {
+                    axis.is_some_and(|a| {
+                        !conv.choices.is_empty()
+                            && conv.choices.iter().all(|ch| a.choices.iter().any(|x| &x.code == ch))
+                            && conv.choices.iter().collect::<BTreeSet<_>>().len() == conv.choices.len()
+                    }) && conv.with_cover.is_none()
+                } else {
+                    conv.axis.is_none() && conv.choices.is_empty() && lump_sum(&conv.to)
+                }
+                && conv.with_cover.as_ref().is_none_or(|w| w != &c.code && w != &conv.to && lump_sum(w));
+            if !sound || !(within || lump_sum(&c.code)) {
+                return Err(invalid(
+                    file,
+                    format!(
+                        "cover {}: a conversion is to choices the cover's own axis offers, or from a lump sum cover to another lump sum cover, once to each cover, with an age above zero",
+                        c.code
+                    ),
+                ));
+            }
+        }
     }
     let mut kinds = BTreeSet::new();
     for f in &p.features {

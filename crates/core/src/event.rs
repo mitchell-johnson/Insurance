@@ -603,6 +603,19 @@ pub enum Event {
         sum_insured_minor: i64,
         paid_up_minor: i64,
     },
+    /// All or part of a life's cover was converted without evidence: to
+    /// another choice on the same cover, or to another cover (with as much
+    /// of a third where the product says so). The layers it ended and wrote
+    /// are announced by `LayerEnded`, `LayerReduced` and `LayerAdded`.
+    CoverConverted {
+        policy: PolicyId,
+        cover: String,
+        to_cover: String,
+        life: LifeId,
+        sum_insured_minor: i64,
+        option: String,
+        reference: String,
+    },
     /// Cover a closed claim took off a life was written again without
     /// evidence under the product's buy-back option. The layer it wrote is
     /// announced by `LayerAdded` before it.
