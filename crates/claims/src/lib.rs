@@ -22,6 +22,7 @@
 //!   was the insurer's own error is held, not pursued, unless the conduct
 //!   officer and legal both sign.
 
+pub mod channel;
 pub mod command;
 pub mod config;
 pub mod investigate;

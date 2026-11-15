@@ -16,8 +16,10 @@
   <div id="ap-msg" aria-live="polite"></div>
   <h3>Tell us about a claim</h3>
   <form id="notify"><div class="row"><div><label for="nc-cover">Cover</label><select id="nc-cover" required></select></div>
+    <div><label for="nc-type">What happened</label><select id="nc-type" required><option value="death">A death</option><option value="terminal_illness">A terminal illness</option>
+      <option value="trauma">A serious illness or injury</option><option value="total_permanent_disability">Permanent disablement</option><option value="income_protection">Unable to work</option></select></div>
     <div><label for="nc-date">When it happened</label><input id="nc-date" type="date" required></div><button>Tell us</button></div>
-    <p class="muted">Only the date and the cover go from here. The claims team contacts you for the rest, so nothing about your health is typed into this page.</p></form>
+    <p class="muted">Only the cover, what happened and the date go from here. The claims team contacts you for the rest, so nothing about your health is typed into this page.</p></form>
   <div id="nc-msg" aria-live="polite"></div>
 </section>
 
@@ -125,7 +127,7 @@ async function open(p) {
   const covers = rows("cover");
   put($("covers"), table(["Cover", "Life insured", "Sum insured", "Held at", "In force"], covers.map((c) => [words(c.cover), c.life, money(c.sum_insured_minor),
     c.options ? Object.entries(c.options).map(([k, v]) => `${words(k)} ${words(v)}`).join(", ") : "", c.in_force ? "yes" : "no"])));
-  put($("nc-cover"), covers.map((c) => h("option", { value: c.cover + "/" + c.layer }, `${words(c.cover)} (${c.life})`)));
+  put($("nc-cover"), covers.map((c) => h("option", { value: JSON.stringify({ cover: c.cover, layer: c.layer, life: c.life }) }, `${words(c.cover)} (${c.life})`)));
   const bills = rows("billing");
   const owed = bills.find((b) => b.outstanding_minor !== undefined);
   put($("bills"), owed && owed.outstanding_minor > 0 ? h("div", { class: "banner warn", role: "status" }, `${money(owed.outstanding_minor)} is due, the oldest from ${owed.oldest_unpaid_due}.`) : h("p", { class: "muted" }, "Nothing is overdue."),
@@ -151,12 +153,17 @@ $("appoint").addEventListener("submit", run($("ap-msg"), async () => {
   return "Your adviser was appointed.";
 }));
 $("notify").addEventListener("submit", run($("nc-msg"), async () => {
-  const [cover, layer] = $("nc-cover").value.split("/");
+  const { cover, layer, life } = JSON.parse($("nc-cover").value);
   const id = crypto.randomUUID();
-  const payload = { cover, layer: Number(layer), event_date: $("nc-date").value };
+  const payload = { cover, life, event_date: $("nc-date").value, claim_type: $("nc-type").value };
+  if (Number.isInteger(layer)) payload.layer = layer;
   await api(R, "POST", "/app/v1/requests", { id, policy: current, kind: "notify_claim", module: "claims", payload });
   $("notify").reset();
   await waiting();
+  // The portal carries it to claims straight away; say what claims said.
+  const mine = (await api(R, "GET", "/app/v1/requests")).find((r) => r.id === id) || {};
+  if (mine.status === "rejected") throw new Error("Claims could not take this: " + (mine.message || words(mine.code || "refused")) + ". Please call us.");
+  if (mine.status === "applied") await open(me.policies.find((p) => p.policy === current));
   return "Thank you. The claims team will be in touch, usually within two working days.";
 }));
 
@@ -190,9 +197,13 @@ async function decline(r) {
 // ---- The customer's own record in the customer master.
 async function details() {
   try {
-    record = await api(R, "GET", "/app/v1/profile");
-    put($("record"), portal.details(record.record));
-    $("ct-email").value = record.record.email || ""; $("ct-phone").value = record.record.mobile_phone || "";
+    // The customer master answers each fact with its dates; the person sees the values,
+    // and a field they may not read in full is shown masked.
+    const answer = await api(R, "GET", "/app/v1/profile");
+    const facts = Object.fromEntries(Object.entries(answer.facts || {}).map(([f, x]) => [f, x && typeof x === "object" && "value" in x ? x.value : x]));
+    record = { ...answer, values: facts };
+    put($("record"), portal.details({ ...facts, ...answer.masked }));
+    $("ct-email").value = facts.email || ""; $("ct-phone").value = facts.mobile_phone || "";
   } catch (e) { say($("record"), "warn", "Your details cannot be shown just now. " + e.message); }
   try {
     const hold = await api(R, "GET", "/app/v1/profile/spending-hold");
@@ -208,7 +219,7 @@ async function change(command) {
   await details();
 }
 $("contact").addEventListener("submit", run($("ct-msg"), async () => {
-  const facts = [["email", $("ct-email").value.trim()], ["mobile_phone", $("ct-phone").value.trim()]].filter(([f, v]) => v && v !== (record && record.record[f])).map(([field, value]) => ({ field, value }));
+  const facts = [["email", $("ct-email").value.trim()], ["mobile_phone", $("ct-phone").value.trim()]].filter(([f, v]) => v && v !== (record && record.values[f])).map(([field, value]) => ({ field, value }));
   if (!facts.length) return "Nothing has changed.";
   await change({ command: "record", facts });
   return "Your details were saved.";

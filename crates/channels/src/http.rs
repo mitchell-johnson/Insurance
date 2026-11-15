@@ -125,6 +125,7 @@ impl Channel for Hosted {
     }
 }
 
+#[derive(Clone)]
 pub struct AppState {
     pub channel: Arc<dyn Channel>,
     /// Customers, advisers and employer administrators: Entra External ID.
@@ -913,6 +914,7 @@ async fn submit_request(State(s): State<Shared>, headers: HeaderMap, method: Met
         return Err(Problem::bad_request("dispute a replacement from your matches in the adviser portal"));
     }
     let action = request_action(&new.id, new.policy.as_ref(), &new.kind, &new.payload);
+    let kind = new.kind.clone();
     let signed = redeem(&s, &headers, &session, &action, new.signed).await?;
     let routing = match &s.master {
         Some(master) => Some(master.routing(&session.party).await),
@@ -935,6 +937,10 @@ async fn submit_request(State(s): State<Shared>, headers: HeaderMap, method: Met
             },
         )
         .await?;
+    // A claim is carried to claims now rather than at the next sweep; one not carried now waits for the sweep.
+    if kind == ic_core::claims_module::channel::REQUEST_KIND {
+        s.carry_now().await;
+    }
     accepted(result)
 }
 
@@ -952,14 +958,16 @@ async fn approve_request(State(s): State<Shared>, headers: HeaderMap, method: Me
         None => None,
     };
     let route_to_person = crate::customers::route_to_person(routing);
-    accepted(
-        s.propose(
+    let result = s
+        .propose(
             key(&headers, &session.party.0)?,
             Actor::Party(session.party),
             Command::ApproveRequest { id, signed, route_to_person },
         )
-        .await?,
-    )
+        .await?;
+    // An approved claim someone prepared for the customer goes to claims now too.
+    s.carry_now().await;
+    accepted(result)
 }
 
 async fn cancel_request(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(id): Path<String>) -> Answer {
@@ -3397,6 +3405,109 @@ async fn ops_customers_rewrap(State(s): State<Shared>, headers: HeaderMap, body:
 async fn ops_customers_reshred(State(s): State<Shared>, headers: HeaderMap, body: Bytes) -> Answer {
     let request = body_json(&body)?;
     ops_desk(&s, &headers, crate::customers::Desk::Reshred(request)).await
+}
+
+// ---- First notice of a claim from the customer's own channel ------------
+//
+// Claims runs inside each partition and has no process to collect its
+// requests, so the portal carries them (claims' contract:
+// `ic_core::claims_module::channel`). Each pending `notify_claim` becomes a
+// `Notify` on the policy's partition as the caller `claims`, and the request
+// is closed with the claim as its reference or the module's reason. The
+// claim ID comes from the request ID, so carrying a request twice registers
+// one claim.
+
+impl AppState {
+    /// Carry every pending claim notification once. Returns how many were
+    /// closed. One that cannot be carried now (the core or a partition out
+    /// of reach) stays pending for the next sweep.
+    pub async fn carry_claim_notices(&self) -> Result<usize, String> {
+        use ic_core::claims_module::channel;
+        let pending = self
+            .ask(Question::Pending {
+                module: channel::MODULE.to_string(),
+            })
+            .await
+            .map_err(|p| p.detail)?;
+        let mut closed = 0;
+        for request in pending.as_array().into_iter().flatten().filter(|r| r["kind"] == channel::REQUEST_KIND) {
+            let id = request["id"].as_str().unwrap_or_default();
+            let outcome = match channel::notification(
+                id,
+                request["party"].as_str().unwrap_or_default(),
+                request["policy"].as_str(),
+                &request["payload"],
+            ) {
+                Err(refused) => Err((refused.code, refused.message)),
+                Ok(notice) => {
+                    let policy = PolicyId::from(notice.policy.as_str());
+                    let mut found = None;
+                    let mut unreachable = false;
+                    for answer in futures::future::join_all((0..self.claims.count()).map(|p| self.claims.locate(p, policy.clone()))).await {
+                        match answer {
+                            Ok(at) => found = found.or(at),
+                            Err(_) => unreachable = true,
+                        }
+                    }
+                    let Some(partition) = found else {
+                        if unreachable {
+                            continue;
+                        }
+                        self.close_request(id, Err(("policy_not_found".into(), "we could not find that policy".into())))
+                            .await?;
+                        closed += 1;
+                        continue;
+                    };
+                    let command = ic_core::Command::Claims(Box::new(ic_core::claims_module::Command::Notify(Box::new(notice))));
+                    let Ok(proposed) = self.claims.propose(partition, crate::claims::envelope(format!("notice:{id}"), command)).await else {
+                        continue;
+                    };
+                    channel::resolution(id, proposed.rejected)
+                }
+            };
+            self.close_request(id, outcome).await?;
+            closed += 1;
+        }
+        Ok(closed)
+    }
+
+    /// Carry what can be carried now; anything left waits for the sweep.
+    async fn carry_now(&self) {
+        if let Err(e) = self.carry_claim_notices().await {
+            tracing::warn!(error = %e, "claim notification left for the next sweep");
+        }
+    }
+
+    async fn close_request(&self, id: &str, outcome: Result<String, (String, String)>) -> Result<(), String> {
+        let (reference, rejected) = match outcome {
+            Ok(claim) => (Some(claim), None),
+            Err(refusal) => (None, Some(refusal)),
+        };
+        let command = Command::ResolveRequest {
+            id: id.to_string(),
+            reference,
+            rejected,
+        };
+        match self
+            .propose(format!("notice-closed:{id}"), Actor::Module(crate::state::GATEWAY.to_string()), command)
+            .await
+        {
+            Ok(_) => Ok(()),
+            // Closed by an earlier sweep that was cut short.
+            Err(p) if p.code == "not_pending" => Ok(()),
+            Err(p) => Err(p.detail),
+        }
+    }
+}
+
+/// Carry claim notifications every `every`, for as long as the service runs.
+pub async fn carry_claim_notices(state: Shared, every: Duration) {
+    loop {
+        if let Err(e) = state.carry_claim_notices().await {
+            tracing::warn!(error = %e, "claim notifications not carried this time");
+        }
+        tokio::time::sleep(every).await;
+    }
 }
 
 /// The public status, in plain words. No sign-in.

@@ -49,7 +49,7 @@ pub struct PortalSettings {
     /// Where the service is reached from outside (`IC_PUBLIC_URL`), for
     /// the MCP endpoint's sign-in discovery. Required with Entra sign-in.
     pub public_url: Option<String>,
-    /// How often the commission module's changes are carried to the channels.
+    /// How often the commission module's changes are carried to the channels, and pending claim notices to claims.
     pub forward: Duration,
     /// The currency of the commission module's balances.
     pub currency: String,
