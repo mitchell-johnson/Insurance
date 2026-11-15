@@ -1,0 +1,2 @@
+cargo:rerun-if-changed=./protos
+cargo:descriptor_path=/home/user/Insurance/target-wt/debug/build/temporalio-protos-4497353621e92e09/out/descriptors.bin

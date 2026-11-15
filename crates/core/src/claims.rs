@@ -239,6 +239,15 @@ pub fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&s
     facts.cover_type = c.cover_type.clone();
     facts.cover_start = Some(c.start);
     facts.definitions = c.definitions.iter().map(|d| format!("{}@{}", d.id, d.version)).collect();
+    // Where the product passes later wordings back, a newer version in force
+    // on the event date is listed beside the one the cover is bound to.
+    if product.and_then(|pr| pr.cover(cover)).is_some_and(|def| def.pass_back_definitions) {
+        for d in &c.definitions {
+            if let Some(newer) = state.catalog.bind_definition(&d.id, on).filter(|n| n.version > d.version) {
+                facts.definitions.push(format!("{}@{}", newer.id, newer.version));
+            }
+        }
+    }
     let mine = |l: &&crate::policy::Layer| life_id.as_ref().is_none_or(|id| &l.life == id);
     let at_event: Vec<&crate::policy::Layer> = c.layers.iter().filter(mine).filter(|l| l.in_force_on(on)).collect();
     // A life given the cover after the policy began has it from its own

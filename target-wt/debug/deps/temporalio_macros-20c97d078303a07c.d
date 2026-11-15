@@ -1,0 +1,10 @@
+/home/user/Insurance/target-wt/debug/deps/temporalio_macros-20c97d078303a07c.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/activities_definitions.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/cloud_test_exclusion.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/fsm_impl.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/macro_utils.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/workflow_definitions.rs
+
+/home/user/Insurance/target-wt/debug/deps/libtemporalio_macros-20c97d078303a07c.so: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/activities_definitions.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/cloud_test_exclusion.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/fsm_impl.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/macro_utils.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/workflow_definitions.rs
+
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/lib.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/activities_definitions.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/cloud_test_exclusion.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/fsm_impl.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/macro_utils.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/temporalio-macros-1.2.0/src/workflow_definitions.rs:

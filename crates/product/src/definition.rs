@@ -234,6 +234,12 @@ pub struct CoverDefinition {
     /// (AIA Cover for Life's guaranteed level premiums).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub guaranteed_rates: bool,
+    /// A later version of a definition the cover is bound to applies to a
+    /// claim too, where it is in force on the event date (AIA's Medical
+    /// Advancements Provision and Enhancement Pass Back Benefit): the claim
+    /// is assessed on whichever is more favourable.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pass_back_definitions: bool,
     /// One sum insured across every life on the cover, paid once on the
     /// first event to any of them. A payment reduces or ends the cover for
     /// all of them. A cover that carries on in full for the survivor is not

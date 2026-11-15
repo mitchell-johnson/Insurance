@@ -60,7 +60,7 @@ def benefit_category(code, salary_multiple, max_sum_insured, member_pays_percent
 def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, levies = [],
           expiry_age = None, min_sum_insured = 0, max_sum_insured = None, categories = [],
           automatic_acceptance_limit = None, excess_options = [], premium_waiver = None,
-          shared_counter = None, reduces = [], joint_first_event = False, insurability_option = None, anniversary_option = None, adds_cover = None, buybacks = [], conversions = [], guaranteed_rates = False,
+          shared_counter = None, reduces = [], joint_first_event = False, insurability_option = None, anniversary_option = None, adds_cover = None, buybacks = [], conversions = [], guaranteed_rates = False, pass_back_definitions = False,
           option_axes = [], min_entry_age = None, max_entry_age = None, built_in = [], paid_up_option = None):
     return {
         "paid_up_option": paid_up_option,
@@ -81,6 +81,7 @@ def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, 
         "shared_counter": shared_counter,
         "reduces": reduces,
         "guaranteed_rates": guaranteed_rates,
+        "pass_back_definitions": pass_back_definitions,
         "joint_first_event": joint_first_event,
         "insurability_option": insurability_option,
         "anniversary_option": anniversary_option,

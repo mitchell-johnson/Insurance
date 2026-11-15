@@ -36,6 +36,9 @@ PRODUCT = product(
             rating = stepped("aia-business-continuity"),
             premium_waiver = True,
             definitions = ["aia-start-up-income"],
+            # Enhancement Pass Back: a later, better version of the wording applies
+            # to a claim too.
+            pass_back_definitions = True,
             min_entry_age = 16,
             max_entry_age = 60,  # PH
             expiry_age = 65,

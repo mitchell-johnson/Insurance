@@ -103,6 +103,9 @@ def trauma_cover(code, table, definitions, accelerated, max_sum_insured, ends_co
         max_entry_age = 70,
         min_sum_insured = dollars(10000),  # PH: no published minimum
         max_sum_insured = max_sum_insured,
+        # Medical Advancements Provision: a later version of the trauma definitions
+        # applies to a claim where it is more favourable.
+        pass_back_definitions = True,
         reduces = ["life"] if accelerated else [],
         option_axes = [premium_axis(), waiver_axis()] + extra_axes,
         # Accelerated trauma is already accelerated: only stand-alone trauma converts to it.

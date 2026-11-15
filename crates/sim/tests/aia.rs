@@ -1299,3 +1299,32 @@ fn cover_for_life_is_made_paid_up_instead_of_lapsing_after_its_paid_up_date() {
     assert_eq!(p.status, PolicyStatus::InForce);
     assert!(p.receivables.iter().all(|r| r.due <= d(2032, 12, 17)), "nothing more is billed");
 }
+
+/// Purpose: once AIA issues a new version of the Critical Conditions definition, the cover check
+/// for an AIA Living trauma claim after it lists the new version beside the one the cover was
+/// bound to (Medical Advancements Provision), while life cover, which has no such provision,
+/// lists only its own; a claim before the new version lists only the old one.
+/// Why it matters: the provision promises that medical advances in AIA's later definitions reach
+/// existing customers. A cover check that showed only the old definition would have the assessor
+/// decline a claim the later wording pays.
+#[test]
+fn a_later_trauma_definition_reaches_cover_already_written() {
+    let mut c = cluster();
+    let living = product("aia_living.star");
+    let id = issue(
+        &mut c,
+        policy(1, "aia-living", d(1987, 6, 1), &[("life", 500_000_00, Some(pick(&living, "life", &[]))), ("critical-conditions", 200_000_00, Some(pick(&living, "critical-conditions", &[])))]),
+    )
+    .unwrap();
+    let source = r#"DEFINITIONS = [
+    definition("aia-critical-conditions", 2, "2028-03-01", "Critical Conditions", "Version 2, updated for medical advances."),
+    definition("aia-death", 2, "2028-03-01", "Death", "Version 2."),
+]"#;
+    let newer = ic_product::load_definitions("aia_v2.star", source).unwrap();
+    c.activate_everywhere(Command::ActivateDefinitions { definitions: newer }).unwrap();
+    let facts = |cover: &str, on: NaiveDate| ic_core::cover_facts(c.state(0), &id.0, cover, Some("life-1"), on).unwrap().definitions;
+    let trauma = facts("critical-conditions", d(2028, 4, 1));
+    assert!(trauma.contains(&"aia-critical-conditions@1".to_string()) && trauma.contains(&"aia-critical-conditions@2".to_string()), "{trauma:?}");
+    assert!(!facts("critical-conditions", d(2028, 2, 1)).iter().any(|d| d.ends_with("@2")));
+    assert!(!facts("life", d(2028, 4, 1)).iter().any(|d| d.ends_with("@2")));
+}
