@@ -205,6 +205,12 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
             ));
         }
         let lump_sum = |code: &str| p.covers.iter().any(|o| o.code == code && matches!(o.benefit, Benefit::LumpSum { .. }));
+        // A cover with a sum insured to grow: a lump sum or a monthly benefit.
+        let sized = |code: &str| {
+            p.covers
+                .iter()
+                .any(|o| o.code == code && matches!(o.benefit, Benefit::LumpSum { .. } | Benefit::MonthlyBenefit { .. }))
+        };
         if (c.joint_first_event || !c.reduces.is_empty()) && !lump_sum(&c.code) {
             return Err(invalid(file, format!("cover {}: only a lump sum cover is joint or reduces another", c.code)));
         }
@@ -277,11 +283,11 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                 && option.requires_feature.as_ref().is_none_or(|f| !f.is_empty())
                 && option.not_before_days.is_none_or(|d| d > 0)
                 && option.max_cover_after_minor.is_none_or(|m| m > 0);
-            if !sound || !lump_sum(&c.code) {
+            if !sound || !sized(&c.code) {
                 return Err(invalid(
                     file,
                     format!(
-                        "cover {}: an insurability option is on a lump sum cover, names its events once each, and has limits above zero",
+                        "cover {}: an insurability option is on a lump sum or monthly benefit cover, names its events once each, and has limits above zero",
                         c.code
                     ),
                 ));
@@ -301,12 +307,14 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                 && option.requires_feature.as_ref().is_none_or(|f| !f.is_empty())
                 && option.once_in_days.is_none_or(|d| d > 0)
                 && option.days_before.is_none_or(|d| d > 0)
-                && option.from_age.is_none_or(|a| a < option.to_age);
-            if !sound || !lump_sum(&c.code) {
+                && option.from_age.is_none_or(|a| a < option.to_age)
+                && option.max_cover_after_minor.is_none_or(|m| m > 0)
+                && (!option.shared_total || c.insurability_option.is_some());
+            if !sound || !sized(&c.code) {
                 return Err(invalid(
                     file,
                     format!(
-                        "cover {}: an anniversary option is on a lump sum cover, its limits are above zero and its totals at least one use",
+                        "cover {}: an anniversary option is on a lump sum or monthly benefit cover, shares totals only with an event option, its limits are above zero and its totals at least one use",
                         c.code
                     ),
                 ));

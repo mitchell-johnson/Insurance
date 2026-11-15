@@ -530,6 +530,15 @@ pub struct AnniversaryOption {
     /// greater (AIA's trauma and TPD Future Insurability).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub lesser: bool,
+    /// The life's cover after a use is at most this (AIA's income Future
+    /// Insurability: $240,000 a year).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cover_after_minor: Option<i64>,
+    /// Uses of this option and of the cover's event option count together
+    /// towards both options' totals (AIA's income Future Insurability: on an
+    /// anniversary or a rise in income, 100% of the original cover in all).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shared_total: bool,
 }
 
 /// One excess level on a cover's menu.

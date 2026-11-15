@@ -1103,3 +1103,88 @@ fn standalone_trauma_converts_to_accelerated_trauma_with_life_cover() {
     let done = &c.state(0).policies[&id].conversions["sc-1"];
     assert_eq!((done.to_cover.as_str(), done.sum_insured_minor), ("critical-conditions-accelerated", 200_000_00));
 }
+
+/// Purpose: AIA Living Family Protection grows its monthly benefit on a special event by the
+/// lower of half the original benefit and $500 a month, once in any 12 months, to the lower of
+/// half the original and $1,500 a month in all, and not for a life over 50.
+/// Why it matters: these are the Family Protection wording's limits (1103 AL-FP section 3).
+/// The benefit is paid every month for decades: a few hundred dollars a month given without
+/// evidence beyond them is tens of thousands of dollars of unpriced risk.
+#[test]
+fn family_protection_grows_on_a_special_event_within_its_monthly_limits() {
+    let mut c = cluster();
+    let living = product("aia_living.star");
+    let fp = pick(&living, "family-protection", &[("term", "20y")]);
+    let id = issue(&mut c, policy(1, "aia-living", d(1987, 6, 1), &[("family-protection", 1_000_00, Some(fp.clone()))])).unwrap();
+    let older = issue(&mut c, policy(2, "aia-living", d(1976, 6, 1), &[("family-protection", 1_000_00, Some(fp))])).unwrap();
+    let code = |r: Result<(), Reject>| r.unwrap_err().code;
+    let born = start() - chrono::Days::new(10);
+    let fp_option = |c: &mut Cluster, id: &PolicyId, r: &str, on: NaiveDate, amount: i64| use_option(c, id, "family-protection", r, "birth_or_adoption", on, amount, None);
+
+    assert_eq!(code(fp_option(&mut c, &older, "fp-0", born, 1_00)), "option_age");
+    assert_eq!(code(fp_option(&mut c, &id, "fp-0", born, 500_01)), "option_limit");
+    fp_option(&mut c, &id, "fp-1", born, 500_00).unwrap();
+    assert_eq!(code(use_option(&mut c, &id, "family-protection", "fp-2", "marriage", start(), 1_00, None)), "option_too_soon");
+    assert_eq!(held(&c, &id, "family-protection"), 1_500_00);
+    // A year on, half the original benefit has been added: nothing more.
+    let year = start() + chrono::Days::new(366);
+    close_to(&mut c, year);
+    assert_eq!(code(use_option(&mut c, &id, "family-protection", "fp-3", "marriage", year, 1_00, None)), "option_total");
+}
+
+/// An AIA Living policy with one income cover for a life born in 1987 in occupation class 2.
+fn income_policy(c: &mut Cluster, n: u64, cover: &str, monthly: i64, option: String) -> PolicyId {
+    let mut p = policy(n, "aia-living", d(1987, 6, 1), &[(cover, monthly, Some(option))]);
+    p.lives[0].factors.occupation_class = Some("2".to_string());
+    issue(c, p).unwrap()
+}
+
+/// Purpose: AIA Living income protection grows without evidence on a rise in income (once a
+/// year) and at each third anniversary by the lower of 10% of the original benefit and $1,000
+/// a month, never to more than $20,000 a month, and not where Claim Indexation was chosen
+/// instead; Mortgage, Income or Rent Cover grows on a mortgage by at most $750 a month, once in
+/// three years.
+/// Why it matters: these are the income wordings' Future Insurability (1108 AL-IP section 17)
+/// and Property Special Event (1117 AL-MIRC section 12) limits. An income benefit grown past
+/// them, or for a customer who chose indexation instead, is a monthly risk paid to age 65 that
+/// nobody priced.
+#[test]
+fn income_cover_grows_without_evidence_inside_the_income_wordings_limits() {
+    let mut c = cluster();
+    let living = product("aia_living.star");
+    let ip = pick(&living, "income-agreed-value", &[]);
+    let indexed = pick(&living, "income-agreed-value", &[("claim-indexation", "cpi")]);
+    let mirc = pick(&living, "mortgage-income-rent", &[]);
+    let small = income_policy(&mut c, 1, "income-agreed-value", 5_000_00, ip.clone());
+    let large = income_policy(&mut c, 2, "income-agreed-value", 19_800_00, ip);
+    let cpi = income_policy(&mut c, 3, "income-agreed-value", 5_000_00, indexed);
+    let home = income_policy(&mut c, 4, "mortgage-income-rent", 3_000_00, mirc);
+    let code = |r: Result<(), Reject>| r.unwrap_err().code;
+    let raise = start() - chrono::Days::new(20);
+    let pay_rise = |c: &mut Cluster, id: &PolicyId, r: &str, amount: i64| use_option(c, id, "income-agreed-value", r, "salary_increase", raise, amount, None);
+
+    assert_eq!(code(pay_rise(&mut c, &cpi, "fi-0", 1_00)), "no_option");
+    assert_eq!(code(pay_rise(&mut c, &small, "fi-0", 500_01)), "option_limit");
+    pay_rise(&mut c, &small, "fi-1", 500_00).unwrap();
+    assert_eq!(code(pay_rise(&mut c, &small, "fi-2", 1_00)), "option_used");
+    assert_eq!(code(pay_rise(&mut c, &large, "fi-0", 200_01)), "option_total");
+    pay_rise(&mut c, &large, "fi-1", 200_00).unwrap();
+    assert_eq!((held(&c, &small, "income-agreed-value"), held(&c, &large, "income-agreed-value")), (5_500_00, 20_000_00));
+
+    let moved = start() - chrono::Days::new(100);
+    let mortgage = |c: &mut Cluster, r: &str, on: NaiveDate, amount: i64| use_option(c, &home, "mortgage-income-rent", r, "mortgage", on, amount, None);
+    assert_eq!(code(mortgage(&mut c, "ps-0", start() - chrono::Days::new(184), 1_00)), "option_window");
+    assert_eq!(code(mortgage(&mut c, "ps-0", moved, 750_01)), "option_limit");
+    mortgage(&mut c, "ps-1", moved, 750_00).unwrap();
+    assert_eq!(code(mortgage(&mut c, "ps-2", start(), 1_00)), "option_too_soon");
+    assert_eq!(held(&c, &home, "mortgage-income-rent"), 3_750_00);
+
+    // At the third anniversary: the lower of 10% and $1,000 again, inside the $20,000 cap.
+    let third = d(2030, 11, 15);
+    close_to(&mut c, third - chrono::Days::new(10));
+    let anniversary = |c: &mut Cluster, id: &PolicyId, r: &str, amount: i64| use_option(c, id, "income-agreed-value", r, "anniversary", third, amount, None);
+    assert_eq!(code(anniversary(&mut c, &small, "an-0", 500_01)), "option_limit");
+    anniversary(&mut c, &small, "an-1", 500_00).unwrap();
+    assert_eq!(code(anniversary(&mut c, &large, "an-0", 1_00)), "option_total");
+    assert_eq!(held(&c, &small, "income-agreed-value"), 6_000_00);
+}

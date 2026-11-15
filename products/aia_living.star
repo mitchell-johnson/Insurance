@@ -346,7 +346,69 @@ def income_built_ins(premier):
         ]
     return out
 
+# Income Future Insurability (1108 AL-IP, 1109 AL-LOE, 1115 AL-IND section 17), built in
+# unless Claim Indexation is chosen: at each third anniversary (60 days either side),
+# or within 60 days of a rise in income (once a year), the monthly benefit grows by the
+# lower of 10% of the original benefit and $1,000 a month ($12,000 a year), 100% of the
+# original in all across both, never to more than $20,000 a month ($240,000 a year), and
+# not from age 56. The agreed replacement ratio is checked on the income evidence the
+# request carries.
+def income_future_insurability():
+    return anniversary_option(
+        every_years = 3,
+        max_percent_of_original = "10",
+        at_least = dollars(1000),
+        lesser = True,
+        max_total_percent_of_original = "100",
+        max_total_increase = dollars(20000),
+        within_days = 60,
+        days_before = 60,
+        to_age = 56,
+        requires = "future-insurability",
+        max_cover_after = dollars(20000),
+        shared_total = True,
+    )
+
+def income_increase():
+    return insurability_option(
+        events = ["salary_increase"],
+        max_percent_of_original = "10",
+        max_increase = dollars(1000),
+        max_uses = 99,
+        within_days = 60,
+        to_age = 56,
+        max_total_percent_of_original = "100",
+        once_in_days = 365,
+        requires = "future-insurability",
+        max_cover_after = dollars(20000),
+    )
+
+# Property Special Event Facility (1117 AL-MIRC section 12): within six months of taking
+# out or increasing a mortgage for a home, holiday home or residential land, the benefit
+# grows by the lower of 115% of the rise in the mortgage repayment and $750 a month, once
+# every three years, not from age 56, never to more than $20,000 a month. The 115% is
+# checked on the lender's evidence the request carries; the $750 and the rest here.
+def property_special_event():
+    return insurability_option(
+        events = ["mortgage"],
+        max_percent_of_original = "1000",
+        max_increase = dollars(750),
+        max_uses = 99,
+        within_days = 183,
+        to_age = 56,
+        once_in_days = 1095,
+        max_cover_after = dollars(20000),
+    )
+
 def income_cover(code, definitions, premier, weeks, periods, max_monthly):
+    mirc = code == "mortgage-income-rent"
+    built_ins = income_built_ins(premier)
+    if mirc:
+        # Mortgage, Income or Rent Cover has the Property Special Event Facility in place
+        # of Future Insurability.
+        built_ins = [b for b in built_ins if b["code"] != "future-insurability"] + [
+            built_in("property-special-event", "Property Special Event Facility (the lower of 115% of the repayment rise and $750 a month)", "facility"),
+        ]
     return cover(
         code = code,
         cover_type = "income_protection",
@@ -361,8 +423,10 @@ def income_cover(code, definitions, premier, weeks, periods, max_monthly):
         expiry_age = 65,
         min_sum_insured = dollars(500),  # PH: monthly benefit
         max_sum_insured = max_monthly,
+        insurability_option = property_special_event() if mirc else income_increase(),
+        anniversary_option = None if mirc else income_future_insurability(),
         option_axes = income_axes(weeks, periods, premier) + [optional("redundancy", "Redundancy Cover", "1.04")],  # PH
-        built_in = income_built_ins(premier),
+        built_in = built_ins,
     )
 
 IP_WEEKS = [2, 4, 8, 13, 26, 52, 104]
@@ -545,6 +609,21 @@ PRODUCT = product(
             min_entry_age = 10,
             max_entry_age = 70,
             min_sum_insured = dollars(500),  # PH: monthly benefit
+            # Special Events Increase Facility (1103 AL-FP section 3): the lower of 50% of
+            # the original monthly benefit and $500 a month each event, the lower of 50%
+            # and $1,500 a month in all, asked within 12 months of the event, not over age
+            # 50, once in any 12 months.
+            insurability_option = insurability_option(
+                events = SPECIAL_EVENTS,
+                max_percent_of_original = "50",
+                max_increase = dollars(500),
+                max_uses = 99,
+                within_days = 365,
+                to_age = 51,
+                max_total_percent_of_original = "50",
+                max_total_increase = dollars(1500),
+                once_in_days = 365,
+            ),
             option_axes = [
                 option_axis("term", "Benefit term",
                     [choice("%dy" % y, "Fixed term of %d years" % y, expiry_after_years = y) for y in range(5, 31)] +
@@ -556,7 +635,6 @@ PRODUCT = product(
             built_in = common_built_ins() + [
                 built_in("bereavement-support", "Bereavement Support Benefit", "early_payment", max = dollars(25000)),
                 built_in("parents-grieving", "Parents Grieving Benefit", "additional", max = dollars(15000)),
-                # The lower of 50% and $500 a month each event, 50% and $1,500 a month in all.
                 built_in("special-events-increase", "Special Events Increase Facility", "facility"),
                 built_in("premium-conversion", "Premium Conversion Facility (before age 65)", "facility"),
             ],
@@ -588,9 +666,10 @@ PRODUCT = product(
         income_cover("income-agreed-value", ["aia-ip-total-disability", "aia-ip-agreed-value"], True, IP_WEEKS, IP_PERIODS, dollars(30000)),  # PH max
         income_cover("income-indemnity", ["aia-ip-total-disability", "aia-ip-indemnity"], True, IP_WEEKS, IP_PERIODS, dollars(30000)),  # PH max
         income_cover("income-loss-of-earnings", ["aia-ip-total-disability", "aia-ip-loss-of-earnings"], True, IP_WEEKS, IP_PERIODS, dollars(30000)),  # PH max
-        # Up to 115% of mortgage or rent payments, or 45% of income. ACC and
-        # other mortgage cover are offset only above $7,500 a month.
-        income_cover("mortgage-income-rent", ["aia-ip-total-disability", "aia-mortgage-income-rent"], False, MIRC_WEEKS, MIRC_PERIODS, dollars(15000)),  # PH max
+        # Up to 115% of mortgage or rent payments, or 45% of income, and $20,000 a
+        # month with all increases (1117 AL-MIRC). ACC and other mortgage cover are
+        # offset only above $7,500 a month.
+        income_cover("mortgage-income-rent", ["aia-ip-total-disability", "aia-mortgage-income-rent"], False, MIRC_WEEKS, MIRC_PERIODS, dollars(20000)),
         cover(
             code = "retirement-protection",
             cover_type = "income_protection",

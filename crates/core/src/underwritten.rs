@@ -225,7 +225,7 @@ fn option_terms(product: &ic_product::ProductDefinition, def: &ic_product::Cover
             every_years: Some(o.every_years),
             requires_feature: o.requires_feature.clone(),
             not_before_days: None,
-            max_cover_after_minor: None,
+            max_cover_after_minor: o.max_cover_after_minor,
         });
     }
     let Some(o) = &def.insurability_option else {
@@ -335,6 +335,10 @@ pub(crate) fn exercise_option(ledger: &mut Ledger, catalog: &Catalog, policy: &m
     }) {
         return Err(Reject::new("option_used", "the option has already been used for this event"));
     }
+    // AIA's wordings: no increase without evidence while a claim is made on the cover.
+    if policy.claims.values().any(|c| c.open && (c.cover == spec.cover || spec.from_cover.as_ref() == Some(&c.cover))) {
+        return Err(Reject::new("claim_open", "cover with a claim open on it is not increased without evidence"));
+    }
     if let Some(days) = terms.once_in_days {
         // Increases without evidence for the life on covers of the same type.
         let kind = def.cover_type.clone();
@@ -353,8 +357,11 @@ pub(crate) fn exercise_option(ledger: &mut Ledger, catalog: &Catalog, policy: &m
     }
     // Uses of the same kind: the anniversary option, the event option, or
     // the carrying cover's cover-adding option.
+    // Where the anniversary option shares its totals, both count together.
     let anniversary = spec.event == ANNIVERSARY_EVENT;
-    let same_kind = |u: &&OptionUse| u.from_cover == spec.from_cover && (spec.from_cover.is_some() || (u.event == ANNIVERSARY_EVENT) == anniversary);
+    let shared = def.anniversary_option.as_ref().is_some_and(|o| o.shared_total);
+    let same_kind =
+        |u: &&OptionUse| u.from_cover == spec.from_cover && (spec.from_cover.is_some() || shared || (u.event == ANNIVERSARY_EVENT) == anniversary);
     let kind_uses = |policy: &Policy| -> Vec<OptionUse> {
         policy
             .option_uses

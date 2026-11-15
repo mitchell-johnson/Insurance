@@ -218,7 +218,7 @@ def conversion(to, before_age, axis = None, choices = [], standard_terms_only = 
 
 def anniversary_option(every_years, max_percent_of_original, at_least, max_total_percent_of_original, max_total_increase,
                        within_days, to_age, requires = None, once_in_days = None, days_before = None, from_age = None,
-                       lesser = False):
+                       lesser = False, max_cover_after = None, shared_total = False):
     """More of a lump sum cover without evidence of health every few years from the day the cover
     started: the greater of the share and at_least each time, the lower of the totals in all."""
     option = {
@@ -240,6 +240,10 @@ def anniversary_option(every_years, max_percent_of_original, at_least, max_total
         option["from_age"] = from_age
     if lesser:
         option["lesser"] = True
+    if max_cover_after != None:
+        option["max_cover_after_minor"] = max_cover_after
+    if shared_total:
+        option["shared_total"] = True
     return option
 
 def excess_option(code, excess, premium_factor = "1"):

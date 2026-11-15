@@ -756,8 +756,8 @@ fn the_loader_refuses_unsound_option_totals_and_anniversary_options() {
     for axes in &good {
         assert!(mini(&[("LIFE_AXES", axes), ("GROUP", trauma)]).is_ok(), "{axes}");
     }
-    let events_wrong = "an insurability option is on a lump sum cover";
-    let anniversary_wrong = "an anniversary option is on a lump sum cover";
+    let events_wrong = "an insurability option is on a lump sum or monthly benefit cover";
+    let anniversary_wrong = "an anniversary option is on a lump sum or monthly benefit cover";
     let adding_wrong = "a cover-adding option is on a lump sum cover";
     let cases = [
         (event(r#", max_total_percent_of_original = "40""#), events_wrong),
@@ -814,9 +814,36 @@ fn the_loader_refuses_unsound_option_totals_and_anniversary_options() {
     }
     let err = mini(&[("INCOME_AXES", &back(r#"buyback("income", "x", [365], 60)"#)), ("GROUP", trauma)]).unwrap_err();
     assert!(err.contains(buyback_wrong), "{err}");
-    // On a cover that pays an income.
-    let err = mini(&[("INCOME_AXES", &yearly("")), ("GROUP", trauma)]).unwrap_err();
+    // On a cover that pays an income the options grow the monthly benefit; a health cover has
+    // no sum to grow.
+    let income = format!("{}, insurability_option = insurability_option([\"salary_increase\"], \"10\", 100, 99, 60, 56)", yearly(", max_cover_after = 2000, shared_total = True"));
+    assert!(mini(&[("INCOME_AXES", &income), ("GROUP", trauma)]).is_ok());
+    for bad in [yearly(", shared_total = True"), yearly(", max_cover_after = 0")] {
+        let err = mini(&[("INCOME_AXES", &bad), ("GROUP", trauma)]).unwrap_err();
+        assert!(err.contains(anniversary_wrong), "{bad}: {err}");
+    }
+    let health = r#"anniversary_option = anniversary_option(3, "20", 100, "40", 200, 60, 60),"#;
+    let err = mini(&[("HEALTH_EXCESS", health), ("GROUP", trauma)]).unwrap_err();
     assert!(err.contains(anniversary_wrong), "{err}");
+    // Conversions: to the cover's own axis choices on any cover; to another cover only
+    // between lump sum covers.
+    let conv = |axes: &str, c: &str| format!("[{axes}], conversions = [{c}]");
+    let level = r#"conversion("income", 65, axis = "premium", choices = ["level"])"#;
+    assert!(mini(&[("INCOME_AXES", &conv(PREMIUM, level)), ("GROUP", trauma)]).is_ok());
+    let to_life = r#"conversion("trauma", 60, standard_terms_only = True)"#;
+    assert!(mini(&[("LIFE_AXES", &conv(PREMIUM, to_life)), ("GROUP", trauma)]).is_ok());
+    let conversion_wrong = "a conversion is to choices the cover's own axis offers";
+    for (slot, c) in [
+        ("INCOME_AXES", r#"conversion("life", 60)"#),
+        ("INCOME_AXES", r#"conversion("income", 65, axis = "premium", choices = ["nope"])"#),
+        ("INCOME_AXES", r#"conversion("income", 65, axis = "premium", choices = [])"#),
+        ("INCOME_AXES", r#"conversion("income", 0, axis = "premium", choices = ["level"])"#),
+        ("LIFE_AXES", r#"conversion("trauma", 60, with_cover = "life")"#),
+        ("LIFE_AXES", r#"conversion("income", 60)"#),
+    ] {
+        let err = mini(&[(slot, &conv(PREMIUM, c)), ("GROUP", trauma)]).unwrap_err();
+        assert!(err.contains(conversion_wrong), "{c}: {err}");
+    }
     let err = mini(&[("INCOME_AXES", &adding(r#"{"trauma": {}}"#, "")), ("GROUP", trauma)]).unwrap_err();
     assert!(err.contains(adding_wrong), "{err}");
 }

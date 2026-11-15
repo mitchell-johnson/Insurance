@@ -958,3 +958,54 @@ async fn aia_living_cover_is_bought_back_a_year_after_an_accelerated_trauma_clai
     assert!(before > 0, "the days left of the period billed are billed for the cover written again");
     b.months(1, &policy);
 }
+
+/// Purpose: while a trauma claim is open on an AIA Living Critical Conditions cover, the cover
+/// is neither increased without evidence on a special event nor converted to accelerated
+/// trauma; both are refused as claim_open with nothing written.
+/// Why it matters: AIA's wordings give no increase or conversion without evidence while a claim
+/// is made. Allowed, a customer who has just fallen ill could add or move cover on the strength
+/// of the very condition being claimed, with no one ever assessing it.
+#[tokio::test]
+async fn aia_living_cover_is_not_increased_or_converted_while_a_claim_is_open() {
+    let b = bench();
+    let issued = b
+        .apply("OPN", "aia-living", &[("life", "life", 500_000_00, None), ("critical-conditions", "trauma", 200_000_00, None)], 40, Some("2"))
+        .await;
+    let policy = issued.policy.clone();
+    b.months(1, &policy);
+    let today = b.today();
+    b.notify("clm-opn", &policy, "critical-conditions", "L1", ClaimType::Trauma, today);
+    b.with_cluster(|c| assert!(c.state(0).policies[&policy].claims["clm-opn"].open));
+    let send = |command: CoreCommand| b.with_cluster(|c| c.submit(0, "policy-servicing", command));
+    let increase = CoreCommand::ExerciseOption(Box::new(ic_core::command::OptionExercise {
+        policy: policy.clone(),
+        cover: "critical-conditions".into(),
+        life: LifeId::from("L1"),
+        event: "marriage".into(),
+        event_date: today,
+        sum_insured_minor: 10_000_00,
+        evidence: "vault/evidence-1".into(),
+        reference: "se-1".into(),
+        from_cover: None,
+        excess_option: None,
+    }));
+    assert_eq!(send(increase).unwrap_err().code, "claim_open");
+    let option = b.with_cluster(|c| {
+        c.state(0).policies[&policy].covers["critical-conditions"].layers[0].excess_option.clone().unwrap_or_default()
+    });
+    let convert = CoreCommand::ConvertCover(Box::new(ic_core::conversion::ConvertCover {
+        policy: policy.clone(),
+        cover: "critical-conditions".into(),
+        life: LifeId::from("L1"),
+        sum_insured_minor: 200_000_00,
+        to_cover: "critical-conditions-accelerated".into(),
+        excess_option: option,
+        reference: "sc-1".into(),
+    }));
+    assert_eq!(send(convert).unwrap_err().code, "claim_open");
+    b.with_cluster(|c| {
+        let p = &c.state(0).policies[&policy];
+        assert!(p.option_uses.is_empty() && p.conversions.is_empty());
+        assert!(!p.covers.contains_key("critical-conditions-accelerated"));
+    });
+}

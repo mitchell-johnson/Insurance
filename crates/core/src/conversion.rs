@@ -114,6 +114,9 @@ pub(crate) fn convert(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Polic
     if policy.status != PolicyStatus::InForce {
         return Err(Reject::new("not_in_force", "cover is converted only on a policy in force"));
     }
+    if policy.claims.values().any(|c| c.open && (c.cover == spec.cover || c.cover == spec.to_cover)) {
+        return Err(Reject::new("claim_open", "cover with a claim open on it is not converted"));
+    }
     if policy.policyholder_outstanding_minor() > 0 {
         return Err(Reject::new("premium_owing", "premium is owing; it is paid before cover is converted"));
     }
@@ -141,9 +144,6 @@ pub(crate) fn convert(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Polic
         .ok_or_else(|| Reject::new("unknown_life", format!("life {} has no date of birth", spec.life)))?;
     if age_on(born, today) >= rule.before_age {
         return Err(Reject::new("conversion_age", format!("cover is converted before age {}", rule.before_age)));
-    }
-    if policy.claims.values().any(|c| c.open && (c.cover == spec.cover || c.cover == spec.to_cover)) {
-        return Err(Reject::new("claim_open", "cover with a claim open on it is not converted"));
     }
     let held = held_layers(policy, &spec.cover, &spec.life, today);
     let total: i64 = held.iter().map(|l| l.sum_insured_minor).sum();
