@@ -732,6 +732,10 @@ impl CoreState {
                     underwritten::change_excess(&mut s.ledger, &s.catalog, p, ctx, *spec)
                 })
             }
+            Command::SetPeakSeason(spec) => {
+                let policy = spec.policy.clone();
+                self.with_policy(&policy, false, |_, p| crate::peak_season::set(p, ctx, *spec))
+            }
             Command::RecordReplacement(spec) => {
                 let policy = spec.policy.clone();
                 self.with_policy(&policy, false, |_, p| underwritten::record_replacement(p, ctx, *spec))

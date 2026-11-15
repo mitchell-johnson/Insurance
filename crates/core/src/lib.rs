@@ -28,6 +28,7 @@ pub mod conversion;
 pub mod paid_up;
 pub mod payee_debt;
 pub mod payments;
+pub mod peak_season;
 pub mod policy;
 pub mod premium;
 pub mod recon;

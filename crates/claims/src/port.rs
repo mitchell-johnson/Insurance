@@ -384,6 +384,12 @@ pub enum Instruction {
         claim: String,
         policy: String,
         cover: String,
+        /// Waive only this cover's share of each premium (what it earns in
+        /// it, with GST and levies in proportion), as a waiver that belongs
+        /// to one benefit does, such as AIA's pregnancy waiver on income
+        /// cover. False: everything owing on the policy in the window.
+        #[serde(default)]
+        only_cover: bool,
         from: NaiveDate,
         /// The first day premiums are no longer waived.
         until: NaiveDate,

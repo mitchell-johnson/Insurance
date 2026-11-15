@@ -47,8 +47,9 @@ const SERVICE_ONLY: [&str; 10] = [
 /// People's commands that name no actor in the claims module.
 const NO_ACTOR: [&str; 3] = ["notify", "receive_evidence", "record_repayment"];
 
-/// Commands about a payment run, which lives on one partition.
-const RUNS: [&str; 3] = ["prepare_run", "approve_run", "cancel_run"];
+/// Commands about something that lives on one partition and names no claim:
+/// a payment run, and an investigation case (the cases list says where).
+const ON_A_PARTITION: [&str; 4] = ["prepare_run", "approve_run", "cancel_run", "close_investigation"];
 
 /// Whether this person may open the console.
 pub fn standing(staff: &StaffState, party: &PartyId, at: At) -> Value {
@@ -228,7 +229,7 @@ pub enum Target {
     Claim(String),
     /// The partition holding this policy.
     Policy(String),
-    /// A partition the person named: payment runs.
+    /// A partition the person named: payment runs and investigation cases.
     Partition(PartitionId),
 }
 
@@ -256,8 +257,8 @@ pub fn command(staff: &PartyId, purpose: &str, partition: Option<PartitionId>, m
     }
     // A notification opens the claim, so it goes where its policy lives.
     let text = |field: &str| fields.get(field).and_then(Value::as_str).map(str::to_string);
-    let target = match (RUNS.contains(&name.as_str()), name == "notify") {
-        (true, _) => Target::Partition(partition.ok_or("a payment run is on one partition: name it")?),
+    let target = match (ON_A_PARTITION.contains(&name.as_str()), name == "notify") {
+        (true, _) => Target::Partition(partition.ok_or_else(|| format!("{name} is on one partition: name it"))?),
         (false, true) => Target::Policy(text("policy").ok_or("a notification names its policy")?),
         (false, false) => Target::Claim(text("claim").ok_or_else(|| format!("{name} names no claim"))?),
     };

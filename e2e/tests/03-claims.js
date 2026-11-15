@@ -7,7 +7,9 @@ const oracle = require("../lib/oracle");
 
 const A = "Claims";
 const COMMANDS = "/staff/v1/claims/commands";
-const event = (t) => Journey.before(t.stack.opening, 3);   // eleven days after the cover began
+// The day the cover began: fourteen days before opening, so a trauma claim has served the
+// cover's 14-day survival period and may be decided on the opening day.
+const event = (t) => Journey.before(t.stack.opening, 14);
 const early = (t) => Journey.before(t.stack.opening, 12);  // two days after the cover began
 const tells = (t, who, command, purpose = "working the claim") => t.does(who, "POST", COMMANDS, { purpose, command }, Object.keys(command)[0]);
 const work = async (t, id, who = cast.st4) => (await t.does(who, "GET", `/staff/v1/claims/work?claim=${id}`)).view;

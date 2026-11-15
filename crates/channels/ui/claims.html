@@ -55,7 +55,26 @@ const ACTIONS = {
   decide_decline: [C, ["reasons", "Reason codes (comma separated)", "list"]],
   decide_withdraw: [C, ["reasons", "Reason codes (comma separated)", "list"]],
   decide_end_benefit: [C, ["request.end_benefit.end", "Ends on", "date"], ["request.end_benefit.reason", "Reason", "select", ["recovered", "benefit_period_end", "expiry_age", "death"]], ["reasons", "Reason codes (comma separated)", "list"]],
+  // A benefit in payment stops while evidence is awaited, and starts again from a date.
+  decide_suspend_benefit: [C, ["request.suspend_benefit.from", "Suspend from", "date"], ["request.suspend_benefit.evidence", "Evidence awaited", "text"], ["reasons", "Reason codes (comma separated)", "list"]],
+  decide_resume_benefit: [C, ["request.resume_benefit.from", "Resume from", "date"], ["reasons", "Reason codes (comma separated)", "list"]],
+  decide_permanent_disablement: [C, ["request.permanent_disablement.ends", "The disablement has ended", "bool"], ["reasons", "Reason codes (comma separated)", "list"]],
+  decide_funeral_advance: [C, ["request.funeral_advance.amount_minor", "Advance", "money"], ["reasons", "Reason codes (comma separated)", "list"]],
+  decide_admit_a_built_in_benefit: [C, ["request.admit_built_in.code", "Built-in benefit code", "text"], ["request.admit_built_in.amount_minor", "Amount", "money"], ["request.admit_built_in.settles", "It settles the claim", "bool"], ["reasons", "Reason codes (comma separated)", "list"]],
+  decide_built_in_waiver: [C, ["request.built_in_waiver.code", "Built-in waiver code", "text"], ["request.built_in_waiver.from", "Waive premium from", "date"], ["reasons", "Reason codes (comma separated)", "list"]],
+  decide_ex_gratia: [C, ["request.ex_gratia.amount_minor", "Amount", "money"], ["request.ex_gratia.payment_ref", "Payment reference", "text"], ["reasons", "Reason codes (comma separated)", "list"]],
+  decide_reverse_admission: [C, ["request.reverse_admission.false_declaration", "Because of a false declaration", "bool"], ["reasons", "Reason codes (comma separated)", "list"]],
+  decide_recovery_status: [C, ["request.recovery_status.overpayment", "Overpayment", "text"], ["request.recovery_status.status", "Recovery", "select", ["held", "pursued", "arrangement", "offset", "written_off", "recovered"]],
+    ["request.recovery_status.offset_pct", "Share of each payment to offset, % (offset only)", "zint"], ["request.recovery_status.instalment_minor", "Instalment (arrangement only)", "zmoney"], ["reasons", "Reason codes (comma separated)", "list"]],
+  decide_write_off: [C, ["request.write_off.overpayment", "Overpayment", "text"], ["reasons", "Reason codes (comma separated)", "list"]],
   approve: [C], refuse: [C],
+  record_communication_need: [C, ["needed", "The claimant deals with one named owner", "bool"]],
+  waive_waiting_period: [C, ["evidence_ref", "Evidence it rests on", "text"]],
+  set_withholding_rate: [C, ["rate_bp", "Payee's tax withholding rate, % (blank to clear)", "optpct"]],
+  direct_proceeds: [C, ["party", "Pay (customer reference)", "text"], ["direction", "Direction on file", "text"]],
+  offer_late_interest: [C], withdraw_interest_decline: [C],
+  decline_late_interest: [C, ["vault_ref", "The payee's signed decline in the vault", "text"]],
+  ask_repayment: [C, ["overpayment", "Overpayment", "text"]],
   reopen: [C, ["basis", "Basis", "select", ["internal_review", "dispute_scheme", "recurrence", "new_evidence"]], ["reserve_minor", "Reserve", "money"]],
   verify_payee: [C, ["party", "Payee (customer reference)", "text"], ["kind", "Kind", "select", ["policyholder", "beneficiary", "estate", "trust", "assignee", "provider"]], ["account_ref", "Account reference", "text"], ["name_check_ref", "Name check reference", "text"], ["screening_ref", "Screening reference", "text"], ["authority_doc", "Authority document (optional)", "optional"]],
   pay: [C, ["payment_ref", "Payment reference", "text"], ["amount_minor", "Amount", "money"]],
@@ -68,15 +87,21 @@ const ACTIONS = {
   prepare_run: [["partition", "Partition", "int"], ["run", "Run reference", "text"], ["kind", "Kind", "select", ["benefit", "provider"]], ["benefit_date", "Benefit date", "date"]],
   approve_run: [["partition", "Partition", "int"], ["run", "Run reference", "text"]],
   cancel_run: [["partition", "Partition", "int"], ["run", "Run reference", "text"]],
+  close_investigation: [["partition", "Partition", "int"], ["case", "Case", "text"], ["outcome", "Outcome", "select", ["cleared", "confirmed"]],
+    ["decline", "Claims to decline (comma separated, confirmed only)", "list"], ["recover", "Paid to a provider, to recover, as claim:amount (comma separated, confirmed only)", "list"]],
 };
+// Fields a page has to show but a person usually leaves at No.
+const NO_BY_DEFAULT = new Set(["health.pre_approval_request", "request.admit_built_in.settles", "request.reverse_admission.false_declaration", "request.permanent_disablement.ends"]);
 const commandName = (action) => action.startsWith("decide_") ? "decide" : action.startsWith("notify") ? "notify" : action;
+// "CLM-1:120.50" as [claim, minor units].
+const recovery = (item) => { const at = item.lastIndexOf(":"); return [item.slice(0, at).trim(), Math.round(Number(item.slice(at + 1)) * 100)]; };
 
 // What a field is filled from, so nobody types a reference they cannot know: the claim open now, a
 // new reference made here, a colleague, a customer, a policy and its covers, or the claim's own tasks,
 // evidence and overpayments.
 let current = null, me = { partitions: 1 };
 const NEW = { claim: "CLM", task: "TASK", evidence: "EV", payment_ref: "PAY", overpayment: "OP", run: "RUN" };
-const MAKES = { notify: ["claim"], notify_a_health_invoice: ["claim"], open_task: ["task"], request_evidence: ["evidence"], pay: ["payment_ref"], pay_cost: ["payment_ref"], pay_interest: ["payment_ref"], raise_overpayment: ["overpayment"], prepare_run: ["run"] };
+const MAKES = { notify: ["claim"], notify_a_health_invoice: ["claim"], open_task: ["task"], request_evidence: ["evidence"], pay: ["payment_ref"], decide_ex_gratia: ["request.ex_gratia.payment_ref"], pay_cost: ["payment_ref"], pay_interest: ["payment_ref"], raise_overpayment: ["overpayment"], prepare_run: ["run"] };
 const PEOPLE = new Set(["party", "claimant", "representative.party"]);
 let covers = [];
 async function coversOf(policy) {
@@ -88,7 +113,7 @@ async function coversOf(policy) {
 function helpers(action, key, input) {
   const w = current && current.view;
   if (key === "claim") input.value = (MAKES[action] || []).includes("claim") ? portal.reference(NEW.claim) : (w ? w.claim : $("c-id").value);
-  else if ((MAKES[action] || []).includes(key)) input.value = portal.reference(NEW[key]);
+  else if ((MAKES[action] || []).includes(key)) input.value = portal.reference(NEW[key.split(".").pop()]);
   if (key === "to" || key === "attendees") portal.picker(input, () => portal.colleagues("claims.work"), { min: 0 });
   else if (PEOPLE.has(key)) portal.picker(input, portal.people);
   else if (key === "policy") portal.picker(input, portal.policies, { onPick: async (item) => { covers = await coversOf(item.value).catch(() => []); } });
@@ -96,7 +121,9 @@ function helpers(action, key, input) {
   else if (key === "life") portal.picker(input, async () => [...new Set(covers.map((c) => c.life).filter(Boolean))].map((l) => ({ value: l, label: l })), { min: 0 });
   else if (key === "task" && action === "complete_task") portal.picker(input, () => Promise.resolve(((w && w.tasks) || []).filter((t) => !t.completed_on).map((t) => ({ value: t.id, label: t.id, hint: [words(t.kind), t.due ? "due " + t.due : "", t.overdue ? "overdue" : ""].filter(Boolean).join(" · ") }))), { min: 0, empty: "This claim has no open tasks." });
   else if (key === "evidence" && action === "receive_evidence") portal.picker(input, () => Promise.resolve(((w && w.evidence) || []).filter((e) => !e[4]).map(([e, kind, from, due]) => ({ value: e, label: e, hint: [kind, from, due ? "due " + due : ""].filter(Boolean).join(" · ") }))), { min: 0, empty: "Nothing is outstanding on this claim." });
-  else if (key === "overpayment" && action === "record_repayment") portal.picker(input, () => Promise.resolve(((w && w.overpayments) || []).map(([o, out, status]) => ({ value: o, label: o, hint: `${money(out)} outstanding · ${words(status)}` }))), { min: 0, empty: "This claim has no overpayments." });
+  else if (key === "case") portal.picker(input, () => Promise.resolve(cases.filter((c) => !c.case.closed).map(({ partition, case: c }) => ({ value: c.case, label: c.case, hint: `${words(c.rule)} · partition ${partition}`, partition }))), { min: 0, empty: "Show your cases first.", onPick: (item) => { const part = $("a-fields").querySelector("select"); if (part) part.value = String(item.partition); } });
+  else if (/(^|\.)evidence(_ref)?$/.test(key) && action !== "request_evidence") portal.picker(input, () => Promise.resolve(((w && w.evidence) || []).map(([e, kind, , , received]) => ({ value: e, label: e, hint: [kind, received ? "received " + received : "outstanding"].join(" · ") }))), { min: 0 });
+  else if (/overpayment$/.test(key) && action !== "raise_overpayment") portal.picker(input, () => Promise.resolve(((w && w.overpayments) || []).map(([o, out, status]) => ({ value: o, label: o, hint: `${money(out)} outstanding · ${words(status)}` }))), { min: 0, empty: "This claim has no overpayments." });
   else if (key === "item" && action === "pay_cost") portal.picker(input, () => Promise.resolve([...((w && w.evidence) || []).map(([e, kind]) => ({ value: e, label: e, hint: "evidence · " + kind })), ...((w && w.tasks) || []).map((t) => ({ value: t.id, label: t.id, hint: "task · " + words(t.kind) }))]), { min: 0 });
   else if (key === "party" && action === "pay_interest") portal.picker(input, () => Promise.resolve(((w && w.interests) || []).map(([party, owed]) => ({ value: party, label: party, hint: money(owed) + " still owed" }))), { min: 0 });
 }
@@ -106,10 +133,10 @@ function fields() {
   put($("a-fields"), spec.map(([key, label, kind, options], n) => {
     const id = "f-" + n;
     const input = kind === "select" ? h("select", { id }, options.map((o) => h("option", { value: o }, words(o))))
-      : kind === "bool" ? h("select", { id }, h("option", { value: "true", selected: key !== "health.pre_approval_request" }, "Yes"), h("option", { value: "false", selected: key === "health.pre_approval_request" }, "No"))
-      : h("input", { id, type: kind === "date" || kind === "optdate" ? "date" : kind === "int" || kind === "money" || kind === "optmoney" ? "number" : "text",
-          step: kind === "money" || kind === "optmoney" ? "0.01" : null, min: kind === "int" || kind === "money" ? "0" : null,
-          required: !["optional", "optdate", "optmoney", "list"].includes(kind) });
+      : kind === "bool" ? h("select", { id }, h("option", { value: "true", selected: !NO_BY_DEFAULT.has(key) }, "Yes"), h("option", { value: "false", selected: NO_BY_DEFAULT.has(key) }, "No"))
+      : h("input", { id, type: kind === "date" || kind === "optdate" ? "date" : ["int", "money", "optmoney", "zint", "zmoney", "optpct"].includes(kind) ? "number" : "text",
+          step: ["money", "optmoney", "zmoney", "optpct"].includes(kind) ? "0.01" : null, min: ["int", "money", "zint", "zmoney", "optpct"].includes(kind) ? "0" : null,
+          required: !["optional", "optdate", "optmoney", "list", "zint", "zmoney", "optpct"].includes(kind) });
     if (key === "partition") { const sel = h("select", { id }, Array.from({ length: me.partitions || 1 }, (_, p) => h("option", { value: String(p), selected: current && current.partition === p }, `Partition ${p}`))); return h("div", {}, h("label", { for: id }, label), sel); }
     return h("div", {}, h("label", { for: id }, label), input);
   }));
@@ -124,7 +151,8 @@ $("act").addEventListener("submit", run($("act-msg"), async () => {
     const raw = $("f-" + n).value;
     if (key === "partition") { body.partition = Number(raw); return; }
     const value = kind === "bool" ? raw === "true" : kind === "list" ? list(raw) : kind === "int" ? Number(raw) : kind === "money" ? Math.round(Number(raw) * 100)
-      : kind === "optmoney" ? (raw.trim() ? Math.round(Number(raw) * 100) : null) : kind === "optional" || kind === "optdate" ? (raw.trim() || null) : raw;
+      : kind === "optmoney" ? (raw.trim() ? Math.round(Number(raw) * 100) : null) : kind === "optional" || kind === "optdate" ? (raw.trim() || null)
+      : kind === "zint" ? Number(raw || 0) : kind === "zmoney" ? Math.round(Number(raw || 0) * 100) : kind === "optpct" ? (raw.trim() ? Math.round(Number(raw) * 100) : null) : raw;
     if (key === "partition") { body.partition = value; return; }
     const path = key.split("."); let at = inner;
     for (const part of path.slice(0, -1)) at = at[part] = at[part] || {};
@@ -132,6 +160,7 @@ $("act").addEventListener("submit", run($("act-msg"), async () => {
   });
   if (action === "decide_decline" || action === "decide_withdraw") inner.request = action.slice(7);
   if (name === "notify") delete inner.reasons;
+  if (action === "close_investigation") { const { decline, recover } = inner; inner.outcome = inner.outcome === "cleared" ? "cleared" : { confirmed: { decline, recover: recover.map(recovery) } }; delete inner.decline; delete inner.recover; }
   body.command = { [name]: inner };
   const done = await send(body);
   if (inner.claim && (inner.claim === $("c-id").value || action === "notify")) { $("c-id").value = inner.claim; await show(inner.claim); }
@@ -156,7 +185,9 @@ function nextSteps(w) {
   if (open && w.admitted_minor === 0 && !w.waiting) out.push(step("Decide: admit", "decide_admit"), step("Decide: decline", "decide_decline"));
   if (open && w.payable_minor > w.paid_minor && w.payee) out.push(step(`Pay ${money(w.payable_minor - w.paid_minor)}`, "pay", { amount_minor: money(w.payable_minor - w.paid_minor) }));
   if (open && w.payable_minor > 0 && !w.payee) out.push(step("Verify the payee", "verify_payee"));
-  for (const [o, owed] of (w.overpayments || []).filter((o) => o[1] > 0)) out.push(step(`Record a repayment on ${o}`, "record_repayment", { overpayment: o, amount_minor: money(owed) }));
+  for (const [o, owed] of (w.overpayments || []).filter((o) => o[1] > 0)) out.push(step(`Record a repayment on ${o}`, "record_repayment", { overpayment: o, amount_minor: money(owed) }), step(`Ask for ${o} to be repaid`, "ask_repayment", { overpayment: o }), step(`Set how ${o} is recovered`, "decide_recovery_status", { "request.recovery_status.overpayment": o }));
+  if (open && w.benefit) out.push(step("Suspend the benefit", "decide_suspend_benefit"), step("Resume the benefit", "decide_resume_benefit"));
+  if (open && w.payee) out.push(step("Record the payee's tax rate", "set_withholding_rate"));
   if (w.closed_on) out.push(step("Reopen it", "reopen"));
   out.push(step("Ask for evidence", "request_evidence"), step("Open a task", "open_task"), step("Record a contact", "record_contact"));
   return out;
@@ -260,13 +291,16 @@ $("books").addEventListener("submit", run($("b-msg"), async () => {
   const answer = what === "remittance" ? await ask("remittance", { run: $("b-run").value, partition: $("b-part").value }) : await ask(what);
   portal.put($("b-out"), portal.details(answer));
 }));
+let cases = [];
 $("inv-show").addEventListener("click", run($("inv-msg"), async () => {
   const { rows } = await ask("cases");
+  cases = rows;
+  const close = (partition, c) => c.closed ? portal.text(c.closed) : h("button", { type: "button", class: "quiet", on: { click: () => { portal.view("claim"); prepare("close_investigation", { partition: String(partition), case: c.case }); } } }, "Close it");
   put($("inv"), rows.length ? table(["Case", "Rule", "Opened", "Referred by", "Claims", "Same service elsewhere", "Closed"], rows.map(({ partition, case: c }) => [
     c.case, words(c.rule), c.opened_on, c.referred_by,
     c.claims.map(([id, status, billed, provider]) => `${id} (${words(status)}, ${money(billed)}${provider ? `, ${provider}` : ""})`).join("; "),
     (c.elsewhere || []).map(([p, id]) => `${id} on partition ${p}`).join("; ") || "none",
-    c.closed ? portal.text(c.closed) : ""])) : h("p", { class: "muted" }, "No cases are open to you."));
+    close(partition, c)])) : h("p", { class: "muted" }, "No cases are open to you."));
 }));
 signIn(R).then(async () => {
   me = await ask("me");

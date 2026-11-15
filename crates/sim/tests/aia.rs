@@ -1370,3 +1370,61 @@ fn a_long_income_waiting_period_is_shortened_when_the_business_cover_ends() {
     let done = &c.state(0).policies[&long].conversions["wpr-1"];
     assert_eq!(done.evidence.as_deref(), proof);
 }
+
+/// Purpose: the claim facts carry what the product and the schedule say about a claim on the
+/// business covers: a TPD lump sum's 90-day survival period, which is also its qualifying
+/// (waiting) period; that paying it uses the cover up; and the peak season months the
+/// schedule names, read as they stood on the event date. The months are refused unless they
+/// are some of 1 to 12 each named once, on a cover the policy has, and setting the same
+/// months again records nothing.
+/// Why it matters: claims pays a TPD lump sum only after the qualifying period, pays the
+/// peak season upgrade only for those months, and counts earlier payments against the sum
+/// insured only where the product says a payment ends the cover. Each fact missing would pay
+/// too early, pay the upgrade in the wrong months, or pay twice.
+#[test]
+fn the_claim_facts_carry_the_qualifying_period_and_the_peak_season_on_the_event_date() {
+    let mut c = cluster();
+    let business = product("aia_living_business.star");
+    let rural = pick(&business, "rural-continuity", &[("peak-season", "yes")]);
+    let tpd = pick(&business, "tpd-own-occupation", &[]);
+    let mut p = policy(
+        11,
+        "aia-living-business",
+        d(1980, 3, 1),
+        &[("rural-continuity", 5_000_00, Some(rural)), ("tpd-own-occupation", 500_000_00, Some(tpd))],
+    );
+    p.lives[0].factors.occupation_class = Some("2".to_string());
+    let id = issue(&mut c, p).unwrap();
+    let facts = |c: &Cluster, cover: &str, on: NaiveDate| ic_core::cover_facts(c.state(0), &id.0, cover, Some("life-1"), on).unwrap();
+
+    let tpd_facts = facts(&c, "tpd-own-occupation", start());
+    assert_eq!((tpd_facts.survival_days, tpd_facts.waiting_days, tpd_facts.ends_cover), (90, 90, Some(true)));
+    let rural_facts = facts(&c, "rural-continuity", start());
+    assert_eq!((rural_facts.ends_cover, rural_facts.peak_months.len()), (None, 0));
+
+    let set = |c: &mut Cluster, cover: &str, months: &[u32]| {
+        let spec = ic_core::peak_season::PeakSeasonSpec {
+            policy: id.clone(),
+            cover: cover.to_string(),
+            months: months.to_vec(),
+        };
+        c.submit(0, "policy-servicing", Command::SetPeakSeason(Box::new(spec)))
+    };
+    for bad in [&[0u32][..], &[13], &[3, 3], &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]] {
+        assert_eq!(set(&mut c, "rural-continuity", bad).unwrap_err().code, "invalid_peak_season", "{bad:?}");
+    }
+    assert_eq!(set(&mut c, "no-such-cover", &[3]).unwrap_err().code, "unknown_cover");
+    set(&mut c, "rural-continuity", &[4, 3]).unwrap();
+    set(&mut c, "rural-continuity", &[3, 4]).unwrap();
+    assert_eq!(
+        c.state(0).policies[&id].peak_seasons["rural-continuity"].len(),
+        1,
+        "the same months again record nothing"
+    );
+    days(&mut c, 1);
+    set(&mut c, "rural-continuity", &[11, 12, 1]).unwrap();
+    // A change made today does not reach back to an event yesterday.
+    assert_eq!(facts(&c, "rural-continuity", start()).peak_months, vec![3, 4]);
+    assert_eq!(facts(&c, "rural-continuity", c.business_date().unwrap()).peak_months, vec![1, 11, 12]);
+    assert!(facts(&c, "rural-continuity", start().pred_opt().unwrap()).peak_months.is_empty());
+}

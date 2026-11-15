@@ -743,6 +743,11 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             kind: "rwt".into(),
             payment: "ir-1".into(),
         },
+        Command::SetPeakSeason(Box::new(ic_core::peak_season::PeakSeasonSpec {
+            policy: p.clone(),
+            cover: "life".into(),
+            months: vec![3],
+        })),
         Command::RecordReplacement(Box::new(ic_core::command::Replacement {
             policy: p.clone(),
             replaced_policy: PolicyId("pol-old".into()),
@@ -802,7 +807,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 67, "{names:?}");
+    assert_eq!(names.len(), 68, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail

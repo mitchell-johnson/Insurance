@@ -1,9 +1,0 @@
-/home/user/Insurance/target-wt/debug/deps/ic_underwriting_intake-0f91a3820b9a0d5e.d: crates/underwriting/src/bin/ic-underwriting-intake.rs Cargo.toml
-
-/home/user/Insurance/target-wt/debug/deps/libic_underwriting_intake-0f91a3820b9a0d5e.rmeta: crates/underwriting/src/bin/ic-underwriting-intake.rs Cargo.toml
-
-crates/underwriting/src/bin/ic-underwriting-intake.rs:
-Cargo.toml:
-
-# env-dep:CLIPPY_ARGS=
-# env-dep:CLIPPY_CONF_DIR

@@ -130,7 +130,7 @@ $("for-customer").addEventListener("submit", run($("cust-msg"), async () => {
 async function forPerson() {
   const out = $("person-msg");
   let r;
-  try { r = await api(R, "GET", "/staff/v1/servicing/waiting"); } catch { $("person-section").hidden = true; return; }
+  try { r = await api(R, "GET", "/staff/v1/servicing/waiting"); } catch (e) { $("person-section").hidden = false; portal.say(out, "bad", e.message); return; }
   $("person-section").hidden = false;
   const what = (x) => [x.kind.replace(/_/g, " "), x.payload && x.payload.frequency ? "to " + x.payload.frequency.replace(/_/g, " ") : ""].filter(Boolean).join(" ");
   portal.put($("person"), r.rows.length ? portal.table(["Request", "Customer", "Policy", "Change", ""], r.rows.map((x) => [x.id, x.party, x.policy || "", what(x),
@@ -257,7 +257,7 @@ async function admin() {
 // Someone with no staff record is refused at the door, not shown forms that will each refuse them.
 signIn(R).then(() => api(R, "GET", "/staff/v1/me")).then((me) => {
   $("me").textContent = [me.team, (me.templates || []).map(words).join(", ")].filter(Boolean).join(" · ");
-  forPerson();
+  if ((me.actions || []).includes("servicing.carry_out")) forPerson();
   portal.picker($("scope"), (me.paths || []).map((p) => ({ value: p, label: words(p.replace(/^[a-z]+:/, "")), hint: p.split(":")[0] })), { empty: "No queues or teams reach records for you." });
   // Opened from another console: a policy to show, or a customer to find.
   const sent = portal.params();

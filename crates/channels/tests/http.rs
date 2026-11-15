@@ -2324,6 +2324,85 @@ async fn the_reinsurance_exceptions_console() {
     }
 }
 
+/// Purpose: reinsurance operations run the reinsurer accounts from the console: a statement is cut and agreed by one
+/// person, and its settlement is prepared by one person and instructed only when a different person signs, with the preparer
+/// and the signer named to the module as `prepared_by` and `approved_by`; the reinsurers, their statements, balances and a
+/// claim's consent can be read.
+/// Why it matters: before this, nothing in the system cut a reinsurer's statement or instructed its settlement, so no
+/// reinsurer was ever paid or billed. The module checks two people itself, but only by the names it is given, so the console
+/// must name them from the sign-in and never from the page.
+#[tokio::test]
+async fn the_reinsurer_accounts_are_run_from_the_console() {
+    let portal = portal();
+    let ask = |who: &'static str, rest: String| {
+        let portal = &portal;
+        async move { portal.get(who, &format!("/staff/v1/reinsurance/{rest}")).await }
+    };
+    let tell = |who: &'static str, command: Value| {
+        let portal = &portal;
+        async move { portal.write("POST", who, "/staff/v1/reinsurance/commands", command).await }
+    };
+
+    // The reinsurers the insurer deals with, and one's statements, before any is cut.
+    let (status, exposure) = ask("sub-riview", "exposure?on=2027-02-01".into()).await;
+    assert_eq!(status, StatusCode::OK, "{exposure}");
+    assert!(exposure.get("reinsurer-north").is_some(), "the ceded premium is owed to the panel: {exposure}");
+    assert_eq!(ask("sub-riview", "statements?reinsurer=reinsurer-north".into()).await.1, json!([]));
+    assert_eq!(ask("sub-riview", "statements".into()).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        ask("sub-riview", "statements?reinsurer=reinsurer-north&after=first".into()).await.0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // One person cuts the statement for the month and agrees it with the reinsurer's confirmation.
+    let cut = json!({ "cut_statement": { "treaty": "retail-life-surplus", "reinsurer": "reinsurer-north", "period_end": "2027-02-28" } });
+    let (status, answer) = tell("sub-ri1", cut).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let (_, statements) = ask("sub-riview", "statements?reinsurer=reinsurer-north".into()).await;
+    let number = statements[0]["number"].as_u64().unwrap_or_else(|| panic!("a statement was cut: {statements}"));
+    let (status, answer) = tell("sub-ri1", json!({ "agree_statement": { "number": number, "reference": "north-conf-0227" } })).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(
+        ask("sub-riview", "balance?treaty=retail-life-surplus&reinsurer=reinsurer-north".into()).await.0,
+        StatusCode::OK
+    );
+    // A claim no reinsurer was asked about has no consent to show.
+    assert_eq!(ask("sub-riview", "consent_status?claim=C1".into()).await.0, StatusCode::NOT_FOUND);
+
+    // The page names neither the preparer nor the approver; a settlement needs a reason for the signer.
+    for bad in [
+        json!({ "instruct_settlement": { "number": number, "reason": "monthly", "prepared_by": "ri-2" } }),
+        json!({ "instruct_settlement": { "number": number } }),
+        json!({ "load_opening_balance": { "number": number } }),
+    ] {
+        assert_eq!(tell("sub-ri1", bad.clone()).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let (status, prepared) = tell(
+        "sub-ri1",
+        json!({ "instruct_settlement": { "number": number, "reason": "February settlement" } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{prepared}");
+    let id = prepared["prepared"].as_str().unwrap().to_string();
+    let waiting = ask("sub-ri2", "me".into()).await.1["pending"][0].clone();
+    assert_eq!(waiting["command"]["instruct_settlement"]["prepared_by"], "ri-1", "{waiting}");
+    let (status, sent) = portal.write("POST", "sub-ri2", &format!("/staff/v1/reinsurance/sign/{id}"), json!({})).await;
+    assert_eq!(status, StatusCode::OK, "the module accepted the two names: {sent}");
+    let (_, statement) = ask("sub-riview", format!("statement?number={number}")).await;
+    assert_eq!(statement["status"], "instructed", "{statement}");
+
+    // A dispute is settled the same way, and the module decides whether there is one.
+    let resolve = json!({ "resolve_dispute": { "reference": "d-1", "repay_minor": 0, "agreement_ref": "letter 4", "reason": "agreed with north" } });
+    let (_, prepared) = tell("sub-ri1", resolve).await;
+    let id = prepared["prepared"].as_str().unwrap().to_string();
+    let (status, problem) = portal.write("POST", "sub-ri2", &format!("/staff/v1/reinsurance/sign/{id}"), json!({})).await;
+    assert_eq!(
+        (status, problem["title"].as_str()),
+        (StatusCode::CONFLICT, Some("unknown_dispute")),
+        "{problem}"
+    );
+}
+
 /// Purpose: a member of claims staff finds work across every partition, reads a claim and acts on it as themselves, with the
 /// purpose they gave, on the partition that holds the claim; anything only other modules send, and any attempt to act as a
 /// colleague, goes no further.
@@ -2472,6 +2551,16 @@ async fn the_claims_console() {
         portal.write("POST", "sub-cllead", "/staff/v1/claims/commands", run).await.1["title"],
         "unknown_run"
     );
+    // An investigation case names no claim: it goes to the partition the cases list gave,
+    // and without one it goes nowhere.
+    let close = |partition: Option<u32>| json!({ "purpose": "case review", "partition": partition, "command": { "close_investigation": { "case": "inv-1", "outcome": "cleared" } } });
+    assert_eq!(
+        portal.write("POST", "sub-cllead", "/staff/v1/claims/commands", close(None)).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let (status, refused) = portal.write("POST", "sub-cllead", "/staff/v1/claims/commands", close(Some(1))).await;
+    assert_ne!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(refused["title"].is_string(), "the claims module decided it: {refused}");
 
     // The book and report come by partition; a remittance is asked of the run's own.
     let (status, book) = ask("sub-cl1", "book").await;

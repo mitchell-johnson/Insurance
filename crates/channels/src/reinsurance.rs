@@ -34,19 +34,46 @@ pub mod actions {
 }
 
 /// Commands one person sends.
-pub const DIRECT: [&str; 5] = [
+pub const DIRECT: [&str; 14] = [
     "retry_notice",
     "record_settlement",
     "facultative_reinsurer_told",
     "resume_recoveries",
     "reoffer_settlement",
+    // The reinsurer accounts: a statement is cut, agreed, held or released,
+    // a listing issued again, profit commission reviewed, a settlement paid
+    // some other way put through clearing or recorded as sent back.
+    "cut_statement",
+    "agree_statement",
+    "hold_settlement",
+    "release_hold",
+    "issue_supplementary_listing",
+    "review_profit_commission",
+    "clear_settlement",
+    "settlement_returned",
+    // What a reinsurer said when its consent was needed before admission.
+    "reinsurer_consent",
 ];
 /// Commands that need a second person: they leave the books apart, or a
 /// reinsurer untold.
-pub const COUNTERSIGNED: [&str; 2] = ["abandon_notice", "abandon_instruction"];
+pub const COUNTERSIGNED: [&str; 6] = [
+    "abandon_notice",
+    "abandon_instruction",
+    // Money leaves for the reinsurer, or a dispute is settled.
+    "instruct_settlement",
+    "resolve_dispute",
+    // Cover in force leaves a treaty, or moves to another version of it.
+    "recapture",
+    "move_treaty_version",
+];
+/// Countersigned commands the module checks for two people itself: the
+/// preparer is the person signed in, and the signer is `approved_by`.
+pub const MAKER_CHECKER: [&str; 2] = ["instruct_settlement", "resolve_dispute"];
+/// Countersigned commands whose own fields carry the reason given.
+const KEEPS_REASON: [&str; 2] = ["abandon_notice", "abandon_instruction"];
 
 /// The console's questions: name, required text fields, required whole-number fields.
-const QUESTIONS: [(&str, &[&str], &[&str]); 7] = [
+const QUESTIONS: [(&str, &[&str], &[&str]); 11] = [
     ("exceptions", &[], &[]),
     ("notices", &[], &[]),
     ("abandoned", &[], &[]),
@@ -54,6 +81,11 @@ const QUESTIONS: [(&str, &[&str], &[&str]); 7] = [
     ("sweep_check", &["period_end"], &[]),
     ("statement", &[], &["number"]),
     ("notice_retries", &[], &["seq"]),
+    // The reinsurers the insurer has a balance with, as of a date.
+    ("exposure", &["on"], &[]),
+    ("statements", &["reinsurer"], &[]),
+    ("balance", &["treaty", "reinsurer"], &[]),
+    ("consent_status", &["claim"], &[]),
 ];
 
 /// What this person may do in the console.
@@ -82,6 +114,15 @@ pub fn question(name: &str, fields: &BTreeMap<String, String>) -> Result<Value, 
     if text.is_empty() && numbers.is_empty() {
         return Ok(json!(name));
     }
+    // A reinsurer's statements come a page at a time, newest pages after `after`.
+    if name == "statements" {
+        let after = match given("after") {
+            Some(after) => Some(after.parse::<u32>().map_err(|_| "after is a whole number".to_string())?),
+            None => None,
+        };
+        let reinsurer = given("reinsurer").ok_or("statements needs reinsurer")?;
+        return Ok(json!({ "statements": { "reinsurer": reinsurer, "after": after, "limit": 100 } }));
+    }
     let mut inner = Map::new();
     for field in *text {
         inner.insert((*field).to_string(), json!(given(field).ok_or_else(|| format!("{name} needs {field}"))?));
@@ -92,6 +133,15 @@ pub fn question(name: &str, fields: &BTreeMap<String, String>) -> Result<Value, 
         inner.insert((*field).to_string(), json!(number));
     }
     Ok(json!({ name: inner }))
+}
+
+/// A countersigned command as its preparer leaves it: where the module
+/// checks two people itself, the preparer is the person signed in.
+pub fn prepared(mut command: Value, name: &str, preparer: &PartyId) -> Value {
+    if MAKER_CHECKER.contains(&name) {
+        command[name]["prepared_by"] = json!(preparer);
+    }
+    command
 }
 
 /// Check a command a person sends alone, or prepares for a second person.
@@ -105,12 +155,15 @@ pub fn check(command: &Value) -> Result<(&str, bool), String> {
     if command[name].get("approved_by").is_some() {
         return Err("approved_by is whoever signs it, not something to type".to_string());
     }
+    if command[name].get("prepared_by").is_some() {
+        return Err("prepared_by is whoever prepares it, not something to type".to_string());
+    }
     if DIRECT.contains(&name) {
         Ok((name, false))
     } else if COUNTERSIGNED.contains(&name) {
         let reason = command[name]["reason"].as_str().unwrap_or_default();
         if reason.trim().is_empty() {
-            return Err("say why it is being abandoned".to_string());
+            return Err("say why: the reason goes to the person who signs it".to_string());
         }
         Ok((name, true))
     } else {
@@ -122,7 +175,15 @@ pub fn check(command: &Value) -> Result<(&str, bool), String> {
 /// command carries its signer as `approved_by`.
 pub fn envelope(key: &str, on: &str, mut command: Value, signer: Option<&PartyId>) -> Value {
     if let (Some(signer), Some(name)) = (signer, crate::countersign::command_name(&command).map(str::to_string)) {
-        command[name]["approved_by"] = json!(signer);
+        if KEEPS_REASON.contains(&name.as_str()) || MAKER_CHECKER.contains(&name.as_str()) {
+            command[name.as_str()]["approved_by"] = json!(signer);
+        }
+        // The reason was for the signer; a command without one of its own does not carry it.
+        if !KEEPS_REASON.contains(&name.as_str()) {
+            if let Some(fields) = command[name.as_str()].as_object_mut() {
+                fields.remove("reason");
+            }
+        }
     }
     json!({ "key": key, "caller": CALLER, "on": on, "command": command })
 }
