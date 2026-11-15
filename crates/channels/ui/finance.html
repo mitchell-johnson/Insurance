@@ -107,12 +107,14 @@ function grid(rows) {
 
 let checks = null;
 async function dashboard() {
-  const want = period, d = await ask("dashboard", { period, today: today() });
+  // The books' own date, where they are ahead of the clock (a test or a migration), so the days are counted on the books' calendar; a period still running says how long it has to go.
+  const on = booksDate && booksDate > today() ? booksDate : today();
+  const want = period, d = await ask("dashboard", { period, today: on });
   // Someone who picked another period while this one was being read sees the one they picked.
   if (want !== period) return;
   checks.set(d.steps.filter((s) => s.status !== "green").map((s) => ({ value: s.id, label: s.name, hint: [words(s.status), s.blocking ? "blocking" : "", s.overdue ? "overdue" : ""].filter(Boolean).join(" · ") })));
   $("dash").hidden = false; $("dash-title").textContent = `${d.period}: ${words(cell(d.status)) || "not open"}`;
-  put($("dash-summary"), h("p", {}, `${d.days_since_period_end} day(s) since the period ended. Journals: ${cell(d.journals)}.`),
+  put($("dash-summary"), h("p", {}, `${d.days_since_period_end < 0 ? `The period ends in ${-d.days_since_period_end} day(s).` : `${d.days_since_period_end} day(s) since the period ended.`} Journals: ${cell(d.journals)}.`),
     d.blockers.length ? h("div", { class: "banner warn" }, "Stopping the close: " + d.blockers.join("; ")) : h("div", { class: "banner ok" }, "Nothing is stopping the close."));
   put($("dash-steps"), table(["Check", "Name", "Owner", "Due", "Blocking", "Status", "Detail", "Evidence"], d.steps.map((s) => [s.id, s.name, s.owner, s.due + (s.overdue ? " (overdue)" : ""), s.blocking ? "yes" : "", words(s.status), (s.items || []).join("; "), s.evidence || ""])));
   put($("dash-waivers"), grid(d.waivers));
@@ -241,7 +243,7 @@ checks = portal.picker($("w-check"), [], { empty: "Show a period's close first; 
 portal.picker($("w-owner"), () => portal.colleagues(), { min: 0 });
 portal.picker($("d-owner"), () => portal.colleagues(), { min: 0 });
 portal.picker($("d-kind"), () => agedKinds.map((k) => ({ value: k, label: words(k) })), { min: 0, empty: "No aged item kind is waiting to be explained." });
-portal.picker($("p-id"), () => [...new Set([...closingPeriods, likely(), portal.month(1), portal.month(0)])].map((p) => ({ value: p, hint: closingPeriods.includes(p) ? "waiting to close" : "" })), { min: 0 });
+portal.picker($("p-id"), () => [...new Set([...closingPeriods, likely(), portal.month(1), portal.month(0)])].map((p) => ({ value: p, hint: closingPeriods.includes(p) ? "waiting to close" : "" })), { min: 0, none: "" });
 $("j-id").value = portal.reference("JNL"); $("ye-id").value = portal.reference("YE"); $("rf-id").value = portal.reference("RET");
 for (const id of ["j-date", "ag-date", "dr-date"]) $(id).value = today();
 $("w-due").value = portal.days(14);

@@ -120,7 +120,7 @@ function pickers(scope) {
     if (key === "of" || key === "to") portal.picker(input, () => portal.colleagues("underwriting.work"), { min: 0 });
     else if (key === "reasons" || input.id === "n-reasons" || input.id === "f-reasons") portal.picker(input, () => Promise.resolve(codeItems(reasons)), { min: 0, empty: "No reason codes are in force." });
     else if (key === "exclusion") portal.picker(input, () => Promise.resolve(codeItems(exclusions)), { min: 0, empty: "No exclusion codes are in force." });
-    else if (key === "cover") portal.picker(input, () => Promise.resolve(coversHere()), { min: 0 });
+    else if (key === "cover") portal.picker(input, () => Promise.resolve(coversHere()), { min: 0, none: "" });
     else continue;
     input.dataset.picked = "yes";
   }
@@ -182,7 +182,7 @@ async function openProposal(id) {
   const p = await ask("proposal", { proposal: id });
   proposal = p;
   const lives = Object.entries(p.lives || {});
-  put($("proposal"), h("p", {}, `${p.id}: ${words(p.status)}, policy ${p.policy_number}, ${p.product_code}, received ${p.received_on}, expires ${p.expires_on}.`),
+  put($("proposal"), h("p", {}, `${p.id}: ${words(typeof p.status === "object" && p.status ? p.status.status : p.status)}, policy ${p.policy_number}, ${p.product_code}, received ${p.received_on}, expires ${p.expires_on}.`),
     table(["Life", "Stage", "Cases", "Decisions"], lives.map(([life, f]) => [life, words(f.stage), (f.cases || []).map((c) => `${c.id} (${words(c.status || c.case_type)})`).join(", "),
       (f.decisions || []).map((d) => `${d.reference} ${words(d.status)}`).join(", ")])));
 }

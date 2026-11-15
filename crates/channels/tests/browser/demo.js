@@ -15,7 +15,7 @@ const { chromium } = require("playwright");
 const fs = require("fs");
 const base = process.argv[2] || "http://127.0.0.1:8099";
 const out = process.env.VIDEO;
-const only = process.env.ONLY;
+const only = process.env.ONLY; // one name, or several separated by commas
 if (!out) { console.error("set VIDEO to the folder for the recordings"); process.exit(2); }
 const failures = [];
 const index = [];
@@ -67,6 +67,17 @@ class Demo {
     else { await l.fill(""); await l.pressSequentially(String(text), { delay: 28 }); }
     await this.page.waitForTimeout(250);
   }
+  // Pick from a field's list: type a little, let the list offer it, and choose. Nobody types a reference in full.
+  async choose(target, text, option) {
+    const l = await this.ring(target, 350);
+    await l.fill(""); if (text) await l.pressSequentially(String(text), { delay: 40 }); else await l.focus();
+    const holder = l.locator("xpath=..");
+    const item = holder.locator('[role="option"]').filter(option ? { hasText: option } : {}).first();
+    await item.waitFor({ timeout: 6000 });
+    await this.page.waitForTimeout(700);
+    await item.dispatchEvent("mousedown");
+    await this.page.waitForTimeout(500);
+  }
   async pick(target, value) { const l = await this.ring(target, 350); await l.selectOption(value); await this.page.waitForTimeout(350); }
   // Wait for a result, bring it into view and let it be read.
   async see(target, hold = 1800) { await this.ring(typeof target === "string" && !/^[#.\[]/.test(target) ? this.page.getByText(target, { exact: false }).first() : target, hold); }
@@ -93,7 +104,7 @@ class Demo {
 }
 
 async function video(name, persona, title, lines, run) {
-  if (only && !name.includes(only)) return;
+  if (only && !only.split(",").some((o) => name.includes(o))) return;
   const browser = await chromium.launch();
   const context = await browser.newContext({ recordVideo: { dir: `${out}/${name}`, size: { width: 1280, height: 800 } }, viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
@@ -176,8 +187,7 @@ async function video(name, persona, title, lines, run) {
     "Open the scheme: members, cover and billing", "Upload this month's payroll file", "Preview who joins, leaves and changes, then approve it",
     "Look up a member, without ever seeing health details"], async (d, p) => {
     await d.open("/employer", "sub-hr");
-    await d.say("The scheme administrator signs in and sees the employer's schemes");
-    await d.click(p.getByRole("button", { name: "Open" }).first());
+    await d.say("The scheme administrator signs in. Kai Fresh has one scheme, so it opens by itself");
     await p.locator("#detail:not([hidden])").waitFor();
     await d.say("Members, total cover and what is owed");
     await d.see("#summary");
@@ -208,34 +218,32 @@ async function video(name, persona, title, lines, run) {
   });
 
   await video("04-junior-underwriter", "ST1 Junior underwriter", "An underwriter works a case", [
-    "Take the next case from the queue", "Propose standard acceptance within her authority", "Read the applicant's disclosures for a stated purpose"], async (d, p) => {
+    "See how much work is in each queue", "Take a case and open it with its proposal and life", "Propose acceptance with a reason picked from the library",
+    "Read the applicant's disclosures for a stated purpose"], async (d, p) => {
     await d.open("/underwriting", "sub-amy");
-    await d.say("Amy signs in. The console tells her who she is and what she holds");
-    await d.see("You are amy");
-    await d.say("She takes the next case waiting in her queues");
-    let taken = false;
-    for (const q of ["medical", "financial", "occupational", "tele_interview"]) {
-      await p.selectOption("#q-name", q);
-      await Promise.all([p.waitForResponse((r) => r.url().includes("/underwriting/queue?")), p.locator("#q-form button").click()]);
-      await p.waitForTimeout(200);
-      const take = p.locator("#queue").getByRole("button", { name: "Take" });
-      if (await take.count()) { await d.see("#queue"); await d.click(take.first()); await d.see("You hold"); taken = true; break; }
-    }
-    if (!taken) throw new Error("no case was waiting");
-    await d.say("She proposes standard acceptance of the life cover, with a reason code and her notes");
-    await d.tab("Cases");
+    await d.say("Amy signs in. Each queue says how many cases it holds, and the console opens on the first with work");
+    await d.ring("#q-name", 1800);
+    await d.see("#queue", 2200);
+    await d.say("She takes the first case waiting");
+    await d.click(p.locator("#queue").getByRole("button", { name: "Take" }).first());
+    await d.see("You hold");
+    await d.say("It is now under Cases you hold. Opening it brings its proposal and life with it");
+    await d.see("#mine", 1800);
+    await d.click(p.locator("#mine").getByRole("button", { name: "Open" }).first());
+    await d.see("#case-head", 2400);
+    await d.say("She proposes standard acceptance of the life cover. The reason code is picked from the library in force");
     await d.pick("#c-what", "propose");
     await d.type("#cf-cover", "life"); await d.pick("#cf-outcome", "accept");
-    await d.type("#cf-reasons", "RC-0101"); await d.type("#cf-notes", "vault://notes");
+    await d.choose("#cf-reasons", "RC");
+    await d.type("#cf-notes", "vault://notes");
     await d.click(p.locator("#c-form button"));
     await d.see(p.locator("#c-msg").getByText("Done."));
-    await d.say("The proposal she is working on");
+    await d.say("The proposal is already open, with nothing typed");
     await d.tab("Proposals");
-    await d.type("#p-id", "P2"); await d.click(p.locator("#p-form button").first());
-    await p.locator("#proposal").getByText("P2:").waitFor();
     await d.see("#proposal", 2600);
-    await d.say("She reads the applicant's health disclosures. The purpose is recorded with the read");
-    await d.type("#d-life", "L1"); await d.type("#d-purpose", "assess the case"); await d.click(p.locator("#d-form button"));
+    await d.say("She reads the applicant's health disclosures. The life and her purpose are filled in, and the purpose is recorded with the read");
+    await d.ring("#d-life", 900); await d.ring("#d-purpose", 1200);
+    await d.click(p.locator("#d-form button"));
     await p.locator("#disclosures details").first().waitFor();
     await d.see("#disclosures", 2600);
     await d.say("A senior underwriter's tools are not offered to her", 2600);
@@ -246,15 +254,15 @@ async function video(name, persona, title, lines, run) {
     await d.open("/underwriting", "sub-sam");
     await d.say("Sam is a senior underwriter. A claim found something not disclosed at application");
     await d.see("a senior underwriter");
-    await p.selectOption("#q-name", "senior_review");
-    await Promise.all([p.waitForResponse((r) => r.url().includes("/underwriting/queue?")), p.locator("#q-form button").click()]);
+    await Promise.all([p.waitForResponse((r) => r.url().includes("/underwriting/queue?queue=senior_review")), p.selectOption("#q-name", "senior_review")]);
     await d.see("#queue");
     await d.click(p.locator("#queue").getByRole("button", { name: "Take" }).first());
     await d.see("You hold");
     await d.say("He varies the cover: a 50% loading instead of avoiding the policy");
     await d.tab("Remedies and review");
-    await d.type("#n-review", "ndr/CLM-1/L1"); await d.pick("#n-outcome", "vary");
-    await d.type("#n-reasons", "RC-0980"); await d.type("#n-cover", "life"); await d.type("#n-loading", "50");
+    await d.say("The review is picked from the non-disclosure reviews waiting, and the reason from the library");
+    await d.choose("#n-review", ""); await d.pick("#n-outcome", "vary");
+    await d.choose("#n-reasons", "RC-09"); await d.type("#n-cover", "life"); await d.type("#n-loading", "50");
     await d.click(p.locator("#n-form button"));
     await d.see("A second senior signs it");
     await d.control("a remedy that changes someone's cover is never one person's decision. It waits for a second senior");
@@ -269,27 +277,36 @@ async function video(name, persona, title, lines, run) {
   });
 
   await video("06-claims-assessor", "ST4 Senior claims assessor", "A claim is notified and assigned", [
-    "Notify a trauma claim", "Find it in the lump sum queue", "Assign it to an assessor, with the reason recorded"], async (d, p) => {
+    "Her own claims are on screen when she signs in", "Notify a death claim: the reference is made for her and the policy is found by its number",
+    "Open it from the lump sum queue", "Assign it to an assessor picked from the claims team"], async (d, p) => {
     d.allowed = [403];
     await d.open("/claims", "sub-cllead");
-    await d.say("The claims lead signs in. Every action is taken in her own name");
-    await d.see("You act as cl-lead");
-    await d.say("A trauma claim is notified against a policy");
+    await d.say("The claims lead signs in. The claims she owns are on screen first");
+    await d.see("#q-rows", 2200);
+    await d.say("An executor rings to notify a death. The claim reference is made for her");
     await d.tab("Claim");
-    await d.pick("#a-command", "notify");
-    await d.type("#f-0", "c-b1"); await d.type("#f-1", "pol-c1"); await d.type("#f-2", "trauma");
-    await d.pick("#f-4", "trauma"); await d.type("#f-5", "2027-02-20");
+    await d.click("#c-new");
+    await d.ring("#f-0", 1600);
+    await d.say("The policy is found from the number on the executor's letter, and its covers are offered");
+    await d.choose("#f-1", "KTL");
+    await d.choose("#f-2", "", "life");
+    await d.choose("#f-3", "", "life-1");
+    await d.pick("#f-4", "death"); await d.type("#f-5", "2027-02-20");
+    await d.pick("#f-7", "executor");
+    const claim = await p.inputValue("#f-0");
     await d.click(p.locator("#act button"));
     await d.see("Done: notify.");
-    await d.see("c-b1: trauma");
-    await d.say("It is waiting in the lump sum queue, oldest and most urgent first");
+    await d.say("It is waiting in the lump sum queue, most urgent and oldest first");
     await d.tab("Queue");
-    await d.pick("#q-name", "lump_sum"); await d.click(p.locator("#queue button"));
-    await d.see(p.locator("#q-rows").getByText("c-b1"));
-    await d.say("She assigns it to an assessor, saying why she is acting");
-    await d.tab("Claim");
-    await d.type("#a-purpose", "allocating lump sum work");
-    await d.pick("#a-command", "assign"); await d.type("#f-1", "cl-1");
+    await d.pick("#q-name", "lump_sum");
+    await d.see(p.locator("#q-rows").getByText(claim));
+    await d.click(p.locator("#q-rows tr").filter({ hasText: claim }).getByRole("button", { name: "Open" }));
+    await d.say("The claim opens with what it needs next");
+    await d.see("#c-next", 2400);
+    await d.say("She assigns it to an assessor, picked from the people who work claims. Her purpose is already filled in");
+    await d.pick("#a-command", "assign");
+    await d.choose("#f-1", "cl", /^cl-1(?!\d)/);
+    await d.ring("#a-purpose", 1200);
     await d.click(p.locator("#act button"));
     await d.see("Done: assign.");
     await d.see(p.locator("#c-summary"), 2600);
@@ -337,18 +354,21 @@ async function video(name, persona, title, lines, run) {
     await d.open("/group", "sub-grp1");
     await d.say("The exceptions queue: everything about schemes that needs a person");
     await d.see(p.locator("#ex").getByText("possible match"), 2600);
-    await d.say("A payroll row might be someone the insurer already knows. She confirms the match");
-    await d.tab("Members");
-    await d.type("#rm-scheme", "harbour"); await d.type("#rm-emp", "E002"); await d.type("#rm-party", "party-x");
-    await d.click(p.locator("#rm-form button"));
+    await d.say("A payroll row might be someone the insurer already knows. Decide opens it with the scheme and employee filled in");
+    await d.click(p.locator("#ex").getByRole("button", { name: "Decide" }).first());
+    await d.see("#rm-form", 1600);
+    await d.say("The people the customer master found are shown. She confirms who it is");
+    const candidate = p.locator("#rm-found").getByRole("button", { name: "It is this person" });
+    await p.locator("#rm-found").locator("table, .empty").first().waitFor().catch(() => {});
+    if (await candidate.count()) await d.click(candidate.first()); else await d.type("#rm-party", "party-x");
+    await d.click(p.locator("#rm-form button:not([type=button])"));
     await d.see(p.locator("#rm-msg").getByText("Recorded."));
     await d.say("The queue is now clear");
     await d.tab("Work waiting");
-    await d.click(p.locator("#ex-form button"));
     await d.see(p.locator("#ex").getByText("Nothing is waiting."));
     await d.say("The employer's file layout changed this year. She looks at the mapping in use");
     await d.tab("Files");
-    await d.type("#mp-scheme", "harbour");
+    await d.ring("#mp-scheme", 1400);
     await d.click(p.getByRole("button", { name: "Show the mappings in use" }));
     await p.locator("#mp").getByText("harbour-freight").first().waitFor();
     await d.see("#mp", 2600);
@@ -400,7 +420,9 @@ async function video(name, persona, title, lines, run) {
     "See what is stopping the close", "Report a check done", "Propose a journal with its reason and evidence",
     "A second person approves and posts it", "The trial balance shows it"], async (d, p) => {
     await d.open("/finance", "sub-gl1");
-    await d.say("The finance operator opens November's close");
+    await d.say("The finance operator signs in. Work waiting lists each period still to close and what it needs");
+    await d.see("#work", 2600);
+    await d.say("He opens November's close");
     await d.type("#p-id", "2027-11"); await d.click(p.locator("#period button"));
     await p.locator("#dash:not([hidden])").waitFor();
     await d.see("Stopping the close", 2600);
@@ -408,9 +430,11 @@ async function video(name, persona, title, lines, run) {
     await d.say("He reports the tax reconciliation as done");
     await d.pick("#r-check", "tax_reconciliation"); await d.click(p.locator("#report button"));
     await d.see("Reported.");
-    await d.say("A month-end accrual needs a manual journal");
+    await d.say("A month-end accrual needs a manual journal. Its reference is made for him");
     await d.click(p.getByRole("tab", { name: "Journals" }));
-    await d.type("#j-id", "bj1"); await d.type("#j-period", "2027-11"); await p.fill("#j-date", "2027-11-30");
+    const journal = await p.inputValue("#j-id");
+    await d.ring("#j-id", 1200);
+    await d.type("#j-period", "2027-11"); await p.fill("#j-date", "2027-11-30");
     await d.type("#j-reason", "Month-end accrual"); await d.type("#j-evidence", "vault://evidence/1");
     await d.type("#j-lines", "6500, 250.00, SF1-life\n2500, -250.00, SF1-life");
     await d.click(p.locator("#journal button"));
@@ -424,14 +448,14 @@ async function video(name, persona, title, lines, run) {
     await d.open("/finance", "sub-gl2");
     await d.click(p.getByRole("tab", { name: "Journals" }));
     await d.say("The approver looks up the journal and reads it");
-    await d.type("#jl-id", "bj1"); await d.click(p.locator("#jlookup button"));
+    await d.type("#jl-id", journal); await d.click(p.locator("#jlookup button"));
     await p.locator("#jview:not([hidden])").waitFor();
     await d.see("#jview", 2600);
     await d.click("#j-approve");
     await d.see("Approved and posted.");
     await d.say("The trial balance for the month now carries both sides");
     await d.click(p.getByRole("tab", { name: "Books" }));
-    await d.type("#tb-period", "2027-11"); await d.click(p.locator("#tb button"));
+    await p.fill("#tb-period", "2027-11"); await d.ring("#tb-period", 900); await d.click(p.locator("#tb button"));
     await p.locator("#tb-out").getByText("6500").first().waitFor();
     await d.see("#tb-out", 3200);
   });
@@ -458,12 +482,7 @@ async function video(name, persona, title, lines, run) {
     await d.control("the person who prepared an action is never the one who approves it");
     await d.say("Her own access is hers to read: roles, limits and every record she has opened");
     await d.click(p.getByRole("tab", { name: "My access" }));
-    await d.see("finance", 2200);
-    await d.say("She declares a personal connection. That person's policies are then closed to her");
-    await d.type("#conn", "party-00000009"); await d.click(p.locator("#connect button"));
-    await d.click(p.locator("dialog[open] .actions button:last-child"));
-    await d.see("Declared.");
-    await d.see(p.locator("#connections").getByText("party-00000009"), 2600);
+    await d.see("finance", 2600);
   });
 
   await video("12-payments", "ST10 Payment run maker, then ST17 Treasury approver", "A payment run, from preparation to approval", [
@@ -471,16 +490,20 @@ async function video(name, persona, title, lines, run) {
     await d.open("/payments", "sub-paymk");
     await d.say("The maker signs in. The console says which payment roles she holds");
     await d.see("You are pay-mk: maker.");
-    await d.say("She prepares a provider payment run for a value date");
-    await d.type("#r-id", "rb1"); await d.pick("#r-type", "provider_payments"); await p.fill("#r-date", "2027-11-16");
+    await d.say("She prepares a provider payment run for a value date. The run's reference is made for her");
+    const runId = await p.inputValue("#r-id");
+    await d.ring("#r-id", 1200);
+    await d.pick("#r-type", "provider_payments"); await p.fill("#r-date", "2027-11-16");
     await d.click(p.locator("#prep button"));
     await d.see("Prepared. Add items");
+    await d.see("#run", 1800);
     await d.tab("Controls");
-    await p.fill("#raw-cmd", JSON.stringify({ type: "add_run_items", run: "rb1", items: [{ item: "ib1", source: "browser", counterparty: { payee: "p1" }, amount_minor: 1000, policy: null, payable: null, refund: null, represents: null }] }));
+    await p.fill("#raw-cmd", JSON.stringify({ type: "add_run_items", run: runId, items: [{ item: "ib1", source: "browser", counterparty: { payee: "p1" }, amount_minor: 1000, policy: null, payable: null, refund: null, represents: null }] }));
     await p.locator("#raw-form button").click();
     await p.locator("#raw-msg").getByText("Done.").waitFor();
     await d.say("A payment to a provider is added to the run");
     await d.tab("Runs");
+    await p.fill("#run-id", runId);
     await d.click(p.locator("#run-form button"));
     await d.see(p.locator("#run").getByText("ib1"), 2400);
     await d.say("She checks the run: totals, payees and holds");
@@ -492,12 +515,13 @@ async function video(name, persona, title, lines, run) {
     await d.open("/payments", "sub-payap");
     await d.say("Treasury first reconciles the claims bank account");
     await d.tab("Reconciliation");
-    await d.type("#rec-account", "anz-sf1-claims"); await d.click(p.locator("#rec-form button"));
+    const own = p.locator("#exceptions").getByRole("button", { name: "Its account" });
+    if (await own.count()) await d.click(own.first()); else { await d.type("#rec-account", "anz-sf1-claims"); await d.click(p.locator("#rec-form button")); }
     await d.see("closing 10000000.00", 2400);
     await d.say("The run the maker checked is waiting");
     await d.tab("Runs");
-    await d.see(p.locator("#runs").getByText("rb1"));
-    await d.click(p.locator("#runs").getByRole("button", { name: "Open" }).first());
+    await d.see(p.locator("#runs").getByText(runId));
+    await d.click(p.locator("#runs tr").filter({ hasText: runId }).getByRole("button", { name: "Open" }));
     await d.see("#run", 2400);
     await d.click(p.getByRole("button", { name: "Approve" }));
     await d.see(p.locator("#run-msg").getByText("Done: approve run."), 2600);
@@ -513,29 +537,35 @@ async function video(name, persona, title, lines, run) {
     await d.open("/complaints", "sub-front");
     await d.say("A frontline member of staff hears a complaint on a call and records it there and then");
     await d.see("intake");
-    await d.type("#i-id", "c-100"); await d.type("#i-who", "party-00000001"); await d.type("#i-doc", "doc-100");
-    await d.click(p.locator("#intake button"));
-    await d.see("Recorded c-100", 2600);
+    await d.say("The reference is made for him. He finds the caller by the name and birth date they give");
+    const complaint = await p.inputValue("#i-id");
+    await d.ring("#i-id", 1000);
+    await d.choose("#i-who", "Kiri Parata", "Kiri");
+    await d.say("Her policies are offered, so he ticks the one the complaint is about");
+    await d.choose("#i-policies", "");
+    await d.type("#i-doc", "doc-100");
+    await d.click(p.locator("#intake").getByRole("button", { name: "Record" }));
+    await d.see("Recorded " + complaint, 2600);
     await d.intro("Next", "The complaints handler", ["Trained to work with vulnerable customers", "Takes the complaint, opens its file, checks the register"], 3000);
     await d.open("/complaints", "sub-cmp1");
     await d.see("trained to work with vulnerable customers");
     await d.say("The queue: vulnerable complainants first, then the nearest deadline");
     await d.click(p.getByRole("tab", { name: "Queue" }));
-    await d.see(p.locator("#queue").getByText("c-100"));
-    await d.say("She assigns the complaint to herself");
+    await d.see(p.locator("#queue").getByText(complaint));
+    await d.say("She assigns the complaint to herself, picked from the complaints team");
     await d.pick("#a-command", "assign");
-    await d.type("#f-0", "c-100"); await d.type("#f-1", "cmp-1");
+    await d.type("#f-0", complaint); await d.choose("#f-1", "cmp", /^cmp-1(?!\d)/);
     await d.click(p.locator("#act button"));
     await d.see("Done: assign.");
     await d.say("The complaint's file, with its running deadlines");
-    await d.click(p.locator("#queue").getByRole("button", { name: "Open" }).first());
+    await d.click(p.locator("#queue tr").filter({ hasText: complaint }).getByRole("button", { name: "Open" }));
     await p.locator("#file:not([hidden])").waitFor();
     await d.see("#file", 3200);
     await d.say("The register and report for the month");
     await d.click(p.getByRole("tab", { name: "Register and report" }));
     await p.fill("#p-from", "2027-11-01"); await p.fill("#p-to", "2027-11-30");
     await d.click(p.locator("#period button"));
-    await d.see(p.locator("#register").getByText("c-100"), 2600);
+    await d.see(p.locator("#register").getByText(complaint), 2600);
     await d.intro("Next", "The conduct officer", ["Conduct cases are open to the conduct function and legal only", "The officer opens a case for a suspected breach"], 3000);
     await d.open("/complaints", "sub-con");
     await d.click(p.getByRole("tab", { name: "Queue" }));
@@ -609,7 +639,7 @@ async function video(name, persona, title, lines, run) {
     await d.say("The operations console: each region's health and whether the cluster holds quorum");
     await d.see("auckland", 2400);
     await d.see("sydney", 2400);
-    await d.say("A region that is down is shown plainly, with what that means for fail-over", 3000);
+    await d.say("Both regions are reachable and every partition has its leader at home. A region that went down would show here, with what it means for fail-over", 3500);
   });
 
   fs.writeFileSync(`${out}/videos.json`, JSON.stringify(index));

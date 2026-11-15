@@ -96,7 +96,7 @@ fn authority() -> AuthorityBook {
     let queues: BTreeSet<Queue> = [Queue::LumpSum, Queue::ComplexLarge].into();
     let assessor = Profile {
         lines,
-        max_admission_minor: [(ClaimType::Trauma, 600_000)].into(),
+        max_admission_minor: [(ClaimType::Trauma, 600_000), (ClaimType::Death, 600_000)].into(),
         max_payment_minor: 600_000,
         max_reserve_minor: 700_000,
         may_decline: true,

@@ -296,7 +296,7 @@ const portal = (() => {
       // A value typed in full is chosen already: the list would only stand in front of what comes next.
       if (text && found.some((i) => String(i.value).toLowerCase() === text.toLowerCase())) { tell(""); return close(); }
       items = found.slice(0, opts.max || 12);
-      if (!items.length) { close(); return tell(text ? opts.none || "Nothing matches that." : opts.empty || "Nothing to choose from yet."); }
+      if (!items.length) { close(); return tell(text ? opts.none ?? "Nothing matches that." : opts.empty || "Nothing to choose from yet."); }
       tell("");
       put(list, items.map((item, n) => h("li", { role: "option", id: id + "-" + n, "aria-selected": "false",
         on: { mousedown: (ev) => { ev.preventDefault(); choose(item); } } }, h("strong", {}, item.label || item.value), item.hint ? h("span", {}, item.hint) : null)));
@@ -329,7 +329,7 @@ const portal = (() => {
   // A field that takes several picks, kept as a comma-separated value.
   function pickMany(input, source, opts = {}) {
     const chosen = h("div", { class: "picked" }), all = () => String(input.dataset.many || "").split(",").filter(Boolean), names = {};
-    const draw = () => put(chosen, all().map((v) => h("span", { class: "pill" }, names[v] || v, h("button", { type: "button", class: "quiet", "aria-label": "Remove " + v, on: { click: () => { input.dataset.many = all().filter((x) => x !== v).join(","); draw(); } } }, "×"))));
+    const draw = () => put(chosen, all().map((v) => h("span", { class: "pill" }, names[v] || v, h("button", { type: "button", class: "quiet", "aria-label": "Remove " + (names[v] || v), on: { click: () => { input.dataset.many = all().filter((x) => x !== v).join(","); draw(); } } }, "×"))));
     input.parentElement.append(chosen);
     picker(input, source, { ...opts, onPick: (item) => { names[item.value] = item.label || item.value; input.dataset.many = [...new Set([...all(), item.value])].join(","); input.value = ""; draw(); } });
     return { values: () => [...all(), ...String(input.value).split(",").map((x) => x.trim()).filter(Boolean)], clear: () => { input.dataset.many = ""; input.value = ""; draw(); } };

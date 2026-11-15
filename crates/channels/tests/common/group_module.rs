@@ -151,7 +151,7 @@ impl Group for Beside {
     }
 
     fn ask(&self, question: Value) -> Asked<'_> {
-        if matches!(question["ask"].as_str(), Some("exceptions" | "mapping")) {
+        if matches!(question["ask"].as_str(), Some("exceptions" | "mapping" | "possible_match")) {
             self.staff.ask(question)
         } else {
             self.employer.ask(question)

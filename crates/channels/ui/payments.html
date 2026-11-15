@@ -212,7 +212,7 @@ const runItems = () => openRuns.map((r) => ({ value: r.run, hint: [words(r.run_t
 portal.picker($("t-run"), async () => runItems(), { min: 0, empty: "No run is open. Prepare one below." });
 portal.picker($("run-id"), async () => runItems(), { min: 0, empty: "No run is open." });
 portal.picker($("mm-exception"), async () => openExceptions.map((e) => ({ value: e.exception, hint: [words(e.kind), money(e.amount_minor), e.reference || "no reference"].join(" · ") })), { min: 0, empty: "No exception is open." });
-portal.picker($("rec-account"), async () => [...new Set(openExceptions.map((e) => e.account))].map((a) => ({ value: a })), { min: 0, empty: "No account has an open exception. Type the account's name." });
+portal.picker($("rec-account"), async () => [...new Set(openExceptions.map((e) => e.account))].map((a) => ({ value: a })), { min: 0, none: "", empty: "No account has an open exception. Type the account's name." });
 $("r-id").value = portal.reference("RUN"); $("r-date").value = portal.today();
 signIn(R).then(async () => {
   me = await ask("me");
