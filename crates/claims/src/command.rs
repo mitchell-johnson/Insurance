@@ -141,6 +141,13 @@ pub enum Request {
     ResumeBenefit {
         from: NaiveDate,
     },
+    /// The Permanent Disablement Benefit: after 24 consecutive months of
+    /// benefit, a third more each month from today because the life is
+    /// permanently disabled; or, with `ends`, no longer from today.
+    PermanentDisablement {
+        #[serde(default)]
+        ends: bool,
+    },
 }
 
 impl Request {
@@ -151,6 +158,7 @@ impl Request {
             Request::Decline => DecisionKind::Decline,
             Request::Withdraw => DecisionKind::Withdraw,
             Request::FuneralAdvance { .. } => DecisionKind::FuneralAdvance,
+            Request::PermanentDisablement { .. } => DecisionKind::PermanentDisablement,
             Request::AdmitBuiltIn { .. } => DecisionKind::AdmitBuiltIn,
             Request::ReverseAdmission { .. } => DecisionKind::ReverseAdmission,
             Request::ExGratia { .. } => DecisionKind::ExGratia,
@@ -267,6 +275,15 @@ pub enum Command {
     },
     RecordContact {
         claim: String,
+        actor: Actor,
+    },
+    /// Waive the qualifying period of a total and permanent disablement
+    /// claim under the cover's Waiver of the Waiting Period benefit: the
+    /// owner has evidence (`evidence_ref`, in the vault) that the incapacity
+    /// is permanent and that the life is not expected to die within it.
+    WaiveWaitingPeriod {
+        claim: String,
+        evidence_ref: String,
         actor: Actor,
     },
     /// Move a claim to the senior queue.
@@ -617,6 +634,7 @@ impl Command {
             Command::Assign { .. } => "assign",
             Command::RecordContact { .. } => "record_contact",
             Command::RecordCommunicationNeed { .. } => "record_communication_need",
+            Command::WaiveWaitingPeriod { .. } => "waive_waiting_period",
             Command::Escalate { .. } => "escalate",
             Command::IdentifyLife { .. } => "identify_life",
             Command::RecordCause { .. } => "record_cause",

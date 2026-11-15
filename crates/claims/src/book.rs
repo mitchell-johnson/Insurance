@@ -21,7 +21,7 @@ pub const MAX_RUN_ITEMS: usize = 250;
 /// benefit less other income declared for the period, by days for a part month.
 pub(crate) fn period_gross(s: &Schedule, start: NaiveDate, end: NaiveDate) -> i64 {
     let income = s.income.range(..=start).next_back().map_or(0, |(_, v)| *v);
-    let monthly = (s.monthly_on(start) - income).max(0);
+    let monthly = (s.monthly_on(start) - income).max(0) + s.supplement_on(start);
     let full = plus_months(start, 1);
     let gross = if end >= full {
         monthly
@@ -142,7 +142,21 @@ impl ClaimsState {
             suspended: BTreeMap::new(),
             indexed: false,
             index_steps: BTreeMap::new(),
+            permanent_from: None,
+            permanent_until: None,
+            peak_addition_minor: 0,
+            peak_months: vec![],
         });
+        // The Peak Season Upgrade, where the cover has it and the schedule names the months.
+        let peak = claim.cover_check.as_ref().and_then(|c| {
+            let b = c.facts.has_built_in("peak-season").filter(|b| b.kind == "monthly_addition")?;
+            let months: Vec<u32> = c.facts.peak_months.iter().copied().filter(|m| (1..=12).contains(m)).collect();
+            Some((b.limit_minor.unwrap_or(0).max(0), months))
+        });
+        if let (Some((addition, months)), Some(s)) = (peak, claim.schedule.as_mut()) {
+            s.peak_addition_minor = addition;
+            s.peak_months = months;
+        }
         let indexed = claim.cover_check.as_ref().is_some_and(|c| c.facts.claim_indexation);
         if indexed && claim.claim_type != crate::ClaimType::PremiumWaiver {
             let first = plus_months(terms.first_period, 12);
@@ -849,6 +863,19 @@ impl ClaimsState {
                 "income is declared on a benefit in payment that is not waiting in a run",
             ));
         };
+        // Earning again means partly disabled: a cover whose product lists a
+        // Partial Disablement Benefit the policy did not choose pays only
+        // while the life is totally disabled, so the benefit is ended instead.
+        let partial_not_chosen = claim
+            .cover_check
+            .as_ref()
+            .is_some_and(|c| c.facts.declares("partial-disablement") && c.facts.has_built_in("partial-disablement").is_none());
+        if other_income_minor > 0 && partial_not_chosen {
+            return Err(Reject::new(
+                "no_partial_cover",
+                "the cover pays only total disablement: end the benefit from the day the life went back to work",
+            ));
+        }
         let mut after = before.clone();
         after.income.insert(from, other_income_minor);
         let paid = || before.periods.iter().filter(|(_, p)| !p.returned);

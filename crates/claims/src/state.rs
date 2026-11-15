@@ -323,6 +323,7 @@ impl ClaimsState {
             Command::Assign { claim, to, actor } => self.assign(cx, &claim, &to, &actor),
             Command::RecordContact { claim, actor } => self.record_contact(cx, &claim, &actor),
             Command::RecordCommunicationNeed { claim, needed, actor } => self.record_communication_need(cx, &claim, needed, &actor),
+            Command::WaiveWaitingPeriod { claim, evidence_ref, actor } => self.waive_waiting_period(cx, &claim, &evidence_ref, &actor),
             Command::Escalate { claim, actor } => self.escalate(cx, &claim, &actor),
             Command::IdentifyLife { claim, party, actor } => self.identify_life(cx, &claim, &party, &actor),
             Command::RecordCause { claim, cause_code, actor } => self.record_cause(cx, &claim, &cause_code, &actor),

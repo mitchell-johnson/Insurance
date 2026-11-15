@@ -191,6 +191,7 @@ impl ClaimsState {
             loan_repaid_minor: 0,
             advanced_minor: 0,
             built_in: BTreeMap::new(),
+            waiting_waived: None,
             interest_offer: None,
             interest_declined: None,
             interest_owed_again_minor: 0,
@@ -454,6 +455,30 @@ impl ClaimsState {
     /// Record a communication marker, or its end. Turned on, every deadline
     /// still open for the claimant moves out by the rules' extension; turned
     /// off, nothing already given is shortened.
+    /// Waive a total and permanent disablement claim's qualifying period,
+    /// where the cover has the benefit that allows it.
+    pub(crate) fn waive_waiting_period(&mut self, cx: &mut Cx<'_>, id: &str, evidence_ref: &str, actor: &Actor) -> Result<(), Reject> {
+        let mut claim = self.claim(id)?;
+        self.owner(actor, &claim)?;
+        if claim.claim_type != ClaimType::TotalPermanentDisability || claim.status != Status::Open {
+            return Err(Reject::new("not_open", "the qualifying period is waived on an open disablement claim"));
+        }
+        let allowed = claim
+            .cover_check
+            .as_ref()
+            .is_some_and(|c| c.facts.has_built_in("waiver-of-waiting-period").is_some());
+        if !allowed {
+            return Err(Reject::new("no_waiver_benefit", "the cover has no waiver of the waiting period"));
+        }
+        if evidence_ref.trim().is_empty() {
+            return Err(Reject::new("evidence_required", "keep the evidence that the incapacity is permanent"));
+        }
+        claim.waiting_waived = Some(evidence_ref.to_string());
+        note(&mut claim, cx, Some(actor), "waiting_period_waived");
+        self.commit(claim);
+        Ok(())
+    }
+
     pub(crate) fn record_communication_need(&mut self, cx: &mut Cx<'_>, id: &str, needed: bool, actor: &Actor) -> Result<(), Reject> {
         let mut claim = self.claim(id)?;
         if !self.leads(&actor.staff) {
@@ -574,6 +599,18 @@ impl ClaimsState {
         if changed {
             // Something recorded after the event changed the cover on that date: the assessor sees both.
             note(&mut claim, cx, Some(actor), "cover_changed_since_event");
+        }
+        if claim.claim_type.periodic() && facts.has_built_in("rehabilitation-support").is_some() {
+            // The cover appoints a case manager for rehabilitation as soon as the claim is known.
+            if open_task(
+                &mut claim,
+                cx,
+                "rehabilitation/case-manager",
+                TaskKind::Rehabilitation,
+                Some(plus_days(cx.today, 5)),
+            ) {
+                cx.notify("rehabilitation_case_manager", id, &[("owner", claim.owner.clone().unwrap_or_default())]);
+            }
         }
         claim.cover_check = Some(CoverCheck {
             checked_on: cx.today,
@@ -717,6 +754,15 @@ impl ClaimsState {
             .map(|t| t.kind)
             .ok_or_else(|| Reject::new("unknown_task", format!("claim {id} has no open task {task}")))?;
         self.may_complete(&claim, kind, attendees.len(), vault_ref.is_some(), spend_minor, actor)?;
+        // Spending on rehabilitation is a benefit of the cover: a product that
+        // lists its built-in benefits without Rehabilitation and Support pays none.
+        let rehab_paid = claim
+            .cover_check
+            .as_ref()
+            .is_none_or(|c| !c.facts.lists_built_ins() || c.facts.has_built_in("rehabilitation-support").is_some());
+        if kind == TaskKind::Rehabilitation && spend_minor > 0 && !rehab_paid {
+            return Err(Reject::new("no_rehabilitation_benefit", "the cover pays nothing towards rehabilitation"));
+        }
         let was_overdue = finish_task(
             &mut claim,
             task,

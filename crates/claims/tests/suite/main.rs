@@ -1,5 +1,6 @@
 //! The claims module's own tests, against a stand-in for the core.
 
+mod aia_income;
 mod book;
 mod channel;
 mod controls;
