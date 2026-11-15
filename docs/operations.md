@@ -2,6 +2,8 @@
 
 ## First deployment
 
+What these steps create, with every resource's size and what is needed beyond the templates (Temporal, ingress, the email domain, the bank), is in [azure-resources.md](azure-resources.md).
+
 1. **Create the platform.**
 
    ```sh

@@ -16,7 +16,7 @@ That one idea gives the properties an insurer's core needs:
 Each is drawn from the code, manifests and templates on main; the source is the HTML file beside the picture, rendered with `node tools/render_diagrams.js`. Edit the HTML, never the PNG, and redraw when a process, module or Azure resource is added or removed.
 
 - [How the system is put together](architecture/system-overview.png): the front doors, the people master as a separate system, the ledger cluster with its partitions and the twelve module groups, the drivers and the close, Azure services and partners.
-- [The Azure deployment](architecture/azure-deployment.png): what `infra/main.bicep` and each module template create, and the workloads on AKS.
+- [The Azure deployment](architecture/azure-deployment.png): what `infra/main.bicep` and each module template create, and the workloads on AKS. The full inventory, with every resource's SKU, size, count and placement, what is needed beyond the templates and the gaps, is [azure-resources.md](azure-resources.md).
 - [How a command is applied, and how a day is closed](architecture/command-path.png): one command from caller to ledger, what the leader does after, and the steps of the daily close.
 - [Integrating the core with an existing estate](integration/integration-map.png): what can be swapped, and the seams (`integration.md`).
 
