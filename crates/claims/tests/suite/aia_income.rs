@@ -528,7 +528,7 @@ fn a_built_in_premium_waiver_runs_for_its_own_term() {
     w.ok(Command::DrainDue);
     assert!(w.core.instructions.iter().any(|i| matches!(
         i,
-        Instruction::WaivePremium { claim, from: f, until, .. } if claim == "w-1" && *f == from && *until == d(2027, 9, 1)
+        Instruction::WaivePremium { claim, from: f, until, only_cover: true, .. } if claim == "w-1" && *f == from && *until == d(2027, 9, 1)
     )));
     assert_eq!(w.undecided("w-1", "ana", waiver("pregnancy-premium-waiver", from), "R-OK"), "not_open");
 
@@ -554,4 +554,11 @@ fn a_built_in_premium_waiver_runs_for_its_own_term() {
     });
     w.decided("w-3", "ana", waiver("waiver-on-death", from), "R-OK");
     assert_eq!(w.claim("w-3").schedule.as_ref().expect("waiving").end, d(2029, 3, 1));
+    // After a death the whole policy's premium is waived, not one cover's.
+    w.ok(Command::DrainDue);
+    assert!(w
+        .core
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Instruction::WaivePremium { claim, only_cover: false, .. } if claim == "w-3")));
 }

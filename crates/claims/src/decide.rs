@@ -1103,6 +1103,8 @@ impl ClaimsState {
                     end,
                     expected_end: end,
                 };
+                // Recorded as a built-in admitted for nothing, so the waiver knows its basis.
+                claim.built_in.entry(code.clone()).or_default();
                 self.start_benefit(claim, cx, &terms);
                 Self::meet_timer(claim, TimerKind::Decision, cx.today);
                 cx.lifecycle(
@@ -1276,7 +1278,7 @@ impl ClaimsState {
 }
 
 /// AIA's pregnancy premium waiver on its income covers.
-const PREGNANCY_WAIVER: &str = "pregnancy-premium-waiver";
+pub(crate) const PREGNANCY_WAIVER: &str = "pregnancy-premium-waiver";
 
 /// How many months a built-in premium waiver runs, by its code.
 fn waiver_months(code: &str) -> Option<u32> {
