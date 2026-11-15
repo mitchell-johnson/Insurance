@@ -1,0 +1,21 @@
+# The ledger nodes' disks: Premium SSD v2, zonal, with the IOPS and
+# throughput set apart from the size. Raft writes every journal append with
+# one fsync per partition group, so latency, not size, is what matters:
+# Premium SSD v2 answers in under a millisecond. Sized from ic-simulate
+# (docs/azure-resources.md, "Sizing"): 3,000 IOPS and 125 MB/s are the free
+# baseline and leave a wide margin; raise them here and on the existing
+# disks (az disk update --disk-iops-read-write) if the latency alert says so.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ic-ledger-premiumv2
+provisioner: disk.csi.azure.com
+parameters:
+  skuName: PremiumV2_LRS
+  cachingMode: None
+  DiskIOPSReadWrite: "3000"
+  DiskMBpsReadWrite: "125"
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+# A disk is made in the zone its pod is placed in.
+volumeBindingMode: WaitForFirstConsumer

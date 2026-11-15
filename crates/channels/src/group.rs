@@ -13,6 +13,7 @@
 //! which scheme is on the policy, once the portal has found that the
 //! signed-in person administers it.
 
+use ic_telemetry::Traced;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -241,7 +242,7 @@ pub struct Hosted {
 impl Hosted {
     async fn send(&self, request: reqwest::RequestBuilder) -> Result<Answered, String> {
         let token = self.credential.token(&self.scope).await.map_err(|e| e.to_string())?;
-        let response = request.bearer_auth(token).send().await.map_err(|e| e.to_string())?;
+        let response = request.bearer_auth(token).traced().send().await.map_err(|e| e.to_string())?;
         let status = response.status().as_u16();
         if status == 503 {
             return Err("the group service asked us to try again".to_string());

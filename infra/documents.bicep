@@ -56,6 +56,12 @@ param workloadNamespace string = 'insurance-core'
 @description('Where Communication Services keeps data at rest.')
 param communicationDataLocation string = 'Australia'
 
+@description('The domain letters are e-mailed from, such as mail.example.co.nz. Empty: no e-mail domain is made, and one is attached by hand later. Given: the domain is created as customer managed, and its verification, SPF, DKIM and DMARC records are output for whoever runs the DNS zone (docs/operations.md, "E-mail and SMS").')
+param emailDomain string = ''
+
+@description('The Azure DNS zone of emailDomain, when it is in this resource group: the records are then written into it, and only verification needs starting (az communication email domain initiate-verification).')
+param emailDnsZoneName string = ''
+
 @description('The key Event Grid presents to the webhook in the x-webhook-key header. At least 32 characters.')
 @secure()
 @minLength(32)
@@ -70,10 +76,27 @@ param printHousePrincipalId string = ''
 @description('The role that lets the service send email and SMS under its Entra identity: Communication and Email Service Owner. Confirm the ID with `az role definition list --name "Communication and Email Service Owner" --query [0].name` before the first deployment.')
 param communicationRoleDefinitionId string = '09976791-48a7-449e-bb21-39d1a415f350'
 
+
+// --- private networking (main.bicep output privateNetwork) ---------------------------
+
+@description('main.bicep\'s output privateNetwork: the subnet and the private DNS zones for private endpoints, and what the firewalls admit beside them. Empty: no private endpoints, and the services here stay reachable from anywhere, with Entra ID still required.')
+param privateNetwork object = {}
+
+@description('Address ranges (CIDR) of the outside party that reaches the print outbox (the print house). Empty: that account stays reachable from anywhere, with Entra ID still required; given, it admits only these ranges beside the private endpoint and the administrators.')
+param printHouseIpRanges array = []
+
 var tags = {
   system: 'insurance-core'
   environment: environment
   component: 'documents'
+}
+var isPrivate = !empty(privateNetwork)
+var adminIpRules = map(privateNetwork.?adminIpRanges ?? [], range => { value: range, action: 'Allow' })
+// An account an outside party reaches too: its ranges, or anywhere if none are given.
+var printHouseAcls = {
+  defaultAction: isPrivate && !empty(printHouseIpRanges) ? 'Deny' : 'Allow'
+  bypass: 'AzureServices'
+  ipRules: concat(adminIpRules, map(printHouseIpRanges, range => { value: range, action: 'Allow' }))
 }
 var unique = uniqueString(resourceGroup().id, name)
 var roles = {
@@ -111,6 +134,8 @@ resource account 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   kind: 'StorageV2'
   sku: { name: environment == 'prod' ? 'Standard_GZRS' : 'Standard_LRS' }
   properties: {
+    publicNetworkAccess: 'Enabled'
+    networkAcls: printHouseAcls
     accessTier: 'Hot'
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
@@ -118,6 +143,19 @@ resource account 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     // Entra ID only: shared keys and SAS signed with them are refused.
     allowSharedKeyAccess: false
     defaultToOAuthAuthentication: true
+  }
+}
+
+module accountEndpoint 'modules/private-endpoint.bicep' = if (isPrivate) {
+  name: 'pe-documents-blob'
+  params: {
+    name: '${account.name}-blob'
+    location: location
+    tags: tags
+    subnetId: privateNetwork.?subnetId ?? ''
+    targetId: account.id
+    groupId: 'blob'
+    dnsZoneIds: [privateNetwork.?zones.?blob ?? '']
   }
 }
 
@@ -254,12 +292,91 @@ resource readClusterToken 'Microsoft.Authorization/roleAssignments@2022-04-01' =
 
 // --- email and SMS ---------------------------------------------------------------------
 
+// E-mail: an Email Communication Service with the insurer's own domain,
+// linked to the Communication Service the documents service sends through.
+// ACS has no private endpoint; the service reaches it over TLS with its
+// Entra identity, out through the cluster's fixed egress range.
+resource email 'Microsoft.Communication/emailServices@2023-04-01' = if (!empty(emailDomain)) {
+  name: '${name}-${unique}-email'
+  location: 'global'
+  tags: tags
+  properties: {
+    dataLocation: communicationDataLocation
+  }
+}
+
+resource emailDomainResource 'Microsoft.Communication/emailServices/domains@2023-04-01' = if (!empty(emailDomain)) {
+  parent: email
+  name: empty(emailDomain) ? 'unset' : emailDomain
+  location: 'global'
+  tags: tags
+  properties: {
+    domainManagement: 'CustomerManaged'
+    // Engagement tracking would rewrite links in letters: off.
+    userEngagementTracking: 'Disabled'
+  }
+}
+
+resource sender 'Microsoft.Communication/emailServices/domains/senderUsernames@2023-04-01' = if (!empty(emailDomain)) {
+  parent: emailDomainResource
+  name: 'letters'
+  properties: {
+    username: 'letters'
+    displayName: 'Letters'
+  }
+}
+
 resource communication 'Microsoft.Communication/communicationServices@2023-04-01' = {
   name: '${name}-${unique}-comms'
   location: 'global'
   tags: tags
   properties: {
     dataLocation: communicationDataLocation
+    linkedDomains: empty(emailDomain) ? [] : [emailDomainResource.id]
+  }
+}
+
+// The records, written into the zone when it is here.
+resource emailZone 'Microsoft.Network/dnsZones@2018-05-01' existing = if (!empty(emailDnsZoneName)) {
+  name: empty(emailDnsZoneName) ? 'unset' : emailDnsZoneName
+}
+
+var emailRecords = empty(emailDomain) ? {} : emailDomainResource!.properties.verificationRecords
+var relative = empty(emailDnsZoneName) || emailDomain == emailDnsZoneName ? '@' : replace(emailDomain, '.${emailDnsZoneName}', '')
+
+resource emailTxt 'Microsoft.Network/dnsZones/TXT@2018-05-01' = if (!empty(emailDomain) && !empty(emailDnsZoneName)) {
+  parent: emailZone
+  name: relative
+  properties: {
+    TTL: 3600
+    TXTRecords: [
+      { value: [emailRecords.Domain.value] }
+      { value: [emailRecords.SPF.value] }
+    ]
+  }
+}
+
+// ACS's two DKIM selectors have fixed names; their targets come from the domain.
+var dkim = [
+  { key: 'DKIM', selector: 'selector1-azurecomm-prod-net._domainkey' }
+  { key: 'DKIM2', selector: 'selector2-azurecomm-prod-net._domainkey' }
+]
+
+resource emailDkim 'Microsoft.Network/dnsZones/CNAME@2018-05-01' = [for d in dkim: if (!empty(emailDomain) && !empty(emailDnsZoneName)) {
+  parent: emailZone
+  name: relative == '@' ? d.selector : '${d.selector}.${relative}'
+  properties: {
+    TTL: 3600
+    CNAMERecord: { cname: emailRecords[d.key].value }
+  }
+}]
+
+resource emailDmarc 'Microsoft.Network/dnsZones/TXT@2018-05-01' = if (!empty(emailDomain) && !empty(emailDnsZoneName)) {
+  parent: emailZone
+  name: relative == '@' ? '_dmarc' : '_dmarc.${relative}'
+  properties: {
+    TTL: 3600
+    TXTRecords: [{ value: ['v=DMARC1; p=quarantine; adkim=s; aspf=s'] }]
   }
 }
 
@@ -356,5 +473,7 @@ resource publish 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
 
 output documentsClientId string = identity.properties.clientId
 output documentsVaultEndpoint string = account.properties.primaryEndpoints.blob
+output emailSender string = empty(emailDomain) ? '' : 'letters@${emailDomain}'
+output emailVerificationRecords object = emailRecords
 output communicationEndpoint string = 'https://${communication.properties.hostName}'
 output wrappingKeyName string = wrappingKey.name

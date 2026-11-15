@@ -60,7 +60,7 @@ impl EventHubsSink {
             let token = self.credential.token(SCOPE_EVENT_HUBS).await?;
             let batch: Vec<_> = chunk
                 .iter()
-                .map(|(body, properties)| json!({ "Body": body.to_string(), "UserProperties": properties }))
+                .map(|(body, properties)| json!({ "Body": body.to_string(), "UserProperties": traced(properties) }))
                 .collect();
             let url = format!("{}/{}/partitions/{partition}/messages?api-version=2014-01&timeout=60", self.namespace, self.hub);
             let resp = self
@@ -75,6 +75,17 @@ impl EventHubsSink {
         }
         Ok(())
     }
+}
+
+/// A message's properties with the sender's trace added as `traceparent`,
+/// unless they name one already (a ledger event carries the trace of the
+/// command that made it), so a consumer continues the trace.
+pub fn traced(properties: &serde_json::Value) -> serde_json::Value {
+    let mut properties = properties.clone();
+    if let (serde_json::Value::Object(map), Some(tp)) = (&mut properties, ic_telemetry::traceparent()) {
+        map.entry("traceparent").or_insert(serde_json::Value::String(tp));
+    }
+    properties
 }
 
 impl EventSink for EventHubsSink {

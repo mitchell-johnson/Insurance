@@ -1175,6 +1175,7 @@ pub fn router<W: KeyWrapper + 'static, S: WormStore + 'static>(app: Arc<App<W, S
         .route("/v1/admin/reshred", post(reshred::<W, S>))
         .route("/v1/admin/index", get(index_status::<W, S>))
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
+        .layer(axum::middleware::from_fn(ic_telemetry::http::trace))
         .with_state(app)
 }
 

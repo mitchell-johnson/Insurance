@@ -23,6 +23,7 @@ ic-sim = { path = "crates/sim" }
 ic-azure = { path = "crates/azure" }
 ic-raft = { path = "crates/raft" }
 ic-entra = { path = "crates/entra" }
+ic-telemetry = { path = "crates/telemetry" }
 
 fastnum = { version = "=0.7.5", features = ["serde"] }
 starlark = "=0.14.2"

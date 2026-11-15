@@ -1,0 +1,55 @@
+# Cluster-scoped objects of add-on kinds, applied once before deploy/k8s:
+#   kubectl apply -f deploy/cluster.yaml
+# (kustomize would give them the namespace, which they cannot have.)
+---
+# The way in: Azure Front Door Premium (infra/edge.bicep) with its WAF, over
+# Private Link, to an internal NGINX controller here (AKS application
+# routing). Nothing in the cluster has a public address: the controller's
+# load balancer is internal, in the ingress subnet, and Front Door reaches it
+# through the Private Link Service the annotations below make.
+#
+# Front Door ends TLS for the public names with managed certificates and
+# opens a new connection here; the WAF has already looked at every request.
+# The services each check the caller's own Entra or cluster token as before.
+#
+# This controller is cluster scoped, so it is applied on its own, before
+# deploy/k8s (kubectl apply -f deploy/cluster.yaml); the ingress rules are
+# in deploy/k8s/ingress.yaml.
+#
+# The application routing pods run in the namespace app-routing-system.
+# The services' network policies admit only a namespace labelled
+# insurance-core/ingress: "true", so label it once:
+#   kubectl label namespace app-routing-system insurance-core/ingress=true
+apiVersion: approuting.kubernetes.azure.com/v1alpha1
+kind: NginxIngressController
+metadata:
+  name: insurance-core
+spec:
+  ingressClassName: insurance-core
+  controllerNamePrefix: insurance-core
+  scaling:
+    minReplicas: 3
+    maxReplicas: 9
+  loadBalancerAnnotations:
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+    service.beta.kubernetes.io/azure-load-balancer-internal-subnet: ingress
+    service.beta.kubernetes.io/azure-pls-create: "true"
+    service.beta.kubernetes.io/azure-pls-name: insurance-core-ingress
+    service.beta.kubernetes.io/azure-pls-ip-configuration-subnet: ingress
+    service.beta.kubernetes.io/azure-pls-proxy-protocol: "false"
+    # Front Door asks to connect (edge.bicep's origins name this service).
+    # Nothing is approved automatically: the one connection is approved by
+    # hand (docs/operations.md, "The way in").
+    service.beta.kubernetes.io/azure-pls-visibility: "*"
+    service.beta.kubernetes.io/azure-pls-auto-approval: ""
+---
+# What the backup and a hand-taken snapshot use (docs/operations.md,
+# "Backups and restore").
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: ic-ledger-snapshots
+driver: disk.csi.azure.com
+deletionPolicy: Retain
+parameters:
+  incremental: "true"

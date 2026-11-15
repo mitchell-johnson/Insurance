@@ -118,6 +118,8 @@ spec:
           command: ["/usr/local/bin/ic-payments-pump"]
           envFrom:
             - configMapRef:
+                name: ic-telemetry
+            - configMapRef:
                 name: ic-ledger
             - configMapRef:
                 name: ic-payments
@@ -204,6 +206,8 @@ spec:
               image: insurance-core
               command: ["/usr/local/bin/ic-payments-pump", "drill"]
               envFrom:
+                - configMapRef:
+                    name: ic-telemetry
                 - configMapRef:
                     name: ic-ledger
                 - configMapRef:

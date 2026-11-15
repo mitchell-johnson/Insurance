@@ -6,7 +6,7 @@ This is the honest list: what is not production grade yet, and the decisions tha
 
 ### Where Temporal runs
 
-The daily close needs a Temporal service. The choices are Temporal Cloud (least to operate; the workflow history, which holds dates and ledger hashes but no personal data, leaves New Zealand) or self-hosted Temporal on the same AKS cluster with Azure Database for PostgreSQL (everything stays in the region; more to run). The Bicep template can create the PostgreSQL server (`deployPostgres`), but does not deploy Temporal itself. Until this is decided, `deploy/k8s/settings.yaml` has a placeholder for the address.
+The daily close needs a Temporal service. The choices are Temporal Cloud (least to operate; the workflow history, which holds dates and ledger hashes but no personal data, leaves New Zealand) or self-hosted Temporal on the same AKS cluster with Azure Database for PostgreSQL (everything stays in the region; more to run). Both are templated. For Temporal Cloud, set `TEMPORAL_ADDRESS` and `TEMPORAL_NAMESPACE` in `deploy/k8s/settings.yaml` and add `TEMPORAL_API_KEY` from a Key Vault secret. For self-hosted, `infra/main.bicep` with `deployPostgres` and `selfHostedTemporal` makes the server, its two databases, Temporal's one password login (Temporal cannot sign in with Entra ID) in Key Vault and an identity that alone reads it, and `deploy/temporal` holds the Helm values and secrets for the official chart. Until this is decided, `settings.yaml` has a placeholder for the address.
 
 ### Encryption in transit inside the cluster
 
@@ -14,7 +14,13 @@ Traffic between the services inside the cluster is HTTP carrying bearer tokens (
 
 ### A second region
 
-Three ledger nodes across the zones of New Zealand North survive the loss of a zone. Surviving the loss of the region needs voters in two more regions (five voters across three regions keeps a majority after losing any one). The software supports it: nodes are addressed by name and membership is changed with `ic-admin members`. The infrastructure for it is not written, and it means policy data leaving New Zealand, which is a decision for the insurer and its regulator.
+Three ledger nodes across the zones of New Zealand North survive the loss of a zone. Surviving the loss of the region needs voters in two more regions (five voters across three regions keeps a majority after losing any one). The software supports it: nodes are addressed by name and membership is changed with `ic-admin members`.
+
+Two placements are on the table, and the choice is the insurer's: (A) three voters across the three zones of Australia East (Sydney) with Australia Southeast (Melbourne) as a standby, which survives a zone but not the region without a restore; or (B) a voter in a third region as a tiebreaker (five voters, two, two and one), which survives a region with nothing lost. The templates support either: one region's `main.bicep` is option A's primary and its standby, the ledger storage is RA-GZRS to the paired region, and the backups and databases are geo-redundant. Option B adds a cluster or node pool per further region on a peered network and a second Front Door origin. `docs/operations.md`, "Losing a region", is the runbook for both. Either way, policy data leaves New Zealand, which is a decision for the insurer and its regulator.
+
+### Log retention (placeholder)
+
+Container logs and the traces in the workspace are kept 90 days for querying and seven years in all (`logInteractiveDays`, `logTotalRetentionDays` = 2,556 in `infra/main.bicep`), the rest in the archive tier, where a search job or restore brings them back. Seven years is a best estimate of the audit need: the cluster access log and the reinsurer API log are in these tables, and seven years matches the other records the system keeps. Confirm with compliance; the cost is the archive tier's per-GB rate on what is ingested. Records with a fixed legal period are not left to this: they are in write-once storage.
 
 ### Five questions the persona tests raised: decided
 

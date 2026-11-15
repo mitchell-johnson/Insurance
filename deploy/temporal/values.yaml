@@ -1,0 +1,115 @@
+# Self-hosted Temporal on the same cluster, for the daily close, if Temporal
+# Cloud is not chosen (docs/decisions.md, "Where Temporal runs"). Values for
+# the official chart (https://github.com/temporalio/helm-charts):
+#
+#   helm repo add temporal https://go.temporal.io/helm-charts
+#   kubectl create namespace temporal
+#   kubectl label namespace temporal insurance-core/temporal=true
+#   kubectl apply -n temporal -f deploy/temporal/secrets.yaml
+#   helm install temporal temporal/temporal -n temporal --version 0.62.0 \
+#     -f deploy/temporal/values.yaml \
+#     --set server.config.persistence.default.sql.host=<main.bicep output postgresHost> \
+#     --set server.config.persistence.visibility.sql.host=<the same>
+#
+# Then point the core at it: in deploy/k8s/settings.yaml,
+#   TEMPORAL_ADDRESS: temporal-frontend.temporal:7233
+#
+# Its store is the PostgreSQL server main.bicep makes with deployPostgres
+# and temporalPostgresPassword, reached through its private endpoint. The
+# password comes from Key Vault through the CSI driver (secrets.yaml), never
+# from this file. Everything else Temporal keeps stays in the region.
+server:
+  replicaCount: 2
+  image:
+    # Mirrored into the registry, as every image the cluster runs.
+    repository: REPLACE-registry.azurecr.io/temporalio/server
+  serviceAccount:
+    create: false
+    name: temporal
+  podLabels:
+    azure.workload.identity/use: "true"
+  additionalVolumes:
+    - name: postgres-password
+      csi:
+        driver: secrets-store.csi.k8s.io
+        readOnly: true
+        volumeAttributes:
+          secretProviderClass: temporal-postgres
+  additionalVolumeMounts:
+    - name: postgres-password
+      mountPath: /mnt/secrets
+      readOnly: true
+  config:
+    persistence:
+      default:
+        driver: sql
+        sql:
+          driver: postgres12
+          port: 5432
+          database: temporal
+          user: temporaladmin
+          existingSecret: temporal-postgres
+          maxConns: 20
+          maxIdleConns: 20
+          tls:
+            enabled: true
+            enableHostVerification: true
+      visibility:
+        driver: sql
+        sql:
+          driver: postgres12
+          port: 5432
+          database: temporal_visibility
+          user: temporaladmin
+          existingSecret: temporal-postgres
+          maxConns: 10
+          maxIdleConns: 10
+          tls:
+            enabled: true
+            enableHostVerification: true
+  # OpenTelemetry for Temporal's own traces goes to the same collector.
+  additionalEnv:
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: http://ic-otel-collector.insurance-core:4318
+    - name: OTEL_TRACES_EXPORTER
+      value: otlp
+  frontend:
+    replicaCount: 2
+  history:
+    replicaCount: 2
+  matching:
+    replicaCount: 2
+  worker:
+    replicaCount: 2
+
+# The store is the Azure server above; the chart makes no database.
+cassandra:
+  enabled: false
+mysql:
+  enabled: false
+postgresql:
+  enabled: false
+elasticsearch:
+  enabled: false
+prometheus:
+  enabled: false
+grafana:
+  enabled: false
+
+# The web UI, for operators only: no ingress. Reach it with
+#   kubectl -n temporal port-forward svc/temporal-web 8080
+web:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: REPLACE-registry.azurecr.io/temporalio/ui
+  ingress:
+    enabled: false
+
+schema:
+  createDatabase:
+    enabled: false
+  setup:
+    enabled: true
+  update:
+    enabled: true

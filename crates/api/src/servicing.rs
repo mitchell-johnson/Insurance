@@ -13,6 +13,7 @@
 //! for the act is refused. Where the customer master cannot answer, the
 //! request is not sent on: the caller tries again.
 
+use ic_telemetry::Traced;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -167,6 +168,7 @@ impl Hosted {
             .bearer_auth(token)
             .header("x-ic-caller", "policy-servicing")
             .header("x-ic-purpose", "servicing")
+            .traced()
             .send()
             .await
             .map_err(|e| e.to_string())?;

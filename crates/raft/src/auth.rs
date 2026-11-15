@@ -118,6 +118,8 @@ impl ClusterAuth {
 
     /// Add this process's token to an outgoing request.
     pub fn sign(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        // Every call to a node carries the caller's trace (crates/telemetry).
+        let request = ic_telemetry::Traced::traced(request);
         match self.outgoing() {
             Some(token) => request.bearer_auth(token),
             None => request,

@@ -1,0 +1,308 @@
+# Traces and logs: every process sends them over OTLP to the collector here,
+# and the collector sends them on. docs/operations.md, "Telemetry", says how
+# to point the whole stack somewhere else.
+#
+# The processes read the standard OpenTelemetry settings from the ConfigMap
+# ic-telemetry below (every workload in this directory takes it with
+# envFrom). Change the endpoint there to send straight to another backend,
+# or change the collector's exporters to send to more than one.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ic-telemetry
+data:
+  # The collector, in this namespace. HTTP only: the processes refuse gRPC,
+  # which the collector takes in and can send on.
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://ic-otel-collector:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_EXPORTER_OTLP_COMPRESSION: gzip
+  OTEL_EXPORTER_OTLP_TIMEOUT: "10000"
+  # Every trace a caller did not decide for; a caller's decision is kept.
+  OTEL_TRACES_SAMPLER_ARG: "1.0"
+  OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=REPLACE-environment
+  # Per signal, these take precedence (full URLs, with the /v1/... path):
+  #   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, OTEL_EXPORTER_OTLP_LOGS_ENDPOINT,
+  #   OTEL_EXPORTER_OTLP_TRACES_PROTOCOL, ..._HEADERS, ..._COMPRESSION, ..._TIMEOUT.
+  # OTEL_TRACES_EXPORTER=none or OTEL_LOGS_EXPORTER=none turns one off;
+  # OTEL_SDK_DISABLED=true turns both off. Log lines on stdout stay either way.
+  # A header with a credential does not belong here: put it in a secret and
+  # set OTEL_EXPORTER_OTLP_HEADERS from it on the workload, or (better) leave
+  # the processes pointed at the collector and give the collector the secret.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ic-otel-collector
+  annotations:
+    azure.workload.identity/client-id: REPLACE-collectorClientId
+---
+# The Application Insights connection string, from Key Vault under the
+# collector's own identity (infra/main.bicep writes it there).
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: ic-otel-collector-secrets
+spec:
+  provider: azure
+  parameters:
+    clientID: REPLACE-collectorClientId
+    keyvaultName: REPLACE-keyVaultName
+    tenantId: REPLACE-tenantId
+    objects: |
+      array:
+        - |
+          objectName: appinsights-connection-string
+          objectAlias: appinsights-connection-string
+          objectType: secret
+---
+# The collector reads which pod, node and workload each span came from, so
+# that the processes need not say.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ic-otel-collector
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ic-otel-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ic-otel-collector
+subjects:
+  - kind: ServiceAccount
+    name: ic-otel-collector
+    namespace: insurance-core
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ic-otel-collector
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+          grpc:
+            endpoint: 0.0.0.0:4317
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 20
+      k8sattributes:
+        auth_type: serviceAccount
+        passthrough: false
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.pod.name
+            - k8s.node.name
+            - k8s.deployment.name
+            - k8s.statefulset.name
+            - k8s.cronjob.name
+            - k8s.job.name
+        pod_association:
+          - sources:
+              - from: connection
+      # A second line of defence: the processes scrub personal data before
+      # anything leaves them (crates/telemetry/src/scrub.rs). These drop the
+      # same kinds of attribute if one arrives from anything else.
+      attributes/scrub:
+        actions:
+          - pattern: (?i).*(email|phone|mobile|address|birth|dob|ird|passport|password|secret|token|authorization|cookie|diagnosis|medical).*
+            action: delete
+          - key: http.request.header.authorization
+            action: delete
+          - key: url.query
+            action: delete
+          - key: client.address
+            action: delete
+      batch:
+        send_batch_size: 1024
+        timeout: 5s
+
+    exporters:
+      # The default: Application Insights, whose data lives in the Log
+      # Analytics workspace (tables AppTraces, AppRequests, AppDependencies).
+      azuremonitor:
+        connection_string: ${file:/mnt/secrets/appinsights-connection-string}
+        sending_queue:
+          enabled: true
+          queue_size: 5000
+      # Other backends. Uncomment one, give it its secret (a SecretProviderClass
+      # object, mounted under /mnt/secrets like the one above) and add it to
+      # the pipelines below. docs/operations.md, "Telemetry".
+      #
+      # Grafana Cloud (OTLP gateway):
+      # otlphttp/grafana:
+      #   endpoint: https://otlp-gateway-prod-au-southeast-1.grafana.net/otlp
+      #   headers:
+      #     Authorization: Basic ${file:/mnt/secrets/grafana-otlp-basic-auth}
+      #
+      # Datadog (the Datadog exporter):
+      # datadog:
+      #   api:
+      #     site: ap1.datadoghq.com
+      #     key: ${file:/mnt/secrets/datadog-api-key}
+      #
+      # Honeycomb (OTLP):
+      # otlphttp/honeycomb:
+      #   endpoint: https://api.honeycomb.io
+      #   headers:
+      #     x-honeycomb-team: ${file:/mnt/secrets/honeycomb-api-key}
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    service:
+      extensions: [health_check]
+      telemetry:
+        logs:
+          encoding: json
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, attributes/scrub, batch]
+          exporters: [azuremonitor]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, attributes/scrub, batch]
+          exporters: [azuremonitor]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ic-otel-collector
+spec:
+  selector:
+    app: ic-otel-collector
+  ports:
+    - name: otlp-http
+      port: 4318
+    - name: otlp-grpc
+      port: 4317
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-otel-collector
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ic-otel-collector
+  template:
+    metadata:
+      labels:
+        app: ic-otel-collector
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: ic-otel-collector
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: ic-otel-collector
+      containers:
+        - name: collector
+          # Mirrored into the registry (docs/operations.md, "Telemetry"):
+          # the cluster pulls from nowhere else.
+          image: otel-collector
+          args: ["--config=/etc/otelcol/config.yaml"]
+          env:
+            - name: GOMEMLIMIT
+              value: 400MiB
+          ports:
+            - name: otlp-http
+              containerPort: 4318
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: health
+              containerPort: 13133
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol
+              readOnly: true
+            - name: secrets
+              mountPath: /mnt/secrets
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: ic-otel-collector
+        - name: secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ic-otel-collector-secrets
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ic-otel-collector
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: ic-otel-collector
+---
+# Every pod in the namespace may send to the collector; nothing else may.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ic-otel-collector
+spec:
+  podSelector:
+    matchLabels:
+      app: ic-otel-collector
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - port: 4318
+        - port: 4317

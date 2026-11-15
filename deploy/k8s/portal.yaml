@@ -134,6 +134,8 @@ spec:
           command: ["/usr/local/bin/ic-portal"]
           envFrom:
             - configMapRef:
+                name: ic-telemetry
+            - configMapRef:
                 name: ic-ledger
             - configMapRef:
                 name: ic-portal

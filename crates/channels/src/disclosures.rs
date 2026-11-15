@@ -12,6 +12,7 @@
 //! and the module can check it again. Answers pass through and are never
 //! kept or logged here.
 
+use ic_telemetry::Traced;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -135,6 +136,7 @@ impl Hosted {
             .post(format!("{}{path}", self.base.trim_end_matches('/')))
             .bearer_auth(token)
             .json(&body)
+            .traced()
             .send()
             .await
             .map_err(|e| e.to_string())?;

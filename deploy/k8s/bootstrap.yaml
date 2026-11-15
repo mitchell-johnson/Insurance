@@ -32,6 +32,8 @@ spec:
           command: ["/usr/local/bin/ic-admin", "init"]
           envFrom:
             - configMapRef:
+                name: ic-telemetry
+            - configMapRef:
                 name: ic-ledger
           env:
             - name: IC_LEDGER_PATIENCE_SECS
@@ -58,6 +60,8 @@ spec:
           command: ["/usr/local/bin/ic-admin", "open", "REPLACE-first-business-date"]
           envFrom:
             - configMapRef:
+                name: ic-telemetry
+            - configMapRef:
                 name: ic-ledger
           env:
             - name: IC_LEDGER_PATIENCE_SECS
@@ -81,6 +85,8 @@ spec:
           image: insurance-core
           command: ["/usr/local/bin/ic-admin", "activate-shipped"]
           envFrom:
+            - configMapRef:
+                name: ic-telemetry
             - configMapRef:
                 name: ic-ledger
           env:
@@ -106,6 +112,8 @@ spec:
           image: insurance-core
           command: ["/usr/local/bin/ic-admin", "status"]
           envFrom:
+            - configMapRef:
+                name: ic-telemetry
             - configMapRef:
                 name: ic-ledger
           env:

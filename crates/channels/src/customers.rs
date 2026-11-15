@@ -9,6 +9,7 @@
 //! record through it, and that a change or an export comes from an enrolled
 //! device that proved itself.
 
+use ic_telemetry::Traced;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -385,7 +386,7 @@ impl Hosted {
         if let Some(body) = body {
             request = request.json(&body);
         }
-        let response = request.send().await.map_err(|e| e.to_string())?;
+        let response = request.traced().send().await.map_err(|e| e.to_string())?;
         let status = response.status().as_u16();
         // 503 from the master always means try again.
         if status == 503 {

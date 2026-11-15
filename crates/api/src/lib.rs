@@ -17,6 +17,7 @@ pub mod migrate;
 pub mod routes;
 pub mod servicing;
 pub mod settings;
+pub mod watch;
 
 pub use backend::{Backend, Gateway};
 pub use engine::{Engine, EngineConfig};

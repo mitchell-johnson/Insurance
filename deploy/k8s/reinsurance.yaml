@@ -71,6 +71,8 @@ spec:
           command: ["/usr/local/bin/ic-reinsurance"]
           envFrom:
             - configMapRef:
+                name: ic-telemetry
+            - configMapRef:
                 name: ic-ledger
             # IC_BLOB_ENDPOINT and IC_EVENT_HUBS_ENDPOINT. The container and
             # hub have the names infra/reinsurance.bicep gives them, which

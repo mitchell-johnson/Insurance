@@ -197,6 +197,7 @@ where
         // A report or a file in base64 is a third larger than the document.
         .layer(axum::extract::DefaultBodyLimit::max(crate::inbound::MOST_BYTES / 3 * 4 + 64 * 1024))
         .route("/healthz", get(|| async { "ok" }))
+        .layer(axum::middleware::from_fn(ic_telemetry::http::trace))
         .with_state(Arc::new(App { intake, auth }))
 }
 

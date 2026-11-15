@@ -69,10 +69,27 @@ param alertEmails array = []
 @description('Reinsurers that collect statements over SFTP: [{ "id": "reinsurer-north", "sshPublicKey": "ssh-ed25519 AAAA..." }]. The id is the reinsurer ID in the treaties; its container is ri-<id> in lower case with underscores as hyphens.')
 param sftpReinsurers array = []
 
+
+// --- private networking (main.bicep output privateNetwork) ---------------------------
+
+@description('main.bicep\'s output privateNetwork: the subnet and the private DNS zones for private endpoints, and what the firewalls admit beside them. Empty: no private endpoints, and the services here stay reachable from anywhere, with Entra ID still required.')
+param privateNetwork object = {}
+
+@description('Address ranges (CIDR) of the outside party that reaches the SFTP drop account (the reinsurers). Empty: that account stays reachable from anywhere, with Entra ID still required; given, it admits only these ranges beside the private endpoint and the administrators.')
+param reinsurerIpRanges array = []
+
 var tags = {
   system: 'insurance-core'
   environment: environment
   component: 'reinsurance'
+}
+var isPrivate = !empty(privateNetwork)
+var adminIpRules = map(privateNetwork.?adminIpRanges ?? [], range => { value: range, action: 'Allow' })
+// An account an outside party reaches too: its ranges, or anywhere if none are given.
+var reinsurerAcls = {
+  defaultAction: isPrivate && !empty(reinsurerIpRanges) ? 'Deny' : 'Allow'
+  bypass: 'AzureServices'
+  ipRules: concat(adminIpRules, map(reinsurerIpRanges, range => { value: range, action: 'Allow' }))
 }
 var roles = {
   blobDataContributor: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
@@ -295,6 +312,8 @@ resource drops 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   kind: 'StorageV2'
   sku: { name: environment == 'prod' ? 'Standard_ZRS' : 'Standard_LRS' }
   properties: {
+    publicNetworkAccess: 'Enabled'
+    networkAcls: reinsurerAcls
     isHnsEnabled: true
     isSftpEnabled: true
     isLocalUserEnabled: true
@@ -302,6 +321,19 @@ resource drops 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     allowBlobPublicAccess: false
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
+  }
+}
+
+module dropsEndpoint 'modules/private-endpoint.bicep' = if (isPrivate) {
+  name: 'pe-reinsurance-drops'
+  params: {
+    name: '${drops.name}-blob'
+    location: location
+    tags: tags
+    subnetId: privateNetwork.?subnetId ?? ''
+    targetId: drops.id
+    groupId: 'blob'
+    dnsZoneIds: [privateNetwork.?zones.?blob ?? '']
   }
 }
 

@@ -7,6 +7,7 @@
 //! Staff ask with the staff action `documents.download` and a purpose, and
 //! never get a clinical document. The PDF passes through and is never kept.
 
+use ic_telemetry::Traced;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -67,7 +68,7 @@ impl Documents for Hosted {
                     .header("x-ic-actor", actor)
                     .header("x-ic-purpose", purpose),
             };
-            let response = request.send().await.map_err(|e| e.to_string())?;
+            let response = request.traced().send().await.map_err(|e| e.to_string())?;
             let status = response.status().as_u16();
             if status == 503 {
                 return Err("the documents module asked us to try again".to_string());

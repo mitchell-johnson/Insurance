@@ -72,6 +72,8 @@ spec:
           command: ["/usr/local/bin/ic-unit-pricing"]
           envFrom:
             - configMapRef:
+                name: ic-telemetry
+            - configMapRef:
                 name: ic-ledger
             # After ic-ledger: the token is mounted under this service's identity.
             - configMapRef:

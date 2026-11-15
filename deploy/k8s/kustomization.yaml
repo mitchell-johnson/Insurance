@@ -9,6 +9,8 @@ kind: Kustomization
 namespace: insurance-core
 resources:
   - namespace.yaml
+  - storage.yaml
+  - telemetry.yaml
   - identities.yaml
   - settings.yaml
   - node.yaml
@@ -22,6 +24,7 @@ resources:
   - bootstrap.yaml
   - admin.yaml
   - network.yaml
+  - ingress.yaml
   - group.yaml
   - documents.yaml
   - finance.yaml
@@ -31,3 +34,8 @@ images:
   - name: insurance-core
     newName: REPLACE-registry.azurecr.io/insurance-core
     newTag: REPLACE-git-sha
+  # The OpenTelemetry Collector (contrib), mirrored into the registry:
+  #   az acr import -n <registry> --source ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.120.0 --image opentelemetry-collector-contrib:0.120.0
+  - name: otel-collector
+    newName: REPLACE-registry.azurecr.io/opentelemetry-collector-contrib
+    newTag: 0.120.0

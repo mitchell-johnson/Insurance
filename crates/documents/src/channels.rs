@@ -9,6 +9,7 @@
 //! customer master at the moment of sending, for the relationship the
 //! document is sent under, and only a masked form is recorded.
 
+use ic_telemetry::Traced;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
@@ -156,6 +157,7 @@ impl ContactDirectory for HttpDirectory {
             .get(format!("{}/v1/relationships", self.base))
             .query(&[("target", target.as_str())])
             .bearer_auth(token)
+            .traced()
             .send()
             .await
             .map_err(|e| down(e.to_string()))?;

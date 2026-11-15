@@ -11,6 +11,7 @@ publish.workspace = true
 testing = ["dep:axum", "dep:rustls", "dep:tokio-rustls"]
 
 [dependencies]
+ic-telemetry.workspace = true
 ic-payments = { path = "../payments" }
 ic-core.workspace = true
 ic-money.workspace = true

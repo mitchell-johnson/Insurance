@@ -13,7 +13,8 @@
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    ic_payments_service::pump::log_to_stderr();
+    // JSON log lines on standard error, and traces and logs over OTLP.
+    let _telemetry = ic_telemetry::init_stderr("ic-payments-pump")?;
     let args: Vec<String> = std::env::args().skip(1).collect();
     ic_payments_service::pump::run_from(&args, |key| std::env::var(key).ok(), ic_payments_service::pump::interrupted()).await
 }

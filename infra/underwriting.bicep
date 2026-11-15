@@ -51,11 +51,22 @@ param serviceAccount string = 'ic-underwriting-clinical'
 @description('The Kubernetes service account of the underwriting driver.')
 param driverServiceAccount string = 'ic-underwriting'
 
+
+// --- private networking (main.bicep output privateNetwork) ---------------------------
+
+@description('main.bicep\'s output privateNetwork: the subnet and the private DNS zones for private endpoints, and what the firewalls admit beside them. Empty: no private endpoints, and the services here stay reachable from anywhere, with Entra ID still required.')
+param privateNetwork object = {}
+
 var tags = {
   system: 'insurance-core'
   environment: environment
   component: 'underwriting'
 }
+var isPrivate = !empty(privateNetwork)
+var adminIpRules = map(privateNetwork.?adminIpRanges ?? [], range => { value: range, action: 'Allow' })
+// An account only this system reaches: the private endpoint and the administrators.
+var internalAccess = privateNetwork.?publicAccess ?? 'Enabled'
+var internalAcls = { defaultAction: isPrivate ? 'Deny' : 'Allow', bypass: 'AzureServices', ipRules: adminIpRules }
 var unique = uniqueString(resourceGroup().id, name)
 var roles = {
   blobDataContributor: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
@@ -108,6 +119,8 @@ resource clinical 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   kind: 'StorageV2'
   sku: { name: environment == 'prod' ? 'Standard_ZRS' : 'Standard_LRS' }
   properties: {
+    publicNetworkAccess: internalAccess
+    networkAcls: internalAcls
     accessTier: 'Hot'
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
@@ -115,6 +128,19 @@ resource clinical 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     // Entra ID only: shared keys and SAS signed with them are refused.
     allowSharedKeyAccess: false
     defaultToOAuthAuthentication: true
+  }
+}
+
+module clinicalEndpoint 'modules/private-endpoint.bicep' = if (isPrivate) {
+  name: 'pe-underwriting-blob'
+  params: {
+    name: '${clinical.name}-blob'
+    location: location
+    tags: tags
+    subnetId: privateNetwork.?subnetId ?? ''
+    targetId: clinical.id
+    groupId: 'blob'
+    dnsZoneIds: [privateNetwork.?zones.?blob ?? '']
   }
 }
 

@@ -14,7 +14,8 @@ spec:
   policyTypes: ["Ingress"]
 ---
 # The ledger nodes hear from each other, the API, the portal service, the workers, the close job,
-# the bootstrap job, the reinsurance and underwriting drivers and the payments pump and its drill, and from nobody else.
+# the bootstrap job, the reinsurance and underwriting drivers, the payments pump and its drill,
+# and the ledger watch, and from nobody else.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -30,7 +31,7 @@ spec:
             matchExpressions:
               - key: app
                 operator: In
-                values: ["ic-node", "ic-api", "ic-portal", "ic-worker", "ic-close", "ic-unit-orders", "ic-bootstrap", "ic-reinsurance", "ic-underwriting", "ic-payments-pump", "ic-payments-drill"]
+                values: ["ic-node", "ic-api", "ic-portal", "ic-worker", "ic-close", "ic-unit-orders", "ic-bootstrap", "ic-reinsurance", "ic-underwriting", "ic-payments-pump", "ic-payments-drill", "ic-watch"]
       ports:
         - port: 7000
 ---

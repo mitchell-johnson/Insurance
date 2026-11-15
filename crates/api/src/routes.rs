@@ -55,6 +55,7 @@ pub fn router(state: Shared) -> Router {
         .route("/v1/claims/runs/{run}/remittance", get(claims_remittance))
         .route("/v1/admin/end-of-day", post(end_of_day))
         .route("/v1/admin/reconciliation", get(reconciliation))
+        .layer(axum::middleware::from_fn(ic_telemetry::http::trace))
         .with_state(state)
 }
 

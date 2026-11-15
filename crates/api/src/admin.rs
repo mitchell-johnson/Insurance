@@ -66,6 +66,9 @@ pub enum AdminCommand {
     Init,
     /// Every node's view of every partition.
     Status,
+    /// The ledger's health as log lines for the alert rules: partitions with
+    /// no leader, unreachable nodes, a backlog over the limit (crate::watch).
+    Watch { backlog_limit: u64 },
     /// Open the business date on every partition of an empty ledger.
     Open { date: NaiveDate },
     /// Activate the products, rate tables and definitions shipped in this
@@ -87,6 +90,7 @@ pub enum AdminCommand {
 
 pub const USAGE: &str = "usage: ic-admin init
        ic-admin status
+       ic-admin watch [backlog-limit]
        ic-admin open <YYYY-MM-DD>
        ic-admin activate-shipped
        ic-admin apply <setup.json>
@@ -105,6 +109,12 @@ impl AdminCommand {
         match args.as_slice() {
             ["init"] => Ok(Self::Init),
             ["status"] => Ok(Self::Status),
+            ["watch"] => Ok(Self::Watch {
+                backlog_limit: crate::watch::DEFAULT_BACKLOG_LIMIT,
+            }),
+            ["watch", limit] => Ok(Self::Watch {
+                backlog_limit: limit.parse().map_err(|e| format!("backlog limit: {e}"))?,
+            }),
             ["open", date] => Ok(Self::Open {
                 date: NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|e| format!("date: {e}"))?,
             }),
@@ -506,6 +516,11 @@ impl Admin {
                     })
                     .collect::<serde_json::Map<_, _>>()
                     .into())
+            }
+            AdminCommand::Watch { backlog_limit } => {
+                let watch = crate::watch::findings(&self.status().await, backlog_limit);
+                crate::watch::log(&watch, backlog_limit);
+                Ok(json!(watch))
             }
             AdminCommand::Open { date } => self.open(date).await,
             AdminCommand::ActivateShipped => self.activate_shipped().await,

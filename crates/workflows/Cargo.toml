@@ -7,12 +7,15 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+ic-telemetry.workspace = true
 ic-core.workspace = true
 ic-ledger.workspace = true
 ic-raft.workspace = true
 ic-azure.workspace = true
-temporalio-sdk = "=1.2.0"
-temporalio-client = "=1.2.0"
+# `experimental` and `opentelemetry`: the SDK's OpenTelemetry plugin, which
+# carries trace context through workflows and activities (crates/telemetry).
+temporalio-sdk = { version = "=1.2.0", features = ["experimental", "opentelemetry"] }
+temporalio-client = { version = "=1.2.0", features = ["experimental"] }
 temporalio-macros = "=1.2.0"
 temporalio-workflow = "=1.2.0"
 temporalio-common = "=1.2.0"

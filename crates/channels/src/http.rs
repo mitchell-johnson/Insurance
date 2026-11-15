@@ -3702,5 +3702,6 @@ pub fn router(state: Shared) -> Router {
             get(|| async { hardened(([("content-type", "font/woff2"), ("cache-control", "public, max-age=604800")], crate::ui::FONT).into_response()) }),
         )
         .route("/ui/config.json", get(ui_config))
+        .layer(axum::middleware::from_fn(ic_telemetry::http::trace))
         .with_state(state)
 }

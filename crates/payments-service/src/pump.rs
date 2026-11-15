@@ -680,11 +680,7 @@ pub type DeployedPump = Pump<
 /// Structured logs on standard error, at `info` unless `RUST_LOG` says
 /// otherwise. A second call leaves the first in place.
 pub fn log_to_stderr() {
-    let _ = tracing_subscriber::fmt()
-        .json()
-        .with_writer(std::io::stderr)
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .try_init();
+    let _ = ic_telemetry::init_stderr("ic-payments-pump");
 }
 
 /// Resolves when the process is asked to stop.

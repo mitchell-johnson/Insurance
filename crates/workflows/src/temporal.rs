@@ -9,7 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ic_core::machine::ClosedDay;
-use temporalio_client::{Client, WorkflowGetResultOptions, WorkflowIdConflictPolicy, WorkflowStartOptions};
+use temporalio_client::envconfig::{ClientConfigExtension, ClientConfigExtensionRequest, ConfigError};
+use temporalio_client::{Client, ErasedClientPlugin, WorkflowGetResultOptions, WorkflowIdConflictPolicy, WorkflowStartOptions};
 use temporalio_macros::{activities, workflow, workflow_methods};
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
 use temporalio_sdk::{ActivityExecutionError, ActivityOptions, ApplicationFailure, Runtime, Worker, WorkerOptions, WorkflowContext, WorkflowResult};
@@ -20,6 +21,37 @@ use crate::eod::{
 };
 use crate::steps::{LedgerSteps, StepError};
 use crate::store::{Signer, Store};
+
+/// Trace context through Temporal: the SDK's OpenTelemetry plugin, on this
+/// process's own tracer. Starting a run makes a span in the caller's trace
+/// and puts its context in the workflow's `_tracer-data` header; the
+/// workflow and each activity continue it, so every ledger command a step
+/// sends belongs to the trace of the close that ran it. Given to the client
+/// as a configuration extension; the worker takes it from the client.
+pub struct Tracing {
+    pub tracer: ic_telemetry::opentelemetry_sdk::trace::SdkTracer,
+}
+
+impl ClientConfigExtension for Tracing {
+    fn name(&self) -> &str {
+        "ic-telemetry"
+    }
+
+    fn client_plugin(&self, _req: ClientConfigExtensionRequest<'_>) -> Result<Option<ErasedClientPlugin>, ConfigError> {
+        let plugin = temporalio_sdk::opentelemetry::OpenTelemetryPlugin::builder()
+            .tracer(self.tracer.clone())
+            .build();
+        Ok(Some(plugin.into()))
+    }
+}
+
+/// What the worker's tracer provider needs from the SDK: span IDs that come
+/// out the same when Temporal replays a workflow.
+pub fn telemetry_custom() -> ic_telemetry::Custom {
+    ic_telemetry::Custom {
+        id_generator: Some(Box::new(temporalio_sdk::opentelemetry::WorkflowIdGenerator::default())),
+    }
+}
 
 /// The task queue end-of-day workers poll.
 pub const TASK_QUEUE: &str = "ic-end-of-day";

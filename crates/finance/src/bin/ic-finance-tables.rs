@@ -12,6 +12,8 @@ use ic_raft::{ClusterAuth, ClusterClient};
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
+    // The report is on standard output; log lines go to standard error.
+    let _telemetry = ic_telemetry::init_stderr("ic-finance-tables")?;
     let args: Vec<String> = std::env::args().skip(1).collect();
     let run = ic_finance::tables::tool(&args, |file| std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}")))?;
     println!("{}", serde_json::to_string_pretty(&run.report).map_err(|e| e.to_string())?);

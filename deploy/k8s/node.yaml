@@ -63,11 +63,22 @@ spec:
               labelSelector:
                 matchLabels:
                   app: ic-node
+      # The ledger pool only (infra/main.bicep): its own machines, one per
+      # zone, which nothing else is scheduled on.
+      nodeSelector:
+        insurance-core/pool: ledger
+      tolerations:
+        - key: insurance-core/ledger
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
       containers:
         - name: node
           image: insurance-core
           command: ["/usr/local/bin/ic-node"]
           envFrom:
+            - configMapRef:
+                name: ic-telemetry
             - configMapRef:
                 name: ic-ledger
             - configMapRef:
@@ -142,7 +153,8 @@ spec:
         name: data
       spec:
         accessModes: ["ReadWriteOnce"]
-        storageClassName: managed-csi-premium
+        # Premium SSD v2 (storage.yaml): sub-millisecond fsync.
+        storageClassName: ic-ledger-premiumv2
         resources:
           requests:
             storage: 128Gi

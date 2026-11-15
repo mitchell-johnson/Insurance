@@ -117,8 +117,9 @@ pub async fn serve(config: Config, auth: ClusterAuth, credential: AzureCredentia
 /// (read with `read` where it is a file), the Azure credential from the
 /// workload identity, then [`serve`] until a stop signal.
 pub async fn run(get: impl Fn(&str) -> Option<String>, read: impl Fn(&str) -> std::io::Result<String>) -> Result<(), String> {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
-    let _ = tracing_subscriber::fmt().json().with_env_filter(filter).try_init();
+    // JSON log lines, and traces and logs over OTLP (crates/telemetry). A
+    // second call in one process keeps the subscriber already set.
+    let _telemetry = ic_telemetry::init("ic-unit-pricing")?;
     let config = Config::from_lookup(&get)?;
     let auth = ClusterAuth::from_lookup(&get, read)?;
     let credential = AzureCredential::from_env().map_err(|e| e.to_string())?;

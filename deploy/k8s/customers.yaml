@@ -113,6 +113,8 @@ spec:
           command: ["/usr/local/bin/ic-customers"]
           envFrom:
             - configMapRef:
+                name: ic-telemetry
+            - configMapRef:
                 name: ic-customers
           env:
             - name: IC_CUSTOMERS_LISTEN

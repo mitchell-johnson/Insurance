@@ -36,6 +36,8 @@ spec:
               command: ["/usr/local/bin/ic-admin", "status"]
               envFrom:
                 - configMapRef:
+                    name: ic-telemetry
+                - configMapRef:
                     name: ic-ledger
               resources:
                 requests:
@@ -43,6 +45,71 @@ spec:
                   memory: 128Mi
                 limits:
                   memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: cluster-token
+                  mountPath: /mnt/cluster-token
+                  readOnly: true
+          volumes:
+            - name: cluster-token
+              csi:
+                driver: secrets-store.csi.k8s.io
+                readOnly: true
+                volumeAttributes:
+                  secretProviderClass: ic-node-token
+---
+# The ledger watch: every five minutes, ic-admin asks each node for its
+# status and logs what is wrong (a node it cannot reach, a partition with no
+# leader, a backlog of housekeeping, voters whose state hashes differ). The
+# core's alert rules (infra/main.bicep, "alerts: the core") read those lines.
+# The argument is the backlog limit per partition.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ic-watch
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 240
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app: ic-watch
+            azure.workload.identity/use: "true"
+        spec:
+          restartPolicy: Never
+          serviceAccountName: ic-node
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: watch
+              image: insurance-core
+              command: ["/usr/local/bin/ic-admin", "watch", "5000"]
+              envFrom:
+                - configMapRef:
+                    name: ic-ledger
+                - configMapRef:
+                    name: ic-telemetry
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true

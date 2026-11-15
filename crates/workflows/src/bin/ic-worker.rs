@@ -14,10 +14,11 @@
 use chrono::NaiveDate;
 use ic_workflows::due::{is_due, ledger_day};
 use ic_workflows::settings::WorkerSettings;
-use ic_workflows::temporal::{close_day, run_worker};
+use ic_workflows::temporal::{close_day, run_worker, telemetry_custom, Tracing};
 use ic_workflows::{run_unit_orders, EndOfDayInput};
 use temporalio_client::envconfig::LoadClientConfigProfileOptions;
 use temporalio_client::{Client, ClientOptions, Connection};
+use tracing::Instrument;
 
 async fn stop_signal() {
     let ctrl_c = async {
@@ -37,8 +38,9 @@ async fn stop_signal() {
     tokio::select! { () = ctrl_c => {}, () = term => {} }
 }
 
-async fn connect() -> Result<Client, String> {
-    let (connection, options) = ClientOptions::load_from_config(LoadClientConfigProfileOptions::default()).map_err(|e| e.to_string())?;
+async fn connect(tracing: &Tracing) -> Result<Client, String> {
+    let (connection, options) =
+        ClientOptions::load_from_config_with_extensions(LoadClientConfigProfileOptions::default(), &[tracing]).map_err(|e| e.to_string())?;
     let connection = Connection::connect(connection).await.map_err(|e| format!("temporal: {e}"))?;
     Client::new(connection, options).map_err(|e| e.to_string())
 }
@@ -55,25 +57,51 @@ fn close_input(args: &[String], settings: &WorkerSettings) -> Result<EndOfDayInp
     })
 }
 
+/// One log line for each partition the close left unit orders on: the line
+/// the "unit orders left" alert looks for (infra/alerts.bicep).
+fn warn_unit_orders_left(report: &ic_workflows::EndOfDayReport) {
+    for (partition, left) in report.unit_orders_left.iter().filter(|(_, left)| **left > 0) {
+        tracing::warn!(partition = *partition, left = *left, business_date = %report.closed, "unit orders left");
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    tracing_subscriber::fmt()
-        .json()
-        .with_writer(std::io::stderr)
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    // JSON log lines, and traces and logs over OTLP (crates/telemetry), with
+    // span IDs Temporal's replay keeps stable.
+    let telemetry = ic_telemetry::init_with("ic-worker", ic_telemetry::Output::Stderr, telemetry_custom())?;
+    let tracing = Tracing { tracer: telemetry.tracer() };
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let command = args.first().cloned().unwrap_or_else(|| "worker".to_string());
+    // One trace per run of a command: every ledger call and Temporal step it
+    // makes is a child of this span. The long-running worker has none: each
+    // activity continues the trace of the run it belongs to.
+    let result = if args.is_empty() {
+        run(&args, &tracing).await
+    } else {
+        run(&args, &tracing).instrument(tracing::info_span!("ic-worker", command = %command)).await
+    };
+    if let Err(e) = &result {
+        // The line the "close failed" alert looks for (infra/alerts.bicep).
+        tracing::error!(command = %command, error = %e, "ic-worker command failed");
+    }
+    telemetry.flush();
+    result
+}
+
+async fn run(args: &[String], tracing: &Tracing) -> Result<(), String> {
     let settings = WorkerSettings::from_lookup(|key| std::env::var(key).ok())?;
     match args.split_first() {
         None => {
             let steps = settings.steps()?;
-            let client = connect().await?;
+            let client = connect(tracing).await?;
             tracing::info!(task_queue = %settings.task_queue, nodes = ?settings.nodes, "end-of-day worker started");
             run_worker(client, &settings.task_queue, steps, stop_signal()).await
         }
         Some((command, rest)) if command == "close" => {
             let input = close_input(rest, &settings)?;
-            let report = close_day(&connect().await?, &settings.task_queue, input).await?;
+            let report = close_day(&connect(tracing).await?, &settings.task_queue, input).await?;
+            warn_unit_orders_left(&report);
             println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
             if report.breaks.is_empty() {
                 Ok(())
@@ -83,7 +111,7 @@ async fn main() -> Result<(), String> {
         }
         Some((command, [])) if command == "close-due" => {
             let ledger = ic_raft::ClusterClient::new(settings.nodes.clone()).with_auth(settings.auth.clone());
-            let temporal = connect().await?;
+            let temporal = connect(tracing).await?;
             let mut closed = Vec::new();
             loop {
                 let day = ledger_day(&ledger, settings.patience).await?;
@@ -97,6 +125,7 @@ async fn main() -> Result<(), String> {
                     step_timeout_secs: settings.step_timeout.as_secs(),
                 };
                 let report = close_day(&temporal, &settings.task_queue, input).await?;
+                warn_unit_orders_left(&report);
                 if !report.breaks.is_empty() {
                     // The next day is not started over books that do not reconcile.
                     return Err(format!(
@@ -119,6 +148,10 @@ async fn main() -> Result<(), String> {
             let mut left = std::collections::BTreeMap::new();
             for partition in 0..day.partitions {
                 let remaining = run_unit_orders(&steps, partition, day.business_date).await.map_err(|e| e.to_string())?;
+                if remaining > 0 {
+                    // The line the "unit orders left" alert looks for.
+                    tracing::warn!(partition, left = remaining, business_date = %day.business_date, "unit orders left");
+                }
                 left.insert(partition, remaining);
             }
             println!("{}", serde_json::json!({ "business_date": day.business_date, "left": left }));

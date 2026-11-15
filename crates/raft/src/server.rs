@@ -542,10 +542,16 @@ fn refusal(error: ProposeError) -> Response {
     refuse(status, error)
 }
 
-async fn propose(State(host): State<Arc<Host>>, Path(partition): Path<PartitionId>, Json(envelope): Json<Envelope>) -> Response {
+async fn propose(State(host): State<Arc<Host>>, Path(partition): Path<PartitionId>, Json(mut envelope): Json<Envelope>) -> Response {
     let Some(member) = host.groups.get(&partition) else {
         return no_partition(partition);
     };
+    // The command, and every event it makes, carries the trace of the
+    // request that proposed it (outside the hash chain), so the events on
+    // Event Hubs and in the modules' feeds continue that trace.
+    if envelope.traceparent.is_none() {
+        envelope.traceparent = ic_telemetry::traceparent();
+    }
     match member.propose(envelope).await {
         Ok(reply) => Json(reply).into_response(),
         Err(e) => refusal(e),
@@ -744,6 +750,10 @@ pub fn router(host: Arc<Host>) -> Router {
         .route("/v1/modules/{module}/commands", post(module_propose))
         .route("/v1/modules/{module}/query", post(module_query))
         .route("/v1/modules/{module}/members", axum::routing::put(module_members))
+        // A span for each client request, continuing the caller's trace. Raft's
+        // own traffic, nested below, is not traced: it is heartbeats and
+        // replication, many a second.
+        .layer(axum::middleware::from_fn(ic_telemetry::http::trace))
         .with_state(host.clone());
     for (partition, member) in &host.groups {
         router = router.nest(&format!("/raft/{partition}"), network::routes(member.raft.clone(), member.identity.clone()));
@@ -876,10 +886,8 @@ async fn stop_signal() {
 /// environment, host the given modules and run until the process is told
 /// to stop.
 pub async fn run(modules: Vec<ModuleSpec>) -> Result<(), String> {
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    // JSON log lines, and traces and logs over OTLP (crates/telemetry).
+    let _telemetry = ic_telemetry::init("ic-node")?;
     let settings = Settings::from_lookup(|key| std::env::var(key).ok())?;
     let failback = FailbackSettings::from_lookup(|key| std::env::var(key).ok())?;
     serve_full(settings, modules, failback, stop_signal()).await

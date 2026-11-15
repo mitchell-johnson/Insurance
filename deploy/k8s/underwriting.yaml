@@ -66,6 +66,8 @@ spec:
           command: ["/usr/local/bin/ic-underwriting"]
           envFrom:
             - configMapRef:
+                name: ic-telemetry
+            - configMapRef:
                 name: ic-ledger
             # IC_EVENT_HUBS_ENDPOINT. The hub has the name
             # infra/underwriting.bicep gives it, the driver's default.

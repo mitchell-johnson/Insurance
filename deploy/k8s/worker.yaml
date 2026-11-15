@@ -30,6 +30,8 @@ spec:
           command: ["/usr/local/bin/ic-worker"]
           envFrom:
             - configMapRef:
+                name: ic-telemetry
+            - configMapRef:
                 name: ic-ledger
             - configMapRef:
                 name: ic-azure
@@ -110,6 +112,8 @@ spec:
               command: ["/usr/local/bin/ic-worker", "close-due"]
               envFrom:
                 - configMapRef:
+                    name: ic-telemetry
+                - configMapRef:
                     name: ic-ledger
                 - configMapRef:
                     name: ic-azure
@@ -178,6 +182,8 @@ spec:
               image: insurance-core
               command: ["/usr/local/bin/ic-worker", "unit-orders"]
               envFrom:
+                - configMapRef:
+                    name: ic-telemetry
                 - configMapRef:
                     name: ic-ledger
                 - configMapRef:

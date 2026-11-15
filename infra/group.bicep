@@ -50,11 +50,22 @@ param quarantineRetentionDays int = 35
 @description('Malware scanning cap per month, in GB, for the quarantine account.')
 param scanCapGbPerMonth int = 1000
 
+
+// --- private networking (main.bicep output privateNetwork) ---------------------------
+
+@description('main.bicep\'s output privateNetwork: the subnet and the private DNS zones for private endpoints, and what the firewalls admit beside them. Empty: no private endpoints, and the services here stay reachable from anywhere, with Entra ID still required.')
+param privateNetwork object = {}
+
 var tags = {
   system: 'insurance-core'
   environment: environment
   component: 'group'
 }
+var isPrivate = !empty(privateNetwork)
+var adminIpRules = map(privateNetwork.?adminIpRanges ?? [], range => { value: range, action: 'Allow' })
+// An account only this system reaches: the private endpoint and the administrators.
+var internalAccess = privateNetwork.?publicAccess ?? 'Enabled'
+var internalAcls = { defaultAction: isPrivate ? 'Deny' : 'Allow', bypass: 'AzureServices', ipRules: adminIpRules }
 var unique = uniqueString(resourceGroup().id, name)
 var roles = {
   blobDataContributor: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
@@ -87,6 +98,8 @@ resource quarantine 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   kind: 'StorageV2'
   sku: { name: environment == 'prod' ? 'Standard_ZRS' : 'Standard_LRS' }
   properties: {
+    publicNetworkAccess: internalAccess
+    networkAcls: internalAcls
     accessTier: 'Hot'
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
@@ -94,6 +107,19 @@ resource quarantine 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     // Entra ID only: shared keys and SAS signed with them are refused.
     allowSharedKeyAccess: false
     defaultToOAuthAuthentication: true
+  }
+}
+
+module quarantineEndpoint 'modules/private-endpoint.bicep' = if (isPrivate) {
+  name: 'pe-group-blob'
+  params: {
+    name: '${quarantine.name}-blob'
+    location: location
+    tags: tags
+    subnetId: privateNetwork.?subnetId ?? ''
+    targetId: quarantine.id
+    groupId: 'blob'
+    dnsZoneIds: [privateNetwork.?zones.?blob ?? '']
   }
 }
 
@@ -138,7 +164,7 @@ resource retention 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05
 }
 
 // Scan every blob as it lands and tag it with the result.
-resource defender 'Microsoft.Security/defenderForStorageSettings@2022-12-01-preview' = {
+resource defender 'Microsoft.Security/defenderForStorageSettings@2025-06-01' = {
   scope: quarantine
   name: 'current'
   properties: {

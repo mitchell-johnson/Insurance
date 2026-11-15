@@ -7,6 +7,7 @@
 //! console, other modules' drivers), which have already established who
 //! the person is; each presents its own Entra ID token ([`crate::auth`]).
 
+use ic_telemetry::Traced;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -167,6 +168,7 @@ impl CustomerMaster for HttpCustomerMaster {
             // Why the customer master is being asked, which its access policy weighs.
             .header("x-ic-purpose", "scheme_membership")
             .json(&body)
+            .traced()
             .send()
             .await
             // The error may quote the request: say only that it failed.
@@ -508,6 +510,7 @@ where
         .route("/readyz", get(ready::<M, C, P, D, F>))
         .route("/metrics", get(metrics::<M, C, P, D, F>))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(axum::middleware::from_fn(ic_telemetry::http::trace))
         .with_state(web)
 }
 

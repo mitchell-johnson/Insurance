@@ -39,11 +39,8 @@ async fn shutdown() {
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    // JSON lines on stdout: Container Insights and Application Insights pick them up as they are.
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    // JSON log lines, and traces and logs over OTLP (crates/telemetry).
+    let _telemetry = ic_telemetry::init("ic-api")?;
     // The wall clock is read here, to open an empty single-process ledger, and nowhere else.
     let today = chrono::Utc::now().with_timezone(&chrono_tz::Pacific::Auckland).date_naive();
     let settings = ApiSettings::from_lookup(|key| std::env::var(key).ok(), today)?;

@@ -196,8 +196,17 @@ const portal = (() => {
   // A page that holds a device key proves it on each call: given the method,
   // the path and the exact body sent, it returns the headers to add.
   let prover = null;
+  // W3C trace context: each call begins a trace here in the browser, which
+  // the portal and the services behind it continue (crates/telemetry). The
+  // trace ID is the reference a failure carries (e.reference), the one
+  // support looks up in Application Insights.
+  function traceparent() {
+    const hex = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => b.toString(16).padStart(2, "0")).join("");
+    return "00-" + hex(16) + "-" + hex(8) + "-01";
+  }
   async function api(realm, method, path, body) {
     const { cfg, headers } = await signedIn(realm);
+    headers.traceparent = traceparent();
     if (method !== "GET") headers["idempotency-key"] = crypto.randomUUID();
     // A file goes as it is; anything else as JSON.
     const raw = typeof Blob !== "undefined" && body instanceof Blob;
@@ -212,13 +221,14 @@ const portal = (() => {
       const vague = res.status === 404 && (!data || !data.detail || /^no such resource$/i.test(data.detail));
       // A role named as the code spells it (PayeeMaintainer) reads as words.
       const detail = data && data.detail && String(data.detail).replace(/\b([A-Z][a-z]+)((?:[A-Z][a-z]+)+)\b/g, (w) => w.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase());
-      const e = new Error(vague ? "Nothing was found with that reference. Check it for a slip and try again; if it is right, it may not be open to you." : detail || "The request failed (" + res.status + ")."); e.status = res.status; e.code = data && data.title; throw e;
+      const e = new Error(vague ? "Nothing was found with that reference. Check it for a slip and try again; if it is right, it may not be open to you." : detail || "The request failed (" + res.status + ")."); e.status = res.status; e.code = data && data.title; e.reference = headers.traceparent.split("-")[1]; throw e;
     }
     return data;
   }
   // Fetch a file as the signed-in person and hand it to the browser to save.
   async function download(realm, path, name) {
     const { headers } = await signedIn(realm);
+    headers.traceparent = traceparent();
     if (prover) Object.assign(headers, await prover("GET", path.split("?")[0], ""));
     const res = await fetch(path, { headers });
     if (res.status === 404) throw new Error("That document is not available to you.");

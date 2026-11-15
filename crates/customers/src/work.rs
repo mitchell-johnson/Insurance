@@ -387,11 +387,8 @@ pub async fn start(
 /// The process: logging, signals, settings from the environment, then
 /// [`start`]. The binary is only this call.
 pub async fn main() -> Result<(), String> {
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .try_init()
-        .ok();
+    // JSON log lines, and traces and logs over OTLP (crates/telemetry).
+    let _telemetry = ic_telemetry::init("ic-customers")?;
     // The handlers are installed before anything else, so a signal during
     // start-up is kept.
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map_err(crate::text)?;

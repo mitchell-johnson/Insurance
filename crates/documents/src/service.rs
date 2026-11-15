@@ -368,6 +368,7 @@ where
         .route("/v1/documents/{id}/pdf", get(download::<M, S, W, C, D>))
         .route("/v1/wordings/{text_hash}", get(wording::<M, S, W, C, D>))
         .route("/healthz", get(|| async { "ok" }))
+        .layer(axum::middleware::from_fn(ic_telemetry::http::trace))
         .with_state(web)
 }
 

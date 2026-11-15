@@ -72,10 +72,27 @@ param logAnalyticsWorkspaceName string = '${name}-logs'
 @description('Who is told when unit pricing needs a person: the fund operations addresses.')
 param alertEmails array = []
 
+
+// --- private networking (main.bicep output privateNetwork) ---------------------------
+
+@description('main.bicep\'s output privateNetwork: the subnet and the private DNS zones for private endpoints, and what the firewalls admit beside them. Empty: no private endpoints, and the services here stay reachable from anywhere, with Entra ID still required.')
+param privateNetwork object = {}
+
+@description('Address ranges (CIDR) of the outside party that reaches the valuation upload and extract accounts (the fund administrator). Empty: that account stays reachable from anywhere, with Entra ID still required; given, it admits only these ranges beside the private endpoint and the administrators.')
+param fundAdministratorIpRanges array = []
+
 var tags = {
   system: 'insurance-core'
   environment: environment
   component: 'unit-pricing'
+}
+var isPrivate = !empty(privateNetwork)
+var adminIpRules = map(privateNetwork.?adminIpRanges ?? [], range => { value: range, action: 'Allow' })
+// An account an outside party reaches too: its ranges, or anywhere if none are given.
+var fundAdministratorAcls = {
+  defaultAction: isPrivate && !empty(fundAdministratorIpRanges) ? 'Deny' : 'Allow'
+  bypass: 'AzureServices'
+  ipRules: concat(adminIpRules, map(fundAdministratorIpRanges, range => { value: range, action: 'Allow' }))
 }
 var unique = uniqueString(resourceGroup().id, name)
 var roles = {
@@ -110,6 +127,8 @@ resource inbound 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   kind: 'StorageV2'
   sku: { name: environment == 'prod' ? 'Standard_ZRS' : 'Standard_LRS' }
   properties: {
+    publicNetworkAccess: 'Enabled'
+    networkAcls: fundAdministratorAcls
     accessTier: 'Hot'
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
@@ -119,6 +138,19 @@ resource inbound 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     defaultToOAuthAuthentication: true
     // Index tags, where the scan result is written, need a flat namespace.
     isHnsEnabled: false
+  }
+}
+
+module inboundEndpoint 'modules/private-endpoint.bicep' = if (isPrivate) {
+  name: 'pe-unit-pricing-inbound'
+  params: {
+    name: '${inbound.name}-blob'
+    location: location
+    tags: tags
+    subnetId: privateNetwork.?subnetId ?? ''
+    targetId: inbound.id
+    groupId: 'blob'
+    dnsZoneIds: [privateNetwork.?zones.?blob ?? '']
   }
 }
 
@@ -164,7 +196,7 @@ resource inboundRetention 'Microsoft.Storage/storageAccounts/managementPolicies@
 }
 
 // Scan every blob as it lands and tag it with the result.
-resource defender 'Microsoft.Security/defenderForStorageSettings@2022-12-01-preview' = {
+resource defender 'Microsoft.Security/defenderForStorageSettings@2025-06-01' = {
   scope: inbound
   name: 'current'
   properties: {
@@ -215,12 +247,27 @@ resource outbound 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   kind: 'StorageV2'
   sku: { name: environment == 'prod' ? 'Standard_GZRS' : 'Standard_LRS' }
   properties: {
+    publicNetworkAccess: 'Enabled'
+    networkAcls: fundAdministratorAcls
     accessTier: 'Hot'
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
     allowBlobPublicAccess: false
     allowSharedKeyAccess: false
     defaultToOAuthAuthentication: true
+  }
+}
+
+module outboundEndpoint 'modules/private-endpoint.bicep' = if (isPrivate) {
+  name: 'pe-unit-pricing-outbound'
+  params: {
+    name: '${outbound.name}-blob'
+    location: location
+    tags: tags
+    subnetId: privateNetwork.?subnetId ?? ''
+    targetId: outbound.id
+    groupId: 'blob'
+    dnsZoneIds: [privateNetwork.?zones.?blob ?? '']
   }
 }
 

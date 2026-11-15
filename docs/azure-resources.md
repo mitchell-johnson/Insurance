@@ -10,8 +10,8 @@ Where a template sizes something differently by environment, the table gives **p
 
 | | Today in the templates | Pending |
 | --- | --- | --- |
-| Region | One region. `infra/main.bicepparam` sets `newzealandnorth`, and every template takes the resource group's location. | **The Raft placement is still to be chosen.** One option is three voters across the three zones of Australia East (Sydney), with Australia Southeast (Melbourne) as a standby. The other is to add a voter in a third region as a tiebreaker, so that losing any one region keeps a majority (five voters across three regions; `decisions.md`, "A second region"). Neither is written in the templates. Both put policy data outside New Zealand, which is a decision for the insurer and its regulator. |
-| Zones | The AKS node pool spans zones 1, 2 and 3, and the three `ic-node` pods are spread one per zone. Event Hubs is zone-redundant. In prod, storage is ZRS or GZRS and the PostgreSQL servers are zone-redundant. | None. |
+| Region | One region. `infra/main.bicepparam` sets `newzealandnorth`, and every template takes the resource group's location. | **The Raft placement is still to be chosen.** One option is three voters across the three zones of Australia East (Sydney), with Australia Southeast (Melbourne) as a standby. The other is to add a voter in a third region as a tiebreaker, so that losing any one region keeps a majority (five voters across three regions; `decisions.md`, "A second region"). The templates support either (`operations.md`, "Losing a region"; `decisions.md`, "A second region"): the ledger storage is RA-GZRS to the paired region in prod, and the backups and databases are geo-redundant. Option B also needs a cluster or pool per further region and a second Front Door origin. Both put policy data outside New Zealand, which is a decision for the insurer and its regulator. |
+| Zones | Every AKS node pool spans zones 1, 2 and 3, and the three `ic-node` pods are spread one per zone on the ledger pool. Event Hubs is zone-redundant. In prod, storage is ZRS or GZRS and the PostgreSQL servers are zone-redundant. | None. |
 | Fail-back | Built, but `IC_PREFERRED_NODES` is unset, so nothing fails back until voters exist in a second region. | Depends on the placement choice. |
 | Communication Services data | `communicationDataLocation` = `Australia` (`infra/documents.bicep`). | Confirm with the placement choice. |
 
@@ -22,9 +22,16 @@ What one deployment of every template creates in prod, with no reinsurers config
 | Resource type | Count | Created by |
 | --- | ---: | --- |
 | AKS cluster | 1 | main |
-| AKS node pool (system) | 1 pool, 3 VMs | main |
+| AKS node pools | 3 pools: system 3 VMs, ledger 3 VMs, apps 3 to 9 VMs | main |
+| Virtual network, NSG, public IP prefix (egress) | 1 each, 3 subnets | main |
+| Private DNS zones and links | 9 each | main |
+| Private endpoints | 6 in main (ledger blob, 2 vaults, Event Hubs, registry, Azure Monitor), 1 more with `deployPostgres`; 1 per module storage account (8) and the customer database; 1 for the backup account | main, every module |
+| Azure Monitor private link scope | 1 | main |
+| Front Door Premium profile, WAF policy | 1 each | edge |
+| Backup vault, policy, instance; AKS backup extension and its account | 1 each | main (`backupLedgerDisks`) |
+| Email Communication Service and domain | 1 each, with `emailDomain` | documents |
 | Container Registry | 1 | main |
-| Storage accounts | 10 | main 1 (ledger), customers 1, documents 1, finance 1, group 1, reinsurance 1 (SFTP), underwriting 1, unit-pricing 2 |
+| Storage accounts | 11 | main 2 (ledger, backup), customers 1, documents 1, finance 1, group 1, reinsurance 1 (SFTP), underwriting 1, unit-pricing 2 |
 | Blob containers | 14, plus one per SFTP reinsurer | see [Storage](#storage) |
 | PostgreSQL Flexible Servers | 1, or 2 with `deployPostgres` | customers; main (optional, for Temporal) |
 | Key Vaults | 2 | main: the core vault and the payments vault |
@@ -36,9 +43,9 @@ What one deployment of every template creates in prod, with no reinsurers config
 | Defender for Storage settings | 2 | group, unit-pricing |
 | Log Analytics workspace | 1 | main |
 | Application Insights | 1 | main |
-| Log alert rules | 5 | reinsurance 2, unit-pricing 3 |
-| Action groups | up to 2 | reinsurance and unit-pricing, only when `alertEmails` is set |
-| User-assigned managed identities | 13, each with one federated credential | main 5, the module templates 8 |
+| Log alert rules | 12 | main 7 (the core), reinsurance 2, unit-pricing 3 |
+| Action groups | up to 3 | main, reinsurance and unit-pricing, only when `alertEmails` is set |
+| User-assigned managed identities | 15, or 16 with a self-hosted Temporal | main 7 (five workloads, the collector, and the cluster's own identity, which has no federated credential), the module templates 8 |
 | Role assignments | about 50 | every template |
 
 ## Compute
@@ -49,16 +56,18 @@ What one deployment of every template creates in prod, with no reinsurers config
 | --- | --- |
 | Name | `<name>-aks` |
 | Tier | Standard in prod (uptime SLA), Free in dev/test |
-| Node pool | One pool, `system`, mode System. **3 × `Standard_D4ds_v5`** (4 vCPU, 16 GiB, 150 GiB local temp disk each), Azure Linux, zones 1, 2 and 3. The size and count are the parameters `nodeVmSize` and `nodeCount`. There is no autoscaler and no separate user pool. |
-| Total | 12 vCPU and 48 GiB. After AKS's own reservations, about 3.8 vCPU and 11 to 12 GiB per node are left for pods. |
-| Networking | Azure CNI overlay with Cilium as dataplane and network policy. Advanced Container Networking Services with **WireGuard** encrypts traffic between nodes on UDP 51871. |
+| Pool `system` | Mode System, tainted `CriticalAddonsOnly`: AKS's own pods only. **3 × `Standard_D2ds_v5`** (2 vCPU, 8 GiB), zones 1 to 3 (`systemVmSize`). |
+| Pool `ledger` | Mode User, tainted `insurance-core/ledger`, label `insurance-core/pool: ledger`: the three `ic-node` voters only. **3 × `Standard_D8ds_v5`** (8 vCPU, 32 GiB), one per zone, fixed (`ledgerVmSize`); a voter's disk is zonal, so it cannot move. |
+| Pool `apps` | Mode User: every other workload. **`Standard_D4ds_v5`** (4 vCPU, 16 GiB), the cluster autoscaler between **3 and 9** (`appsMinCount`, `appsMaxCount`), zones balanced, scale-down after 10 idle minutes. |
+| Total at rest | 42 vCPU and 168 GiB; up to 66 vCPU and 264 GiB at the apps pool's maximum. All pools Azure Linux. |
+| Networking | Nodes in the `aks-nodes` subnet (/22) of the virtual network `10.40.0.0/16` (`vnetAddressSpace`), with `private-endpoints` (/24) and `ingress` (/24) beside it. Outbound through the standard load balancer from one public IP prefix (/30, output `egressPrefix`), for providers to allow-list. Private API server unless `adminIpRanges` is given. Azure CNI overlay with Cilium as dataplane and network policy. Advanced Container Networking Services with **WireGuard** encrypts traffic between nodes on UDP 51871. |
 | Identity | Entra ID with Azure RBAC and local accounts off. OIDC issuer and Workload Identity are on. |
-| Add-ons | Key Vault Secrets Store CSI driver (rotation every 2 minutes) and the monitoring agent to the Log Analytics workspace. |
+| Add-ons | Key Vault Secrets Store CSI driver (rotation every 2 minutes), the monitoring agent to the Log Analytics workspace (Entra auth, through the private link scope), the Azure Disk CSI driver with the snapshot controller, application routing (managed NGINX, an internal controller of our own in `deploy/cluster.yaml`), and the Azure Backup extension. |
 | Upgrades | Patch channel; node OS on NodeImage. |
 
 ### Container Registry (`infra/main.bicep`)
 
-One registry on the **Premium** SKU, with the admin user and anonymous pull off. The kubelet identity has AcrPull. It holds one image, `insurance-core`, which contains every binary.
+One registry on the **Premium** SKU, with the admin user off, reached through its private endpoint (public access only for `adminIpRanges`). The kubelet identity has AcrPull. It holds the image `insurance-core`, which contains every binary, and the mirrored OpenTelemetry Collector (`opentelemetry-collector-contrib`).
 
 ### Workloads on the cluster (`deploy/k8s`)
 
@@ -66,7 +75,7 @@ These are the requests and limits as written in the manifests. Memory has limits
 
 | Workload | Kind | Replicas | CPU request | Memory request / limit | Storage |
 | --- | --- | ---: | --- | --- | --- |
-| `ic-node` | StatefulSet, one per zone | 3 | 1 | 2 GiB / 4 GiB | 128 GiB `managed-csi-premium` each (Premium SSD P10, zonal LRS: 500 IOPS and 100 MB/s, bursting to 3,500 IOPS) |
+| `ic-node` | StatefulSet, one per zone, on the ledger pool | 3 | 1 | 2 GiB / 4 GiB | 128 GiB `ic-ledger-premiumv2` each (Premium SSD v2, zonal LRS: 3,000 IOPS and 125 MB/s provisioned, sub-millisecond latency; see Sizing) |
 | `ic-api` | Deployment | 2 | 250m | 256 MiB / 1 GiB | none |
 | `ic-portal` | Deployment | 2 | 250m | 256 MiB / 1 GiB | none |
 | `ic-worker` | Deployment | 2 | 250m | 256 MiB / 1 GiB | none |
@@ -79,30 +88,33 @@ These are the requests and limits as written in the manifests. Memory has limits
 | `ic-finance-close` | Deployment | 2 | 50m | 128 MiB / 1 GiB | none |
 | `ic-reinsurance` | Deployment | 2 | 50m | 64 MiB / 256 MiB | none |
 | `ic-underwriting` | Deployment | 2 | 50m | 64 MiB / 256 MiB | none |
-| **Long-running total** | | **27 pods** | **6.8 vCPU** | **10.25 GiB / 30 GiB** | **384 GiB Premium SSD** |
+| `ic-otel-collector` | Deployment | 2 | 200m | 256 MiB / 512 MiB | none |
+| **Long-running total** | | **29 pods** | **7.2 vCPU** | **10.75 GiB / 31 GiB** | **384 GiB Premium SSD v2** |
 | `ic-close` | CronJob, 00:05 NZ | 1 | 100m | 128 MiB / 512 MiB | none |
 | `ic-unit-orders` | CronJob, every 15 minutes | 1 | 100m | 128 MiB / 512 MiB | none |
 | `ic-payments-drill` | CronJob, Tuesdays at 09:30 NZ | 1 | 50m | 64 MiB / 256 MiB | none |
 | `ic-admin` | CronJob, suspended, run by hand | 1 | 100m | 128 MiB / 512 MiB | none |
+| `ic-watch` | CronJob, every 5 minutes (`ic-admin watch`) | 1 | 50m | 64 MiB / 256 MiB | none |
 | `ic-bootstrap` | Job, once | 1 | 100m | 128 MiB / 512 MiB | none |
 
 Each Deployment and the StatefulSet has a pod disruption budget. `ic-api`, `ic-portal`, `ic-customers`, `ic-documents` and `ic-group` spread their two replicas across zones; the other Deployments leave placement to the scheduler.
 
-**Fit.** The requests (6.8 vCPU, 10.25 GiB) fit the three nodes, with about 4 vCPU to spare once the system pods are counted. The headroom is small when a zone is lost. The two remaining nodes have about 7.6 vCPU for pods, and they must take every stateless pod from the lost node beside their own: about 5.8 vCPU of requests plus the system pods. The lost zone's `ic-node` cannot move, because its disk is zonal. The memory limits add up to about 30 GiB against about 35 GiB allocatable, so the pods can burst together on three nodes but not on two. No load test has sized the cluster yet; `ic-simulate` is the tool for it (see Gaps).
+**Fit.** The ledger voters have a pool to themselves: 8 vCPU and 32 GiB each for one `ic-node` (1 vCPU, 2 to 4 GiB requested), so a voter is never starved by another workload and the margin covers snapshots and catch-up. The other workloads request about 4.3 vCPU and 8.6 GiB, on an apps pool of at least 3 × D4ds_v5 (about 11 vCPU and 35 GiB allocatable). When a zone is lost, its third of the apps pool's pods reschedule onto the other two zones and the autoscaler adds nodes there; its voter stays down until the zone returns. See Sizing.
 
 ## Storage
 
-All accounts are StorageV2, TLS 1.2 minimum, with public blob access off. They are reached by Entra ID with no shared keys.
+All accounts are StorageV2, TLS 1.2 minimum, with public blob access off. They are reached by Entra ID with no shared keys. With private networking each has a private endpoint and refuses everything else, except the four an outside party reaches (the document vault's print outbox, the two unit pricing accounts and the SFTP drops), which admit their party's ranges when given (`operations.md`, "Private networking").
 
 | Account | Template | Redundancy (prod / dev) | Containers and protection | Serves |
 | --- | --- | --- | --- | --- |
-| Ledger account `<name><unique>` | main | ZRS / LRS, Hot | `merkle-roots`: write-once for `retentionDays` (2,920 days, 8 years). `cold-segments`: write-once for 8 years; moves to Cool after 30 days and Cold after 180. `payments-evidence`: write-once for 8 years. `reinsurance-records` (added by `reinsurance.bicep`): write-once for 8 years. | Signed daily Merkle roots, sealed journal segments, bank evidence, statements and releases to reinsurers |
+| Ledger account `<name><unique>` | main | RA-GZRS / LRS, Hot (`ledgerStorageSku`); a delete lock in prod; deleted containers kept 365 days | `merkle-roots`: write-once for `retentionDays` (2,920 days, 8 years). `cold-segments`: write-once for 8 years; moves to Cool after 30 days and Cold after 180. `payments-evidence`: write-once for 8 years. `reinsurance-records` (added by `reinsurance.bicep`): write-once for 8 years. | Signed daily Merkle roots, sealed journal segments, bank evidence, statements and releases to reinsurers |
 | Customer master register | customers | GZRS / LRS | `customers-erasures`: write-once for `registerYears` × 366 days (10 years). The lock is applied once in prod with `tools/lock-erasure-register.sh`. | The erasure register a restore is replayed against |
 | Document vault | documents | GZRS / LRS | `documents-vault`: versioning with version-level immutability, each document locked to its own retention date. `print-outbox`: for the print house to collect. | Issued documents and print files |
 | Finance extracts | finance | ZRS / LRS | `finance-extracts`: write-once for 8 years. Also reads `merkle-roots`. | Valuation and experience extracts |
 | Group quarantine | group | ZRS / LRS | `group-quarantine`, deleted after 35 days. Scanned by Defender. | Employer membership files |
 | Reinsurer SFTP drops | reinsurance | ZRS / LRS, hierarchical namespace, SFTP on | One `ri-<reinsurer>` container and one SFTP local user (SSH key) per entry of `sftpReinsurers` | Listings and statements that reinsurers collect |
 | Clinical store | underwriting | ZRS / LRS | `clinical`: no soft delete, no versioning and no change feed, on purpose, so that deleting a person's wrapped key erases them | Health disclosures and evidence |
+| Backup account `<name>bk<unique>` | main | ZRS / LRS | `aks-backup`: the Kubernetes objects Azure Backup saves beside the disk snapshots | Restoring the ledger nodes |
 | Valuations in | unit-pricing | ZRS / LRS | `unit-pricing-inbound`, deleted after 90 days. Scanned by Defender. The fund administrator writes it under its own identity. | Valuation files |
 | Holdings extract out | unit-pricing | GZRS / LRS | `unit-pricing-outbound`: write-once for 2,555 days (7 years) | Unit holdings extract for the fund administrator |
 
@@ -110,8 +122,8 @@ All accounts are StorageV2, TLS 1.2 minimum, with public blob access off. They a
 
 | Server | Template | SKU (prod / dev) | Storage | Availability and backup | Serves |
 | --- | --- | --- | --- | --- | --- |
-| Customer master `<name>-<unique>-customers` | customers | `Standard_D4ds_v5` General Purpose (4 vCores, 16 GiB) / `Standard_B2ms` Burstable (2 vCores, 8 GiB) | 128 GiB, grows automatically | Zone-redundant HA in prod; 35-day backups, geo-redundant in prod | PostgreSQL 16, database `customers`. Entra sign-in only with TLS required. The firewall admits the AKS outbound IP. |
-| Temporal store `<name>-<unique>-pg` (only with `deployPostgres`) | main | `Standard_D2ds_v5` General Purpose (2 vCores, 8 GiB) | 128 GiB | Zone-redundant HA in prod; 35-day backups | PostgreSQL 16 for a self-hosted Temporal, if Temporal Cloud is not chosen |
+| Customer master `<name>-<unique>-customers` | customers | `Standard_D4ds_v5` General Purpose (4 vCores, 16 GiB) / `Standard_B2ms` Burstable (2 vCores, 8 GiB) | 128 GiB, grows automatically | Zone-redundant HA in prod; 35-day backups, geo-redundant in prod | PostgreSQL 16, database `customers`. Entra sign-in only with TLS required. No public address: reached through its private endpoint. |
+| Temporal store `<name>-<unique>-pg` (only with `deployPostgres`) | main | `Standard_D2ds_v5` General Purpose (2 vCores, 8 GiB) | 128 GiB | Zone-redundant HA in prod; 35-day backups, geo-redundant in prod | PostgreSQL 16 for a self-hosted Temporal (`selfHostedTemporal`), databases `temporal` and `temporal_visibility`, one password login for Temporal, private endpoint |
 
 The ledger does not use a database. Its state is on the `ic-node` disks, replicated by Raft.
 
@@ -150,10 +162,14 @@ There is one namespace, `<name>-<unique>-events`: **Premium, 1 processing unit**
 | Event Grid system topic and subscription | documents | Email and SMS delivery reports, posted to `https://<host>/v1/delivery-reports` | Proof of delivery |
 | Defender for Storage | group | Malware scanning on upload, capped at 1,000 GB a month | Employer files |
 | Defender for Storage | unit-pricing | Malware scanning on upload, capped at 100 GB a month | Valuation files |
-| Log Analytics workspace | main | PerGB2018, 90-day retention | Container logs (JSON lines on stdout) from the monitoring add-on |
-| Application Insights | main | Workspace-based | Created and exported as an output, but no service sends to it (see Gaps) |
-| Log alert rules | reinsurance (2), unit-pricing (3) | Every 5 minutes on the workspace; severity 1 or 2 | Reinsurance exception opened and delivery stopped; a price that needs a person, failing passes, a silent driver |
-| Action groups | reinsurance, unit-pricing | Email to `alertEmails` | On-call |
+| Log Analytics workspace | main | PerGB2018; 90 days interactive and 2,556 days in all (archive tier) on the container log and App tables, a placeholder (`decisions.md`, "Log retention"); ingestion only through the private link scope | Container logs (JSON lines on stdout, each with its trace ID) from the monitoring add-on, and the traces and log records from the collector |
+| Application Insights | main | Workspace-based, ingestion private | Traces and log records over OpenTelemetry, through the collector (`deploy/k8s/telemetry.yaml`); its connection string is in Key Vault for the collector alone |
+| Azure Monitor private link scope | main | Private only for ingestion, open for queries | The monitoring agent and the collector |
+| Log alert rules | main (7), reinsurance (2), unit-pricing (3) | Every 5 or 15 minutes on the workspace; severity 0 to 2 | The core: no leader, state hashes differ, node down, close failed, housekeeping backlog, unit orders left, watch silent (`operations.md`, "Alerts"). Reinsurance exception opened and delivery stopped; a price that needs a person, failing passes, a silent driver |
+| Action groups | main, reinsurance, unit-pricing | Email to `alertEmails` | On-call |
+| Front Door Premium and WAF | edge | DRS 2.1 and bot manager in Prevention; rate limit 600 a minute per client (placeholder); managed TLS | The only way in, over Private Link to the internal ingress |
+| Backup vault | main | Geo-redundant and immutable in prod; snapshots every 4 hours kept 7 days, daily vault copies kept 35 days | The `ic-node` disks |
+| Email Communication Service | documents (with `emailDomain`) | Customer-managed domain, sender `letters@<domain>`, SPF, DKIM and DMARC records | Letters by e-mail |
 
 ## Identity
 
@@ -172,31 +188,44 @@ There is one namespace, `<name>-<unique>-events`: **Premium, 1 processing unit**
 | `ic-underwriting` | underwriting | `ic-underwriting` | Underwriting driver |
 | `ic-underwriting-clinical` | underwriting | `ic-underwriting-clinical` | Disclosure intake |
 | `ic-unit-pricing` | unit-pricing | `ic-unit-pricing` | Unit pricing driver |
+| `ic-otel-collector` | main | `ic-otel-collector` | The OpenTelemetry Collector; reads only the Application Insights connection string |
+| `temporal` (only with `selfHostedTemporal`) | main | `temporal` in namespace `temporal` | Self-hosted Temporal; reads only its database password |
+| `<name>-aks-control-plane` | main | none | The cluster's own identity, Network Contributor on the virtual network and Disk Snapshot Contributor for the backups |
 
 Each identity is federated to exactly one service account in the namespace `insurance-core` and holds only its own roles and its own cluster token. The Entra app registrations and app roles are made by `deploy/entra/apps.sh` (workforce and External ID tenants) and `deploy/entra/group-app.sh`, with one registration per reinsurer that uses the API.
+
+## Sizing
+
+Measured with `ic-simulate` on 15 Nov 2026: 2,000 policies and 5,000 group members over 61 business days on 8 partitions made **7,286 commands and 74,666 journal entries** (29 seconds on one machine). That is about **0.017 commands and 0.18 journal entries per life per day**, most of them at the close and the billing run.
+
+| Book | Commands a day | Journal entries a day | Average entries a second | Peak (the close, 50 times the average over an hour) |
+| --- | ---: | ---: | ---: | ---: |
+| 100,000 lives | 1,700 | 18,000 | 0.2 | about 10 a second |
+| 1,000,000 lives | 17,000 | 180,000 | 2 | about 100 a second |
+
+Raft makes one `fsync` per append for each partition group (`crates/raft/src/store.rs`), batched across the commands waiting, so the disk's write latency, not its size or IOPS, sets the ledger's write rate. **The disks are Premium SSD v2** (`deploy/k8s/storage.yaml`) at the free baseline of 3,000 IOPS and 125 MB/s: sub-millisecond writes, against 2 to 5 ms on the old P10 with its 500 IOPS. At a million lives the peak is under a twentieth of the baseline. 128 GiB holds the journal until it is sealed to Blob Storage, a year many times over at these rates. These are estimates from the simulation; measure on the first deployment with `fio --name=raft --rw=write --bs=4k --fsync=1 --size=1G` on a ledger node's disk and with a business day's load, and raise IOPS (`az disk update --disk-iops-read-write`) without downtime if the p99 write latency passes 2 ms.
+
+The apps pool's minimum of three D4ds_v5 covers the requests with a zone lost; the autoscaler adds nodes for the close and for a burst of portal use. The ledger pool is sized for the voter's peak with room for snapshot transfer and catch-up after a node returns.
 
 ## Needed but not in the templates
 
 | Need | What it is | Who decides or provides it |
 | --- | --- | --- |
-| **Temporal** | The close runs on Temporal. Either Temporal Cloud, or self-hosted Temporal on AKS (its own pods, not sized here) with the optional PostgreSQL server. `deploy/k8s/settings.yaml` holds a placeholder address. | The insurer (`decisions.md`) |
-| **Ingress, TLS and DNS** | An ingress controller (for example Application Gateway for Containers, or an NGINX ingress with a public IP), TLS certificates and DNS names for `ic-api`, `ic-portal`, the reinsurer API and the documents delivery-report webhook. A web application firewall in front of the public pages. None of these are in the templates. | The insurer's platform team |
-| **Email domain and SMS number** | An Email Communication Services resource with a verified sending domain linked to Communication Services, and a purchased SMS number or short code (`infra/documents.bicep`, header). | A person, once |
-| **Bank connectivity** | The mutual TLS channel to the chosen bank, and its credentials in the payments vault. No bank is chosen. | The insurer and its bank |
+| **Temporal** | Templated both ways: Temporal Cloud (address and API key in `settings.yaml`), or self-hosted with `selfHostedTemporal` and `deploy/temporal` (Helm values for the official chart on the PostgreSQL server). Which one is the insurer's decision. | The insurer (`decisions.md`) |
+| **Public names** | Templated in `infra/edge.bicep` (Front Door, WAF, managed TLS, Azure DNS records). The domain names themselves, and the DNS zone if it is not in Azure. | The insurer |
+| **Email domain and SMS number** | The e-mail domain is templated (`emailDomain` in `infra/documents.bicep`; records written when its zone is in Azure DNS, then verification started once). An SMS number or short code is bought in the portal: New Zealand numbers need an application to Azure and a provider. | The insurer, and a provider for SMS |
+| **Bank connectivity** | Calls to the bank leave from the fixed egress range (`egressPrefix`) for the bank to allow-list. The mutual TLS channel, its credentials in the payments vault, and a private link (ExpressRoute or VPN) if the bank requires one. No bank is chosen. | The insurer and its bank |
 | **Second and third region** | Further voters, their AKS clusters or node pools, network links between the regions, and storage for the region-loss plan. | The pending placement choice above |
+| **Partners' address ranges** | The print house, the fund administrator and each SFTP reinsurer, to restrict their accounts (`printHouseIpRanges`, `fundAdministratorIpRanges`, `reinsurerIpRanges`). | Each partner |
+| **Alert recipients** | `alertEmails` for main and the module templates. | The insurer |
 | **Fund administrator's identity** | An Entra identity of the administrator's, granted write on the inbound valuations container (`administratorPrincipalId`). | The administrator |
 | **AIA Vitality intake** | A small service and its identity, once the feed format is known. | AIA |
 
 ## Gaps between the templates and what the services need
 
-1. **No alerts on the core.** The only alert rules are reinsurance's and unit pricing's. Nothing alerts when a close fails, a ledger node is down, a partition has no leader, housekeeping falls behind or `unit_orders_left` is not zero. These conditions are logged, and `ic-admin status` shows them, but no rule watches for them.
-2. **Application Insights is unused.** It is created and its connection string is an output, but no manifest or service reads it. Logs reach Log Analytics through the monitoring add-on. Either wire the services to it or drop it.
-3. **One node pool runs everything.** System pods and every workload share three D4ds_v5 nodes, with no autoscaler and little headroom after a zone loss (see Fit). For production, a separate user pool would be the usual layout. A best estimate until a load test says otherwise is three `Standard_D8ds_v5` (8 vCPU, 32 GiB) user nodes across the zones beside a small system pool. Size it with `ic-simulate` and a business-day load before the first prod deployment.
-4. **Ledger disks may limit write rate.** Each `ic-node` has a 128 GiB Premium SSD (P10: 500 IOPS baseline), and Raft syncs every entry to disk before acknowledging it. The disks have not been measured under load. Premium SSD v2 or a larger tier may be needed.
-5. **No private networking.** Every PaaS service (storage, Key Vault, Event Hubs, PostgreSQL, Communication Services) is reached over its public endpoint, with Entra ID and TLS. The customer master's PostgreSQL admits the AKS outbound IP through a firewall rule. No virtual network integration or private endpoints are written. Many insurers and regulators expect private endpoints for personal and health data.
-6. **The ledger's write-once evidence is not geo-redundant.** The ledger account (Merkle roots, sealed segments, payment evidence, reinsurance records) is ZRS in prod, while the customer master register, document vault and holdings extract are GZRS. Losing the region would leave the proofs out of reach until it returns. This should follow the placement choice.
-7. **No backup of the node disks.** The ledger relies on three Raft replicas and the sealed segments in Blob Storage. No Azure Backup or disk snapshot policy is written for the `ic-node` disks.
-8. **Log retention is 90 days.** Container logs, which include the cluster access log and the reinsurer API log, are kept 90 days in the workspace. Records with longer retention needs are kept in write-once storage. Confirm 90 days meets the audit requirement.
-9. **The Defender settings use a preview API version** (`2022-12-01-preview`) in `group.bicep` and `unit-pricing.bicep`.
-10. **The module templates are separate deployments.** `main.bicep` does not reference them, so the deployment order in `operations.md` (main, tokens, the seven module templates, then the manifests) is the only thing that keeps them in step.
-11. **"Losing a region" is missing from the runbook.** `deploy/k8s/portal.yaml` points to a section of that name in `operations.md`, and it does not exist yet.
+Closed on 15 Nov 2026: core alerts, OpenTelemetry to Application Insights, separate system, ledger and autoscaled apps pools, Premium SSD v2 ledger disks, private endpoints for every PaaS service that has them, RA-GZRS ledger storage, disk backups, log retention with an archive tier, Defender on a GA API (`2025-06-01`), the "Losing a region" runbook, the edge, the e-mail domain and the Temporal templates.
+
+1. **The module templates are separate deployments.** `main.bicep` does not reference them, so the deployment order in `operations.md` (main, tokens, the seven module templates, then the manifests) is the only thing that keeps them in step.
+2. **Communication Services has no private endpoint** (Azure offers none). It is reached over TLS with Entra ID.
+3. **The Raft placement is not chosen**, so only one region is deployed, and losing it means a restore (option A) until a third region's voter exists (option B).
+4. **Placeholders to confirm:** log retention (seven years), the WAF rate limit (600 a minute) and country list (none), and the disk baseline (3,000 IOPS), which a load test on the first deployment should confirm.

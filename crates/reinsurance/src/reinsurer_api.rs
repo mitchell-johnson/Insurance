@@ -265,5 +265,6 @@ pub fn router<M: Module + 'static, W: WormStore + 'static>(api: Api<M, W>) -> Ro
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/statements", get(statements::<M, W>))
         .route("/v1/files/{treaty}/{file}", get(file::<M, W>))
+        .layer(axum::middleware::from_fn(ic_telemetry::http::trace))
         .with_state(Arc::new(api))
 }

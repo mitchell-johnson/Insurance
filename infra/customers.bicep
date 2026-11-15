@@ -19,7 +19,7 @@
 // Deployed on its own into the same resource group as main.bicep:
 //   az deployment group create -g <rg> -f infra/customers.bicep \
 //     -p name=<name> keyVaultName=<vault> eventHubsNamespaceName=<namespace> \
-//        aksOidcIssuer=<url> aksOutboundIp=<ip> \
+//        aksOidcIssuer=<url> privateNetwork=<main.bicep output privateNetwork> \
 //        postgresAdminGroupObjectId=<id> postgresAdminGroupName=<name> \
 //        indexKey=<64 random characters>
 //
@@ -53,8 +53,8 @@ param aksOidcIssuer string
 @description('The Kubernetes namespace the services run in.')
 param workloadNamespace string = 'insurance-core'
 
-@description('The public address the AKS cluster connects out from. The only address the database accepts.')
-param aksOutboundIp string
+@description('Only without private networking (a throwaway dev environment): the public address the AKS cluster connects out from (main.bicep output egressPrefix), the only address the database then accepts. With private networking the database has no public address at all and this is ignored.')
+param aksOutboundIp string = ''
 
 @description('Object ID of the Entra group that administers the customer database.')
 param postgresAdminGroupObjectId string
@@ -73,11 +73,22 @@ param hubPartitions int = 8
 @description('Years the erasure register is kept: 10, agreed 2026-11-13. Longer than any backup the database can be restored from. Once the policy is locked it can only grow.')
 param registerYears int = 10
 
+
+// --- private networking (main.bicep output privateNetwork) ---------------------------
+
+@description('main.bicep\'s output privateNetwork: the subnet and the private DNS zones for private endpoints, and what the firewalls admit beside them. Empty: no private endpoints, and the services here stay reachable from anywhere, with Entra ID still required.')
+param privateNetwork object = {}
+
 var tags = {
   system: 'insurance-core'
   environment: environment
   component: 'customers'
 }
+var isPrivate = !empty(privateNetwork)
+var adminIpRules = map(privateNetwork.?adminIpRanges ?? [], range => { value: range, action: 'Allow' })
+// An account only this system reaches: the private endpoint and the administrators.
+var internalAccess = privateNetwork.?publicAccess ?? 'Enabled'
+var internalAcls = { defaultAction: isPrivate ? 'Deny' : 'Allow', bypass: 'AzureServices', ipRules: adminIpRules }
 var unique = uniqueString(resourceGroup().id, name)
 var roles = {
   blobDataContributor: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
@@ -127,7 +138,21 @@ resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
       backupRetentionDays: 35
       geoRedundantBackup: environment == 'prod' ? 'Enabled' : 'Disabled'
     }
-    network: { publicNetworkAccess: 'Enabled' }
+    // Reached only through its private endpoint when private.
+    network: { publicNetworkAccess: isPrivate ? 'Disabled' : 'Enabled' }
+  }
+}
+
+module postgresEndpoint 'modules/private-endpoint.bicep' = if (isPrivate) {
+  name: 'pe-customers-postgres'
+  params: {
+    name: '${postgres.name}-postgres'
+    location: location
+    tags: tags
+    subnetId: privateNetwork.?subnetId ?? ''
+    targetId: postgres.id
+    groupId: 'postgresqlServer'
+    dnsZoneIds: [privateNetwork.?zones.?postgres ?? '']
   }
 }
 
@@ -147,7 +172,7 @@ resource database 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-0
   properties: { charset: 'UTF8', collation: 'en_US.utf8' }
 }
 
-resource fromCluster 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = {
+resource fromCluster 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = if (!isPrivate && !empty(aksOutboundIp)) {
   parent: postgres
   name: 'aks-outbound'
   properties: { startIpAddress: aksOutboundIp, endIpAddress: aksOutboundIp }
@@ -243,12 +268,27 @@ resource account 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   kind: 'StorageV2'
   sku: { name: environment == 'prod' ? 'Standard_GZRS' : 'Standard_LRS' }
   properties: {
+    publicNetworkAccess: internalAccess
+    networkAcls: internalAcls
     accessTier: 'Cool'
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
     allowBlobPublicAccess: false
     allowSharedKeyAccess: false
     defaultToOAuthAuthentication: true
+  }
+}
+
+module accountEndpoint 'modules/private-endpoint.bicep' = if (isPrivate) {
+  name: 'pe-customers-blob'
+  params: {
+    name: '${account.name}-blob'
+    location: location
+    tags: tags
+    subnetId: privateNetwork.?subnetId ?? ''
+    targetId: account.id
+    groupId: 'blob'
+    dnsZoneIds: [privateNetwork.?zones.?blob ?? '']
   }
 }
 

@@ -1,0 +1,59 @@
+# The ingress rules for the internal NGINX controller that
+# deploy/cluster.yaml makes. See that file for the way in.
+# Only Front Door reaches this: the load balancer has no public address, and
+# a Private Link connection is answered only once approved, which is done
+# for Front Door's connection alone (docs/operations.md, "The way in").
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: insurance-core
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 25m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+spec:
+  ingressClassName: insurance-core
+  rules:
+    # The portals and the app's service (customers, advisers, employers, staff).
+    - host: REPLACE-portal-host
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ic-portal
+                port:
+                  name: http
+    # The API gateway.
+    - host: REPLACE-api-host
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ic-api
+                port:
+                  name: http
+    # Reinsurers' API.
+    - host: REPLACE-reinsurers-host
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ic-reinsurance-api
+                port:
+                  name: http
+    # Event Grid's delivery reports for letters, e-mail and SMS: that path only.
+    - host: REPLACE-hooks-host
+      http:
+        paths:
+          - path: /v1/delivery-reports
+            pathType: Exact
+            backend:
+              service:
+                name: ic-documents
+                port:
+                  name: http

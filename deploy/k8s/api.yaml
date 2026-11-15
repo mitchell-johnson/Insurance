@@ -51,6 +51,8 @@ spec:
           command: ["/usr/local/bin/ic-api"]
           envFrom:
             - configMapRef:
+                name: ic-telemetry
+            - configMapRef:
                 name: ic-ledger
             - configMapRef:
                 name: ic-identity

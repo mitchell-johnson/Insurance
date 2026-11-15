@@ -34,11 +34,8 @@ async fn shutdown() {
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    // JSON lines on stdout: Container Insights and Application Insights pick them up as they are.
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    // JSON log lines, and traces and logs over OTLP (crates/telemetry).
+    let _telemetry = ic_telemetry::init("ic-portal")?;
     let settings = PortalSettings::from_lookup(|key| std::env::var(key).ok(), |path| std::fs::read_to_string(path))?;
     if settings.customers == Identity::Dev {
         tracing::warn!("development identity: callers are trusted by header. Never expose this listener.");

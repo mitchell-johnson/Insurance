@@ -11,6 +11,7 @@ name = "ic-portal"
 path = "src/main.rs"
 
 [dependencies]
+ic-telemetry.workspace = true
 ic-core.workspace = true
 ic-money.workspace = true
 ic-ledger.workspace = true

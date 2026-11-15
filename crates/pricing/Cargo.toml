@@ -7,6 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+ic-telemetry.workspace = true
 ic-azure.workspace = true
 ic-core.workspace = true
 ic-ledger.workspace = true

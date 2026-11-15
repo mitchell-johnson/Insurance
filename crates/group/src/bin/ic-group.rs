@@ -37,10 +37,8 @@ async fn stopped(mut stop: tokio::sync::watch::Receiver<bool>) {
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    // JSON log lines, and traces and logs over OTLP (crates/telemetry).
+    let _telemetry = ic_telemetry::init("ic-group")?;
     let stop = stop_signal()?;
     let config = Config::from_lookup(|key| std::env::var(key).ok(), |path| std::fs::read_to_string(path))?;
     let credential = AzureCredential::from_env().map_err(|e| e.to_string())?;

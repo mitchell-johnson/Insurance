@@ -94,6 +94,8 @@ spec:
           image: insurance-core
           command: ["/usr/local/bin/ic-underwriting-intake"]
           envFrom:
+            - configMapRef:
+                name: ic-telemetry
             # IC_NODES and IC_CLUSTER_TOKEN_FILE.
             - configMapRef:
                 name: ic-ledger
