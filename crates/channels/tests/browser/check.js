@@ -549,7 +549,15 @@ const sees = async (page, text) => {
     await p.locator("#act-form button").first().click();
     await sees(p, "Someone else signs it");
     await p.getByRole("button", { name: "Withdraw" }).waitFor();
-  } });
+    await say(p, "The reinsurer accounts: a reinsurer's statements, and cutting one for a period that has ended");
+    await tab(p, "Accounts");
+    await p.fill("#acc-re", "reinsurer-north");
+    await p.locator("#acc button").click();
+    await p.locator("#acc-out").getByText(/No statements|Agree/).first().waitFor();
+    await p.fill("#cut-treaty", "retail-life-surplus"); await p.fill("#cut-end", "2027-02-28");
+    await p.locator("#cut button").click();
+    await p.locator("#acc-msg .banner").first().waitFor();
+  }, expectStatus: [409] });
   await visit(browser, "/reinsurance", { subject: "sub-ri2" }, { run: async (p) => {
     await p.getByRole("button", { name: "Sign and send" }).click();
     await sees(p, "Signed and sent.");

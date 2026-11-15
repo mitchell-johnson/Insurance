@@ -255,22 +255,29 @@ Claims live inside the core on the partition of each claim's policy (`docs/claim
 | `settlement_mismatch:<n>`, `settlement_returned:<n>` | Record the settlement with its payment reference and the statement's net (`record_settlement`). A returned settlement can instead be offered to payments again under a new reference, with a note of where the decision is filed (`reoffer_settlement`). |
 | `facultative_terms_altered:<policy>/<cover>/<layer>/<life>` | Record that the reinsurer was told, and where its answer is filed (`facultative_reinsurer_told`). |
 | `reopened_after_reversal:<claim>` | Resume recoveries with a note (`resume_recoveries`) once every disputed item on the claim is resolved; the module refuses it before then (`disputes_open`). |
+| `disputed_item:<reference>` | Settle the dispute: what the insurer repays, where the agreement is filed (`resolve_dispute`, two people; the preparer is `prepared_by` and the signer `approved_by`). |
+| `settlement_not_cleared:<n>` | Name the bank account a settlement recorded without one moved through (`clear_settlement`). |
+| `admitted_without_consent:<claim>` | Record the reinsurer's answer and where it is filed (`reinsurer_consent`). |
 | `claim_fact:...`, `possible_match:...` | Shown; they close when the facts arrive. |
+
+**Reinsurer accounts** (the Accounts view, 15 Nov). Until this view nothing in the system cut a reinsurer's statement or instructed its settlement. A person with `reinsurance.operate` picks a reinsurer (from the module's `exposure`), sees its statements, cuts one for a treaty and a period that has ended (`cut_statement`), agrees it with the reinsurer's confirmation (`agree_statement`), holds or releases its settlement (`hold_settlement`, `release_hold`), issues a supplementary listing when one is due, reviews profit commission (`review_profit_commission`), and prepares the settlement (`instruct_settlement`), which a second person signs: the module is told the preparer and the signer and refuses one person as both (`maker_checker`). A settlement the bank sent back can be recorded (`settlement_returned`) where payments did not report it.
+
+**Treaty changes** (15 Nov). Recapturing cover from a treaty (`recapture`) and moving cover to another version (`move_treaty_version`), each from a date for the covers listed, are prepared by one person and sent when a second signs. The reason given is for the signer and is not sent to the module.
 
 Commands go under the caller `reinsurance-ops` on the latest business date any partition has reported. That module keeps no actor beyond an abandonment's `approved_by`, so the portal enforces who may act:
 
 | Staff action | What it allows |
 | --- | --- |
 | `reinsurance.view` | Read the exceptions, staff notices, abandonments and the month-end check (`sweep_check`). |
-| `reinsurance.operate` | Send what one person may (retry, settlement, reinsurer told) and prepare an abandonment. |
-| `reinsurance.approve` | Sign an abandonment someone else prepared. |
+| `reinsurance.operate` | Send what one person may (retry, settlement, reinsurer told, consent, the statement steps) and prepare an abandonment, a settlement, a dispute's resolution or a treaty change. |
+| `reinsurance.approve` | Sign what someone else prepared. |
 
 **Two people.** An abandonment is prepared by one person and kept in the replicated channel state (`src/countersign.rs`) with its reason. A different person with `reinsurance.approve` signs it, and only then is it sent, with the signer as `approved_by`; the page cannot type an approver. The person who prepared it can take it back until it is signed. If the module cannot be reached when it is signed, it stays signed and the signer signs again to finish it; the module's key is the proposal's, so it applies once. A refusal from the module ends it, and it is prepared again if still needed.
 
 | Route | What it does |
 | --- | --- |
 | `GET /staff/v1/reinsurance/me` | What you may do, and the abandonments waiting for a signature. |
-| `GET /staff/v1/reinsurance/{question}` | `exceptions`, `notices`, `abandoned`, `abandoned_notices`, `sweep_check?period_end=`, `statement?number=`, `notice_retries?seq=`. |
+| `GET /staff/v1/reinsurance/{question}` | `exceptions`, `notices`, `abandoned`, `abandoned_notices`, `sweep_check?period_end=`, `statement?number=`, `notice_retries?seq=`, `exposure?on=`, `statements?reinsurer=[&after=]` (100 at a time), `balance?treaty=&reinsurer=`, `consent_status?claim=`. A null answer is 404. |
 | `POST /staff/v1/reinsurance/commands` | One of the commands above, in that module's own JSON, with an `Idempotency-Key`. An abandonment answers `{prepared}`. |
 | `POST /staff/v1/reinsurance/sign/{id}`, `.../withdraw/{id}` | Sign and send, or take back, a prepared abandonment. |
 
