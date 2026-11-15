@@ -388,3 +388,54 @@ async fn a_data_voter_never_takes_the_witness_marker_for_a_state() {
     assert!(sent.to_string().contains("no state to send"), "{sent}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Purpose: as the state machine Raft drives, a witness's partition member
+/// and module member take no snapshot while the data voters have marked
+/// nothing new, and take a leader's snapshot as a position: the witness
+/// moves to it and keeps no state. A durable mark names what it covers.
+/// Why it matters: these are the calls openraft makes on a witness. A
+/// snapshot taken without a new mark would cut log a lost region may still
+/// need; one installed as state would put the ledger on the one machine
+/// meant to hold none.
+#[tokio::test]
+async fn a_witness_member_snapshots_only_at_a_mark_and_installs_only_a_position() {
+    use openraft::storage::RaftStateMachine;
+    use openraft::testing::log_id;
+    use openraft::{Membership, StoredMembership};
+
+    let meta = openraft::SnapshotMeta {
+        last_log_id: Some(log_id::<ic_raft::TypeConfig>(2, 1, 40)),
+        last_membership: StoredMembership::new(
+            Some(log_id::<ic_raft::TypeConfig>(1, 1, 3)),
+            Membership::new_with_defaults(vec![BTreeSet::from([1, 2, 3, 4, 5])], []),
+        ),
+    };
+
+    let mut partition = ic_raft::Machine::open_witness(0, scratch("witness-machine")).unwrap();
+    assert!(partition.try_create_snapshot_builder(false).await.is_none(), "no mark, no marker");
+    partition.install_snapshot(&meta, b"a whole partition".to_vec()).await.unwrap();
+    assert_eq!(partition.witness().unwrap().last_applied_index(), Some(40));
+
+    let spec = ModuleSpec::new(MODULE, tally).unwrap();
+    let mut module = ic_raft::module::ModuleMachine::open_witness(spec, scratch("witness-module")).unwrap();
+    assert!(module.try_create_snapshot_builder(false).await.is_none(), "no mark, no marker");
+    module.install_snapshot(&meta, b"a whole module".to_vec()).await.unwrap();
+    assert_eq!(module.witness().unwrap().last_applied_index(), Some(40));
+
+    let mark = ic_raft::Proposal::Durable {
+        through: log_id::<ic_raft::TypeConfig>(2, 1, 40),
+    };
+    assert_eq!(mark.to_string(), "every data voter holds the log through 40");
+}
+
+/// Purpose: a witness whose marker file cannot be read for any reason but
+/// its absence refuses to start, rather than starting from nothing.
+/// Why it matters: starting from nothing would forget the membership and
+/// the point the log was cut at, and the witness would vote as a member of
+/// a group it no longer knows.
+#[test]
+fn a_witness_marker_that_cannot_be_read_stops_the_start() {
+    let dir = scratch("witness-unreadable");
+    std::fs::create_dir_all(dir.join("witness.json")).unwrap();
+    assert!(ic_raft::witness::Witness::open(&dir).is_err());
+}

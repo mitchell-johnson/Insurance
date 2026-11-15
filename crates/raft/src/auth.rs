@@ -11,10 +11,6 @@
 //! rotated without stopping the cluster: add the new one everywhere, switch
 //! senders to it, then remove the old one.
 
-use axum::extract::{Request, State};
-use axum::http::{header, StatusCode};
-use axum::middleware::Next;
-use axum::response::{IntoResponse, Response};
 use sha2::{Digest, Sha256};
 
 /// Tokens shorter than this are refused: they are guessable.
@@ -144,15 +140,5 @@ impl ClusterAuth {
             admitted |= difference == 0;
         }
         admitted
-    }
-}
-
-/// Middleware: turn away any request without an accepted token.
-pub async fn require(State(auth): State<ClusterAuth>, request: Request, next: Next) -> Response {
-    let authorization = request.headers().get(header::AUTHORIZATION).and_then(|v| v.to_str().ok());
-    if auth.admits(authorization) {
-        next.run(request).await
-    } else {
-        (StatusCode::UNAUTHORIZED, [(header::WWW_AUTHENTICATE, "Bearer")], "a cluster token is required").into_response()
     }
 }

@@ -152,9 +152,12 @@ cut_off() {
   local node
   for node in "$@"; do docker network disconnect "$NETWORK" "$(container "$node")"; done
 }
+# Rejoin under the service name too: Compose gives each container that alias
+# on its network, and a plain reconnect would leave it known only by its
+# container name, so its peers could never reach it again.
 join() {
   local node
-  for node in "$@"; do docker network connect "$NETWORK" "$(container "$node")"; done
+  for node in "$@"; do docker network connect --alias "$node" "$NETWORK" "$(container "$node")"; done
 }
 
 cleanup() {
