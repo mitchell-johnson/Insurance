@@ -424,9 +424,15 @@ impl IdGenerator for BoxedIds {
     }
 }
 
-/// The filter for log lines: `RUST_LOG`, or `info`.
+/// The filter for log lines and log records: `RUST_LOG`, or `info`.
 fn filter() -> EnvFilter {
     EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
+}
+
+/// The filter for spans: `IC_TRACE_FILTER`, or `info`. Separate from `RUST_LOG`, so quieter log
+/// lines (`RUST_LOG=warn`) do not drop the spans a trace is made of.
+fn trace_filter() -> EnvFilter {
+    EnvFilter::try_from_env("IC_TRACE_FILTER").unwrap_or_else(|_| EnvFilter::new("info"))
 }
 
 /// Builds the subscriber for these settings and output, without installing it.
@@ -439,15 +445,16 @@ pub fn subscriber_with(settings: &Settings, output: Output, custom: Custom) -> R
     let (traces, logs) = providers_with(settings, custom)?;
     let tracer = traces.tracer("ic-telemetry");
     let lines = match output {
-        Output::Stdout => format::lines(std::io::stdout).boxed(),
-        Output::Stderr => format::lines(std::io::stderr).boxed(),
+        Output::Stdout => format::lines(std::io::stdout).with_filter(filter()).boxed(),
+        Output::Stderr => format::lines(std::io::stderr).with_filter(filter()).boxed(),
     };
-    let exported = logs.as_ref().map(|p| logs::ScrubbedBridge::new(p).boxed());
-    let subscriber = Registry::default()
-        .with(filter())
-        .with(tracing_opentelemetry::layer().with_tracer(tracer).with_threads(false).with_location(false))
-        .with(lines)
-        .with(exported);
+    let exported = logs.as_ref().map(|p| logs::ScrubbedBridge::new(p).with_filter(filter()).boxed());
+    let spans = tracing_opentelemetry::layer()
+        .with_tracer(tracer)
+        .with_threads(false)
+        .with_location(false)
+        .with_filter(trace_filter());
+    let subscriber = Registry::default().with(spans).with(lines).with(exported);
     let exporting = settings.exporting();
     Ok((subscriber, Telemetry { traces, logs, exporting }))
 }

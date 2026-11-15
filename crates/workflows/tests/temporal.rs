@@ -290,7 +290,11 @@ async fn a_close_is_one_trace_across_temporal() {
         return;
     }
     let server = temporal().await;
-    let ledger = Ledger::start("traced", 3, 1).await;
+    // A day of its own: Temporal names the close's workflow by its date, and the other tests on
+    // this server close days 0 to 2 and the days before today.
+    let ledger = Ledger::start_empty("traced", 3, 1).await;
+    let date = day(100);
+    ledger.run(0, "open", "leader", ic_core::Command::OpenBusinessDate { date }).await;
     let (collector, spans) = span_collector();
     let fleet = Fleet {
         temporal: server.address.clone(),
@@ -306,13 +310,13 @@ async fn a_close_is_one_trace_across_temporal() {
         .unwrap();
     let closing = fleet
         .traced(&fleet.nodes, &collector, "close")
-        .args(["close", &day(0).to_string(), "1"])
+        .args(["close", &date.to_string(), "1"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     let closed = report(closing).await;
-    assert_eq!(closed.closed, day(0));
+    assert_eq!(closed.closed, date);
     // A clean stop, so the worker flushes what it holds.
     assert!(Process::new("kill").args(["-TERM", &worker.id().to_string()]).status().unwrap().success());
     tokio::task::spawn_blocking(move || worker.wait().unwrap()).await.unwrap();

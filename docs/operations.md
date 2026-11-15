@@ -261,6 +261,7 @@ Every process sends its traces and log records over OTLP (HTTP) to the OpenTelem
 | `OTEL_TRACES_SAMPLER_ARG` | `1.0` | Share of new traces kept; a caller's decision is kept |
 | `OTEL_RESOURCE_ATTRIBUTES` | `deployment.environment.name=<env>` | Added to every span and record |
 | `OTEL_SERVICE_NAME` | each process's own name | |
+| `IC_TRACE_FILTER` | `info` | Which spans become traces, as a `RUST_LOG`-style filter. Separate from `RUST_LOG`, which sets only the log lines and records, so quieter logs do not break traces apart |
 
 With no endpoint set at all (the compose cycle, the tests), nothing is exported and the log lines on stdout carry the trace IDs as before.
 
