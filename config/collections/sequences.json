@@ -1,0 +1,822 @@
+{
+  "_about": "Best-estimate dunning sequences for every shipped product (15 Nov 2026). Days count from the oldest unpaid premium's due date; lapse_day is the product's arrears lapse_days plus one, the day the core lapses. Not approved by anyone: legal and conduct confirm the days, channels and wording before a configuration person sets each one from the collections console. See docs/payments.md, Collections.",
+  "sequences": [
+    {
+      "product": "aia-cancer-care",
+      "lapse_day": 32,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 8,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 14,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 18,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "aia-corporate",
+      "lapse_day": 121,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 17,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 46,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 90,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "aia-cover-for-life",
+      "lapse_day": 32,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 8,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 14,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 18,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "aia-essentials-life",
+      "lapse_day": 32,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 8,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 14,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 18,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "aia-interim",
+      "lapse_day": 91,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 17,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 31,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 60,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "aia-living",
+      "lapse_day": 32,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 8,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 14,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 18,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "aia-living-business",
+      "lapse_day": 32,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 8,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 14,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 18,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "aia-private-health",
+      "lapse_day": 32,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 8,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 14,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 18,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "aia-start-up-income",
+      "lapse_day": 32,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 8,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 14,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 18,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "aia-starter",
+      "lapse_day": 32,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 8,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 14,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 18,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "group-benefits",
+      "lapse_day": 121,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 17,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 46,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 90,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "group-health",
+      "lapse_day": 121,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 17,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 46,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 90,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "group-life",
+      "lapse_day": 121,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 17,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 46,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 90,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "health-flex",
+      "lapse_day": 61,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 17,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 31,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 45,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "health-plan",
+      "lapse_day": 61,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 17,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 31,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 45,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "income-protection",
+      "lapse_day": 91,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 17,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 31,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 60,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "interim-accident",
+      "lapse_day": 91,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 17,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 31,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 60,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "invest-plan",
+      "lapse_day": 91,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 17,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 31,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 60,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    },
+    {
+      "product": "term-life",
+      "lapse_day": 91,
+      "minimum_notice_days": 14,
+      "steps": [
+        {
+          "day": 3,
+          "kind": "reminder",
+          "channel": "email",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 10,
+          "kind": "reminder",
+          "channel": "sms",
+          "template": "collections/reminder"
+        },
+        {
+          "day": 17,
+          "kind": "call_task",
+          "channel": "queue",
+          "template": "collections/call_task"
+        },
+        {
+          "day": 31,
+          "kind": "suspension_notice",
+          "channel": "post",
+          "template": "collections/suspension_notice"
+        },
+        {
+          "day": 60,
+          "kind": "final_notice",
+          "channel": "post",
+          "template": "collections/final_notice"
+        }
+      ],
+      "early_call": {
+        "annual_premium_minor": 500000,
+        "day": 7
+      },
+      "call_escalate_days": 3,
+      "max_arrangement_instalments": 6
+    }
+  ]
+}

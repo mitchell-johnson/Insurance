@@ -126,3 +126,29 @@ fn only_configuration_sets_a_sequence() {
     assert!(matches!(&applied.events[0].event, ic_collections::Event::SequenceSet { product, hash } if product == PRODUCT && hash.len() == 64));
     assert_eq!(world.state.sequences[PRODUCT].minimum_notice_days, 15);
 }
+
+/// Purpose: the best-estimate sequences shipped in `config/collections/sequences.json` are each
+/// accepted by `SetSequence`, one per product with no product named twice, and a file that is
+/// not sequences or holds one the rules refuse is reported naming the problem.
+/// Why it matters: the collections console offers these as the starting point for each
+/// product. One the module would refuse would leave that product sending nothing, the state
+/// the shipped products were in before any sequence existed.
+#[test]
+fn the_shipped_sequences_are_accepted_by_the_module() {
+    let shipped = ic_collections::shipped_sequences().unwrap();
+    let mut products: Vec<&str> = shipped.iter().map(|s| s.product.as_str()).collect();
+    products.sort_unstable();
+    products.dedup();
+    assert_eq!(products.len(), shipped.len());
+    let mut world = World::new();
+    for sequence in shipped {
+        let product = sequence.product.clone();
+        let applied = world.staff("config-1", &[Role::Configuration], Command::SetSequence { sequence });
+        assert_eq!(applied.result, Ok(()), "{product}");
+    }
+    assert!(ic_collections::parse_sequences("[]").unwrap_err().starts_with("not a file of sequences"));
+    let mut short = sequence();
+    short.minimum_notice_days = 3;
+    let file = serde_json::json!({ "sequences": [short] }).to_string();
+    assert!(ic_collections::parse_sequences(&file).unwrap_err().contains("at least 14 days"));
+}

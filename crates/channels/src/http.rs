@@ -153,6 +153,8 @@ pub struct AppState {
     pub reinsurance: Arc<dyn crate::forward::Source>,
     /// The payments module, for the payments console.
     pub payments: Arc<dyn crate::forward::Source>,
+    /// The collections module, for the collections console.
+    pub collections: Arc<dyn crate::forward::Source>,
     /// The underwriting module, for the underwriting console.
     pub underwriting: Arc<dyn crate::forward::Source>,
     /// The customer master, for a person's own record. `None` where it is
@@ -915,6 +917,7 @@ async fn submit_request(State(s): State<Shared>, headers: HeaderMap, method: Met
     }
     let action = request_action(&new.id, new.policy.as_ref(), &new.kind, &new.payload);
     let kind = new.kind.clone();
+    let servicing = new.module == crate::servicing::MODULE;
     let signed = redeem(&s, &headers, &session, &action, new.signed).await?;
     let routing = match &s.master {
         Some(master) => Some(master.routing(&session.party).await),
@@ -937,8 +940,9 @@ async fn submit_request(State(s): State<Shared>, headers: HeaderMap, method: Met
             },
         )
         .await?;
-    // A claim is carried to claims now rather than at the next sweep; one not carried now waits for the sweep.
-    if kind == ic_core::claims_module::channel::REQUEST_KIND {
+    // A claim, or a change the customer asked for themselves, is carried now rather than at the next sweep; one not
+    // carried now waits for the sweep. One that waits for the customer's approval is carried when they approve it.
+    if kind == ic_core::claims_module::channel::REQUEST_KIND || servicing {
         s.carry_now().await;
     }
     accepted(result)
@@ -2285,6 +2289,173 @@ async fn payments_command(State(s): State<Shared>, headers: HeaderMap, method: M
     ok(json!({ "accepted": true, "events": output["Ok"] }))
 }
 
+impl AppState {
+    /// Whether this person may open the collections console, and their roles
+    /// there. Nobody without a collections action gets as far as that module.
+    async fn collections_standing(&self, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<(Session, Value), Problem> {
+        let session = self.staff(headers, method, uri, body).await?;
+        let standing = self
+            .ask(Question::CollectionsStaff {
+                staff: session.party.clone(),
+                at: session.at,
+            })
+            .await?;
+        if standing["view"] != true {
+            return Err(Problem::forbidden("your roles do not include collections"));
+        }
+        Ok((session, standing))
+    }
+}
+
+/// One of the console's questions to the collections module. `me` answers
+/// from here, and so does `shipped_sequence`: the best-estimate sequence
+/// shipped for a product, for a configuration person to start from.
+async fn collections_question(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(name): Path<String>,
+    Query(fields): Query<std::collections::BTreeMap<String, String>>,
+) -> Answer {
+    let (session, standing) = s.collections_standing(&headers, &method, &uri, b"").await?;
+    if name == "me" {
+        return ok(standing);
+    }
+    if name == "shipped_sequence" {
+        let product = fields.get("product").map(|p| p.trim()).unwrap_or_default();
+        return crate::collections::shipped_sequence(product)
+            .map(ok)
+            .unwrap_or_else(|| Err(Problem::not_found()));
+    }
+    let roles = payment_roles(&standing);
+    let question = crate::collections::question(&name, &fields, &roles, session.at).map_err(Problem::bad_request)?;
+    let answer = s
+        .collections
+        .ask(question)
+        .await
+        .map_err(|e| module_problem("collections", StatusCode::BAD_REQUEST, e))?;
+    if answer.is_null() {
+        return Err(Problem::not_found());
+    }
+    ok(answer)
+}
+
+/// A person's command to the collections module, as the person signed in
+/// with the roles their staff actions give them there. That module decides,
+/// and keeps the person who applied for hardship from deciding it.
+async fn collections_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let (session, standing) = s.collections_standing(&headers, &method, &uri, &body).await?;
+    let roles = payment_roles(&standing);
+    if roles.is_empty() {
+        return Err(Problem::forbidden("you may read collections but hold no role to act on them"));
+    }
+    let key = key(&headers, &session.party.0)?;
+    let command: Value = parse(&body)?;
+    if crate::collections::console_command(&command).is_none() {
+        return Err(Problem::bad_request("that is not a command people send to collections"));
+    }
+    let envelope = crate::collections::envelope(&key, &session.party, &roles, session.at, command);
+    let applied = s
+        .collections
+        .tell(envelope)
+        .await
+        .map_err(|e| module_problem("collections", StatusCode::BAD_REQUEST, e))?;
+    if let Some(refused) = applied["result"].get("Err") {
+        return Err(module_refusal(
+            refused["code"].as_str().unwrap_or("refused"),
+            refused["message"].as_str().unwrap_or("the collections module refused it"),
+        ));
+    }
+    ok(json!({ "accepted": true, "events": applied["events"], "duplicate": applied["duplicate"] }))
+}
+
+impl AppState {
+    /// A member of staff who may carry out or decline a customer's request
+    /// the customer master sent to a person first.
+    async fn servicing_person(&self, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<Session, Problem> {
+        let session = self.staff(headers, method, uri, body).await?;
+        let allowed = self
+            .ask(Question::ServicingStaff {
+                staff: session.party.clone(),
+                at: session.at,
+            })
+            .await?;
+        if allowed != true {
+            return Err(Problem::forbidden(
+                "carrying out customers' requests that need a person is not one of your actions",
+            ));
+        }
+        Ok(session)
+    }
+
+    /// The pending servicing request `id` that waits for a person.
+    async fn waiting_for_person(&self, id: &str) -> Result<Value, Problem> {
+        self.servicing_pending()
+            .await
+            .map_err(|e| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "channels_unavailable", e))?
+            .into_iter()
+            .find(|r| r["id"] == id && !crate::servicing::carried_by_sweep(r))
+            .ok_or_else(Problem::not_found)
+    }
+}
+
+/// Customers' requests the customer master sent to a trained person first,
+/// oldest first. Who is asking and what for; never why.
+async fn servicing_waiting(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
+    s.servicing_person(&headers, &method, &uri, b"").await?;
+    let waiting: Vec<Value> = s
+        .servicing_pending()
+        .await
+        .map_err(|e| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "channels_unavailable", e))?
+        .into_iter()
+        .filter(|r| !crate::servicing::carried_by_sweep(r))
+        .map(|r| json!({ "id": r["id"], "party": r["party"], "policy": r["policy"], "kind": r["kind"], "payload": r["payload"], "submitted": r["submitted"], "assisted": r["assisted"] }))
+        .collect();
+    ok(json!({ "rows": waiting }))
+}
+
+/// A trained person, having spoken with the customer, carries out their
+/// request: it goes to the core as the sweep would send it, and is closed
+/// with the core's answer.
+async fn servicing_carry_out(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(id): Path<String>, body: Bytes) -> Answer {
+    let session = s.servicing_person(&headers, &method, &uri, &body).await?;
+    let request = s.waiting_for_person(&id).await?;
+    let note: Value = if body.is_empty() { json!({}) } else { parse(&body)? };
+    tracing::info!(request = %id, staff = %session.party, conversation = note["conversation"].as_str().unwrap_or_default(), "a person carries out a customer's request");
+    let carried = s
+        .carry_servicing(&request)
+        .await
+        .map_err(|e| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "channels_unavailable", e))?;
+    match carried {
+        None => Err(Problem::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "core_unavailable",
+            "the core could not be reached; try again",
+        )),
+        Some(Ok(_)) => ok(json!({ "id": id, "applied": true })),
+        Some(Err((code, message))) => ok(json!({ "id": id, "applied": false, "code": code, "message": message })),
+    }
+}
+
+/// A trained person declines a customer's request, saying why in words the
+/// customer will read.
+async fn servicing_decline(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(id): Path<String>, body: Bytes) -> Answer {
+    let session = s.servicing_person(&headers, &method, &uri, &body).await?;
+    s.waiting_for_person(&id).await?;
+    let given: Value = parse(&body)?;
+    let reason = given["reason"]
+        .as_str()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .ok_or_else(|| Problem::bad_request("say why, in words the customer will read"))?;
+    tracing::info!(request = %id, staff = %session.party, "a person declines a customer's request");
+    s.close_request(&id, Err(("declined_by_service".to_string(), reason.to_string())))
+        .await
+        .map_err(|e| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "channels_unavailable", e))?;
+    ok(json!({ "id": id, "declined": true }))
+}
+
 /// One of the console's questions to the underwriting module. `me` answers
 /// from here, with the remedies waiting for a second senior.
 async fn underwriting_question(
@@ -3629,6 +3800,84 @@ impl AppState {
         if let Err(e) = self.carry_claim_notices().await {
             tracing::warn!(error = %e, "claim notification left for the next sweep");
         }
+        if let Err(e) = self.carry_servicing_requests().await {
+            tracing::warn!(error = %e, "servicing request left for the next sweep");
+        }
+    }
+
+    /// The policy-servicing requests pending now, as the channel module lists them.
+    async fn servicing_pending(&self) -> Result<Vec<Value>, String> {
+        let pending = self
+            .ask(Question::Pending {
+                module: crate::servicing::MODULE.to_string(),
+            })
+            .await
+            .map_err(|p| p.detail)?;
+        Ok(pending.as_array().cloned().unwrap_or_default())
+    }
+
+    /// Carry every pending servicing request the sweep may carry: those the
+    /// customer master did not send to a person first. Returns how many were
+    /// closed. One that cannot be carried now (the core or a partition out
+    /// of reach) stays pending for the next sweep.
+    pub async fn carry_servicing_requests(&self) -> Result<usize, String> {
+        let mut closed = 0;
+        for request in self.servicing_pending().await?.iter().filter(|r| crate::servicing::carried_by_sweep(r)) {
+            if self.carry_servicing(request).await?.is_some() {
+                closed += 1;
+            }
+        }
+        Ok(closed)
+    }
+
+    /// Carry one servicing request to the core and close it with the
+    /// core's answer, which it returns. `None` when it could not be carried now.
+    async fn carry_servicing(&self, request: &Value) -> Result<Option<Result<String, (String, String)>>, String> {
+        let id = request["id"].as_str().unwrap_or_default();
+        let outcome = match crate::servicing::command(request) {
+            Err(refused) => Err(refused),
+            Ok(command) => {
+                let policy = PolicyId::from(request["policy"].as_str().unwrap_or_default());
+                let mut found = None;
+                let mut unreachable = false;
+                for answer in futures::future::join_all((0..self.claims.count()).map(|p| self.claims.locate(p, policy.clone()))).await {
+                    match answer {
+                        Ok(at) => found = found.or(at),
+                        Err(_) => unreachable = true,
+                    }
+                }
+                match found {
+                    // The channels know the policy from the core's own events, so a partition that does not
+                    // answer for it yet is behind or out of reach: the request waits for the next sweep.
+                    None => {
+                        tracing::warn!(
+                            request = id,
+                            unreachable,
+                            "no partition answered for a servicing request's policy; left for the next sweep"
+                        );
+                        return Ok(None);
+                    }
+                    Some(partition) => {
+                        let envelope = ic_core::Envelope {
+                            key: format!("servicing:{id}"),
+                            caller: crate::servicing::MODULE.to_string(),
+                            salt: ic_raft::client::fresh_salt(),
+                            traceparent: None,
+                            command,
+                        };
+                        let Ok(proposed) = self.claims.propose(partition, envelope).await else {
+                            return Ok(None);
+                        };
+                        match proposed.rejected {
+                            Some(refused) => Err(refused),
+                            None => Ok(id.to_string()),
+                        }
+                    }
+                }
+            }
+        };
+        self.close_request(id, outcome.clone()).await?;
+        Ok(Some(outcome))
     }
 
     async fn close_request(&self, id: &str, outcome: Result<String, (String, String)>) -> Result<(), String> {
@@ -3653,11 +3902,15 @@ impl AppState {
     }
 }
 
-/// Carry claim notifications every `every`, for as long as the service runs.
+/// Carry claim notifications and servicing requests every `every`, for as
+/// long as the service runs.
 pub async fn carry_claim_notices(state: Shared, every: Duration) {
     loop {
         if let Err(e) = state.carry_claim_notices().await {
             tracing::warn!(error = %e, "claim notifications not carried this time");
+        }
+        if let Err(e) = state.carry_servicing_requests().await {
+            tracing::warn!(error = %e, "servicing requests not carried this time");
         }
         tokio::time::sleep(every).await;
     }
@@ -3789,6 +4042,11 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/group/schemes/{policy}/first-admin", put(group_first_admin))
         .route("/staff/v1/group/{question}", get(group_staff_question))
         .route("/staff/v1/payments/{question}", get(payments_question))
+        .route("/staff/v1/servicing/waiting", get(servicing_waiting))
+        .route("/staff/v1/servicing/{id}/carry-out", post(servicing_carry_out))
+        .route("/staff/v1/servicing/{id}/decline", post(servicing_decline))
+        .route("/staff/v1/collections/commands", post(collections_command))
+        .route("/staff/v1/collections/{question}", get(collections_question))
         .route("/staff/v1/underwriting/commands", post(underwriting_command))
         .route("/staff/v1/underwriting/disclosures", post(underwriting_disclosures))
         .route("/staff/v1/underwriting/{verb}/{id}", post(underwriting_decide))
@@ -3844,6 +4102,7 @@ pub fn router(state: Shared) -> Router {
         .route("/claims", get(|State(s): State<Shared>| async move { page(&s, crate::ui::CLAIMS) }))
         .route("/reinsurance", get(|State(s): State<Shared>| async move { page(&s, crate::ui::REINSURANCE) }))
         .route("/payments", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PAYMENTS) }))
+        .route("/collections", get(|State(s): State<Shared>| async move { page(&s, crate::ui::COLLECTIONS) }))
         .route("/group", get(|State(s): State<Shared>| async move { page(&s, crate::ui::GROUP) }))
         .route("/underwriting", get(|State(s): State<Shared>| async move { page(&s, crate::ui::UNDERWRITING) }))
         .route("/pricing", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PRICING) }))

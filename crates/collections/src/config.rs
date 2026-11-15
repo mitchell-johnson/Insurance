@@ -208,3 +208,35 @@ impl Sequence {
         }
     }
 }
+
+/// Best-estimate dunning sequences for every shipped product, as
+/// `config/collections/sequences.json` holds them. Nobody has approved
+/// them: the collections console offers one as the starting point when a
+/// configuration person sets a product's sequence, and that person is the
+/// one who sets it.
+pub const SHIPPED_SEQUENCES: &str = include_str!("../../../config/collections/sequences.json");
+
+/// The shipped best-estimate sequences, each checked as `SetSequence`
+/// would check it.
+pub fn shipped_sequences() -> Result<Vec<Sequence>, String> {
+    parse_sequences(SHIPPED_SEQUENCES)
+}
+
+/// Sequences from a file shaped like `config/collections/sequences.json`
+/// (`{"sequences": [...]}`), each checked as `SetSequence` would check it.
+pub fn parse_sequences(text: &str) -> Result<Vec<Sequence>, String> {
+    #[derive(Deserialize)]
+    struct File {
+        sequences: Vec<Sequence>,
+    }
+    let file: File = match serde_json::from_str(text) {
+        Ok(file) => file,
+        Err(e) => return Err(format!("not a file of sequences: {e}")),
+    };
+    for sequence in &file.sequences {
+        if let Err(refused) = sequence.validate() {
+            return Err(format!("the sequence for {}: {}", sequence.product, refused.message));
+        }
+    }
+    Ok(file.sequences)
+}

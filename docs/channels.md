@@ -296,6 +296,26 @@ Only people's commands pass (`src/payments.rs`, `COMMANDS`); the banks' answers,
 | `GET /staff/v1/payments/{question}` | `open_runs`, `open_exceptions[?account=]`, `matches_to_approve`, `manual_match?exception=`, `party?party=`, `customer_hold?party=`, `waiting`, `run?run=`, `control_totals?run=`, `submission?submission=`, `queued_submissions`, `unconfirmed_submissions`, `authority?authority=`, `payee?payee=`, `refund?refund=`, `awaiting_conversation`, `represent`, `deferred?from=&to=`, `fund_sweep?as_at=`, `fund_cash_settlement?as_at=`, `aged_unidentified_receipts?as_at=`, `reconciliation?account=` and `readiness` (both as of today in New Zealand), `config`, and `payer_cases` and `payer_case?case=` (compliance only). A null answer is 404. |
 | `POST /staff/v1/payments/commands` | One command in that module's JSON (`{"type": ...}`), with an `Idempotency-Key`. Its events come back; a refusal is 403 (`not_permitted`, `role_conflict`, `same_person`, ...) or 409 with the module's code. |
 
+## The collections console
+
+`/collections` is how staff reach the collections module (`ic-collections`, described in `docs/architecture.md` under Collections). The module decides each command by the roles it is told the person holds; the console tells it the signed-in workforce ID and the roles their staff actions give, at UTC time, under the key `console:{key}` (`src/collections.rs`).
+
+| Staff action | Role there |
+|---|---|
+| `collections.view` | None: reads the queue, tasks, notices and sequences, and sends nothing. |
+| `collections.officer` | `collections`: record a call's outcome, propose and end an arrangement within the officer's instalment limit, apply for hardship, ask for reinstatement. |
+| `collections.team_lead` | `team_lead`: as an officer, without the instalment limit. |
+| `collections.hardship` | `hardship`: decide a hardship application someone else made, end relief early. Only this role reads a case's health-disclosing note. |
+| `collections.configuration` | `configuration`: set a product's dunning sequence. |
+
+| Route | |
+|---|---|
+| `GET /staff/v1/collections/me` | Your roles there. |
+| `GET /staff/v1/collections/{question}` | `queue`, `hardship_cases`, `policy?policy=`, `tasks?team=` (an officer reads `collections`, the hardship and team lead teams their own), `hardship_case?case=`, `notices_due`, `notices_sent`, `unsequenced`, `sequences`, `reinstatements_for_underwriting`, and `shipped_sequence?product=` (the best-estimate sequence shipped in `config/collections/sequences.json`, read from the portal itself). Dates are today in New Zealand; lists are cut at 200. |
+| `POST /staff/v1/collections/commands` | One of `set_sequence`, `record_outcome`, `propose_arrangement`, `end_arrangement`, `apply_hardship`, `decide_hardship`, `end_hardship`, `request_reinstatement`, with an `Idempotency-Key`. The module's driver commands (core events, notice reports, the outbox) are refused here. A refusal is 403 or 409 with the module's code. |
+
+The page has five views: the queue (days to lapse, then annual premium), tasks by team, open hardship cases with a decision form, sequences (the one in force beside the shipped best estimate, which a configuration holder can set with one press), and notices due and sent. The portal's identity writes to the collections module (`deploy/cluster-access/grants.json`).
+
 ## The underwriting console
 
 `/underwriting` is how underwriters reach the underwriting module (`docs/underwriting.md`). That module keeps proposals, cases and decisions and checks each underwriter's authority profile itself (grade, accreditation, limits, conflicts); it takes people's commands only from the caller `underwriting-console` and believes the console about who is acting. So every field that names the person acting (`underwriter`, `by`, `of`, `reviewer`, `booked_by`, `decided_by`) is set here to whoever signed in, whatever the page sent. The underwriter IDs in that module's profiles are workforce directory IDs.
@@ -504,7 +524,13 @@ Some work is done by another service, and the portal is where people reach it. T
 
 The master is always told who the member of staff is (`x-ic-actor`) and never names a party to act for. For this the portal's identity holds the `staff`, `privacy` and `operations` roles on the customer master (docs/operations.md, step 4).
 
-A policy is not issued here. The core trusts its new business caller to send only terms underwriting accepted, so a policy is issued from underwriting's decision (the path the portal's applications already take), never from an application typed in by hand. Policy servicing changes are not here either: staff enter them for the customer (`POST /staff/v1/requests`) and the customer approves them in the app, as before. The end-of-day close runs on its schedule as a workflow and is not started from the portal; its result is what `/ops/v1/reconciliation` reads.
+A policy is not issued here. The core trusts its new business caller to send only terms underwriting accepted, so a policy is issued from underwriting's decision (the path the portal's applications already take), never from an application typed in by hand. Policy servicing changes are not here either: staff enter them for the customer (`POST /staff/v1/requests`) and the customer approves them in the app, as before.
+
+### Carrying servicing requests to the core
+
+A `policy-servicing` request that is pending (every owner signed, a second member of staff agreed where needed) is carried to the core by the portal (`src/servicing.rs`): at once when the customer signs, on the sweep, and from `carry_now`. `decline_indexation` (`declined`, true if left out) becomes `DeclineIndexation`, `change_frequency` (`frequency` and/or `billing_day`) becomes `ChangeBilling` with the request ID as its reference, and `cancel_policy` becomes `CancelPolicy`. Each is proposed on the partition holding the policy as caller `policy-servicing` with key `servicing:{id}`, so carrying it twice changes the policy once, and the request is closed with what the core said (applied, or rejected with the core's code). A request whose policy no partition holds yet stays pending and is tried again.
+
+A request the customer master routed to a person (`route_to_person`), and one of a kind the portal does not carry, waits for a member of staff holding `servicing.carry_out` who has spoken to the customer: `GET /staff/v1/servicing/waiting` lists them, `POST /staff/v1/servicing/{id}/carry-out` carries one (answer `{id, applied, code?, message?}`), and `POST /staff/v1/servicing/{id}/decline {reason}` closes it as rejected (`declined_by_service`). The staff console shows them under "Customers' changes waiting for a trained person". The adviser and staff change forms now carry the new frequency. The end-of-day close runs on its schedule as a workflow and is not started from the portal; its result is what `/ops/v1/reconciliation` reads.
 
 ## The MCP server
 
