@@ -44,13 +44,14 @@ Azure services do the work that should not be ours:
 | Bank keys and credentials | A Key Vault of payments' own |
 | Logs, metrics and alerts | Container Insights, Application Insights and log alert rules (JSON lines on stdout) |
 
-What each template creates is drawn in [docs/architecture/azure-deployment.png](docs/architecture/azure-deployment.png). Temporal hosting (Temporal Cloud or self-hosted on AKS) is still the insurer's decision.
+What each template creates is drawn in [docs/architecture/azure-deployment.png](docs/architecture/azure-deployment.png) and listed with its specifications in [docs/azure-resources.md](docs/azure-resources.md). Temporal hosting (Temporal Cloud or self-hosted on AKS) is still the insurer's decision.
 
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md): how the system works, the diagrams, and each area's state and hand-over.
 - [docs/operations.md](docs/operations.md): the runbook, from the first deployment to replacing a node.
 - [docs/decisions.md](docs/decisions.md): what is deliberately not done yet, open decisions and best-estimate placeholders.
+- [docs/azure-resources.md](docs/azure-resources.md): every Azure resource the system needs, with SKU, size, count and placement, what the templates leave out, and the gaps.
 - [docs/integration.md](docs/integration.md): fitting the core into an insurer's existing systems, and what can be swapped.
 - [docs/modules.md](docs/modules.md): the contract for modules built beside the core.
 - One document per area: [claims](docs/claims.md), [reinsurance](docs/reinsurance.md), [underwriting](docs/underwriting.md), [group schemes](docs/group.md), [commission](docs/distribution.md), [payments](docs/payments.md), [documents](docs/documents.md), [complaints](docs/complaints.md), [finance](docs/finance.md), [unit pricing](docs/unit-pricing.md), [customer master](docs/customers.md), [portal and app services](docs/channels.md), [wellness](docs/wellness.md), [AIA New Zealand products](docs/aia-products.md), [design system](docs/design-system.md).
