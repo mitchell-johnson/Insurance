@@ -224,7 +224,7 @@ signIn(R).then(async () => {
   await Promise.all([showWaiting(), showRuns(), showExceptions(), showMatches()]);
   // The run most likely meant: the only one being prepared.
   const preparing = openRuns.filter((r) => /prepar/i.test(status(r.status)));
-  if (preparing.length === 1) $("t-run").value = preparing[0].run;
+  if (preparing.length === 1 && !$("t-run").value) $("t-run").value = preparing[0].run;
   $("mm-send").disabled = !has("reconciler");
   const conv = await ask("awaiting_conversation");
   const held = Object.entries(conv || {});

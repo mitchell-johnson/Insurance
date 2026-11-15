@@ -197,7 +197,8 @@ signIn(R).then(async () => {
   me = await ask("me");
   $("seats").textContent = `${me.seats.map(words).join(", ")}. Authority level ${me.authority}${me.trained ? ", trained to work with vulnerable customers" : ""}.`;
   put($("a-seat"), me.seats.filter((s) => s !== "intake").map((s) => h("option", { value: s }, words(s)))); commands();
-  fresh();
+  // A reference someone typed while the page was signing them in is theirs to keep.
+  if (!$("i-id").value) fresh();
   $("p-from").value = portal.month() + "-01"; $("p-to").value = portal.today();
   // Opened from another console: a complaint from someone found there, or that person's complaints.
   const sent = portal.params();

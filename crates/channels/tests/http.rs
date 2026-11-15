@@ -4130,7 +4130,7 @@ async fn the_commission_console() {
 /// decide it, and every command reaches the underwriting module naming whoever signed in, whatever the page typed. Peer
 /// review and non-disclosure remedies are a senior's; a remedy is prepared by one senior and sent only when a different
 /// senior signs it, named as `countersigned_by`. Reading a life's disclosures goes through the intake with a purpose,
-/// and parked effects can be put back.
+/// and parked effects can be put back. A date with no reason or exclusion library in force offers an empty one.
 /// Why it matters: that module believes the console about who is acting, so a page that could name someone else would
 /// defeat its authority, conflict and separation checks; and a remedy changes or ends someone's cover on a claim, which
 /// must never rest on one person.
@@ -4173,6 +4173,14 @@ async fn the_underwriting_console() {
     }
     assert!(queued, "the case is in a queue");
     assert_eq!(ask("sub-amy", "workload".into()).await.1, json!(0));
+    // A date before any library was in force offers nothing to pick, rather than a missing page.
+    for library in ["reasons", "exclusions"] {
+        assert_eq!(
+            ask("sub-amy", format!("{library}?on=1900-01-01")).await,
+            (StatusCode::OK, json!({ "entries": {}, "in_force": false })),
+            "{library}"
+        );
+    }
 
     // The person acting is whoever signed in, whatever the page says.
     let (status, taken) = tell("sub-amy", json!({ "take_case": { "case": case, "underwriter": "sam" } })).await;

@@ -2305,6 +2305,10 @@ async fn underwriting_question(
         .ask(question)
         .await
         .map_err(|e| module_problem("underwriting", StatusCode::BAD_REQUEST, e))?;
+    // No library in force on the date is an empty library to pick from, not a missing page.
+    if answer.is_null() && matches!(name.as_str(), "exclusions" | "reasons") {
+        return ok(json!({ "entries": {}, "in_force": false }));
+    }
     if answer.is_null() {
         return Err(Problem::not_found());
     }

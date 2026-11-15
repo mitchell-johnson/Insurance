@@ -374,7 +374,9 @@ const portal = (() => {
   }
   // Customers and policies from what the person knows, under the case they are working on.
   async function find(text) {
-    const q = new URLSearchParams({ q: text }); if (working()) q.set("case", working());
+    // Every search is recorded against the case in hand; without one there is no search, and the person is told why.
+    if (!working()) throw new Error("Say which case, call or task you are working on first: every search is recorded against it.");
+    const q = new URLSearchParams({ q: text, case: working() });
     return api("workforce", "GET", "/staff/v1/find?" + q);
   }
   const born = (d) => d ? new Date(d + "T00:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : "";

@@ -91,7 +91,8 @@ test({ id: "E2E-072", area: A, persona: "ST4", story: "US-ST04-1", title: "A new
   await s.press("Show", "#queue");
   await s.sees(c.claim, "#q-rows");
   const row = (await s.rows("#q-rows")).find((r) => r[0] === c.claim);
-  if (row[1] !== String(c.policy.partition) || row[3] !== "0" || row[4] !== "unassigned") throw new Error(`the queue row reads ${JSON.stringify(row)}`);
+  // Claim, priority, days open, owner: where the claim is stored is the system's business, not the assessor's.
+  if (row[2] !== "0" || row[3] !== "unassigned") throw new Error(`the queue row reads ${JSON.stringify(row)}`);
   await s.row("#q-rows", c.claim).getByRole("button", { name: "Open" }).click();
   await s.tab("Claim");
   await s.sees(`${c.claim}: trauma, open`, "#c-title");
@@ -636,7 +637,12 @@ test({ id: "E2E-113", area: A, persona: "ST4", story: "US-ST04-1", title: "An ac
   const s = await desk(t, cast.st4, c.claim);
   await s.act("#act", "escalate", { "Claim": c.claim }, { purpose: "claimant in hardship, needs a senior today" });
   await s.done("#act-msg", "Done: escalate.");
-  await s.act("#act", "record_contact", { "Claim": c.claim }, { purpose: "" });
+  // The console fills in a purpose when an action is chosen; the assessor clears it and sends anyway.
+  const f = s.$("#act");
+  await f.locator("#a-command").selectOption("record_contact");
+  await f.locator("#a-purpose").fill("");
+  await s.stale();
+  await f.getByRole("button", { name: "Send", exact: true }).click();
   const o = await s.outcome("#act-msg");
   s.expect(400, 409, 422);
   if (o.kind !== "bad") throw new Error("an action with no stated purpose was accepted");

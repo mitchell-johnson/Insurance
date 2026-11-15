@@ -188,7 +188,7 @@ test({ id: "E2E-025", area: A, persona: "ST6", story: "US-ST06-1", title: "A key
   if (second.trim() === "Policies") throw new Error("the right arrow did not move to the next view");
   await s.page.keyboard.press("ArrowLeft");
   if ((await selected()).trim() !== "Policies") throw new Error("the left arrow did not return to the first view");
-  await s.sees("Look up a policy");
+  await s.sees("Find a customer or a policy");
 });
 
 test({ id: "E2E-026", area: A, persona: "ST5", story: "US-ST05-1", title: "A link to one view of a console opens that view",

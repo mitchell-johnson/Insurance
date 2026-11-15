@@ -196,6 +196,9 @@ for (const id of ["ex-scheme", "sc-id", "fi-scheme", "mb-scheme", "rm-scheme", "
 // The administrator is found by name and birth date in the customer master, never typed as a reference.
 portal.picker($("fa-party"), portal.people, { label: true, onPick: (item) => { $("fa-party").dataset.party = item.value; } });
 $("fa-party").addEventListener("input", () => { delete $("fa-party").dataset.party; });
+// The search for the administrator is recorded against the scheme they are named for.
+const naming = () => { if (val("fa-policy")) portal.workOn(`Naming the first administrator of scheme ${val("fa-policy")}`); };
+$("fa-policy").addEventListener("change", naming); $("fa-party").addEventListener("focus", naming);
 signIn(R).then(async () => {
   me = await ask("me");
   $("me").textContent = `You are ${me.staff}: ${me.admin ? "group administration" : "view only"}.`;

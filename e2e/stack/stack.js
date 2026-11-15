@@ -40,7 +40,7 @@ const NODES = ports.nodes.map(local).join(",");
 // same way it would there.
 const AUD = { group: "api://ic-group", customers: "api://ic-customers", documents: "api://ic-documents", intake: "api://ic-underwriting-intake" };
 const roles = {
-  "ic-portal": { [AUD.group]: ["employer-portal", "group-admin"], [AUD.customers]: ["portal"], [AUD.documents]: ["portal", "staff"], [AUD.intake]: ["new-business", "underwriting-console"] },
+  "ic-portal": { [AUD.group]: ["employer-portal", "group-admin"], [AUD.customers]: ["portal", "staff"], [AUD.documents]: ["portal", "staff"], [AUD.intake]: ["new-business", "underwriting-console"] },
   "ic-group": { [AUD.customers]: ["group-admin"] },
   "ic-documents": { [AUD.customers]: ["documents"] },
   "ic-payments": { [AUD.customers]: ["payments"] },

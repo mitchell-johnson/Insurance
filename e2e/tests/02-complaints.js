@@ -44,7 +44,9 @@ test({ id: "E2E-029", area: A, persona: "Frontline", story: "US-ST14-1", title: 
   await s.fill("#i-id", id); await s.pick("#i-channel", "call"); await s.fill("#i-who", "cust-p18"); await s.pick("#i-process", "billing"); await s.fill("#i-doc", `doc-${id}`);
   await s.press("Record", "#intake");
   await s.done("#intake-msg", `Recorded ${id}. The complaints team will acknowledge it.`);
-  if (await s.page.inputValue("#i-id")) throw new Error("the form kept the last complaint's details");
+  // The form is ready for the next complaint: a fresh reference, and nothing of the last one's.
+  const next = await s.page.inputValue("#i-id");
+  if (!next || next === id || await s.page.inputValue("#i-doc")) throw new Error("the form kept the last complaint's details");
   const queue = await t.does(cast.st14, "GET", "/staff/v1/complaints/queue");
   const row = queue.find((q) => q.complaint === id);
   if (!row || row.process !== "billing" || row.next_due[0] !== "acknowledge") throw new Error(`the team's queue holds ${JSON.stringify(row)}`);
