@@ -44,6 +44,8 @@ const roles = {
   "ic-group": { [AUD.customers]: ["group-admin"] },
   "ic-documents": { [AUD.customers]: ["documents"] },
   "ic-payments": { [AUD.customers]: ["payments"] },
+  // The suite's stand-in for new business opening a customer's record, as it does before a policy is issued.
+  "ic-e2e-new-business": { [AUD.customers]: ["new-business"] },
   "e2e-seed": { [AUD.group]: ["group-admin", "employer-portal"], [AUD.customers]: ["portal", "group-admin", "identity", "staff", "new-business", "claims"], [AUD.documents]: ["portal", "staff"], [AUD.intake]: ["new-business", "underwriting-console"] },
 };
 

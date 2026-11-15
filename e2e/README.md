@@ -101,13 +101,24 @@ The customer master matches people on name and date of birth, across every
 scheme in the stack. Tests therefore give their members random names and
 birth dates, except the one test that wants two records to look alike.
 
+## The customer page
+
+The area "Customer" (`tests/12-customer.js`) drives `/customer`, the page
+Mitchell decided on 14 November 2026 that customers should have in this
+repository. Each journey has a customer of its own (`lib/customer.js`): a
+record opened in the customer master by its own route, as new business opens
+one, a sign-in bound to it, and a phone enrolled after identity verification.
+Approving, changing details and taking a copy of one's record need a signing
+browser: the page makes the key, and the test signs it with the phone's key as
+the phone app would.
+
 ## What it does not cover
 
 - The customer app: the repository has its API and sync protocol but no
   screens, so there is nothing for a browser to drive.
-- The customer master has no screens of its own. It is exercised through
-  group schemes, where it decides who each joiner is. A person's own record,
-  consents and holds are reached only by the customer app.
+- The customer's phone app. The customer page is driven in the browser, and
+  the phone's part (holding the key that approves a new browser) is played by
+  the test with a key it makes; every check of a signature is the system's.
 - Defender for Storage: a test writes the scan result on an uploaded file as
   Defender would.
 - Group schemes beyond one product and one set of terms: pools, health menus,
