@@ -20,6 +20,7 @@
 
 pub mod claims;
 pub mod classes;
+pub mod collections;
 pub mod commission;
 pub mod complaints;
 pub mod countersign;
@@ -42,6 +43,7 @@ pub mod query;
 pub mod reinsurance;
 pub mod replacements;
 pub mod serve;
+pub mod servicing;
 pub mod settings;
 pub mod staff;
 pub mod state;

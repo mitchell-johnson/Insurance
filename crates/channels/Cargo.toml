@@ -24,6 +24,8 @@ ic-entra.workspace = true
 ic-product.workspace = true
 # For its return definition loader only: the service reads that module as JSON.
 ic-finance = { path = "../finance" }
+# For the best-estimate dunning sequences it offers: the service reads that module as JSON.
+ic-collections = { path = "../collections" }
 reqwest.workspace = true
 cedar-policy.workspace = true
 chrono.workspace = true

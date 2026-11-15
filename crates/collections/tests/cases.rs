@@ -596,6 +596,38 @@ fn an_officer_does_not_read_health_in_a_hardship_note() {
     assert!(world.state.hardship_case("none", Role::Hardship).is_none());
 }
 
+/// Purpose: the open hardship cases are those waiting for a decision and those approved with
+/// relief still to run, each shown as the reader's role may see it; a case declined, or whose
+/// relief is over, drops off the list.
+/// Why it matters: the hardship team decides cases from this list on the collections console.
+/// Without it a case waited behind a task that does not name it, and an officer must still not
+/// read a note that discloses health.
+#[test]
+fn the_open_hardship_cases_are_listed_for_the_team() {
+    let mut world = World::new();
+    in_call(&mut world);
+    apply(&mut world, "h1", Relief::Holiday, d(2027, 3, 20), d(2027, 6, 19));
+    let open = world.state.open_hardship_cases(d(2027, 3, 20), Role::Collections);
+    assert_eq!(open.len(), 1);
+    assert_eq!((open[0]["id"].as_str(), open[0]["note"].as_str()), (Some("h1"), Some("")));
+    let team = world.state.open_hardship_cases(d(2027, 3, 20), Role::Hardship);
+    assert_eq!(team[0]["note"], "lost work after an injury");
+    let decide = Command::DecideHardship {
+        case: "h1".into(),
+        approve: true,
+        note: "evidence seen".into(),
+    };
+    assert_eq!(world.staff("hardship-1", &[Role::Hardship], decide).result, Ok(()));
+    // approved: listed while relief runs, gone after its last day
+    assert_eq!(world.state.open_hardship_cases(d(2027, 6, 19), Role::Hardship).len(), 1);
+    assert!(world.state.open_hardship_cases(d(2027, 6, 20), Role::Hardship).is_empty());
+    let asked = ic_collections::query::answer(
+        &world.state,
+        serde_json::json!({"q": "hardship_cases", "as_at": "2027-03-20", "role": "hardship"}),
+    );
+    assert_eq!(asked.unwrap().as_array().unwrap().len(), 1);
+}
+
 /// Purpose: an officer asks the core to reinstate a lapsed policy; one
 /// request waits at a time; a refusal for want of underwriting opens a task
 /// to start the reinstatement proposal, any other refusal a reinstatement

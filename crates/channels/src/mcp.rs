@@ -194,7 +194,7 @@ fn with_me(mut names: Vec<&'static str>) -> Vec<&'static str> {
 }
 
 /// Routes deliberately not offered as tools, and why.
-pub const EXCLUDED: [(&str, &str, &str); 26] = [
+pub const EXCLUDED: [(&str, &str, &str); 27] = [
     ("GET", "/healthz", "a probe for the platform, not a function"),
     ("GET", "/readyz", "a probe for the platform, not a function"),
     ("GET", "/app/v1/sync", "the device protocol: only an enrolled device, proving its key, syncs"),
@@ -222,6 +222,7 @@ pub const EXCLUDED: [(&str, &str, &str); 26] = [
     ("GET", "/claims", "a web page"),
     ("GET", "/reinsurance", "a web page"),
     ("GET", "/payments", "a web page"),
+    ("GET", "/collections", "a web page"),
     ("GET", "/group", "a web page"),
     ("GET", "/underwriting", "a web page"),
     ("GET", "/pricing", "a web page"),
@@ -343,6 +344,16 @@ pub fn catalogue() -> Vec<Tool> {
             .choose("question", with_me(crate::payments::question_names()))
             .query("As the question needs: `account`, `exception`, `party`, `run`, `submission`, `case`."),
         tool("payments_command", "Act in payments", S, M::POST, "/staff/v1/payments/commands", "A command to the payments module in its own JSON.")
+            .json(r#"{"type": "<command>", ...}"#),
+        tool("servicing_waiting", "Customers' requests waiting for a person", S, M::GET, "/staff/v1/servicing/waiting", "Changes customers asked for that the customer master sent to a trained person first: who asked and what for, never why."),
+        tool("servicing_carry_out", "Carry out a customer's request", S, M::POST, "/staff/v1/servicing/{id}/carry-out", "Having spoken with the customer, send their change to the core and close it with the core's answer.")
+            .json(r#"{"conversation"?: "<the call or case reference>"}"#),
+        tool("servicing_decline", "Decline a customer's request", S, M::POST, "/staff/v1/servicing/{id}/decline", "Decline a customer's change, in words the customer will read.")
+            .json(r#"{"reason": "<why>"}"#),
+        tool("collections_question", "Ask collections", S, M::GET, "/staff/v1/collections/{question}", "The day's queue of policies in arrears, a policy's dunning state, a team's tasks, a hardship case, notices, products with no sequence, the sequences in force, and the best-estimate sequence shipped for a product.")
+            .choose("question", with_me(crate::collections::question_names()))
+            .query("As the question needs: `policy`, `team` (collections, hardship or team_lead), `case`, `product`."),
+        tool("collections_command", "Act in collections", S, M::POST, "/staff/v1/collections/commands", "A command to the collections module in its own JSON: record an outcome, propose or end an arrangement, apply for, decide or end hardship, ask for reinstatement, set a product's sequence.")
             .json(r#"{"type": "<command>", ...}"#),
         tool("group_question", "Ask group administration", S, M::GET, "/staff/v1/group/{question}", "Exceptions, a scheme, its invoices and mapping, an uploaded file, a member, a possible match, or the scheme a policy belongs to.")
             .choose("question", vec!["me", "exceptions", "scheme", "invoices", "mapping", "file", "member", "possible_match", "scheme_of"])

@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Collections · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
+<body data-shell="workforce" data-page="collections" data-realm="workforce">
+<main><header class="page"><div><h1>Collections</h1><p>Policies in arrears, calls to make, arrangements, hardship and each product's dunning sequence.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
+
+<section data-view="Queue"><h2>Today's queue</h2><p class="muted">Policies in arrears, nearest to lapse first, then by annual premium. Open one to agree an arrangement, refer it for hardship or ask for it back after a lapse.</p>
+<div id="q-msg" aria-live="polite"></div><div id="queue"></div></section>
+
+<section data-view="Queue"><h2>A policy</h2>
+<form id="pol-form"><div class="row"><div><label for="pol-id">Policy (pick from the queue)</label><input id="pol-id" required></div><button>Open</button></div></form>
+<div id="pol-msg" aria-live="polite"></div><div id="pol"></div>
+<form id="arr-form" class="officer" hidden><h3>Agree an arrangement</h3><p class="muted">Instalments that clear what is overdue. More instalments than the product allows an officer go to a team lead.</p>
+<div class="row"><div><label for="arr-id">Arrangement reference (made for you)</label><input id="arr-id" required></div>
+<div><label for="arr-rows">Instalments, one per line: date, amount</label><textarea id="arr-rows" rows="3" cols="30" required placeholder="2027-12-01, 80.00"></textarea></div><button>Propose</button></div></form>
+<form id="hs-form" class="applier" hidden><h3>Apply for hardship</h3><p class="muted">Someone in the hardship team other than you decides it. Say if the reason touches on health: only that team reads the note then.</p>
+<div class="row"><div><label for="hs-case">Case reference (made for you)</label><input id="hs-case" required></div>
+<div><label for="hs-relief">Relief</label><select id="hs-relief"><option value="holiday">A premium holiday</option><option value="reduced">A reduced premium</option></select></div>
+<div><label for="hs-percent">Reduced to (% of the usual premium)</label><input id="hs-percent" type="number" min="1" max="99" value="50"></div>
+<div><label for="hs-from">From</label><input id="hs-from" type="date" required></div><div><label for="hs-to">To</label><input id="hs-to" type="date" required></div>
+<div><label for="hs-health">Touches on health</label><select id="hs-health"><option value="false">No</option><option value="true">Yes</option></select></div>
+<div><label for="hs-note">Why</label><input id="hs-note" required></div><button>Apply</button></div></form>
+<p id="pol-actions"></p></section>
+
+<section data-view="Tasks"><h2>Tasks</h2>
+<form id="t-form"><div class="row"><div><label for="t-team">Team</label><select id="t-team"><option value="collections">Collections officers</option><option value="team_lead">Team lead</option><option value="hardship">Hardship team</option></select></div><button>Show</button></div></form>
+<div id="t-msg" aria-live="polite"></div><div id="tasks"></div>
+<form id="out-form" class="officer" hidden><h3>What the customer said</h3><div class="row">
+<div><label for="out-task">Task (or press Record on one above)</label><input id="out-task" required></div>
+<div><label for="out-reason">Outcome</label><select id="out-reason"><option value="paid">Paid, or paying now</option><option value="arrangement">An arrangement is being agreed</option><option value="hardship_referral">Referred to the hardship team</option><option value="reduction">Wants less cover or a lower premium</option><option value="cancellation_requested">Wants to cancel, after the alternatives</option><option value="no_contact">No answer</option><option value="disputed">Disputes the arrears</option><option value="deceased_notified">The policyholder has died</option></select></div>
+<div><label for="out-note">Note</label><input id="out-note"></div><button>Record</button></div></form><div id="out-msg" aria-live="polite"></div></section>
+
+<section data-view="Hardship"><h2>Hardship cases</h2><p class="muted">Waiting for a decision, or approved with relief still to run. Nobody decides a case they applied for.</p>
+<div id="hc-msg" aria-live="polite"></div><div id="cases"></div>
+<form id="dec-form" class="hardship" hidden><div class="row"><div><label for="dec-case">Case (or press Decide on one above)</label><input id="dec-case" required></div>
+<div><label for="dec-approve">Decision</label><select id="dec-approve"><option value="true">Approve</option><option value="false">Decline</option></select></div>
+<div><label for="dec-note">What it rests on</label><input id="dec-note" required></div><button>Decide</button></div></form></section>
+
+<section data-view="Sequences"><h2>Products sending nothing</h2><p class="muted">Products with policies and no dunning sequence: no reminder or notice goes for them until one is set.</p><div id="unseq"></div></section>
+<section data-view="Sequences"><h2>Sequences in force</h2><div id="seqs"></div></section>
+<section data-view="Sequences" class="configuration" hidden><h2>Set a product's sequence</h2><p class="muted">Start from the best estimate shipped for the product, change what legal and conduct have agreed, then set it. You are recorded as the person who set it. The suspension and final notices cannot be left out or brought closer to lapse than the product's minimum.</p>
+<form id="seq-load"><div class="row"><div><label for="seq-product">Product code</label><input id="seq-product" required></div><button type="submit">Load the shipped best estimate</button></div></form>
+<form id="seq-form"><div><label for="seq-json">The sequence</label><textarea id="seq-json" rows="16" required></textarea></div><p><button>Set this sequence</button></p></form><div id="seq-msg" aria-live="polite"></div></section>
+
+<section data-view="Notices"><h2>Notices waiting for the documents service</h2><div id="due"></div></section>
+<section data-view="Notices"><h2>Notices sent, waiting to hear they arrived</h2><div id="sent"></div></section>
+<section data-view="Notices"><h2>Lapsed policies with underwriting</h2><p class="muted">Lapsed too long to come back on payment alone: underwriting opens a reinstatement proposal for each.</p><div id="reinst"></div></section>
+</main>
+<script src="/ui/app.js"></script>
+<script>
+"use strict";
+const { h, put, table, signIn, api, run } = portal;
+const $ = (id) => document.getElementById(id);
+const R = "workforce", BASE = "/staff/v1/collections/";
+let me = {}, queue = [];
+const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
+const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
+const send = (command) => api(R, "POST", BASE + "commands", command);
+const money = (minor) => minor == null ? "" : (Number(minor) / 100).toFixed(2);
+const has = (role) => (me.roles || []).includes(role);
+const button = (label, out, act) => h("button", { class: "quiet", type: "button", on: { click: run(out, act) } }, label);
+const empty = (text) => h("p", { class: "muted" }, text);
+
+async function showQueue() {
+  const q = await ask("queue");
+  queue = q.items || [];
+  put($("queue"), queue.length ? [table(["Policy", "Product", "Kind", "Standing", "Days overdue", "Days to lapse", "Annual premium", "Open tasks", ""], queue.map((i) => [i.number, i.product, words(i.segment), words(i.standing), i.days_in_arrears,
+    i.days_to_lapse == null ? "not set" : i.days_to_lapse, money(i.annual_premium_minor), (i.open_tasks || []).length,
+    button("Open", $("q-msg"), async () => { $("pol-id").value = i.policy; await showPolicy(); return ""; })])),
+    (q.withheld || []).length ? h("p", { class: "muted" }, `Not shown to your role: ${q.withheld.map(words).join(", ")}.`) : null]
+    : empty("Nothing is in arrears."));
+}
+
+async function showPolicy() {
+  const id = $("pol-id").value.trim();
+  const p = await ask("policy", { policy: id });
+  put($("pol"), h("p", {}, `${p.number}, ${p.product}, held by ${p.party}: ${p.ended ? "no longer in force" : words(p.standing) || "paid up"}${p.oldest_unpaid_due ? `, overdue since ${p.oldest_unpaid_due}` : ""}.`),
+    p.kept ? h("p", {}, `Arrangement ${p.kept.id} made ${p.kept.made_on} for ${money(p.kept.arrears_minor)}, instalments due ${p.kept.dues.join(", ")}.`) : null,
+    p.hold ? h("p", {}, `Reminders held: ${words(typeof p.hold === "string" ? p.hold : Object.keys(p.hold)[0])}.`) : null,
+    p.relief ? h("p", {}, `Hardship relief under case ${p.relief}.`) : null);
+  const out = $("pol-msg");
+  put($("pol-actions"), [
+    p.kept && (has("collections") || has("team_lead")) ? button("End the arrangement", out, async () => { await send({ type: "end_arrangement", policy: id }); await showPolicy(); return "Ended. The lapse clock runs on from where it stood."; }) : null,
+    p.ended && (has("collections") || has("team_lead")) ? button("Ask for it back (reinstatement)", out, async () => { await send({ type: "request_reinstatement", policy: id }); await showPolicy(); return "Asked. The core decides; a refusal comes back as a task."; }) : null,
+  ].filter(Boolean));
+  $("hs-from").value = $("hs-from").value || portal.today();
+}
+$("pol-form").addEventListener("submit", run($("pol-msg"), showPolicy));
+
+$("arr-form").addEventListener("submit", run($("pol-msg"), async () => {
+  const instalments = $("arr-rows").value.split("\n").map((row) => row.split(",").map((x) => x.trim())).filter((row) => row[0]).map(([due, amount]) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) throw new Error(`"${due}" is not a date: use 2027-12-01.`);
+    if (!/^\d+(\.\d{1,2})?$/.test(amount || "")) throw new Error(`"${amount || ""}" is not an amount: use 80.00.`);
+    return { due, amount_minor: Math.round(Number(amount) * 100) };
+  });
+  await send({ type: "propose_arrangement", policy: $("pol-id").value.trim(), arrangement: $("arr-id").value.trim(), instalments });
+  $("arr-id").value = portal.reference("ARR");
+  await showPolicy();
+  return "Proposed to the core. It holds standing while the arrangement is kept.";
+}));
+
+$("hs-form").addEventListener("submit", run($("pol-msg"), async () => {
+  const id = $("pol-id").value.trim();
+  const p = await ask("policy", { policy: id });
+  const relief = $("hs-relief").value === "holiday" ? "holiday" : { reduced: { percent: Number($("hs-percent").value) } };
+  await send({ type: "apply_hardship", case: $("hs-case").value.trim(), party: p.party, policies: [id], relief, from: $("hs-from").value, to: $("hs-to").value, discloses_health: $("hs-health").value === "true", note: $("hs-note").value.trim() });
+  $("hs-case").value = portal.reference("HS");
+  await Promise.all([showPolicy(), showCases()]);
+  return "Applied. The hardship team decides it.";
+}));
+
+async function showTasks() {
+  const tasks = await ask("tasks", { team: $("t-team").value });
+  put($("tasks"), tasks.length ? table(["Task", "What", "Customer", "Policies", "Opened", "Tries", ""], tasks.map((t) => [t.id, words(t.kind), t.party, t.policies.join(", "), t.opened, t.attempts, t.escalated ? "with the team lead" : "",
+    has("collections") || has("team_lead") ? button("Record", $("t-msg"), async () => { $("out-task").value = t.id; $("out-note").focus(); return `Record what was said for ${t.id} below.`; }) : ""]))
+    : empty("No open tasks."));
+}
+$("t-form").addEventListener("submit", run($("t-msg"), showTasks));
+$("out-form").addEventListener("submit", run($("out-msg"), async () => {
+  await send({ type: "record_outcome", task: $("out-task").value.trim(), reason: $("out-reason").value, note: $("out-note").value.trim() });
+  await Promise.all([showTasks(), showQueue()]);
+  return "Recorded.";
+}));
+
+async function showCases() {
+  const cases = await ask("hardship_cases");
+  const relief = (r) => r === "holiday" ? "premium holiday" : r && r.reduced ? `reduced to ${r.reduced.percent}%` : words(r);
+  put($("cases"), cases.length ? table(["Case", "Customer", "Policies", "Relief", "From", "To", "Applied by", "Decision", "Note", ""], cases.map((c) => [c.id, c.party, c.policies.join(", "), relief(c.relief), c.from, c.to, c.applied_by,
+    c.decision ? `${c.decision.approved ? "approved" : "declined"} by ${c.decision.by}` : "waiting", (c.withheld || []).length ? "(for the hardship team)" : c.note,
+    has("hardship") && !c.decision && c.applied_by !== me.staff ? button("Decide", $("hc-msg"), async () => { $("dec-case").value = c.id; $("dec-note").focus(); return `Decide ${c.id} below.`; })
+      : has("hardship") && c.decision && c.decision.approved && !c.ended_early ? button("End early", $("hc-msg"), async () => { await send({ type: "end_hardship", case: c.id }); await showCases(); return "Ended. Normal billing resumes today."; }) : ""]))
+    : empty("No open cases."));
+}
+$("dec-form").addEventListener("submit", run($("hc-msg"), async () => {
+  await send({ type: "decide_hardship", case: $("dec-case").value.trim(), approve: $("dec-approve").value === "true", note: $("dec-note").value.trim() });
+  await showCases();
+  return "Decided.";
+}));
+
+async function showSequences() {
+  const [unseq, seqs] = await Promise.all([ask("unsequenced"), ask("sequences")]);
+  put($("unseq"), unseq.length ? h("p", {}, unseq.join(", ")) : empty("Every product with policies has a sequence."));
+  const rows = Object.values(seqs || {});
+  put($("seqs"), rows.length ? table(["Product", "Lapse day", "Least notice", "Steps", ""], rows.map((s) => [s.product, s.lapse_day, `${s.minimum_notice_days} days`, s.steps.map((x) => `day ${x.day} ${words(x.kind)} by ${words(x.channel)}`).join("; "),
+    has("configuration") ? button("Change", $("seq-msg"), async () => { $("seq-product").value = s.product; $("seq-json").value = JSON.stringify(s, null, 2); return `Change the sequence for ${s.product} below.`; }) : ""]))
+    : empty("No sequence is set."));
+}
+$("seq-load").addEventListener("submit", run($("seq-msg"), async () => {
+  const product = $("seq-product").value.trim();
+  $("seq-json").value = JSON.stringify(await ask("shipped_sequence", { product }), null, 2);
+  return `The shipped best estimate for ${product}. Nobody has approved it: check it before you set it.`;
+}));
+$("seq-form").addEventListener("submit", run($("seq-msg"), async () => {
+  let sequence;
+  try { sequence = JSON.parse($("seq-json").value); } catch (e) { throw new Error("The sequence is not valid JSON: " + e.message); }
+  await send({ type: "set_sequence", sequence });
+  await showSequences();
+  return `Set for ${sequence.product}.`;
+}));
+
+async function showNotices() {
+  const [due, sent, reinst] = await Promise.all([ask("notices_due"), ask("notices_sent"), ask("reinstatements_for_underwriting")]);
+  const list = (rows) => rows.length ? table(["Notice", "Customer", "What", "By", "On", "Policies"], rows.map((n) => [n.id, n.party, words(n.kind), words(n.channel), n.on, n.policies.join(", ")])) : empty("None.");
+  put($("due"), list(due)); put($("sent"), list(sent));
+  put($("reinst"), reinst.length ? table(["Policy", "Partition"], reinst.map((r) => [r.policy, r.partition])) : empty("None."));
+}
+
+portal.picker($("pol-id"), async () => queue.map((i) => ({ value: i.policy, label: i.number, hint: [i.product, words(i.standing), `${i.days_in_arrears} days overdue`].join(" · ") })), { min: 0, empty: "Nothing is in arrears." });
+$("arr-id").value = portal.reference("ARR"); $("hs-case").value = portal.reference("HS");
+signIn(R).then(async () => {
+  me = await ask("me");
+  $("me").textContent = `You are ${me.staff}: ${(me.roles || []).map(words).join(", ") || "view only"}.`;
+  document.querySelectorAll(".officer").forEach((e) => { e.hidden = !(has("collections") || has("team_lead")); });
+  document.querySelectorAll(".applier").forEach((e) => { e.hidden = !(has("collections") || has("hardship")); });
+  document.querySelectorAll(".hardship").forEach((e) => { e.hidden = !has("hardship"); });
+  document.querySelectorAll(".configuration").forEach((e) => { e.hidden = !has("configuration"); });
+  // A team lead or the hardship team starts on their own tasks.
+  if (has("hardship")) $("t-team").value = "hardship"; else if (has("team_lead")) $("t-team").value = "team_lead";
+  [...$("t-team").options].forEach((o) => { o.disabled = o.value !== "collections" && !has(o.value); });
+  await Promise.all([showQueue(), showTasks(), showCases(), showSequences(), showNotices()]);
+}).catch(portal.refuse);
+</script></body></html>

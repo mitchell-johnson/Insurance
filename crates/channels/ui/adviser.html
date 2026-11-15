@@ -14,6 +14,7 @@
 <section data-view="Your book" id="detail" hidden><h2 id="detail-title"></h2><div id="rows"></div><h3>Claims</h3><p class="muted">Each claim's status only. What a claim is about stays between the customer and the claims team.</p><div id="claims"></div><h3>Investments</h3><div id="invest"></div><h3>Documents</h3><div id="docs"></div><div id="docs-msg" aria-live="polite"></div>
   <form id="change"><h2>Prepare a change for the customer to approve</h2>
   <div class="row"><div><label for="kind">Change</label><select id="kind"><option value="decline_indexation">Decline indexation</option><option value="change_frequency">Change payment frequency</option><option value="cancel_policy">Cancel policy</option></select></div>
+  <div><label for="freq">New payment frequency (for a change of frequency)</label><select id="freq"><option value="monthly">Monthly</option><option value="fortnightly">Fortnightly</option><option value="quarterly">Quarterly</option><option value="half_yearly">Half-yearly</option><option value="yearly">Yearly</option></select></div>
   <div><label for="note">Details</label><input id="note" maxlength="200"></div><button id="send">Send to customer</button></div>
   <p class="muted">The customer approves in their app with their device. Nothing changes until they do.</p></form><div id="change-msg" aria-live="polite"></div></section>
 <section data-view="Your book"><h2>Requests you have made</h2><div id="requests"></div></section></main>
@@ -92,7 +93,11 @@ $("dispute").addEventListener("submit", run($("d-msg"), async () => {
   return "Disputed. The commission on the matched amount is held until the conduct officer decides.";
 }));
 $("change").addEventListener("submit", run($("change-msg"), async () => {
-  await api(R, "POST", "/app/v1/requests", { id: crypto.randomUUID(), policy: current, kind: $("kind").value, module: "policy-servicing", payload: { note: $("note").value } });
+  // What the core needs to carry the change out once the customer approves it.
+  const payload = { note: $("note").value };
+  if ($("kind").value === "change_frequency") payload.frequency = $("freq").value;
+  if ($("kind").value === "decline_indexation") payload.declined = true;
+  await api(R, "POST", "/app/v1/requests", { id: crypto.randomUUID(), policy: current, kind: $("kind").value, module: "policy-servicing", payload });
   await load();
   return "Sent. The customer has been asked to approve it in their app.";
 }));

@@ -24,6 +24,10 @@ struct Part {
     core: FakeCore,
     index: u64,
     seen: BTreeMap<String, Proposed>,
+    /// Servicing commands the portal carried here, with the caller named.
+    servicing: Vec<(String, Command)>,
+    /// The refusal the stand-in core gives the next servicing command, if any.
+    refuse_servicing: Option<(String, String)>,
 }
 
 impl Part {
@@ -140,6 +144,8 @@ pub fn seeded() -> ClaimsCore {
                 core,
                 index: 0,
                 seen: BTreeMap::new(),
+                servicing: Vec::new(),
+                refuse_servicing: None,
             };
             for command in [
                 ClaimsCommand::ActivateRules { rules: Box::new(rules()) },
@@ -157,6 +163,16 @@ impl ClaimsCore {
     /// Put one more policy's life cover on a partition's stand-in core.
     pub fn cover(&self, partition: usize, policy: &str) {
         self.0.lock().unwrap()[partition].core.cover(policy, "life", facts("life"));
+    }
+
+    /// The servicing commands one partition's stand-in core took, with their callers.
+    pub fn servicing(&self, partition: usize) -> Vec<(String, Command)> {
+        self.0.lock().unwrap()[partition].servicing.clone()
+    }
+
+    /// The next servicing command on a partition is refused with this code.
+    pub fn refuse_servicing(&self, partition: usize, code: &str) {
+        self.0.lock().unwrap()[partition].refuse_servicing = Some((code.to_string(), format!("the core refused it: {code}")));
     }
 
     /// What one partition's stand-in core has been asked to do.
@@ -258,7 +274,24 @@ impl Partitions for ClaimsCore {
         } else {
             let command = match envelope.command {
                 Command::Claims(command) => command,
-                _ => panic!("the console sent the core something other than a claims command"),
+                other => {
+                    // A servicing request carried from the app: checked for its caller as the core would, then kept.
+                    let rejected = if !other.allowed_callers().contains(&envelope.caller.as_str()) {
+                        Some(("caller".to_string(), format!("{} may not send this", envelope.caller)))
+                    } else {
+                        part.refuse_servicing.take()
+                    };
+                    if rejected.is_none() {
+                        part.servicing.push((envelope.caller.clone(), other));
+                    }
+                    let proposed = Proposed {
+                        duplicate: false,
+                        events: usize::from(rejected.is_none()),
+                        rejected,
+                    };
+                    part.seen.insert(envelope.key.clone(), proposed.clone());
+                    return Box::pin(async move { Ok(proposed) });
+                }
             };
             let proposed = if command.allowed_callers().contains(&envelope.caller.as_str()) {
                 part.apply(*command)

@@ -2208,6 +2208,7 @@ dependencies = [
  "http-body-util",
  "ic-api",
  "ic-azure",
+ "ic-collections",
  "ic-complaints",
  "ic-core",
  "ic-distribution",
