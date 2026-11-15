@@ -101,7 +101,9 @@ test({ id: "E2E-151", area: A, persona: "ST11", story: "US-ST11-1", title: "A wa
   const s = await close(t, cast.st11);
   await s.press("Waive", "#waive");
   await s.wait(300);
-  for (const id of ["#w-check", "#w-reason", "#w-owner", "#w-due"]) if (!(await s.page.locator(id).evaluate((el) => !el.validity.valid))) throw new Error(`${id} is not marked as needed`);
+  for (const id of ["#w-check", "#w-reason", "#w-owner"]) if (!(await s.page.locator(id).evaluate((el) => !el.validity.valid))) throw new Error(`${id} is not marked as needed`);
+  // The remediation date starts a fortnight out, so it is filled in already; it is still needed.
+  if (!(await s.page.locator("#w-due").evaluate((el) => el.required && el.value))) throw new Error("#w-due has no default or is not needed");
   await s.fill("#w-check", "analytical_review"); await s.fill("#w-reason", "reviewer on leave"); await s.fill("#w-owner", "st10"); await s.fill("#w-due", "2027-12-10");
   await s.press("Waive", "#waive");
   await s.stopped("#close-msg", `${PERIOD(t)} has not started`, 409);

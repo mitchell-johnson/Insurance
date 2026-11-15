@@ -2588,6 +2588,29 @@ async fn finance_question(
     if name == "return_definitions" {
         return ok(json!({ "rows": s.returns.list() }));
     }
+    let mut fields = fields;
+    if name == "accounting_group" && fields.get("partition").is_none_or(|p| p.trim().is_empty()) {
+        // Finance knows a policy by its number; where it is kept is the system's business, not theirs.
+        let typed = fields.get("policy").map(|p| p.trim().to_string()).unwrap_or_default();
+        let found = s
+            .ask(Question::StaffFind {
+                number: Some(typed.clone()),
+                parties: Vec::new(),
+            })
+            .await?;
+        let exact = found["policies"].as_array().into_iter().flatten().find(|p| {
+            p["number"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(&typed)) || p["policy"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(&typed))
+        });
+        let Some(policy) = exact else {
+            return Err(Problem::new(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                format!("no policy has the number or reference {typed}"),
+            ));
+        };
+        fields.insert("policy".into(), policy["policy"].as_str().unwrap_or_default().to_string());
+        fields.insert("partition".into(), policy["partition"].to_string());
+    }
     let question = crate::finance::question(&name, &fields).map_err(Problem::bad_request)?;
     let answer = s
         .finance

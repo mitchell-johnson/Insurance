@@ -2505,7 +2505,8 @@ fn notify_body() -> Value {
 
 /// Purpose: the finance console end to end against the finance ledger's own code: only staff with a finance action get in and a
 /// reader cannot act; the close dashboard, checks, work and trial balance are shown; a journal is proposed with exact amounts,
-/// refused to someone without the approver's role and to its own maker, and posted when a second person approves it; commands that
+/// refused to someone without the approver's role and to its own maker, and posted when a second person approves it; a policy's
+/// accounting group is found from its number alone; commands that
 /// ledger takes only from its own services never leave the console; and its refusals come back with their codes.
 /// Why it matters: manual journals and the close are how people change and sign the books. The ledger trusts the console about who
 /// the person is and which roles they hold, so a console that let a reader post, stated roles nobody holds, or rounded an amount in
@@ -2596,6 +2597,15 @@ async fn the_finance_console() {
     // A policy not yet placed has no group: the ledger answers nothing rather than a guess.
     assert_eq!(ask("sub-aud", "accounting_group?policy=nope&partition=1").await, (StatusCode::OK, Value::Null));
     assert_eq!(ask("sub-aud", "accounting_group?policy=nope&partition=one").await.0, StatusCode::BAD_REQUEST);
+    // Finance names a policy by its number; the console finds where it is kept. A number nobody holds is said to be unknown.
+    let typed = portal.retail.0.to_uppercase();
+    assert_eq!(ask("sub-aud", &format!("accounting_group?policy={typed}")).await, (StatusCode::OK, Value::Null));
+    let (status, problem) = ask("sub-aud", "accounting_group?policy=POL-NOBODY").await;
+    assert_eq!(
+        (status, problem["detail"].as_str().unwrap().contains("POL-NOBODY")),
+        (StatusCode::NOT_FOUND, true),
+        "{problem}"
+    );
     // Only the console's questions, each with its fields; one the ledger cannot read is its refusal.
     for bad in [
         "rate_table?id=life-base",

@@ -310,7 +310,9 @@ const portal = (() => {
         return show(source.filter((i) => !want || `${i.value} ${i.label || ""} ${i.hint || ""}`.toLowerCase().includes(want)), text);
       }
       if (text.length < (opts.min == null ? 2 : opts.min)) { tell(""); return close(); }
-      try { const found = await source(text); if (mine === asked) show(found || [], text); }
+      // A whole list fetched on focus (min 0) narrows as the person types; a search has already matched.
+      const want = text.toLowerCase(), near = (i) => !want || `${i.value} ${i.label || ""} ${i.hint || ""}`.toLowerCase().includes(want);
+      try { const found = (await source(text)) || []; if (mine === asked) show(opts.min === 0 ? found.filter(near) : found, text); }
       catch (e) { if (mine === asked) { close(); tell(e.message); } }
     }
     input.addEventListener("input", () => { delete input.dataset.label; clearTimeout(timer); timer = setTimeout(lookup, typeof source === "function" ? 250 : 0); });
