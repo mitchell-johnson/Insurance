@@ -290,3 +290,18 @@ Decided by Mitchell on 15 Nov 2026, after asking why the Raft groups could not r
 
 Built in: `crates/raft` (witness, shared leadership), `infra/second-region.bicep`, `infra/ledger-witness.bicep`, `infra/regions.bicep`, `deploy/regions`, `tools/check_regions.py`, and the region drill (`deploy/compose/regions.sh`). Runbook: `docs/operations.md`, "Losing a region".
 
+
+## AIA facilities made to work (15 Nov 2026)
+
+Mitchell asked for every declared AIA benefit to work. The calls made, and why:
+
+- **Conversions are a core command, not new business.** Premium and standalone conversion move cover the life already holds, so `ConvertCover` cuts the old layers and writes the new ones on a draft, re-bills the year already billed once, and keeps nothing if any step fails. Underwriting is not involved, because the wordings ask for no evidence.
+- **The newest layers convert first, and only as much as is held at the same choices.** This keeps a partial conversion from mixing two premium types in one request.
+- **Business wordings have no personal special events or Future Insurability.** These were removed from AIA Living Business. Business Safeguard replaces them, as in 1151 ALB-LIFE.
+- **Income Future Insurability shares one 100% total across anniversary and pay-rise increases** (`shared_total`). The wording gives one total for the benefit.
+- **The once-a-year rule for pay-rise increases counts anniversary increases too.** This is the cautious reading of "once per year".
+- **MIRC's 115% of the repayment rise is checked on the lender's evidence.** The core enforces only the $750 limit, because the repayment figure is evidence, not policy data.
+- **No increase or conversion while a claim is open on the cover.** The wordings refuse an increase "if you are entitled to or are receiving payment of a claim". Open claims are not tracked per life, so on a policy with several lives, another life's claim on the same cover also blocks.
+- **Guaranteed rates are chosen per layer.** Each layer keeps the rate table version in force when it was priced. An increase is priced on the table of its own day, which is what the wording says.
+- **Cover for Life is made paid up instead of lapsing** only where every paying cover qualifies. Otherwise it lapses as before. Premium for the days ahead is credited first, then what is unpaid for the days already covered is written off as at a lapse. This posts under its own kind (`paid_up_arrears`), so the conduct return does not count it as a lapse.
+- **Medical Advancements and Enhancement Pass Back are shown in the cover check.** The facts list the later definition version beside the bound one, and the assessor applies whichever is more favourable. The claims decision records both.
