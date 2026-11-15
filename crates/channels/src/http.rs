@@ -2113,7 +2113,7 @@ async fn reinsurance_command(State(s): State<Shared>, headers: HeaderMap, method
         let prepare = crate::countersign::CountersignCommand::Prepare {
             id: key.clone(),
             module: crate::reinsurance::MODULE.to_string(),
-            command: command.clone(),
+            command: crate::reinsurance::prepared(command.clone(), name, &session.party),
             reason,
         };
         s.propose(format!("countersign:{key}"), Actor::Staff(session.party), Command::Countersign(prepare))

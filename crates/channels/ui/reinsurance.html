@@ -7,6 +7,13 @@
 <section data-view="Exceptions"><h2>Waiting for a second person</h2><div id="p-msg" aria-live="polite"></div><div id="pending"></div></section>
 <section data-view="Notices and abandoned"><h2>Notices for staff</h2><div id="notices"></div></section>
 <section data-view="Notices and abandoned"><h2>Abandoned</h2><div id="abandoned"></div></section>
+<section data-view="Accounts"><h2>Reinsurer accounts</h2><p class="muted">Each reinsurer's statements: cut one for a period that has ended, agree it with the reinsurer's confirmation, hold or release its settlement, and prepare the settlement for a second person to instruct.</p>
+<form id="acc"><div class="row"><div><label for="acc-re">Reinsurer</label><input id="acc-re" required></div><button>Show</button></div></form><div id="acc-msg" aria-live="polite"></div><div id="acc-bal"></div><div id="acc-out"></div>
+<h2>Cut a statement</h2><form id="cut"><div class="row"><div><label for="cut-treaty">Treaty</label><input id="cut-treaty" required></div><div><label for="cut-end">Period ending</label><input id="cut-end" type="date" required></div><button>Cut it</button></div></form>
+<h2>Review profit commission</h2><form id="pc"><div class="row"><div><label for="pc-treaty">Treaty</label><input id="pc-treaty" required></div><button>Review</button></div></form></section>
+<section data-view="Treaty changes"><h2>Change a treaty's cover in force</h2><p class="muted">Take cover back from a treaty, or move it to another version of the treaty, from a date. Either takes a second person.</p>
+<form id="tc"><div class="row"><div><label for="tc-what">Change</label><select id="tc-what"><option value="recapture">Recapture from the treaty</option><option value="move_treaty_version">Move to another version</option></select></div><div><label for="tc-treaty">Treaty</label><input id="tc-treaty" required></div><div><label for="tc-version">To version (moving only)</label><input id="tc-version" type="number" min="1"></div><div><label for="tc-from">From</label><input id="tc-from" type="date" required></div></div>
+<div><label for="tc-keys">Covers, one per line, as policy/cover/layer/life</label><textarea id="tc-keys" rows="4" required></textarea></div><div><label for="tc-reason">Why (for the person who signs)</label><input id="tc-reason" required size="40"></div><p><button>Prepare</button></p></form><div id="tc-msg" aria-live="polite"></div></section>
 <section data-view="Month-end check"><h2>Month-end check</h2><form id="sweep"><div class="row"><div><label for="s-date">Period ending</label><input id="s-date" type="date" required></div><button>Check</button></div></form><div id="s-msg" aria-live="polite"></div><div id="s-out"></div></section>
 </main>
 <script src="/ui/app.js"></script>
@@ -46,6 +53,17 @@ function actionsFor(id) {
       return [["Record that the reinsurer was told", "facultative_reinsurer_told", [["reference", "Where the reinsurer's answer is filed", "text"]],
         (f) => ({ facultative_reinsurer_told: { key: { policy, cover, layer: Number(layer), life }, reference: f.reference } })]];
     }
+    case "disputed_item": return [
+      ["Settle the dispute", "resolve_dispute", [["repay", "What the insurer repays the reinsurer", "money"], ["agreement_ref", "Where the agreement is filed", "text"], ["reason", "Why (for the person who signs)", "text"]],
+        (f) => ({ resolve_dispute: { reference: subject, repay_minor: Math.round(Number(f.repay) * 100), agreement_ref: f.agreement_ref, reason: f.reason } }), "A second person signs before it goes."],
+    ];
+    case "settlement_not_cleared": return [
+      ["Name the bank account", "clear_settlement", [["bank_account", "The bank account it moved through", "text"]], (f) => ({ clear_settlement: { number: seq, bank_account: f.bank_account } })],
+    ];
+    case "admitted_without_consent": return [
+      ["Record the reinsurer's answer", "reinsurer_consent", [["reinsurer", "Reinsurer", "text"], ["agreed", "Agreed (yes or no)", "text"], ["reference", "Where its answer is filed", "text"]],
+        (f) => ({ reinsurer_consent: { claim: subject, reinsurer: f.reinsurer, agreed: /^y/i.test(f.agreed), reference: f.reference } })],
+    ];
     case "reopened_after_reversal": return [
       ["Resume recoveries", "resume_recoveries", [["reference", "Your note: why recoveries may go on", "text"]],
         (f) => ({ resume_recoveries: { claim: subject, reference: f.reference } }), "Every disputed item on the claim must be resolved first."],
@@ -59,8 +77,52 @@ function open(id, [label, , spec, build, warning]) {
   put($("act-fields"), spec.map(([key, text, kind]) => h("div", {}, h("label", { for: "a-" + key }, text), h("input", { id: "a-" + key, required: true, type: kind === "money" ? "number" : "text", step: kind === "money" ? "0.01" : null }))));
   $("act-form").dataset.id = id;
   current = { spec, build };
+  for (const [key] of spec) if (key === "reinsurer") portal.picker($("a-" + key), reinsurers, { min: 0 });
   if (!spec.length) $("act-form").requestSubmit();
 }
+// The reinsurers the insurer has a balance with, for the pickers.
+const reinsurers = async () => Object.entries(await ask("exposure", { on: me.today || portal.days(0) })).map(([id, e]) => ({ value: id, label: id, hint: `balance ${money(e.balance_minor)}` }));
+const money = (minor) => minor == null ? "" : (Number(minor) / 100).toFixed(2);
+// One statement's actions: each sends at once, except instructing its settlement, which a second person signs.
+function statementActions(st) {
+  const n = st.number, go = (words, command, done) => h("button", { class: "quiet", type: "button", on: { click: run($("acc-msg"), async () => { const c = await command(); if (!c) return ""; const a = await send(c); await accounts(); return a.prepared ? "Prepared. Someone else signs it before it is sent." : done; }) } }, words);
+  const askFor = (title, label) => portal.ask({ title, label, confirm: "Send" });
+  const status = typeof st.status === "string" ? st.status : Object.keys(st.status || {})[0];
+  const out = [];
+  if (status === "issued") out.push(go("Agree", async () => { const r = await askFor(`Agree statement ${n}`, "The reinsurer's confirmation reference"); return r && { agree_statement: { number: n, reference: r } }; }, "Agreed."));
+  if (st.held) out.push(go("Release the hold", async () => ({ release_hold: { number: n } }), "Released."));
+  else if (status === "issued" || status === "agreed") out.push(go("Hold the settlement", async () => { const r = await askFor(`Hold statement ${n}`, "Why it is held"); return r && { hold_settlement: { number: n, reason: r } }; }, "Held."));
+  if (status === "agreed" && !st.held) out.push(go("Prepare the settlement", async () => { const r = await askFor(`Settle statement ${n}`, "A note for the person who signs"); return r && { instruct_settlement: { number: n, reason: r } }; }, ""));
+  if (st.supplementary_due) out.push(go("Issue a supplementary listing", async () => { const r = await askFor(`Supplementary listing for ${n}`, "Why it is issued"); return r && { issue_supplementary_listing: { number: n, reason: r } }; }, "Issued."));
+  return h("span", {}, out);
+}
+async function accounts() {
+  const reinsurer = $("acc-re").value.trim();
+  if (!reinsurer) return "";
+  const rows = await ask("statements", { reinsurer });
+  put($("acc-out"), rows.length ? table(["Statement", "Treaty", "Period", "Net", "Status", "Held", ""], rows.map((st) => [st.number, st.treaty, `${st.period_start} to ${st.period_end}`, money(st.net_minor),
+    words(typeof st.status === "string" ? st.status : Object.keys(st.status || {})[0]), st.held || "", me.operate ? statementActions(st) : ""])) : h("p", { class: "muted" }, "No statements have been cut for this reinsurer."));
+  return "";
+}
+$("acc").addEventListener("submit", run($("acc-msg"), accounts));
+portal.picker($("acc-re"), reinsurers, { min: 0 });
+$("cut").addEventListener("submit", run($("acc-msg"), async () => {
+  await send({ cut_statement: { treaty: $("cut-treaty").value.trim(), reinsurer: $("acc-re").value.trim(), period_end: $("cut-end").value } });
+  await accounts();
+  return "Cut. Send it to the reinsurer and agree it when they confirm.";
+}));
+$("pc").addEventListener("submit", run($("acc-msg"), async () => {
+  await send({ review_profit_commission: { treaty: $("pc-treaty").value.trim(), reinsurer: $("acc-re").value.trim() } });
+  return "Reviewed. Any profit commission is on the next statement.";
+}));
+$("tc").addEventListener("submit", run($("tc-msg"), async () => {
+  const keys = $("tc-keys").value.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => { const [policy, cover, layer, life] = l.split("/"); return { policy, cover, layer: Number(layer), life }; });
+  const treaty = $("tc-treaty").value.trim(), effective = $("tc-from").value, reason = $("tc-reason").value.trim();
+  const command = $("tc-what").value === "recapture" ? { recapture: { treaty, effective, keys, reason } }
+    : { move_treaty_version: { to: { id: treaty, version: Number($("tc-version").value) }, effective, keys, reason } };
+  await send(command); await refresh();
+  return "Prepared. Someone else signs it before it is sent.";
+}));
 let current = null;
 $("act-cancel").addEventListener("click", () => { $("act").hidden = true; });
 $("act-form").addEventListener("submit", run($("ex-msg"), async () => {
@@ -94,6 +156,7 @@ $("sweep").addEventListener("submit", run($("s-msg"), async () => {
 $("s-date").value = portal.days(-1, portal.month(0) + "-01");
 signIn(R).then(async () => {
   await refresh();
+  if (!me.operate) for (const f of ["cut", "pc", "tc"]) $(f).hidden = true;
   $("me").textContent = `You are ${me.staff}: ${[me.operate ? "you act on exceptions" : null, me.approve ? "you sign abandonments" : null].filter(Boolean).join(", ") || "view only"}. Commands are made on ${me.today || "today's date"}.`;
 }).catch(portal.refuse);
 </script></body></html>
