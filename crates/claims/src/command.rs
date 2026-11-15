@@ -148,6 +148,14 @@ pub enum Request {
         #[serde(default)]
         ends: bool,
     },
+    /// A premium waiver built into the cover, on a waiver claim: the
+    /// cover's premium is waived from `from` for as long as the benefit
+    /// says (six months for pregnancy, two years after the policy owner's
+    /// death).
+    BuiltInWaiver {
+        code: String,
+        from: NaiveDate,
+    },
 }
 
 impl Request {
@@ -159,7 +167,7 @@ impl Request {
             Request::Withdraw => DecisionKind::Withdraw,
             Request::FuneralAdvance { .. } => DecisionKind::FuneralAdvance,
             Request::PermanentDisablement { .. } => DecisionKind::PermanentDisablement,
-            Request::AdmitBuiltIn { .. } => DecisionKind::AdmitBuiltIn,
+            Request::AdmitBuiltIn { .. } | Request::BuiltInWaiver { .. } => DecisionKind::AdmitBuiltIn,
             Request::ReverseAdmission { .. } => DecisionKind::ReverseAdmission,
             Request::ExGratia { .. } => DecisionKind::ExGratia,
             Request::EndBenefit { .. } => DecisionKind::EndBenefit,

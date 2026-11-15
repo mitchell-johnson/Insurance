@@ -550,6 +550,37 @@ impl ClaimsState {
                 }
                 plan.amount_minor = s.monthly_on(cx.today) / 3;
             }
+            Request::BuiltInWaiver { code, from } => {
+                if claim.claim_type != ClaimType::PremiumWaiver || claim.status != Status::Open {
+                    return refuse("not_open", "a built-in premium waiver is admitted on an open waiver claim");
+                }
+                let facts = Self::covered(claim)?;
+                let Some(benefit) = facts.built_in.iter().find(|b| &b.code == code && b.kind == "premium_waiver") else {
+                    return refuse("unknown_benefit", "the cover has no built-in premium waiver with that code");
+                };
+                if !benefit.applies {
+                    return refuse("built_in_not_chosen", "the built-in benefit needs a feature the life did not choose");
+                }
+                if !claim.evidence.iter().any(|e| e.received_on.is_some()) {
+                    return refuse("evidence_required", "the doctor's confirmation or the death certificate must be on file");
+                }
+                if waiver_months(code).is_none() {
+                    return refuse("no_waiver_terms", "the claims module does not know how long this waiver runs");
+                }
+                if code == PREGNANCY_WAIVER {
+                    // The event is the start of the second trimester; the birth, about six
+                    // months later, must be at least 12 months after the cover started.
+                    if facts.cover_start.is_none_or(|start| claim.event_date < plus_months(start, 6)) {
+                        return refuse("too_soon_after_start", "the birth must be at least 12 months after the cover started");
+                    }
+                }
+                // From the event to six months after the pregnancy ends, or after the death.
+                if *from < claim.event_date || *from > plus_months(claim.event_date, 12) {
+                    return refuse("outside_waiver_window", "the waiver starts outside the window the benefit allows");
+                }
+                // Nothing is paid: the premium is the benefit.
+                plan.amount_minor = 0;
+            }
             Request::ResumeBenefit { from } => {
                 let open = claim
                     .schedule
@@ -618,7 +649,9 @@ impl ClaimsState {
             Request::FuneralAdvance { .. } | Request::AdmitBuiltIn { .. } | Request::PermanentDisablement { .. } => {
                 amount <= profile.max_admission_minor.get(&claim.claim_type).copied().unwrap_or(0)
             }
-            Request::Withdraw | Request::EndBenefit { .. } | Request::SuspendBenefit { .. } | Request::ResumeBenefit { .. } => true,
+            Request::Withdraw | Request::EndBenefit { .. } | Request::SuspendBenefit { .. } | Request::ResumeBenefit { .. } | Request::BuiltInWaiver { .. } => {
+                true
+            }
         }
     }
 
@@ -1062,6 +1095,23 @@ impl ClaimsState {
             Request::WriteOff { overpayment } => Self::write_off(cx, claim, overpayment, decision.no)?,
             Request::SuspendBenefit { from, .. } => self.suspend_benefit(cx, claim, *from)?,
             Request::ResumeBenefit { from } => self.resume_benefit(cx, claim, *from),
+            Request::BuiltInWaiver { code, from } => {
+                let end = plus_months(*from, waiver_months(code).unwrap_or(0));
+                let terms = crate::command::Periodic {
+                    monthly_minor: 0,
+                    first_period: *from,
+                    end,
+                    expected_end: end,
+                };
+                self.start_benefit(claim, cx, &terms);
+                Self::meet_timer(claim, TimerKind::Decision, cx.today);
+                cx.lifecycle(
+                    &self.rules,
+                    "claim_admitted",
+                    claim,
+                    &[("admitted_minor", "0".into()), ("built_in", code.clone()), ("until", end.to_string())],
+                );
+            }
             Request::PermanentDisablement { ends } => {
                 for s in claim.schedule.iter_mut() {
                     if *ends {
@@ -1222,5 +1272,17 @@ impl ClaimsState {
             cx.notify("underpayment_owed", &claim.id, &[("amount_minor", under.to_string())]);
         }
         cx.notify("benefit_resumed", &claim.id, &[("from", from.to_string())]);
+    }
+}
+
+/// AIA's pregnancy premium waiver on its income covers.
+const PREGNANCY_WAIVER: &str = "pregnancy-premium-waiver";
+
+/// How many months a built-in premium waiver runs, by its code.
+fn waiver_months(code: &str) -> Option<u32> {
+    match code {
+        PREGNANCY_WAIVER => Some(6),
+        "waiver-on-death" => Some(24),
+        _ => None,
     }
 }

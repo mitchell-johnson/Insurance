@@ -452,3 +452,106 @@ fn a_cover_a_claim_leaves_in_place_is_not_used_up() {
         .collect();
     assert_eq!(admits, vec![(None, 500_000), (None, 500_000)]);
 }
+
+/// Purpose: a premium waiver built into the cover is admitted on a waiver claim for its own
+/// length (six months for pregnancy, two years after a death), from a date inside its window,
+/// only with evidence on file, only where the cover carries it, and for pregnancy only where the
+/// birth falls at least a year after the cover started; the core is asked to waive that span.
+/// Why it matters: these benefits pay nothing out, so the only thing claims controls is the
+/// span waived. Waiving too long, without the doctor's confirmation or death certificate, or on a
+/// cover too new for the pregnancy benefit, gives away premium the policy does not promise.
+#[test]
+fn a_built_in_premium_waiver_runs_for_its_own_term() {
+    let waiver = |code: &str, from: chrono::NaiveDate| Request::BuiltInWaiver { code: code.into(), from };
+    let mut w = World::new();
+    w.core.cover(
+        "pol-2",
+        "ip",
+        ip_facts(vec![
+            built_in("pregnancy-premium-waiver", "premium_waiver", None, true),
+            built_in("waiver-on-death", "premium_waiver", None, false),
+            built_in("other-waiver", "premium_waiver", None, true),
+            built_in("rehabilitation-support", "facility", None, true),
+        ]),
+    );
+    w.core.cover(
+        "pol-4",
+        "ip",
+        CoverFacts {
+            cover_start: Some(d(2026, 12, 1)),
+            ..ip_facts(vec![built_in("pregnancy-premium-waiver", "premium_waiver", None, true)])
+        },
+    );
+    for (id, policy) in [("w-1", "pol-2"), ("w-2", "pol-4")] {
+        w.ok(Command::Notify(Box::new(World::notification(id, policy, "ip", ClaimType::PremiumWaiver))));
+        w.assign(id, "ana");
+        w.assess(id, "CC-0002");
+    }
+    let from = d(2027, 3, 1);
+    assert_eq!(w.undecided("ip-x", "ana", waiver("pregnancy-premium-waiver", from), "R-OK"), "unknown_claim");
+    assert_eq!(w.undecided("w-1", "ana", waiver("rehabilitation-support", from), "R-OK"), "unknown_benefit");
+    assert_eq!(w.undecided("w-1", "ana", waiver("waiver-on-death", from), "R-OK"), "built_in_not_chosen");
+    assert_eq!(w.undecided("w-1", "ana", waiver("pregnancy-premium-waiver", from), "R-OK"), "evidence_required");
+    for id in ["w-1", "w-2"] {
+        w.ok(Command::RequestEvidence {
+            claim: id.into(),
+            evidence: "doctor".into(),
+            kind: "medical_report".into(),
+            from: "treating-doctor".into(),
+            actor: actor("ana"),
+        });
+        w.ok(Command::ReceiveEvidence {
+            claim: id.into(),
+            evidence: "doctor".into(),
+            vault_ref: "vault-7".into(),
+            cost_minor: 0,
+        });
+    }
+    assert_eq!(w.undecided("w-1", "ana", waiver("other-waiver", from), "R-OK"), "no_waiver_terms");
+    assert_eq!(
+        w.undecided("w-2", "ana", waiver("pregnancy-premium-waiver", from), "R-OK"),
+        "too_soon_after_start"
+    );
+    assert_eq!(
+        w.undecided("w-1", "ana", waiver("pregnancy-premium-waiver", d(2027, 2, 19)), "R-OK"),
+        "outside_waiver_window"
+    );
+    assert_eq!(
+        w.undecided("w-1", "ana", waiver("pregnancy-premium-waiver", d(2028, 2, 21)), "R-OK"),
+        "outside_waiver_window"
+    );
+    w.decided("w-1", "ana", waiver("pregnancy-premium-waiver", from), "R-OK");
+    let c = w.claim("w-1");
+    assert_eq!((c.status, c.waiver_from), (Status::InPayment, Some(from)));
+    assert_eq!(c.schedule.as_ref().expect("waiving").end, d(2027, 9, 1));
+    assert_eq!(w.core.noticed("claim_admitted").last().expect("published")["until"], "2027-09-01");
+    w.ok(Command::DrainDue);
+    assert!(w.core.instructions.iter().any(|i| matches!(
+        i,
+        Instruction::WaivePremium { claim, from: f, until, .. } if claim == "w-1" && *f == from && *until == d(2027, 9, 1)
+    )));
+    assert_eq!(w.undecided("w-1", "ana", waiver("pregnancy-premium-waiver", from), "R-OK"), "not_open");
+
+    // Two years after the policy owner's death.
+    let mut w = World::new();
+    w.core
+        .cover("pol-2", "ip", ip_facts(vec![built_in("waiver-on-death", "premium_waiver", None, true)]));
+    w.ok(Command::Notify(Box::new(World::notification("w-3", "pol-2", "ip", ClaimType::PremiumWaiver))));
+    w.assign("w-3", "ana");
+    w.assess("w-3", "CC-0002");
+    w.ok(Command::RequestEvidence {
+        claim: "w-3".into(),
+        evidence: "death".into(),
+        kind: "death_certificate".into(),
+        from: "registrar".into(),
+        actor: actor("ana"),
+    });
+    w.ok(Command::ReceiveEvidence {
+        claim: "w-3".into(),
+        evidence: "death".into(),
+        vault_ref: "vault-8".into(),
+        cost_minor: 0,
+    });
+    w.decided("w-3", "ana", waiver("waiver-on-death", from), "R-OK");
+    assert_eq!(w.claim("w-3").schedule.as_ref().expect("waiving").end, d(2029, 3, 1));
+}
