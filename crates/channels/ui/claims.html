@@ -92,15 +92,14 @@ function helpers(action, key, input) {
   if (key === "to" || key === "attendees") portal.picker(input, () => portal.colleagues("claims.work"), { min: 0 });
   else if (PEOPLE.has(key)) portal.picker(input, portal.people);
   else if (key === "policy") portal.picker(input, portal.policies, { onPick: async (item) => { covers = await coversOf(item.value).catch(() => []); } });
-  else if (key === "cover") portal.picker(input, async () => (covers.length ? covers : (covers = await coversOf(fieldValue("policy")).catch(() => []))).map((c) => ({ value: c.cover, label: c.cover, hint: [c.type, c.sum_insured_minor != null ? portal.money(c.sum_insured_minor) : "", c.in_force === false ? "not in force" : ""].filter(Boolean).join(" · ") })), { min: 0, empty: "Pick the policy first." });
-  else if (key === "life") portal.picker(input, async () => [...new Set((covers.length ? covers : await coversOf(fieldValue("policy")).catch(() => [])).map((c) => c.life).filter(Boolean))].map((l) => ({ value: l, label: l })), { min: 0 });
+  else if (key === "cover") portal.picker(input, () => Promise.resolve(covers).then((list) => list).then((list) => list.map((c) => ({ value: c.cover, label: c.cover, hint: [c.type, c.sum_insured_minor != null ? portal.money(c.sum_insured_minor) : "", c.in_force === false ? "not in force" : ""].filter(Boolean).join(" · ") }))), { min: 0, empty: "Pick the policy from its list to see its covers." });
+  else if (key === "life") portal.picker(input, async () => [...new Set(covers.map((c) => c.life).filter(Boolean))].map((l) => ({ value: l, label: l })), { min: 0 });
   else if (key === "task" && action === "complete_task") portal.picker(input, () => Promise.resolve(((w && w.tasks) || []).filter((t) => !t.completed_on).map((t) => ({ value: t.id, label: t.id, hint: [words(t.kind), t.due ? "due " + t.due : "", t.overdue ? "overdue" : ""].filter(Boolean).join(" · ") }))), { min: 0, empty: "This claim has no open tasks." });
   else if (key === "evidence" && action === "receive_evidence") portal.picker(input, () => Promise.resolve(((w && w.evidence) || []).filter((e) => !e[4]).map(([e, kind, from, due]) => ({ value: e, label: e, hint: [kind, from, due ? "due " + due : ""].filter(Boolean).join(" · ") }))), { min: 0, empty: "Nothing is outstanding on this claim." });
   else if (key === "overpayment" && action === "record_repayment") portal.picker(input, () => Promise.resolve(((w && w.overpayments) || []).map(([o, out, status]) => ({ value: o, label: o, hint: `${money(out)} outstanding · ${words(status)}` }))), { min: 0, empty: "This claim has no overpayments." });
   else if (key === "item" && action === "pay_cost") portal.picker(input, () => Promise.resolve([...((w && w.evidence) || []).map(([e, kind]) => ({ value: e, label: e, hint: "evidence · " + kind })), ...((w && w.tasks) || []).map((t) => ({ value: t.id, label: t.id, hint: "task · " + words(t.kind) }))]), { min: 0 });
   else if (key === "party" && action === "pay_interest") portal.picker(input, () => Promise.resolve(((w && w.interests) || []).map(([party, owed]) => ({ value: party, label: party, hint: money(owed) + " still owed" }))), { min: 0 });
 }
-const fieldValue = (key) => { const spec = ACTIONS[$("a-command").value] || []; const n = spec.findIndex((f) => f[0] === key); return n < 0 ? "" : $("f-" + n).value.trim(); };
 function fields() {
   const action = $("a-command").value, spec = ACTIONS[action] || [];
   covers = [];
