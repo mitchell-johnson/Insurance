@@ -219,6 +219,7 @@ impl ClaimsState {
             claim: claim.id.clone(),
             policy: claim.policy.clone(),
             cover: claim.cover.clone(),
+            only_cover: false,
             from,
             until: s.end,
         })

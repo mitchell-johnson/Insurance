@@ -34,7 +34,7 @@ PRODUCT = product(
         cover(
             code = "trauma",
             cover_type = "trauma",
-            benefit = lump_sum(survival_days = 14, ends_cover = False),
+            benefit = lump_sum(survival_days = 14),
             rating = stepped("trauma-base"),
             definitions = ["cancer", "heart-attack", "stroke"],
             expiry_age = 70,

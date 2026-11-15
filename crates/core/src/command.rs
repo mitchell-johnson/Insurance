@@ -466,6 +466,9 @@ pub enum Command {
     },
     /// Record that cover on this policy replaces cover on another.
     RecordReplacement(Box<Replacement>),
+    /// Set the months the schedule names as a business's peak season for a
+    /// cover with the peak season upgrade, from the business date.
+    SetPeakSeason(Box<crate::peak_season::PeakSeasonSpec>),
     /// Give a life a cover from the product's menu that it does not hold.
     AddCover(Box<AddedCover>),
     /// Move a life's cover to another of the excess levels the cover offers.
@@ -744,6 +747,7 @@ impl Command {
                 &["policy-servicing"]
             }
             Command::RecordReplacement(_) => &["underwriting", "new-business"],
+            Command::SetPeakSeason(_) => &["new-business", "underwriting", "policy-servicing"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::Claims(command) => command.allowed_callers(),
             Command::Investment(command) => command.allowed_callers(),
@@ -808,6 +812,7 @@ impl Command {
             Command::Migration(_) => "migration",
             Command::ResumeCover { .. } => "resume_cover",
             Command::RecordReplacement(_) => "record_replacement",
+            Command::SetPeakSeason(_) => "set_peak_season",
             Command::AlterUnderwrittenTerms(_) => "alter_underwritten_terms",
             Command::ApproveReinstatement(_) => "approve_reinstatement",
             Command::AvoidPolicy { .. } => "avoid_policy",

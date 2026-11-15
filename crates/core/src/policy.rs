@@ -702,6 +702,11 @@ pub struct Policy {
     /// What people paid by mistake owe back, by debt ID.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub payee_debts: BTreeMap<String, crate::payee_debt::PayeeDebt>,
+    /// The months the schedule names as the business's peak season, by
+    /// cover code, each from the day it was set. A claim reads the months in
+    /// force on its event date (`crate::peak_season`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub peak_seasons: BTreeMap<String, Vec<crate::peak_season::PeakSeason>>,
     /// What the owner has borrowed against the policy, once they have.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loan: Option<crate::loan::Loan>,

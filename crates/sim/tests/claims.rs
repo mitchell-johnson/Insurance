@@ -208,6 +208,12 @@ fn policy(c: &mut Cluster, nth: usize, paid: bool) -> PolicyId {
     id
 }
 
+/// The latest event date on the trauma cover that has served its 14-day survival period by
+/// `today`, so a lump sum on it may be decided today.
+fn survived(today: NaiveDate) -> NaiveDate {
+    today - chrono::Days::new(14)
+}
+
 fn run(c: &mut Cluster, command: claims::Command) -> Result<(), Reject> {
     c.submit(0, "claims", wrap(command))
 }
@@ -369,10 +375,10 @@ fn a_lump_sum_claim_runs_from_notification_to_the_bank() {
     let today = c.business_date().unwrap();
 
     // Only the claims module may send claims work.
-    let n = notification("clm-1", &id, "trauma", ClaimType::Trauma, today);
+    let n = notification("clm-1", &id, "trauma", ClaimType::Trauma, survived(today));
     assert_eq!(code(c.submit(0, "payments", wrap(n))), "caller_not_allowed");
     let hash = c.state(0).state_hash();
-    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, survived(today));
     assert_ne!(c.state(0).state_hash(), hash, "claims state is part of the partition's hash");
     assert_eq!(money(&c, &id), (100_000_00, 0, 0));
     let facts = claim(&c, "clm-1").cover_check.clone().unwrap().facts;
@@ -468,7 +474,7 @@ fn an_admission_can_end_the_policy_or_take_the_premium_owing() {
         .is_some_and(|k| k.facts.policy_status == "in_force"));
 
     // In grace: 61 days of premium unpaid by now would be past grace, 20 is inside it.
-    open_claim(&mut c, "clm-grace", &unpaid, "trauma", ClaimType::Trauma, today);
+    open_claim(&mut c, "clm-grace", &unpaid, "trauma", ClaimType::Trauma, survived(today));
     let facts = claim(&c, "clm-grace").cover_check.clone().unwrap().facts;
     assert_eq!(facts.standing.as_deref(), Some("in_grace"));
     let owing = facts.outstanding_premium_minor;
@@ -1373,9 +1379,9 @@ fn the_core_refuses_instructions_its_own_record_does_not_support() {
     let mut c = cluster();
     let id = policy(&mut c, 0, true);
     let other = policy(&mut c, 1, false);
-    days(&mut c, 3);
+    days(&mut c, 17);
     let today = c.business_date().unwrap();
-    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, survived(today));
     ok(&mut c, decide("clm-1", admit(Some(10_000_00), None, false)));
     verify_payee(&mut c, "clm-1");
     let head = c.state(0).ledger.head();
@@ -1440,7 +1446,7 @@ fn the_core_refuses_instructions_its_own_record_does_not_support() {
     assert_eq!(code(run(&mut c, gift())), "invalid_amount");
 
     // The core has the claim closed; the module thinks it open, and the other way round.
-    open_claim(&mut c, "clm-2", &id, "trauma", ClaimType::Trauma, today);
+    open_claim(&mut c, "clm-2", &id, "trauma", ClaimType::Trauma, survived(today));
     state_mut(&mut c).policies.get_mut(&id).unwrap().claims.get_mut("clm-2").unwrap().open = false;
     assert_eq!(
         code(run(&mut c, decide("clm-2", Request::Reserve { amount_minor: 5_000_00 }))),
@@ -1549,8 +1555,8 @@ fn days_unchecked(c: &mut Cluster, n: u32) {
 fn a_second_death_claim_cannot_end_a_policy_twice() {
     let mut c = cluster();
     let id = policy(&mut c, 0, true);
-    days(&mut c, 5);
-    let died = c.business_date().unwrap();
+    days(&mut c, 20);
+    let died = survived(c.business_date().unwrap());
     open_claim(&mut c, "clm-1", &id, "life", ClaimType::Death, died);
     open_claim(&mut c, "clm-2", &id, "trauma", ClaimType::Death, died);
     ok(&mut c, decide("clm-1", admit(None, None, false)));
@@ -1739,7 +1745,7 @@ fn late_payment_interest_is_its_own_posting_and_settles_with_the_benefit() {
     let id = policy(&mut c, 0, true);
     days(&mut c, 20);
     let today = c.business_date().unwrap();
-    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, survived(today));
     ok(&mut c, decide("clm-1", admit(Some(80_000_00), None, false)));
     verify_payee(&mut c, "clm-1");
     days(&mut c, 40);
@@ -1908,11 +1914,11 @@ fn a_lender_recorded_on_the_policy_is_paid_before_the_claimant() {
         party: ic_core::PartyId("party-bank".into()),
         notice_received: today,
         extent_minor: Some(50_000_00),
-        effective_from: today,
+        effective_from: survived(today),
         notice: "vault-notice-1".into(),
     };
     c.submit(0, "policy-servicing", Command::Interest(Box::new(assignment))).unwrap();
-    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, survived(today));
     ok(&mut c, decide("clm-1", admit(Some(80_000_00), None, false)));
     verify_payee(&mut c, "clm-1");
     let due = claim(&c, "clm-1").interests.clone();
@@ -2047,7 +2053,7 @@ fn an_aborted_transfer_puts_the_claims_back() {
     let id = policy(&mut c, 0, true);
     days(&mut c, 20);
     let today = c.business_date().unwrap();
-    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, survived(today));
     let before = c.state(0).claims.clone();
     let begin = Command::BeginTransfer {
         policy: id.clone(),
@@ -2542,7 +2548,7 @@ fn a_policy_with_a_benefit_owed_cannot_be_avoided() {
     let id = policy(&mut c, 0, true);
     days(&mut c, 20);
     let today = c.business_date().unwrap();
-    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, survived(today));
     ok(&mut c, decide("clm-1", admit(Some(80_000_00), None, false)));
     let before = (c.state(0).ledger.head(), money(&c, &id));
     let avoid = Command::AvoidPolicy {
@@ -2630,7 +2636,7 @@ fn declined_late_interest_is_reversed_in_its_own_entry() {
     let id = policy(&mut c, 0, true);
     days(&mut c, 20);
     let today = c.business_date().unwrap();
-    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, survived(today));
     ok(&mut c, decide("clm-1", admit(Some(80_000_00), None, false)));
     verify_payee(&mut c, "clm-1");
     days(&mut c, 40);
@@ -2802,7 +2808,7 @@ fn a_trauma_cover_paid_in_full_ends_and_the_life_cover_carries_on() {
     };
     let before = *bills(&mut c).last().expect("the policy was billed at issue");
 
-    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, survived(today));
     ok(&mut c, decide("clm-1", admit(Some(100_000_00), None, false)));
     clean(&c);
     let tomorrow = today.succ_opt().unwrap();

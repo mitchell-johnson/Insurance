@@ -264,6 +264,19 @@ pub fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&s
             ic_product::WhileImprisoned::Pay => ic_claims::port::Imprisonment::Pay,
         };
     }
+    // A lump sum's survival period, and whether paying it uses the cover up.
+    // On total and permanent disablement the product's survival period is the
+    // qualifying period (disabled for it, and alive at its end), so claims
+    // also takes it as the waiting period before a lump sum may be paid.
+    if let Some(ic_product::Benefit::LumpSum { survival_days, ends_cover }) = product.and_then(|pr| pr.cover(cover)).map(|def| &def.benefit) {
+        facts.survival_days = *survival_days;
+        facts.ends_cover = Some(*ends_cover);
+        if c.cover_type == "tpd" {
+            facts.waiting_days = *survival_days;
+        }
+    }
+    // The business's peak season on the event date, as its schedule names it.
+    facts.peak_months = crate::peak_season::months_on(p, cover, on);
     // The option the life held the cover at on the event date: its excess,
     // and the waiting period an income cover's option sets.
     let chosen = at_event
@@ -556,7 +569,14 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             [reserve_minor, admitted_minor, payable_minor, receivable_minor],
             open,
         ),
-        Instruction::WaivePremium { claim, cover, from, until, .. } => waive(s, p, ctx, &claim, &cover, from, until),
+        Instruction::WaivePremium {
+            claim,
+            cover,
+            only_cover,
+            from,
+            until,
+            ..
+        } => waive(s, p, ctx, &claim, &cover, only_cover, from, until),
         Instruction::UnwaivePremium { claim, cover, from, .. } => unwaive(s, p, ctx, &claim, &cover, from),
         Instruction::Close {
             claim, outcome, overpayment, ..
@@ -1049,16 +1069,53 @@ fn open_migrated(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, cl
 /// periods starting in the window is paid from claims expense, so earned
 /// premium and claims cost are both recognised. Older arrears are not
 /// touched, and nothing is posted where nothing is owing.
-fn waive(state: &mut CoreState, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &str, cover: &str, from: NaiveDate, until: NaiveDate) -> Result<(), Reject> {
+/// What a waiver pays on each receivable in its window: all that is owing,
+/// or, where it waives only its own cover's premium, that cover's share of
+/// each premium (by what the cover earns in it, GST and levies alike) less
+/// what this claim has already waived on it, never more than is owing.
+fn to_waive(policy: &Policy, claim: &str, cover: &str, only_cover: bool, from: NaiveDate, until: NaiveDate) -> BTreeMap<u32, i64> {
+    let record = policy.claims.get(claim);
+    let cover_type = policy.covers.get(cover).map(|c| c.cover_type.as_str());
+    policy
+        .receivables
+        .iter()
+        .filter(|r| r.outstanding_minor > 0 && !r.closed && r.period_start >= from && r.period_start < until)
+        .filter_map(|r| {
+            if !only_cover {
+                return Some((r.id, r.outstanding_minor));
+            }
+            let all: i128 = r.net_fine.values().sum();
+            let mine = cover_type.and_then(|t| r.net_fine.get(t)).copied().unwrap_or(0);
+            if all <= 0 || mine <= 0 {
+                return None;
+            }
+            let share = i64::try_from(crate::postings::div_half_even(i128::from(r.total_minor) * mine, all)).unwrap_or(0);
+            let already = record.and_then(|k| k.waived.get(&r.id)).copied().unwrap_or(0);
+            Some((r.id, (share - already).clamp(0, r.outstanding_minor)))
+        })
+        .filter(|(_, amount)| *amount > 0)
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn waive(
+    state: &mut CoreState,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    claim: &str,
+    cover: &str,
+    only_cover: bool,
+    from: NaiveDate,
+    until: NaiveDate,
+) -> Result<(), Reject> {
     known(policy, claim)?;
-    let mine = |r: &&crate::policy::Receivable| r.outstanding_minor > 0 && !r.closed && r.period_start >= from && r.period_start < until;
-    let total: i64 = policy.receivables.iter().filter(mine).map(|r| r.outstanding_minor).sum();
+    // The part of what is waived that pays for cover, by cover type, as a
+    // receipt reports it: commission agreements may earn on waived premium.
+    let waived = to_waive(policy, claim, cover, only_cover, from, until);
+    let total: i64 = waived.values().sum();
     if total == 0 || policy.status != PolicyStatus::InForce {
         return Ok(());
     }
-    // The part of what is waived that pays for cover, by cover type, as a
-    // receipt reports it: commission agreements may earn on waived premium.
-    let waived: BTreeMap<u32, i64> = policy.receivables.iter().filter(mine).map(|r| (r.id, r.outstanding_minor)).collect();
     let net = crate::counterparty::net_by_cover_type(&policy.receivables, &waived);
     let c = policy.currency;
     let (expense, d) = incurred(policy, cover, "premium_waiver");
@@ -1074,8 +1131,10 @@ fn waive(state: &mut CoreState, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &
         claim,
         &[("amount_minor", total.to_string())],
     )?;
-    for r in policy.receivables.iter_mut().filter(|r| mine(&&**r)) {
-        r.outstanding_minor = 0;
+    for r in policy.receivables.iter_mut() {
+        if let Some(amount) = waived.get(&r.id) {
+            r.outstanding_minor -= amount;
+        }
     }
     if let Some(record) = policy.claims.get_mut(claim) {
         record.waived_minor += total;
@@ -1570,6 +1629,7 @@ mod tests {
             claim: "clm-1".into(),
             policy: "pol-1".into(),
             cover: "life".into(),
+            only_cover: false,
             from: today,
             until: today + chrono::Days::new(31),
         };
@@ -1610,6 +1670,55 @@ mod tests {
         let entries = ctx.entries.len();
         execute(&mut state, &mut ctx, unwaive(today)).unwrap();
         assert_eq!(ctx.entries.len(), entries, "asked twice, billed back once");
+    }
+
+    /// Purpose: a waiver that belongs to one cover waives that cover's share of each premium
+    /// in its window (what the cover earns in it over everything the premium pays for), and
+    /// asked again the next day waives nothing more; a cover the premium does not pay for
+    /// waives nothing.
+    /// Why it matters: AIA's pregnancy waiver waives the income cover's premium only. Waiving
+    /// the whole premium would give away the other covers' premium, and a waiver run every
+    /// day that forgot what it had already waived would waive the rest a share at a time.
+    #[test]
+    fn a_waiver_for_one_cover_waives_only_that_covers_share_once() {
+        let (mut state, today) = book();
+        let mut ctx = Ctx { date: today, ..ctx() };
+        let pol = PolicyId("pol-1".to_string());
+        let admit = Instruction::Admit {
+            life: None,
+            claim: "clm-1".into(),
+            policy: "pol-1".into(),
+            cover: "life".into(),
+            amount_minor: 1_000_00,
+            release_reserve: false,
+            deduct_premium_minor: 0,
+            terminate: None,
+            repay_loan_minor: 0,
+        };
+        execute(&mut state, &mut ctx, admit).unwrap();
+        let p = &state.policies[&pol];
+        let r = p.receivables.iter().find(|r| r.outstanding_minor > 0).unwrap();
+        let cover_type = p.covers["life"].cover_type.clone();
+        let all: i128 = r.net_fine.values().sum();
+        let share = i64::try_from(crate::postings::div_half_even(i128::from(r.total_minor) * r.net_fine[&cover_type], all)).unwrap();
+        let owed = p.outstanding_minor();
+        let waive = |cover: &str| Instruction::WaivePremium {
+            claim: "clm-1".into(),
+            policy: "pol-1".into(),
+            cover: cover.into(),
+            only_cover: true,
+            from: today,
+            until: today + chrono::Days::new(31),
+        };
+        execute(&mut state, &mut ctx, waive("life")).unwrap();
+        let p = &state.policies[&pol];
+        assert!(share > 0 && share <= owed);
+        assert_eq!((p.claims["clm-1"].waived_minor, p.outstanding_minor()), (share, owed - share));
+        let entries = ctx.entries.len();
+        execute(&mut state, &mut ctx, waive("life")).unwrap();
+        execute(&mut state, &mut ctx, waive("no-such-cover")).unwrap();
+        assert_eq!(ctx.entries.len(), entries, "nothing more to waive");
+        assert_eq!(state.policies[&pol].claims["clm-1"].waived_minor, share);
     }
 
     /// Purpose: a claims command queued for another partition leaves with an
