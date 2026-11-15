@@ -113,3 +113,50 @@ fn outages_are_said_plainly() {
     split.insert("s1:7000".into(), Some(vec![status(2, 0, "leader")]));
     assert_eq!(assess(&regions(), &split).partitions_with_leader, 2);
 }
+
+/// Purpose: with two home regions sharing the leadership and a witness's region that leads
+/// nothing, the report is at home while each home region leads its share and every home node
+/// answers; losing either home region is degraded, not down, and a home region that is named
+/// but not in the map is refused.
+/// Why it matters: this is the shipped placement (Sydney and Melbourne share the partitions,
+/// a witness in a third region). A status page that took Melbourne's share of the leaders for
+/// a fail-over would tell every customer the service is degraded on a normal day.
+#[test]
+fn two_home_regions_share_the_leaders() {
+    let shared = Regions::parse(
+        "australiaeast=s1:7000,s2:7000;australiasoutheast=m1:7000,m2:7000;australiacentral=w1:7000",
+        "australiaeast, australiasoutheast",
+    )
+    .unwrap();
+    assert_eq!(shared.home, "australiaeast");
+    assert_eq!(shared.homes.len(), 2);
+    let nodes = ["s1:7000", "s2:7000", "m1:7000", "m2:7000", "w1:7000"];
+    let seen = |down: &[&str], leaders: &[(&str, u32)]| -> BTreeMap<String, Option<Vec<NodeStatus>>> {
+        nodes
+            .iter()
+            .enumerate()
+            .map(|(i, addr)| {
+                let rows = (0..2u32)
+                    .map(|p| {
+                        let role = if leaders.contains(&(*addr, p)) { "leader" } else { "follower" };
+                        status(i as u64, p, role)
+                    })
+                    .collect();
+                (addr.to_string(), (!down.contains(addr)).then_some(rows))
+            })
+            .collect()
+    };
+    let normal = assess(&shared, &seen(&[], &[("s1:7000", 0), ("m1:7000", 1)]));
+    assert!(normal.at_home && normal.quorum);
+    assert_eq!(StatusPage::from(&normal).level, Level::Operational);
+    let witness = normal.regions.iter().find(|r| r.name == "australiacentral").unwrap();
+    assert!(!witness.home);
+
+    let sydney_lost = assess(&shared, &seen(&["s1:7000", "s2:7000"], &[("m1:7000", 0), ("m1:7000", 1)]));
+    assert!(sydney_lost.quorum && !sydney_lost.at_home);
+    let page = StatusPage::from(&sydney_lost);
+    assert_eq!(page.level, Level::Degraded);
+    assert!(page.detail[1].contains("One of our data centres is unavailable"));
+    assert!(Regions::parse("australiaeast=s1:7000", "australiaeast,westus").unwrap_err().contains("westus"));
+    assert!(Regions::parse("australiaeast=s1:7000", " , ").unwrap_err().contains("home region"));
+}

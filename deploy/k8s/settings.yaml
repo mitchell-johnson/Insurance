@@ -7,10 +7,24 @@ data:
   # Fixed for the life of the ledger: a policy's partition is its group's
   # hash modulo this number.
   IC_PARTITIONS: "64"
-  # The founding members. A replacement node takes a new number and is added
-  # with `ic-admin members` (docs/operations.md); it is not added here first.
-  IC_NODE_PEERS: "1=ic-node-1.ic-node:7000,2=ic-node-2.ic-node:7000,3=ic-node-3.ic-node:7000"
-  IC_NODES: "ic-node-1.ic-node:7000,ic-node-2.ic-node:7000,ic-node-3.ic-node:7000"
+  # The founding members: two voters in each main region and the witness in
+  # a third, named in the ledger.internal zone (infra/regions.bicep). The
+  # same in both regions' clusters and on the witness. A replacement node
+  # takes a new number and is added with `ic-admin members`
+  # (docs/operations.md); it is not added here first.
+  IC_NODE_PEERS: "1=ic-node-1.ledger.internal:7000,2=ic-node-2.ledger.internal:7000,3=ic-node-3.ledger.internal:7000,4=ic-node-4.ledger.internal:7000,5=ic-witness.ledger.internal:7000"
+  # Where callers look for a leader: every voter. The witness answers "not
+  # the leader" to all of them, but is listed so the watch reports it.
+  IC_NODES: "ic-node-1.ledger.internal:7000,ic-node-2.ledger.internal:7000,ic-node-3.ledger.internal:7000,ic-node-4.ledger.internal:7000,ic-witness.ledger.internal:7000"
+  # Node 5 votes and keeps the log, and holds no state (crates/raft/src/witness.rs).
+  IC_WITNESS_NODES: "5"
+  # Leadership is shared: partitions take the two regions in turn, and each
+  # region's groups go back to it when it returns (crates/raft/src/failback.rs).
+  IC_LEADER_REGIONS: "australiaeast,australiasoutheast"
+  IC_REGION_NODES: "australiaeast=1,2;australiasoutheast=3,4;australiacentral=5"
+  # Between regions a round trip is 10 to 15 ms; a heartbeat every 100 ms
+  # puts an election at 400 to 800 ms after a leader is lost.
+  IC_RAFT_HEARTBEAT_MS: "100"
   IC_CLUSTER_TOKEN_FILE: /mnt/cluster-token/cluster-token
 ---
 apiVersion: v1
