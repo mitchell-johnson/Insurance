@@ -37,6 +37,7 @@ pub fn rules() -> Rules {
         DecisionKind::WriteOff,
         DecisionKind::FuneralAdvance,
         DecisionKind::AdmitBuiltIn,
+        DecisionKind::PermanentDisablement,
     ];
     Rules {
         version: 1,
@@ -251,6 +252,9 @@ pub fn facts(cover_type: &str) -> CoverFacts {
         event_cap_minor: None,
         built_in: vec![],
         known_then: None,
+        peak_months: vec![],
+        survival_days: 0,
+        ends_cover: None,
     }
 }
 

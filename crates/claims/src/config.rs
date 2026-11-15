@@ -295,6 +295,13 @@ pub struct Rules {
     /// the payee's own return.
     #[serde(default)]
     pub benefit_withholding_bp: u32,
+    /// The most paid towards a business mentor for a claimant whose cover
+    /// carries the Business Mentors Benefit, over the life of the policy.
+    /// The wording pays a two-year membership, one for each business. When
+    /// rules leave it out, $1,000 is taken: a best-estimate placeholder until
+    /// AIA confirms the figure. Zero: not set, and a request is refused.
+    #[serde(default = "business_mentors_placeholder")]
+    pub business_mentors_minor: i64,
     /// How often a person paid a benefit is asked to prove they are alive.
     /// Zero: never.
     #[serde(default)]
@@ -501,4 +508,9 @@ impl Rules {
         let each: BTreeMap<String, Match> = codes.iter().map(|c| (c.clone(), self.exclusion_match(c, cover_type, tags))).collect();
         (each.values().copied().max().unwrap_or(Match::DoesNotApply), each)
     }
+}
+
+/// The best-estimate placeholder for a two-year Business Mentors membership.
+fn business_mentors_placeholder() -> i64 {
+    100_000
 }

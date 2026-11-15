@@ -147,6 +147,40 @@ pub struct CoverFacts {
     /// late alteration). Absent: nothing recorded since changes it.
     #[serde(default)]
     pub known_then: Option<KnownThen>,
+    /// The months of the year (1 to 12) the schedule names as the business's
+    /// peak season, where the cover carries a peak season upgrade.
+    #[serde(default)]
+    pub peak_months: Vec<u32>,
+    /// Days the life must survive after the event before a lump sum is
+    /// paid, as the product sets it. Zero: none.
+    #[serde(default)]
+    pub survival_days: u32,
+    /// Whether paying a lump sum ends (or reduces) the cover, as the product
+    /// says. `Some(false)`: the cover stays in place and earlier claims do
+    /// not use it up. Absent: the product says nothing, and a payment comes
+    /// off the cover.
+    #[serde(default)]
+    pub ends_cover: Option<bool>,
+}
+
+impl CoverFacts {
+    /// The built-in benefit with this code, where the cover has it and its
+    /// feature was chosen.
+    pub fn has_built_in(&self, code: &str) -> Option<&BuiltIn> {
+        self.built_in.iter().find(|b| b.code == code && b.applies)
+    }
+
+    /// Whether the product lists the cover's built-in benefits at all. When
+    /// it does, a benefit it does not list (or lists as not chosen) is not
+    /// there; when it says nothing, the claims rules' defaults stand.
+    pub fn lists_built_ins(&self) -> bool {
+        !self.built_in.is_empty()
+    }
+
+    /// The product lists this benefit, chosen or not.
+    pub fn declares(&self, code: &str) -> bool {
+        self.built_in.iter().any(|b| b.code == code)
+    }
 }
 
 /// What the record said about a cover on the event date, as known then.

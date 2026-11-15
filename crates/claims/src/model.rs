@@ -160,6 +160,8 @@ pub enum DecisionKind {
     FuneralAdvance,
     /// A benefit built into the cover, within its own limit.
     AdmitBuiltIn,
+    /// The Permanent Disablement Benefit starting or ending.
+    PermanentDisablement,
 }
 
 /// What a second signer must be.
@@ -473,6 +475,18 @@ pub struct Schedule {
     /// payable for. Before the first, `monthly_minor`.
     #[serde(default)]
     pub index_steps: BTreeMap<NaiveDate, i64>,
+    /// The Permanent Disablement Benefit: a third more each month, from the
+    /// day it was accepted until the first day it is no longer paid.
+    #[serde(default)]
+    pub permanent_from: Option<NaiveDate>,
+    #[serde(default)]
+    pub permanent_until: Option<NaiveDate>,
+    /// The Peak Season Upgrade: this much more for a period starting in one
+    /// of the peak months (1 to 12).
+    #[serde(default)]
+    pub peak_addition_minor: i64,
+    #[serde(default)]
+    pub peak_months: Vec<u32>,
 }
 
 impl Schedule {
@@ -480,6 +494,18 @@ impl Schedule {
     /// indexation on or before it, or the benefit as admitted.
     pub fn monthly_on(&self, start: NaiveDate) -> i64 {
         self.index_steps.range(..=start).next_back().map_or(self.monthly_minor, |(_, v)| *v)
+    }
+
+    /// What is paid on top of the monthly benefit for a period starting on
+    /// `start`, before other income is taken off the benefit: a third of it
+    /// while the Permanent Disablement Benefit runs, and the peak season
+    /// addition in a peak month.
+    pub fn supplement_on(&self, start: NaiveDate) -> i64 {
+        let permanent = self
+            .permanent_from
+            .is_some_and(|from| from <= start && self.permanent_until.is_none_or(|until| start < until));
+        let peak = self.peak_months.contains(&chrono::Datelike::month(&start));
+        (if permanent { self.monthly_on(start) / 3 } else { 0 }) + if peak { self.peak_addition_minor } else { 0 }
     }
 
     /// The suspension still open, by the day it began.
@@ -743,6 +769,9 @@ pub struct Claim {
     /// into the cover, by its code.
     #[serde(default)]
     pub built_in: BTreeMap<String, i64>,
+    /// The qualifying period was waived, with the evidence for it.
+    #[serde(default)]
+    pub waiting_waived: Option<String>,
     /// Admitted and not yet paid: mirrors the claim's share of benefit payable.
     pub payable_minor: i64,
     /// The part of `payable_minor` that is a handling cost the bank sent

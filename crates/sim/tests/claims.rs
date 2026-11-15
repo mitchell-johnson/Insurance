@@ -45,6 +45,7 @@ fn rules() -> Rules {
         DecisionKind::ExGratia,
         DecisionKind::FuneralAdvance,
         DecisionKind::AdmitBuiltIn,
+        DecisionKind::PermanentDisablement,
         DecisionKind::EndBenefit,
         DecisionKind::RecoveryStatus,
         DecisionKind::WriteOff,

@@ -368,6 +368,60 @@ fn anniversary_indexes_cover_and_re_rates_stepped_premium() {
     .unwrap();
 }
 
+/// Activates term life again under `code` with its indexation line replaced by `indexation`
+/// (an empty string removes the feature) and issues the standard policy on it.
+fn on_term_life_variant(c: &mut Cluster, n: u64, code: &str, indexation: &str) -> (PartitionId, PolicyId) {
+    let source = include_str!("../../../products/term_life.star")
+        .replace("code = \"term-life\"", &format!("code = \"{code}\""))
+        .replace("indexation(rate_code = \"cpi\"),", indexation);
+    let product = ic_product::load_product(&format!("{code}.star"), &source).unwrap();
+    c.activate_everywhere(Command::ActivateProduct { product: Box::new(product) }).unwrap();
+    let mut issue = term_life(
+        n,
+        d(2027, 11, 15),
+        d(1990, 3, 10),
+        Sex::Female,
+        false,
+        500_000_00,
+        None,
+        Frequency::Monthly,
+        None,
+    );
+    issue.product_code = code.into();
+    let (p, id) = (c.partition_of(&issue.group), issue.policy.clone());
+    c.submit(p, "new-business", issue_command(issue)).unwrap();
+    (p, id)
+}
+
+/// Purpose: the product's `indexation(opt_out = ...)` decides whether the owner may decline
+/// indexation. With `opt_out = False` declining is refused `indexation_compulsory` and the
+/// policy keeps indexing; accepting it is still recorded. A product with no indexation refuses
+/// both ways with `no_indexation`.
+/// Why it matters: the setting was declared on products and read by nothing, so a policy whose
+/// wording makes indexation compulsory could have it switched off, and a request to decline
+/// indexation on a product without it was accepted and silently meant nothing.
+#[test]
+fn the_product_decides_whether_indexation_may_be_declined() {
+    let mut c = cluster(1, d(2027, 11, 15));
+    let decline = |c: &mut Cluster, p, id: &PolicyId, declined| {
+        c.submit(p, "policy-servicing", Command::DeclineIndexation { policy: id.clone(), declined })
+            .map_err(|e| e.code)
+    };
+    let (p, compulsory) = on_term_life_variant(&mut c, 7, "term-life-indexed", "indexation(rate_code = \"cpi\", opt_out = False),");
+    assert_eq!(decline(&mut c, p, &compulsory, true), Err("indexation_compulsory".to_string()));
+    assert!(!c.state(p).policies[&compulsory].indexation_declined);
+    decline(&mut c, p, &compulsory, false).unwrap();
+
+    let (p, plain) = on_term_life_variant(&mut c, 8, "term-life-plain", "");
+    assert_eq!(decline(&mut c, p, &plain, true), Err("no_indexation".to_string()));
+    assert_eq!(decline(&mut c, p, &plain, false), Err("no_indexation".to_string()));
+
+    // the shipped term life lets the owner decline
+    let (p, id) = standard(&mut c, 9, d(2027, 11, 15));
+    decline(&mut c, p, &id, true).unwrap();
+    assert!(c.state(p).policies[&id].indexation_declined);
+}
+
 /// Purpose: a scheme of a thousand members is loaded and billed in chunks that each stay within the
 /// work budget of one command, and a leaver notified late has premium credited back to the date
 /// they left.

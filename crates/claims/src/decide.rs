@@ -82,6 +82,10 @@ impl ClaimsState {
     /// for this life, or for any life where the cover pays once on the first
     /// event, and on the covers whose payments reduce it.
     fn earlier_admitted(&self, claim: &Claim, facts: &CoverFacts) -> i64 {
+        if facts.ends_cover == Some(false) {
+            // A cover a claim leaves in place is not used up by earlier claims.
+            return 0;
+        }
         let others = self.by_policy.get(&claim.policy).into_iter().flatten().filter_map(|id| self.claims.get(id));
         let joint = |c: &Claim| c.life.as_ref().is_some_and(|l| facts.joint_lives.contains(l));
         others
@@ -117,6 +121,33 @@ impl ClaimsState {
             .map(|c| c.admitted_minor)
             .sum();
         Some(cap - others - claim.admitted_minor)
+    }
+
+    /// The day the waiting period runs from: the event date, or, under the
+    /// Concurrent Waiting Period Benefit, the earlier disablement date of a
+    /// business cover claim for the same person and cause on another policy
+    /// that is still being paid or ended within the last 12 months, so the
+    /// waiting already served there counts here.
+    fn waiting_from(&self, claim: &Claim, facts: &CoverFacts) -> NaiveDate {
+        let (Some(_), Some(party)) = (facts.has_built_in("concurrent-waiting-period"), claim.life_party.as_ref()) else {
+            return claim.event_date;
+        };
+        self.by_party
+            .get(party)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.claims.get(id))
+            .filter(|c| c.id != claim.id && c.policy != claim.policy && c.life_party.as_ref() == Some(party))
+            .filter(|c| c.claim_type.periodic() && c.cause_code.is_some() && c.cause_code == claim.cause_code)
+            .filter(|c| c.event_date < claim.event_date)
+            .filter(|c| match c.status {
+                Status::InPayment => true,
+                Status::Ended => c.closed_on.is_some_and(|closed| claim.event_date <= plus_months(closed, 12)),
+                _ => false,
+            })
+            .map(|c| c.event_date)
+            .min()
+            .unwrap_or(claim.event_date)
     }
 
     /// Days of income benefit already paid for a mental health cause on
@@ -213,7 +244,7 @@ impl ClaimsState {
                         };
                         let sound = amount_fits
                             && p.monthly_minor <= facts.sum_insured_minor
-                            && p.first_period >= plus_days(claim.event_date, facts.waiting_days)
+                            && p.first_period >= plus_days(self.waiting_from(claim, facts), facts.waiting_days)
                             && p.end > p.first_period
                             && p.expected_end > p.first_period;
                         if !sound {
@@ -238,6 +269,15 @@ impl ClaimsState {
                         plan.amount_minor = claim.reserve_minor.max(p.monthly_minor);
                     }
                     (false, None) => {
+                        // A disablement claim's qualifying period runs before it is paid, unless waived.
+                        let qualifying = claim.claim_type == ClaimType::TotalPermanentDisability && facts.waiting_days > 0;
+                        if qualifying && claim.waiting_waived.is_none() && cx.today < plus_days(claim.event_date, facts.waiting_days) {
+                            return refuse("qualifying_period", "the incapacity has not yet lasted the cover's qualifying period");
+                        }
+                        // A lump sum with a survival period is paid only once the life has survived it.
+                        if claim.health.is_none() && facts.survival_days > 0 && cx.today < plus_days(claim.event_date, facts.survival_days) {
+                            return refuse("survival_period", "the life has not yet survived the cover's survival period after the event");
+                        }
                         plan.health = self.health_amount(claim, facts);
                         let mut cap = match &plan.health {
                             Some(h) => h.amount_minor,
@@ -381,16 +421,43 @@ impl ClaimsState {
                 if !benefit.applies {
                     return refuse("built_in_not_chosen", "the built-in benefit needs a feature the life did not choose");
                 }
+                // A business mentor is the one facility paid for: the rest are
+                // services arranged for the claimant, or ride with the benefit.
+                let mentors = code == "business-mentors";
+                match benefit.kind.as_str() {
+                    "monthly_addition" => {
+                        return refuse(
+                            "paid_with_the_benefit",
+                            "this benefit is added to each monthly payment, not admitted on its own",
+                        )
+                    }
+                    "facility" if mentors => {
+                        if claim.status != Status::InPayment || *settles {
+                            return refuse("not_in_payment", "a business mentor is paid for while the income benefit is being paid");
+                        }
+                    }
+                    "facility" | "premium_waiver" => return refuse("not_payable", "this benefit is a service or a premium waiver, not a payment"),
+                    _ => {}
+                }
+                let limit = if mentors {
+                    match benefit.limit_minor.or(Some(self.rules.business_mentors_minor).filter(|m| *m > 0)) {
+                        Some(limit) => Some(limit),
+                        None => return refuse("not_configured", "the most paid for a business mentor is not set in the claims rules"),
+                    }
+                } else {
+                    benefit.limit_minor
+                };
                 let used: i64 = self
                     .by_policy
                     .get(&claim.policy)
                     .into_iter()
                     .flatten()
                     .filter_map(|id| self.claims.get(id))
-                    .filter(|c| c.life == claim.life && c.status != Status::Reversed)
+                    // One business mentor for each business: the policy, whichever life claims.
+                    .filter(|c| (mentors || c.life == claim.life) && c.status != Status::Reversed)
                     .filter_map(|c| c.built_in.get(code))
                     .sum();
-                let mut room = benefit.limit_minor.map_or(i64::MAX, |l| l - used);
+                let mut room = limit.map_or(i64::MAX, |l| l - used);
                 if benefit.reduces_cover() {
                     let taken = self.earlier_admitted(claim, facts) + claim.admitted_minor - Self::on_top(claim, facts);
                     room = room.min(facts.sum_insured_minor - taken);
@@ -456,6 +523,64 @@ impl ClaimsState {
                     );
                 }
             }
+            Request::PermanentDisablement { ends } => {
+                let Some(s) = claim.schedule.as_ref().filter(|_| claim.status == Status::InPayment) else {
+                    return refuse("not_in_payment", "the benefit is added to a benefit in payment");
+                };
+                if claim.cover_check.as_ref().and_then(|c| c.facts.has_built_in("permanent-disablement")).is_none() {
+                    return refuse("no_permanent_benefit", "the cover has no Permanent Disablement Benefit");
+                }
+                if *ends {
+                    if s.permanent_from.is_none() || s.permanent_until.is_some() {
+                        return refuse("not_running", "the Permanent Disablement Benefit is not being paid");
+                    }
+                } else {
+                    if s.permanent_from.is_some() {
+                        return refuse("already_started", "the Permanent Disablement Benefit has already been accepted on this claim");
+                    }
+                    // 24 consecutive months paid: from the first period, with nothing returned and no suspension.
+                    let first = s.periods.keys().next().copied();
+                    let consecutive = first.is_some_and(|first| {
+                        let through = plus_months(first, 24);
+                        s.next_period >= through && !s.periods.range(..through).any(|(_, p)| p.returned) && s.suspended_days(first, through) == 0
+                    });
+                    if !consecutive {
+                        return refuse("not_24_months", "the benefit has not been paid for 24 consecutive months");
+                    }
+                }
+                plan.amount_minor = s.monthly_on(cx.today) / 3;
+            }
+            Request::BuiltInWaiver { code, from } => {
+                if claim.claim_type != ClaimType::PremiumWaiver || claim.status != Status::Open {
+                    return refuse("not_open", "a built-in premium waiver is admitted on an open waiver claim");
+                }
+                let facts = Self::covered(claim)?;
+                let Some(benefit) = facts.built_in.iter().find(|b| &b.code == code && b.kind == "premium_waiver") else {
+                    return refuse("unknown_benefit", "the cover has no built-in premium waiver with that code");
+                };
+                if !benefit.applies {
+                    return refuse("built_in_not_chosen", "the built-in benefit needs a feature the life did not choose");
+                }
+                if !claim.evidence.iter().any(|e| e.received_on.is_some()) {
+                    return refuse("evidence_required", "the doctor's confirmation or the death certificate must be on file");
+                }
+                if waiver_months(code).is_none() {
+                    return refuse("no_waiver_terms", "the claims module does not know how long this waiver runs");
+                }
+                if code == PREGNANCY_WAIVER {
+                    // The event is the start of the second trimester; the birth, about six
+                    // months later, must be at least 12 months after the cover started.
+                    if facts.cover_start.is_none_or(|start| claim.event_date < plus_months(start, 6)) {
+                        return refuse("too_soon_after_start", "the birth must be at least 12 months after the cover started");
+                    }
+                }
+                // From the event to six months after the pregnancy ends, or after the death.
+                if *from < claim.event_date || *from > plus_months(claim.event_date, 12) {
+                    return refuse("outside_waiver_window", "the waiver starts outside the window the benefit allows");
+                }
+                // Nothing is paid: the premium is the benefit.
+                plan.amount_minor = 0;
+            }
             Request::ResumeBenefit { from } => {
                 let open = claim
                     .schedule
@@ -502,7 +627,6 @@ impl ClaimsState {
                 plan.amount_minor = op.outstanding_minor();
             }
         }
-        let _ = cx;
         Ok(plan)
     }
 
@@ -522,8 +646,12 @@ impl ClaimsState {
             Request::Decline => profile.may_decline,
             Request::ReverseAdmission { .. } => profile.may_reverse_admission && profile.senior,
             Request::ExGratia { .. } => amount <= profile.max_ex_gratia_minor,
-            Request::FuneralAdvance { .. } | Request::AdmitBuiltIn { .. } => amount <= profile.max_admission_minor.get(&claim.claim_type).copied().unwrap_or(0),
-            Request::Withdraw | Request::EndBenefit { .. } | Request::SuspendBenefit { .. } | Request::ResumeBenefit { .. } => true,
+            Request::FuneralAdvance { .. } | Request::AdmitBuiltIn { .. } | Request::PermanentDisablement { .. } => {
+                amount <= profile.max_admission_minor.get(&claim.claim_type).copied().unwrap_or(0)
+            }
+            Request::Withdraw | Request::EndBenefit { .. } | Request::SuspendBenefit { .. } | Request::ResumeBenefit { .. } | Request::BuiltInWaiver { .. } => {
+                true
+            }
         }
     }
 
@@ -768,7 +896,9 @@ impl ClaimsState {
                     );
                 } else {
                     // The core takes a lump sum off the life's cover and the covers linked to it.
-                    let life = claim.life.clone().filter(|_| plan.health.is_none());
+                    // A cover a claim leaves in place is not reduced by it.
+                    let stays = claim.cover_check.as_ref().is_some_and(|c| c.facts.ends_cover == Some(false));
+                    let life = claim.life.clone().filter(|_| plan.health.is_none() && !stays);
                     cx.core.execute(Instruction::Admit {
                         life,
                         claim: id.clone(),
@@ -965,6 +1095,38 @@ impl ClaimsState {
             Request::WriteOff { overpayment } => Self::write_off(cx, claim, overpayment, decision.no)?,
             Request::SuspendBenefit { from, .. } => self.suspend_benefit(cx, claim, *from)?,
             Request::ResumeBenefit { from } => self.resume_benefit(cx, claim, *from),
+            Request::BuiltInWaiver { code, from } => {
+                let end = plus_months(*from, waiver_months(code).unwrap_or(0));
+                let terms = crate::command::Periodic {
+                    monthly_minor: 0,
+                    first_period: *from,
+                    end,
+                    expected_end: end,
+                };
+                self.start_benefit(claim, cx, &terms);
+                Self::meet_timer(claim, TimerKind::Decision, cx.today);
+                cx.lifecycle(
+                    &self.rules,
+                    "claim_admitted",
+                    claim,
+                    &[("admitted_minor", "0".into()), ("built_in", code.clone()), ("until", end.to_string())],
+                );
+            }
+            Request::PermanentDisablement { ends } => {
+                for s in claim.schedule.iter_mut() {
+                    if *ends {
+                        s.permanent_until = Some(cx.today);
+                    } else {
+                        s.permanent_from = Some(cx.today);
+                    }
+                }
+                let kind = if *ends {
+                    "permanent_disablement_ended"
+                } else {
+                    "permanent_disablement_accepted"
+                };
+                cx.notify(kind, &id, &[("monthly_minor", plan.amount_minor.to_string()), ("from", cx.today.to_string())]);
+            }
         }
         note(claim, cx, None, format!("decided:{kind:?}:{}", decision.no));
         self.sample(claim, cx, &decision);
@@ -989,7 +1151,15 @@ impl ClaimsState {
             return refuse("independent_review", "an internal review is worked by someone who did not make the decision");
         }
         let recurrence = basis == ReopenBasis::Recurrence;
-        let in_window = claim.status == Status::Ended && claim.closed_on.is_some_and(|c| cx.today <= plus_days(c, self.rules.recurrence_days));
+        // The product's Recurrent Disablement Benefit sets the window: 12
+        // months after payments ceased. A product that lists its benefits
+        // without it has none; one that says nothing takes the rules' window.
+        let facts = claim.cover_check.as_ref().map(|c| &c.facts).filter(|f| f.lists_built_ins());
+        let window_end = |closed: NaiveDate| match facts {
+            Some(f) => f.has_built_in("recurrent-disablement").map(|_| plus_months(closed, 12)),
+            None => Some(plus_days(closed, self.rules.recurrence_days)),
+        };
+        let in_window = claim.status == Status::Ended && claim.closed_on.and_then(window_end).is_some_and(|end| cx.today <= end);
         if recurrence && !(in_window && claim.schedule.is_some()) {
             return refuse("recurrence_window", "the claim is not an ended benefit inside the recurrence window");
         }
@@ -1102,5 +1272,17 @@ impl ClaimsState {
             cx.notify("underpayment_owed", &claim.id, &[("amount_minor", under.to_string())]);
         }
         cx.notify("benefit_resumed", &claim.id, &[("from", from.to_string())]);
+    }
+}
+
+/// AIA's pregnancy premium waiver on its income covers.
+const PREGNANCY_WAIVER: &str = "pregnancy-premium-waiver";
+
+/// How many months a built-in premium waiver runs, by its code.
+fn waiver_months(code: &str) -> Option<u32> {
+    match code {
+        PREGNANCY_WAIVER => Some(6),
+        "waiver-on-death" => Some(24),
+        _ => None,
     }
 }
