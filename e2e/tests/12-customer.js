@@ -13,7 +13,7 @@
 const { test } = require("../lib/suite");
 const { cast } = require("../lib/cast");
 const oracle = require("../lib/oracle");
-const { customer, enrolBrowser, phoneSigns, master } = require("../lib/customer");
+const { customer, enrolBrowser, phoneSigns } = require("../lib/customer");
 
 const A = "Customer";
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -87,17 +87,20 @@ test({ id: "E2E-326", area: A, persona: "P17", story: "US-P05-1", title: "A cust
   }
 });
 
-test({ id: "E2E-327", area: A, persona: "P17", story: "US-P05-1", title: "A customer with no claims is told so, and telling us about a claim records it without asking about their health", matrix: [],
-  purpose: "Read the claims of a new policy; then use Tell us about a claim for the life cover with a date, and read the requests list.",
+test({ id: "E2E-327", area: A, persona: "P17", story: "US-P05-1", title: "A customer with no claims is told so, and telling us about a claim starts one without asking about their health", matrix: [],
+  purpose: "Read the claims of a new policy; then use Tell us about a claim for the life cover, a death, with a date, and read the claims list.",
   why: "Claims start with a call or a form. The page must take only what is needed to start, record it as the customer's own request, and say what happens next." }, async (t) => {
   const { s } = await insured(t);
   await s.sees("No claims.", "#claims");
   await s.pick("#nc-cover", { index: 0 });
+  await s.pick("#nc-type", "death");
   await s.fill("#nc-date", t.stack.opening);
   await s.press("Tell us", "#notify");
   await s.done("#nc-msg", "The claims team will be in touch");
-  await s.tab("To approve");
-  await s.sees("notify claim", "#requests");
+  // The claim is with the claims team at once, and the customer sees it by its status only.
+  await s.sees("app-", "#claims");
+  const [claim] = await s.rows("#claims");
+  if (!claim || !claim[0].startsWith("app-") || !claim[1]) throw new Error(`the claims list reads ${JSON.stringify(claim)}`);
   for (const word of ["diagnosis", "symptom", "doctor", "medical"]) if ((await s.$("#notify").innerText()).toLowerCase().includes(word)) throw new Error(`the claim form asks about "${word}"`);
 });
 
@@ -225,8 +228,9 @@ test({ id: "E2E-335", area: A, persona: "P17", story: "US-P18-1", title: "A cust
   await s.fill("#ct-email", fresh);
   await s.press("Save", "#contact");
   await s.done("#ct-msg", "Your details were saved.");
-  const held = await master(t.stack, "GET", `/v1/parties/${who.party}`);
-  const email = held.ok && held.data.facts && held.data.facts.email && held.data.facts.email.value;
+  // Read back from the customer master, by the route the page itself reads.
+  const held = await t.does(who, "GET", "/app/v1/profile", undefined, "reads their record");
+  const email = held.facts && held.facts.email && held.facts.email.value;
   if (email !== fresh) throw new Error(`the customer master holds ${JSON.stringify(email)}, not ${fresh}`);
 });
 

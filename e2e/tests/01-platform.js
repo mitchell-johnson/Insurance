@@ -12,14 +12,13 @@ const CONSOLES = [
 ];
 
 test({ id: "E2E-001", area: A, persona: "Anyone", story: "US-ST16-1", title: "The front page offers every portal, grouped by who works there",
-  purpose: "Open the front page with no sign-in and read the launcher: partner portals, customer consoles, money consoles and platform pages.",
+  purpose: "Open the front page with no sign-in and read the launcher: the customer's page, partner portals, customer consoles, money consoles and platform pages.",
   why: "The front page is how every member of staff and every partner finds their console; a missing card hides a whole area of the system." }, async (t) => {
   const s = await t.open("/", null);
   for (const group of ["Partners", "Customers", "Money", "Platform"]) await s.sees(group, "#launch");
-  for (const [, name] of [...CONSOLES, ["adviser", "Adviser portal"], ["employer", "Employer portal"], ["status", "Service status"]]) await s.sees(name, "#launch");
-  await s.sees("Customers use the mobile app");
+  for (const [, name] of [...CONSOLES, ["customer", "Your policies"], ["adviser", "Adviser portal"], ["employer", "Employer portal"], ["status", "Service status"]]) await s.sees(name, "#launch");
   const links = await s.page.locator("#launch a").count();
-  if (links !== 15) throw new Error(`the launcher has ${links} cards, expected 15`);
+  if (links !== 16) throw new Error(`the launcher has ${links} cards, expected 16`);
 });
 
 test({ id: "E2E-002", area: A, persona: "Anyone", story: "US-ST16-1", title: "A launcher card takes a person to the page it names",

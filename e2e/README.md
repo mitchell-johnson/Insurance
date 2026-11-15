@@ -114,8 +114,6 @@ the phone app would.
 
 ## What it does not cover
 
-- The customer app: the repository has its API and sync protocol but no
-  screens, so there is nothing for a browser to drive.
 - The customer's phone app. The customer page is driven in the browser, and
   the phone's part (holding the key that approves a new browser) is played by
   the test with a key it makes; every check of a signature is the system's.

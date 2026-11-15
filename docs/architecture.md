@@ -44,7 +44,7 @@ This document is shared by every area of the build. The sections above the line 
 | Customer master | `customers` | `customers.md` | its own section |
 | AIA New Zealand products and wellness (AIA Vitality) | `wellness`; products under `products/` | `aia-products.md`, `wellness.md` | "Area: AIA New Zealand products" |
 | Persona test pack (matrix, stories, traceability) | none; `tools/persona_matrix.py` | `testing/personas/README.md` | "Persona rows still to build, by owner" at the end |
-| Persona end-to-end suite (324 journeys through the web pages) | none; top-level `e2e/` | `../e2e/README.md` | "Persona end-to-end suite" at the end |
+| Persona end-to-end suite (339 journeys through the web pages) | none; top-level `e2e/` | `../e2e/README.md` | "Persona end-to-end suite" at the end |
 
 ### Checks every area shares
 
@@ -907,8 +907,8 @@ Mitchell asked on 13 November 2026 for 300 end-to-end UI tests based on the pers
 
 ### What is built
 
-- 324 tests (E2E-001 to E2E-324) in 14 areas: platform and access, complaints and conduct, claims, staff console, finance, payments, unit pricing, policy lifecycle, reinsurance, adviser portal, commission console, replacement matches, underwriting, and group schemes (the group console and the employer portal, added 14 November). Each names its persona, story and the matrix rows it bears on, with its purpose and why it is worth having.
-- A stack of the real binaries (three ledger nodes, API, portal, the group service, the customer master on PostgreSQL, a stand-in for Azure sign-in and storage), seeded through the system's own routes. The seed registers one standing group scheme; `e2e/lib/group.js` registers more for the tests that change one.
+- 339 tests (E2E-001 to E2E-339) in 15 areas: platform and access, complaints and conduct, claims, staff console, finance, payments, unit pricing, policy lifecycle, reinsurance, adviser portal, commission console, replacement matches, underwriting, group schemes (the group console and the employer portal, added 14 November), and the customer page (`/customer`, added 15 November after Mitchell chose to build customer screens in this repository). Each names its persona, story and the matrix rows it bears on, with its purpose and why it is worth having.
+- A stack of the real binaries (three ledger nodes, API, portal, the group service, the customer master on PostgreSQL, a stand-in for Azure sign-in and storage), seeded through the system's own routes. The seed registers one standing group scheme; `e2e/lib/group.js` registers more for the tests that change one. `e2e/lib/customer.js` makes a customer the way onboarding would (a party in the customer master, a sign-in bound to it, a phone key enrolled), and sets up the browser's signing key with the phone's approval, as the page asks.
 - An independent calculator (`e2e/lib/oracle.js`) for premiums, billing periods, grace, suspension and lapse days, reinstatement arrears, claim payable after unpaid premium, unit prices, and a group life member's cover and premium. It reads `products/` as text and shares no code with the system.
 - `ic-e2e-close` (in `e2e/seed`), which closes a business day by calling `ic_workflows::run_end_of_day` over the real nodes, so lifecycle tests can move through months and years in seconds without Temporal.
 - A manually started workflow, `.github/workflows/e2e.yml`. It ran on the Mac mini runners on 14 November 2026 (run 1, 42 minutes: build, browser install, stack and all 300 journeys; 294 passed, 1 on a second attempt, 5 failed on the complaint date fault below). It starts a PostgreSQL container for the customer master, as `ci.yml` does.
@@ -942,15 +942,16 @@ All were reported to the owning thread on 14 November 2026 and fixed on main the
 | Group console gave staff no way to learn who a possible match might be, so the match could not be decided | E2E-323 | group, portal | a850596, 4bccf34 |
 | Nothing deployed named a scheme's first administrator | E2E-324 | portal | 4bccf34 |
 | A file sent again under a used name overwrote the stored file before being refused | E2E-317 | group | a850596 |
+| The customer page's "Your details" read the record from the wrong field and showed nothing (15 Nov) | E2E-335 | portal | 9b71a70 |
 
 Built 14 Nov by the core: `ic-admin apply <setup.json>` sends an insurer's set-up file (core configuration commands and module envelopes, in order, safe to repeat; `docs/operations.md` step 11, `crates/api/src/admin.rs`, test `api/tests/admin.rs::a_set_up_file_is_applied_in_order_and_can_be_applied_again`). The suite's seed now writes its configuration (complaints timers, finance chart and close, claims rules and authority book, payments configuration, unit pricing partition count) as a set-up file, `e2e/.run/setup.json`, and sends it with this tool, so every run of the suite exercises it; all 324 passed on a stack set up that way. Staff bootstrap and a scheme's first administrator go through the portal service's routes, not this tool.
 
-Last full run, 14 November 2026 against main at 9d6194c with this suite's changes: all 324 passed, none on a second attempt, none failed, in 18 minutes. The run before it that day (the original 300, main at 0b5a953) had 292 passed, 2 on a second attempt and 6 failed; all eight were faults in the tests, listed under Working notes.
+Last full run, 15 November 2026 against main at 36a64230 with this suite's changes: all 339 passed, none on a second attempt, none failed, in 17 minutes. The run of 14 November (324 tests, main at 9d6194c) also passed in full. The run before it that day (the original 300, main at 0b5a953) had 292 passed, 2 on a second attempt and 6 failed; all eight were faults in the tests, listed under Working notes.
 
 ### Not covered
 
-- The customer app: no screens exist to drive. Mitchell has not decided whether it gets screens in this repository.
-- The customer master has no screens of its own. It is exercised through group schemes, where it decides who each joiner is; a person's own record, consents and holds are reached only by the customer app.
+- The phone app itself. The customer web page is driven; what only the phone does (holding the device key in hardware, signing on the phone) is done by the test with a key of its own, through the same route the phone uses.
+- The customer master has no screens of its own. It is exercised through group schemes, where it decides who each joiner is, and through the customer page, where a person reads and changes their own record and sets a spending hold.
 - Group schemes beyond one product and one set of terms: pools, health menus, renewal, takeover, scheme split and billing over time are in the group module's own tests.
 - The underwriting intake, the document service, Defender's file scan, and the drivers between modules (reinsurance, unit pricing intake, the bank pump). The test or the seed sends what the missing part would send, and says so.
 
