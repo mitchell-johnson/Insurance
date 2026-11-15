@@ -36,6 +36,24 @@ pub const KINDS: [(&str, &str); 3] = [
     ("cancel_policy", "nothing more"),
 ];
 
+/// Kinds that give up cover, so that commission clawed back for them may
+/// fall on whoever submitted them. Before the core is asked, the commission
+/// module is told which engagement an adviser submitted one under
+/// (`attribution`).
+pub const ATTRIBUTED: [&str; 1] = ["cancel_policy"];
+
+/// The commission module's envelope saying which adviser engagement
+/// submitted this request's alteration, sent as `policy-servicing` on the
+/// day and before the core command. Its key is the request's, so carrying
+/// it twice tells the module once.
+pub fn attribution(request: &Value, engagement: &str) -> Value {
+    serde_json::json!({
+        "key": format!("servicing:{}:attribution", request["id"].as_str().unwrap_or_default()),
+        "actor": { "module": MODULE },
+        "command": { "attribute_alteration": { "policy": request["policy"], "engagement": engagement } },
+    })
+}
+
 /// Staff actions for requests that went to a person first.
 pub mod actions {
     /// Carry out or decline a customer's request the customer master sent to a trained person.

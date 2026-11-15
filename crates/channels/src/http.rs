@@ -3885,6 +3885,9 @@ impl AppState {
                         return Ok(None);
                     }
                     Some(partition) => {
+                        if !self.attribute_alteration(request).await {
+                            return Ok(None);
+                        }
                         let envelope = ic_core::Envelope {
                             key: format!("servicing:{id}"),
                             caller: crate::servicing::MODULE.to_string(),
@@ -3905,6 +3908,33 @@ impl AppState {
         };
         self.close_request(id, outcome.clone()).await?;
         Ok(Some(outcome))
+    }
+
+    /// For a request that gives up cover and that an adviser submitted, tell
+    /// the commission module which engagement it was, so clawback can follow
+    /// its cause where the rule says so. False when that module cannot be
+    /// reached, so the request waits rather than reach the core untold. A
+    /// refusal there (a policy or engagement it does not know) leaves the
+    /// clawback where it would fall anyway, and is logged.
+    async fn attribute_alteration(&self, request: &Value) -> bool {
+        if !crate::servicing::ATTRIBUTED.iter().any(|k| request["kind"] == *k) {
+            return true;
+        }
+        // A request carried this far names its policy; the submitter is always named.
+        let asked = self
+            .ask(Question::AdviserEngagement {
+                policy: PolicyId::from(request["policy"].as_str().unwrap_or_default()),
+                adviser: PartyId::from(request["party"].as_str().unwrap_or_default()),
+            })
+            .await;
+        let Ok(Value::String(engagement)) = asked else {
+            return true;
+        };
+        let told = self.commission.tell(crate::servicing::attribution(request, &engagement)).await;
+        if let Some(refused) = told.as_ref().ok().and_then(|output| output["result"].get("Err")) {
+            tracing::warn!(request = %request["id"], code = %refused["code"], "commission module did not take the alteration's engagement");
+        }
+        told.is_ok()
     }
 
     async fn close_request(&self, id: &str, outcome: Result<String, (String, String)>) -> Result<(), String> {

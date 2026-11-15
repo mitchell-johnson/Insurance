@@ -6134,6 +6134,61 @@ fn the_shipped_sequences_follow_each_products_lapse_day() {
     assert_eq!(ic_channels::collections::reading_role(&["team_lead".into(), "hardship".into()]), "hardship");
 }
 
+/// Purpose: a cancellation an adviser submitted is attributed to the adviser's engagement in the commission module, as
+/// `policy-servicing` and before the core is asked, and then carried to the core; one the customer submitted is not
+/// attributed; a change that gives up no cover is not attributed.
+/// Why it matters: clawback by cause (an agreement's `clawback_by_cause`) puts the clawback on whoever caused the
+/// cancellation only if the commission module is told who that was. Nothing told it, so the switch did nothing.
+#[tokio::test]
+async fn an_advisers_cancellation_is_attributed_to_their_engagement() {
+    use ic_channels::state::{Request, RequestStatus};
+    let portal = portal();
+    let policy = portal.retail.clone();
+    let pending = |id: &str, party: &str, kind: &str| Request {
+        id: id.into(),
+        party: p(party),
+        policy: Some(policy.clone()),
+        kind: kind.into(),
+        module: "policy-servicing".into(),
+        payload: json!({}),
+        signed: true,
+        submitted: 0,
+        status: RequestStatus::Pending,
+        approved_by: Some(p(KIRI)),
+        signed_by: Default::default(),
+        route_to_person: false,
+        assisted: None,
+    };
+    portal.local.with(|state| {
+        state.data.directory.authorities.entry(policy.clone()).or_default().insert(
+            p("adv-1"),
+            ic_channels::directory::Authority {
+                engagement: "e1".into(),
+                granted_by: p(KIRI),
+                granted: 0,
+            },
+        );
+        state.data.requests.insert("a-1".into(), pending("a-1", "adv-1", "decline_indexation"));
+        state.data.requests.insert("a-2".into(), pending("a-2", "adv-1", "cancel_policy"));
+    });
+    portal.claims.cover(0, &policy.to_string());
+    assert_eq!(portal.state.carry_servicing_requests().await, Ok(2));
+    let told = portal.commission.attributions();
+    assert_eq!(told.len(), 1, "only the cancellation gives up cover: {told:?}");
+    assert_eq!(told[0]["actor"], json!({ "module": "policy-servicing" }));
+    assert_eq!(told[0]["command"]["attribute_alteration"], json!({ "policy": policy, "engagement": "e1" }));
+    let serde_ok: Result<ic_distribution::state::Envelope, _> = serde_json::from_value(told[0].clone());
+    assert!(serde_ok.is_ok(), "the commission module reads it: {serde_ok:?}");
+    assert_eq!(portal.claims.servicing(0).len(), 2, "both reached the core");
+
+    // The customer's own cancellation names no engagement.
+    portal.local.with(|state| {
+        state.data.requests.insert("a-3".into(), pending("a-3", KIRI, "cancel_policy"));
+    });
+    assert_eq!(portal.state.carry_servicing_requests().await, Ok(1));
+    assert_eq!(portal.commission.attributions().len(), 1);
+}
+
 /// Purpose: a change the customer asked for in the app (decline indexation, change how often they pay, cancel) is carried to
 /// the core as caller `policy-servicing` once it is pending, under a key made from the request so carrying twice changes the
 /// policy once, and the request is closed with the core's answer, applied or refused with the core's own code. A request the
