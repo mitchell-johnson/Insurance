@@ -255,7 +255,7 @@ fn portal_signed_in_by(
                     &[DataClass::Financial],
                 ),
                 template("ledger-reader", &[ic_channels::finance::actions::VIEW], &[DataClass::Financial]),
-                template("claims", &[ic_channels::claims::actions::WORK], &[DataClass::InsuranceSensitive]),
+                template("claims", &[ic_channels::claims::actions::WORK, "policy.view", staff_actions::FIND_CUSTOMER], &[DataClass::InsuranceSensitive, DataClass::Personal]),
                 template("ri-ops", &[ic_channels::reinsurance::actions::OPERATE], &[DataClass::Financial]),
                 template(
                     "ri-lead",

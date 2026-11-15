@@ -2,17 +2,17 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Claims console · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
 <body data-shell="workforce" data-page="claims" data-realm="workforce">
 <main><header class="page"><div><h1>Claims console</h1><p>Work queues, a claim, and acting on it as yourself.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
-<section data-view="Queue"><h2>Work queue</h2><form id="queue"><div class="row"><div><label for="q-name">Queue</label><select id="q-name"></select></div><button>Show</button></div></form><div id="q-msg" aria-live="polite"></div><div id="q-rows"></div></section>
-<section data-view="Claim"><h2>A claim</h2><form id="lookup"><div class="row"><div><label for="c-id">Claim reference</label><input id="c-id" required></div><button>Show</button></div></form><div id="c-msg" aria-live="polite"></div>
-<div id="claim" hidden><h2 id="c-title"></h2><div id="c-summary"></div><div id="c-cover"></div><div id="c-support"></div><div id="c-waiting"></div><h2>Tasks</h2><div id="c-tasks"></div><h2>Evidence</h2><div id="c-evidence"></div><h2>Payments and benefit</h2><div id="c-money"></div><h2>Overpayments</h2><div id="c-over"></div><h2>Service timers</h2><div id="c-timers"></div><h2 id="c-defs-head" hidden>Wording the cover is bound to</h2><div id="c-defs" hidden></div></div></section>
-<section data-view="Claim"><h2>Act</h2><form id="act"><div class="row"><div><label for="a-purpose">Why you are doing this (recorded with it)</label><input id="a-purpose" size="40"></div><div><label for="a-command">Action</label><select id="a-command"></select></div></div><div class="row" id="a-fields"></div><p><button>Send</button></p>
+<section data-view="Queue"><h2>Work queue</h2><p class="muted">Most urgent first, then oldest. Open a claim to see what it needs next.</p><form id="queue"><div class="row"><div><label for="q-name">Queue</label><select id="q-name"></select></div><button>Show</button></div></form><div id="q-msg" aria-live="polite"></div><div id="q-rows"></div></section>
+<section data-view="Claim"><h2>A claim</h2><form id="lookup"><div class="row"><div><label for="c-id">Claim reference</label><input id="c-id" required size="36" placeholder="A claim reference, a policy number or the customer's name"></div><button>Show</button><button type="button" class="quiet" id="c-new">Notify a new claim</button></div></form><div id="c-msg" aria-live="polite"></div>
+<div id="claim" hidden><h2 id="c-title" tabindex="-1"></h2><div id="c-next" class="next"></div><div id="c-summary"></div><div id="c-cover"></div><div id="c-support"></div><div id="c-waiting"></div><h2>Tasks</h2><div id="c-tasks"></div><h2>Evidence</h2><div id="c-evidence"></div><h2>Payments and benefit</h2><div id="c-money"></div><h2>Overpayments</h2><div id="c-over"></div><h2>Service timers</h2><div id="c-timers"></div><h2 id="c-defs-head" hidden>Wording the cover is bound to</h2><div id="c-defs" hidden></div></div></section>
+<section data-view="Claim" id="act-card"><h2>Act</h2><form id="act"><div class="row"><div><label for="a-purpose">Why you are doing this (recorded with it)</label><input id="a-purpose" size="40"></div><div><label for="a-command">Action</label><select id="a-command"></select></div></div><div class="row" id="a-fields"></div><p><button>Send</button></p>
 <p class="muted">You act as yourself: the claims module records you and your purpose, and your authority there decides what you may do. A decision above your limits waits for a second signature.</p></form><div id="act-msg" aria-live="polite"></div></section>
 <section data-view="Investigations"><h2>Investigations</h2><p class="muted">Restricted cases referred for investigation, shown only to investigators: the claims on each case and the same service billed on other partitions.</p>
 <button type="button" id="inv-show">Show my cases</button><div id="inv-msg" aria-live="polite"></div><div id="inv"></div></section>
 <section data-view="Wordings"><h2>Policy wordings and definitions</h2><p class="muted">The words a cover is bound to, kept by version. A claim is assessed against the version its cover holds, never a later one.</p>
 <div class="row"><div><label for="w-filter">Find by name or reference</label><input id="w-filter" type="search" size="32"></div></div><div id="w-msg" aria-live="polite"></div><div id="w-list"></div></section>
 <section data-view="Wordings" id="wording" hidden><h2 id="w-title" tabindex="-1"></h2><div id="w-facts"></div><div id="w-text"></div></section>
-<section data-view="Reports"><h2>Book, report and payment runs</h2><form id="books"><div class="row"><div><label for="b-what">Show</label><select id="b-what"><option value="book">Claims in payment</option><option value="report">Management report</option><option value="remittance">A run's remittance</option></select></div><div><label for="b-run">Run (for a remittance)</label><input id="b-run"></div><div><label for="b-part">Partition (for a run)</label><input id="b-part" type="number" min="0"></div><button>Show</button></div></form><div id="b-msg" aria-live="polite"></div><div id="b-out"></div></section>
+<section data-view="Reports"><h2>Book, report and payment runs</h2><form id="books"><div class="row"><div><label for="b-what">Show</label><select id="b-what"><option value="book">Claims in payment</option><option value="report">Management report</option><option value="remittance">A run's remittance</option></select></div><div><label for="b-run">Run (for a remittance)</label><input id="b-run"></div><div><label for="b-part">Partition the run is on</label><select id="b-part"></select></div><button>Show</button></div></form><div id="b-msg" aria-live="polite"></div><div id="b-out"></div></section>
 </main>
 <script src="/ui/app.js"></script>
 <script>
@@ -71,17 +71,51 @@ const ACTIONS = {
 };
 const commandName = (action) => action.startsWith("decide_") ? "decide" : action.startsWith("notify") ? "notify" : action;
 
+// What a field is filled from, so nobody types a reference they cannot know: the claim open now, a
+// new reference made here, a colleague, a customer, a policy and its covers, or the claim's own tasks,
+// evidence and overpayments.
+let current = null, me = { partitions: 1 };
+const NEW = { claim: "CLM", task: "TASK", evidence: "EV", payment_ref: "PAY", overpayment: "OP", run: "RUN" };
+const MAKES = { notify: ["claim"], notify_a_health_invoice: ["claim"], open_task: ["task"], request_evidence: ["evidence"], pay: ["payment_ref"], pay_cost: ["payment_ref"], pay_interest: ["payment_ref"], raise_overpayment: ["overpayment"], prepare_run: ["run"] };
+const PEOPLE = new Set(["party", "claimant", "representative.party"]);
+let covers = [];
+async function coversOf(policy) {
+  if (!policy) return [];
+  const q = new URLSearchParams({ case: $("a-purpose").value.trim() || portal.working() || "claim notification" });
+  const view = await api(R, "GET", `/staff/v1/policies/${encodeURIComponent(policy)}?${q}`);
+  return view.rows.filter((r) => r.kind === "cover").map((r) => r.body);
+}
+function helpers(action, key, input) {
+  const w = current && current.view;
+  if (key === "claim") input.value = (MAKES[action] || []).includes("claim") ? portal.reference(NEW.claim) : (w ? w.claim : $("c-id").value);
+  else if ((MAKES[action] || []).includes(key)) input.value = portal.reference(NEW[key]);
+  if (key === "to" || key === "attendees") portal.picker(input, () => portal.colleagues("claims.work"), { min: 0 });
+  else if (PEOPLE.has(key)) portal.picker(input, portal.people);
+  else if (key === "policy") portal.picker(input, portal.policies, { onPick: async (item) => { covers = await coversOf(item.value).catch(() => []); } });
+  else if (key === "cover") portal.picker(input, async () => (covers.length ? covers : (covers = await coversOf(fieldValue("policy")).catch(() => []))).map((c) => ({ value: c.cover, label: c.cover, hint: [c.type, c.sum_insured_minor != null ? portal.money(c.sum_insured_minor) : "", c.in_force === false ? "not in force" : ""].filter(Boolean).join(" · ") })), { min: 0, empty: "Pick the policy first." });
+  else if (key === "life") portal.picker(input, async () => [...new Set((covers.length ? covers : await coversOf(fieldValue("policy")).catch(() => [])).map((c) => c.life).filter(Boolean))].map((l) => ({ value: l, label: l })), { min: 0 });
+  else if (key === "task" && action === "complete_task") portal.picker(input, () => Promise.resolve(((w && w.tasks) || []).filter((t) => !t.completed_on).map((t) => ({ value: t.id, label: t.id, hint: [words(t.kind), t.due ? "due " + t.due : "", t.overdue ? "overdue" : ""].filter(Boolean).join(" · ") }))), { min: 0, empty: "This claim has no open tasks." });
+  else if (key === "evidence" && action === "receive_evidence") portal.picker(input, () => Promise.resolve(((w && w.evidence) || []).filter((e) => !e[4]).map(([e, kind, from, due]) => ({ value: e, label: e, hint: [kind, from, due ? "due " + due : ""].filter(Boolean).join(" · ") }))), { min: 0, empty: "Nothing is outstanding on this claim." });
+  else if (key === "overpayment" && action === "record_repayment") portal.picker(input, () => Promise.resolve(((w && w.overpayments) || []).map(([o, out, status]) => ({ value: o, label: o, hint: `${money(out)} outstanding · ${words(status)}` }))), { min: 0, empty: "This claim has no overpayments." });
+  else if (key === "item" && action === "pay_cost") portal.picker(input, () => Promise.resolve([...((w && w.evidence) || []).map(([e, kind]) => ({ value: e, label: e, hint: "evidence · " + kind })), ...((w && w.tasks) || []).map((t) => ({ value: t.id, label: t.id, hint: "task · " + words(t.kind) }))]), { min: 0 });
+  else if (key === "party" && action === "pay_interest") portal.picker(input, () => Promise.resolve(((w && w.interests) || []).map(([party, owed]) => ({ value: party, label: party, hint: money(owed) + " still owed" }))), { min: 0 });
+}
+const fieldValue = (key) => { const spec = ACTIONS[$("a-command").value] || []; const n = spec.findIndex((f) => f[0] === key); return n < 0 ? "" : $("f-" + n).value.trim(); };
 function fields() {
-  const spec = ACTIONS[$("a-command").value] || [];
+  const action = $("a-command").value, spec = ACTIONS[action] || [];
+  covers = [];
   put($("a-fields"), spec.map(([key, label, kind, options], n) => {
     const id = "f-" + n;
     const input = kind === "select" ? h("select", { id }, options.map((o) => h("option", { value: o }, words(o))))
       : kind === "bool" ? h("select", { id }, h("option", { value: "true", selected: key !== "health.pre_approval_request" }, "Yes"), h("option", { value: "false", selected: key === "health.pre_approval_request" }, "No"))
       : h("input", { id, type: kind === "date" || kind === "optdate" ? "date" : kind === "int" || kind === "money" || kind === "optmoney" ? "number" : "text",
           step: kind === "money" || kind === "optmoney" ? "0.01" : null, min: kind === "int" || kind === "money" ? "0" : null,
-          required: !["optional", "optdate", "optmoney", "list"].includes(kind), value: key === "claim" ? $("c-id").value : null });
+          required: !["optional", "optdate", "optmoney", "list"].includes(kind) });
+    if (key === "partition") { const sel = h("select", { id }, Array.from({ length: me.partitions || 1 }, (_, p) => h("option", { value: String(p), selected: current && current.partition === p }, `Partition ${p}`))); return h("div", {}, h("label", { for: id }, label), sel); }
     return h("div", {}, h("label", { for: id }, label), input);
   }));
+  spec.forEach(([key], n) => { const input = $("f-" + n); if (input && input.tagName === "INPUT") helpers(action, key, input); });
+  if (!$("a-purpose").value && current) $("a-purpose").value = `Working claim ${current.view.claim}`;
 }
 put($("a-command"), Object.keys(ACTIONS).map((c) => h("option", { value: c }, words(c).replace(/^decide /, "decide: "))));
 $("a-command").addEventListener("change", fields);
@@ -89,6 +123,7 @@ $("act").addEventListener("submit", run($("act-msg"), async () => {
   const action = $("a-command").value, name = commandName(action), inner = {}, body = { purpose: $("a-purpose").value };
   ACTIONS[action].forEach(([key, , kind], n) => {
     const raw = $("f-" + n).value;
+    if (key === "partition") { body.partition = Number(raw); return; }
     const value = kind === "bool" ? raw === "true" : kind === "list" ? list(raw) : kind === "int" ? Number(raw) : kind === "money" ? Math.round(Number(raw) * 100)
       : kind === "optmoney" ? (raw.trim() ? Math.round(Number(raw) * 100) : null) : kind === "optional" || kind === "optdate" ? (raw.trim() || null) : raw;
     if (key === "partition") { body.partition = value; return; }
@@ -104,8 +139,32 @@ $("act").addEventListener("submit", run($("act-msg"), async () => {
   return `Done: ${words(action)}${done.duplicate ? " (already done)" : ""}.`;
 }));
 
+// The next things to do on a claim, from what it holds. Each fills the Act form; nothing is sent until Send.
+function prepare(action, values = {}) {
+  $("a-command").value = action; fields();
+  (ACTIONS[action] || []).forEach(([key], n) => { if (values[key] != null) $("f-" + n).value = values[key]; });
+  $("act-card").scrollIntoView({ behavior: "smooth", block: "start" });
+  const empty = [...$("a-fields").querySelectorAll("input[required], select")].find((i) => !i.value);
+  (empty || $("a-fields").querySelector("input, select") || $("a-purpose")).focus({ preventScroll: true });
+}
+function nextSteps(w) {
+  const step = (words, action, values) => h("button", { type: "button", class: "quiet", on: { click: () => prepare(action, values) } }, words);
+  const open = !w.closed_on, out = [];
+  if (open && !w.owner) out.push(h("button", { type: "button", on: { click: run($("c-msg"), async () => { await send({ purpose: `Taking claim ${w.claim}`, command: { assign: { claim: w.claim, to: me.staff } } }); await show(w.claim); return `You own ${w.claim} now.`; }) } }, "Assign it to me"), step("Assign to someone else", "assign"));
+  if (w.waiting && w.waiting.proposer !== me.staff) out.push(step("Approve the decision waiting", "approve"), step("Refuse it", "refuse"));
+  for (const t of (w.tasks || []).filter((t) => !t.completed_on)) out.push(step(`Complete ${words(t.kind)}${t.overdue ? " (overdue)" : ""}`, "complete_task", { task: t.id }));
+  for (const [e, kind] of (w.evidence || []).filter((e) => !e[4])) out.push(step(`Record ${kind} received`, "receive_evidence", { evidence: e }));
+  if (open && w.admitted_minor === 0 && !w.waiting) out.push(step("Decide: admit", "decide_admit"), step("Decide: decline", "decide_decline"));
+  if (open && w.payable_minor > w.paid_minor && w.payee) out.push(step(`Pay ${money(w.payable_minor - w.paid_minor)}`, "pay", { amount_minor: money(w.payable_minor - w.paid_minor) }));
+  if (open && w.payable_minor > 0 && !w.payee) out.push(step("Verify the payee", "verify_payee"));
+  for (const [o, owed] of (w.overpayments || []).filter((o) => o[1] > 0)) out.push(step(`Record a repayment on ${o}`, "record_repayment", { overpayment: o, amount_minor: money(owed) }));
+  if (w.closed_on) out.push(step("Reopen it", "reopen"));
+  out.push(step("Ask for evidence", "request_evidence"), step("Open a task", "open_task"), step("Record a contact", "record_contact"));
+  return out;
+}
 async function show(id) {
-  const { partition, view: w } = await ask("work", { claim: id });
+  const answer = await ask("work", { claim: id }), { partition, view: w } = answer;
+  current = answer; $("c-id").value = w.claim;
   const none = (text) => h("p", { class: "muted" }, text);
   $("claim").hidden = false; $("c-title").textContent = `${w.claim}: ${words(w.claim_type)}, ${words(w.status)}${w.in_run ? " (in a payment run)" : ""}`;
   put($("c-summary"), table(["Policy", "Cover", "Partition", "Queue", "Owner", "Event", "Notified", "Closed", "Reserve", "Admitted", "Payable", "Paid"],
@@ -137,6 +196,9 @@ async function show(id) {
     return [(known.find((k) => k.id === id) || {}).title || id, version, relied[d] ? relied[d].map((n) => `decision ${n}`).join(", ") : "", h("button", { class: "quiet", type: "button", on: { click: run($("c-msg"), () => read(id, version)) } }, "Read the wording")];
   })));
   put($("c-timers"), table(["Timer", "Due", "Met", "Escalated"], Object.entries(w.timers || {}).map(([kind, [due, met, escalated]]) => [words(kind), due, met || "", cell(escalated)])));
+  put($("c-next"), nextSteps(w));
+  if ($("a-command").value.startsWith("notify")) $("a-command").value = "record_contact";
+  $("a-purpose").value = `Working claim ${w.claim}`; portal.workOn($("a-purpose").value);
   fields();
 }
 // The wording library: every definition and version, and one text at a time.
@@ -168,13 +230,32 @@ function listed() {
 }
 $("w-filter").addEventListener("input", listed);
 const cell = (v) => v == null ? "" : typeof v === "object" ? portal.text(v) : v;
-$("lookup").addEventListener("submit", run($("c-msg"), () => show($("c-id").value)));
-$("queue").addEventListener("submit", run($("q-msg"), async () => {
+portal.picker($("c-id"), async (text) => {
+  const items = [];
+  const found = await portal.policies(text).catch(() => []);
+  for (const p of found.slice(0, 4)) {
+    const { rows } = await ask("policy", { policy: p.value });
+    for (const r of rows) items.push({ value: r.status.claim, label: r.status.claim, hint: `${p.label} · ${words(r.status.status)} · notified ${r.status.notified_on}` });
+  }
+  return items;
+}, { none: "No claims found for that. A full claim reference can still be shown with Show.", onPick: (item) => run($("c-msg"), () => show(item.value))() });
+$("lookup").addEventListener("submit", run($("c-msg"), () => show($("c-id").value.trim())));
+$("c-new").addEventListener("click", () => { current = null; $("a-purpose").value = "Notification of a new claim"; portal.workOn($("a-purpose").value); prepare("notify"); });
+// The purpose is also what finding a customer or policy is recorded under.
+$("a-purpose").addEventListener("change", () => portal.workOn($("a-purpose").value.trim()));
+async function queue() {
+  if ($("q-name").value === "mine") {
+    const all = await Promise.all(QUEUES.map((q) => ask("queue", { queue: q }).then((r) => r.rows.filter((x) => x.owner === me.staff).map((x) => ({ ...x, queue: q })))));
+    const rows = all.flat().sort((a, b) => b.priority - a.priority || b.age_days - a.age_days);
+    return put($("q-rows"), rows.length ? table(["Claim", "Queue", "Priority", "Days open", ""], rows.map((r) => [r.claim, words(r.queue), r.priority, r.age_days, opener(r.claim)])) : portal.empty("You own no open claims."));
+  }
   const { rows } = await ask("queue", { queue: $("q-name").value });
-  put($("q-rows"), rows.length ? table(["Claim", "Partition", "Priority", "Days open", "Owner", ""], rows.map((r) => [r.claim, r.partition, r.priority, r.age_days, r.owner || "unassigned",
-    h("button", { class: "quiet", type: "button", on: { click: run($("c-msg"), async () => { $("c-id").value = r.claim; await show(r.claim); }) } }, "Open")])) : h("p", { class: "muted" }, "Nothing in this queue."));
-}));
-put($("q-name"), QUEUES.map((q) => h("option", { value: q }, words(q))));
+  put($("q-rows"), rows.length ? table(["Claim", "Priority", "Days open", "Owner", ""], rows.map((r) => [r.claim, r.priority, r.age_days, r.owner || "unassigned", opener(r.claim)])) : portal.empty("Nothing in this queue."));
+}
+const opener = (claim) => h("button", { class: "quiet", type: "button", on: { click: run($("q-msg"), async () => { await show(claim); portal.view("claim"); $("c-title").focus(); }) } }, "Open");
+$("queue").addEventListener("submit", run($("q-msg"), queue));
+$("q-name").addEventListener("change", run($("q-msg"), queue));
+put($("q-name"), h("option", { value: "mine" }, "Claims I own"), QUEUES.map((q) => h("option", { value: q }, words(q))));
 $("books").addEventListener("submit", run($("b-msg"), async () => {
   const what = $("b-what").value;
   const answer = what === "remittance" ? await ask("remittance", { run: $("b-run").value, partition: $("b-part").value }) : await ask(what);
@@ -189,9 +270,15 @@ $("inv-show").addEventListener("click", run($("inv-msg"), async () => {
     c.closed ? portal.text(c.closed) : ""])) : h("p", { class: "muted" }, "No cases are open to you."));
 }));
 signIn(R).then(async () => {
-  const me = await ask("me");
+  me = await ask("me");
+  put($("b-part"), Array.from({ length: me.partitions || 1 }, (_, p) => h("option", { value: String(p) }, `Partition ${p}`)));
   $("me").textContent = `You act as ${me.staff}. The ledger has ${me.partitions} partitions; a claim's actions go to the one holding it.`;
   fields();
   known = (await ask("definitions")).rows; listed();
+  // Opened from another console: a claim to show, or a policy to notify a claim on.
+  const sent = portal.params();
+  if (sent.claim) await run($("c-msg"), () => show(sent.claim))();
+  else if (sent.policy) { prepare("notify", { policy: sent.policy }); covers = await coversOf(sent.policy).catch(() => []); }
+  else await run($("q-msg"), queue)();
 }).catch(portal.refuse);
 </script></body></html>

@@ -31,7 +31,7 @@ const templates = [
   ["ledger-lead", ["finance.lead"], [F]],
   ["actuary", ["finance.view", "finance.actuary"], [F]],
   ["ledger-reader", ["finance.view"], [F]],
-  ["claims", ["claims.work", "policy.view"], [O, P, S]],
+  ["claims", ["claims.work", "policy.view", "customers.find"], [O, P, S]],
   ["ri-ops", ["reinsurance.operate"], [F]],
   ["ri-lead", ["reinsurance.operate", "reinsurance.approve"], [F]],
   ["ri-reader", ["reinsurance.view"], [F]],
