@@ -12,12 +12,6 @@ The daily close needs a Temporal service. The choices are Temporal Cloud (least 
 
 Traffic between the services inside the cluster is HTTP carrying bearer tokens (the cluster token, Entra tokens). Network policies restrict who can connect; WireGuard encrypts. `infra/main.bicep` turns on Advanced Container Networking Services with `transitEncryption: WireGuard` on the Cilium dataplane, so every pod-to-pod packet that leaves a node is encrypted. Traffic between two pods on the same node never leaves it and is not encrypted; traffic from host-network pods and the nodes themselves is not covered (none of ours run on the host network). WireGuard needs UDP 51871 open between nodes. Turning it on for a running cluster restarts the Cilium agent on every node: do it in a quiet hour. Check it with `kubectl -n kube-system exec ds/cilium -- cilium-dbg encrypt status` (WireGuard, peers = nodes - 1). WireGuard was chosen over a service mesh because it needs nothing in the manifests and adds no sidecar to the ledger's latency path.
 
-### A second region
-
-Three ledger nodes across the zones of New Zealand North survive the loss of a zone. Surviving the loss of the region needs voters in two more regions (five voters across three regions keeps a majority after losing any one). The software supports it: nodes are addressed by name and membership is changed with `ic-admin members`.
-
-Two placements are on the table, and the choice is the insurer's: (A) three voters across the three zones of Australia East (Sydney) with Australia Southeast (Melbourne) as a standby, which survives a zone but not the region without a restore; or (B) a voter in a third region as a tiebreaker (five voters, two, two and one), which survives a region with nothing lost. The templates support either: one region's `main.bicep` is option A's primary and its standby, the ledger storage is RA-GZRS to the paired region, and the backups and databases are geo-redundant. Option B adds a cluster or node pool per further region on a peered network and a second Front Door origin. `docs/operations.md`, "Losing a region", is the runbook for both. Either way, policy data leaves New Zealand, which is a decision for the insurer and its regulator.
-
 ### Log retention (placeholder)
 
 Container logs and the traces in the workspace are kept 90 days for querying and seven years in all (`logInteractiveDays`, `logTotalRetentionDays` = 2,556 in `infra/main.bicep`), the rest in the archive tier, where a search job or restore brings them back. Seven years is a best estimate of the audit need: the cluster access log and the reinsurer API log are in these tables, and seven years matches the other records the system keeps. Confirm with compliance; the cost is the archive tier's per-GB rate on what is ingested. Records with a fixed legal period are not left to this: they are in write-once storage.
@@ -84,9 +78,9 @@ A module hosted from the first start is shown every event. One added later start
 
 A policy's claims move with it when it is transferred to another group: they travel in the transfer record and are registered again on the target (changed 12 November 2026; before that a policy with an open claim could not move). Only a claim in a prepared payment run holds a transfer back. The other gaps in claims operations are listed in `docs/claims.md`.
 
-### Fail-back is built; the second region is not provisioned
+### What losing a region still costs
 
-The fail-back controller runs on every node and is tested with three nodes in one process. The shipped infrastructure is still one region, so `IC_PREFERRED_NODES` is unset in the manifests and nothing fails back in a deployed cluster until voters exist in a second and third region. Pacing is per node: after a region loss the leaders sit on a few nodes, each of which moves its own share per round, so the share moved across the cluster in one round can be up to that share times the number of leading nodes. A pause is not persisted across a node restart. The operations console and status page showing the degraded state belong to the channels module and are not driven from this status yet.
+The ledger carries on through the loss of any one region ("Where the ledger's voters run"), but three things it depends on live in Sydney alone and wait for Azure's own failover: the ledger storage account (sealing old log segments and publishing the day's root pause until its RA-GZRS copy in Melbourne is made writable; nothing is lost, because the outputs wait in the replicated state), Event Hubs (events wait the same way until the geo-replicated namespace is promoted; prod only), and the PostgreSQL databases behind the customer master and Temporal (zone redundant, with geo-redundant backups, not a standby in Melbourne). Fail-back pacing is per node: after a region loss the leaders sit on two nodes, each moving its own share per round. A pause is not persisted across a node restart. Raft traffic between regions travels Microsoft's backbone, which Azure encrypts between its datacentres; it is not additionally encrypted by the nodes (see "Encryption in transit inside the cluster").
 
 ### Group scheme administration
 
@@ -275,3 +269,24 @@ Mitchell asked on 13 Nov 2026 for open items to carry best-estimate placeholders
   - The special events totals and the anniversary totals are counted separately, as the wording gives each its own total.
   - The wording sets no number of special events increases, so the count is set high (99) and the money and the 12 months bound them.
 - **Not built:** the wording's per-event caps (the home loan amount, five times a salary increase) are for the sender to check against the evidence; the totals across all of a life's AIA policies count only this policy; the notice AIA sends before each third anniversary.
+
+## Where the ledger's voters run (15 Nov 2026)
+
+Decided by Mitchell on 15 Nov 2026, after asking why the Raft groups could not run across two regions with a quorum in both, active-active, failing over by themselves.
+
+**Why two regions alone cannot do it.** A Raft group commits a write only when a majority of its voters have it. With voters split between two regions, one region always holds the majority or the two hold equal halves. If Sydney holds three of five, losing Sydney leaves Melbourne two of five, which is not a majority, so Melbourne cannot carry on by itself; it must not, because from Melbourne a lost Sydney and a cut link look the same, and a Sydney that is only cut off would still be taking writes. Equal halves (two and two) have the same problem both ways. Running more machines does not change it: whatever the count, a region that can carry on without the other must hold a majority, and two regions cannot both hold one. Automatic failover between two regions needs a third place to break the tie.
+
+**What was chosen.** Five voters in every partition's group: two in Australia East (Sydney), two in Australia Southeast (Melbourne), and a witness in Australia Central (Canberra). Losing any one region leaves three of five.
+
+- **Active-active.** Both main regions lead: even partitions and half the modules lead from Sydney, odd ones from Melbourne (`IC_LEADER_REGIONS`, `IC_REGION_NODES`). Both clusters run the services, and Front Door sends to both.
+- **Automatic failover and fail-back.** When a region is lost, the voters elsewhere elect leaders within seconds; nothing acknowledged is lost and nothing is re-sent. When it returns, its voters catch up and fail-back hands each group back to its home region, paced and checked (`crates/raft/src/failback.rs`).
+- **The witness holds no data.** It votes and keeps the log until every data voter holds it, but applies nothing: no policies, no money, no personal information (`crates/raft/src/witness.rs`). It never keeps a lead; if it wins an election it hands the group to a data voter that holds the whole log. It is one small VM (`infra/ledger-witness.bicep`), not a cluster.
+
+**Why Australia Central for the witness.** It is about 4 ms from Sydney and 8 ms from Melbourne, so it adds nothing to the time a write takes when a main region is down. It is in Australia, so the log it holds stays in the same country as the ledger. It is a separate region from both, on its own power and network. Its limits are capacity and access: it is a smaller region, and some subscriptions must ask for it to be enabled, so check that the subscription can deploy there before the first deployment. If it cannot, New Zealand North is the fallback (about 25 to 30 ms from both; the template takes `location=newzealandnorth`), at the cost of the witness's copy of the log being held in New Zealand.
+
+**Why Sydney is the home of the stateful services.** The databases, Key Vault, storage and Event Hubs are not run in both regions; they are in Sydney with Azure's own replication to Melbourne. Running them in both would mean a second copy of every database kept consistent across regions, which is what the ledger already does for the books. The services in Melbourne reach them over the peered networks.
+
+**What it costs.** A second AKS cluster with a ledger pool in Melbourne, a VM in Canberra, peering between three networks, and a cross-region wait on every write: a majority is three, and a region holds two, so each write needs one voter outside the leader's region. The witness is usually that voter, about 4 ms away from Sydney and 8 ms from Melbourne (round trip); Melbourne and Sydney are 10 to 15 ms apart. Policy data is held in Australia, which is a decision for the insurer and its regulator.
+
+Built in: `crates/raft` (witness, shared leadership), `infra/second-region.bicep`, `infra/ledger-witness.bicep`, `infra/regions.bicep`, `deploy/regions`, `tools/check_regions.py`, and the region drill (`deploy/compose/regions.sh`). Runbook: `docs/operations.md`, "Losing a region".
+

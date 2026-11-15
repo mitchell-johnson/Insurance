@@ -1,0 +1,128 @@
+# The ledger as it runs on Azure, on one machine: five voters of every
+# partition's Raft group, two "in Sydney", two "in Melbourne" and a witness
+# "in Australia Central" that votes and keeps the log but holds no ledger
+# (docs/decisions.md, "Where the ledger's voters run"). The two main regions
+# share the partitions' leadership. For the region drill beside this file,
+# regions.sh, which cuts a whole region off and expects the ledger to carry
+# on and to hand leadership back by itself.
+#
+# Not for production, for the reasons docker-compose.yml gives.
+
+name: insurance-core-regions
+
+x-image: &image
+  image: insurance-core:dev
+  build:
+    context: ../..
+    target: runtime
+    args:
+      CARGO_PROFILE: ${CARGO_PROFILE:-release}
+      CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-}
+
+x-cluster: &cluster
+  IC_NODES: node-1:7000,node-2:7000,node-3:7000,node-4:7000,witness:7000
+  IC_CLUSTER_TOKEN: compose-only-cluster-token-0123456789abcdef
+  RUST_LOG: ${RUST_LOG:-info}
+
+x-node: &node
+  <<: *image
+  command: ["/usr/local/bin/ic-node"]
+  restart: unless-stopped
+  stop_grace_period: 20s
+
+# The same on every voter, as deploy/k8s/settings.yaml has it, except that
+# fail-back settles in seconds rather than minutes so the drill is short.
+x-node-env: &node-env
+  <<: *cluster
+  IC_NODE_PEERS: 1=node-1:7000,2=node-2:7000,3=node-3:7000,4=node-4:7000,5=witness:7000
+  IC_WITNESS_NODES: "5"
+  IC_LEADER_REGIONS: australiaeast,australiasoutheast
+  IC_REGION_NODES: australiaeast=1,2;australiasoutheast=3,4;australiacentral=5
+  IC_NODE_DATA_DIR: /var/lib/ic/data
+  IC_PARTITIONS: "8"
+  IC_COLD_DIR: /var/lib/ic/cold
+  IC_EVENT_SINK: discard
+  IC_SEGMENT_ENTRIES: "100"
+  IC_RAFT_SNAPSHOT_EVERY: "500"
+  IC_FAILBACK_SETTLE_SECONDS: "10"
+
+services:
+  node-1:
+    <<: *node
+    environment:
+      <<: *node-env
+      IC_NODE_ID: "1"
+      IC_NODE_BOOTSTRAP: "true"
+    volumes: ["node-1:/var/lib/ic/data", "cold:/var/lib/ic/cold"]
+
+  node-2:
+    <<: *node
+    environment:
+      <<: *node-env
+      IC_NODE_ID: "2"
+    volumes: ["node-2:/var/lib/ic/data", "cold:/var/lib/ic/cold"]
+
+  node-3:
+    <<: *node
+    environment:
+      <<: *node-env
+      IC_NODE_ID: "3"
+    volumes: ["node-3:/var/lib/ic/data", "cold:/var/lib/ic/cold"]
+
+  node-4:
+    <<: *node
+    environment:
+      <<: *node-env
+      IC_NODE_ID: "4"
+    volumes: ["node-4:/var/lib/ic/data", "cold:/var/lib/ic/cold"]
+
+  # The witness: no cold tier and no events, only its log and its vote.
+  witness:
+    <<: *node
+    environment:
+      <<: *node-env
+      IC_NODE_ID: "5"
+    volumes: ["witness:/var/lib/ic/data"]
+
+  open:
+    <<: *image
+    command: ["/usr/local/bin/ic-admin", "open", "${OPENING_DATE:-2027-11-15}"]
+    restart: on-failure
+    depends_on: [node-1, node-2, node-3, node-4, witness]
+    environment: *cluster
+
+  configure:
+    <<: *image
+    command: ["/usr/local/bin/ic-admin", "activate-shipped"]
+    restart: on-failure
+    depends_on:
+      open:
+        condition: service_completed_successfully
+    environment: *cluster
+
+  api:
+    <<: *image
+    command: ["/usr/local/bin/ic-api"]
+    restart: unless-stopped
+    depends_on:
+      configure:
+        condition: service_completed_successfully
+    environment:
+      <<: *cluster
+      IC_PARTITIONS: "8"
+      IC_AUTH: dev
+    ports: ["${IC_COMPOSE_API_PORT:-8080}:8080"]
+
+  admin:
+    <<: *image
+    profiles: [tools]
+    entrypoint: ["/usr/local/bin/ic-admin"]
+    environment: *cluster
+
+volumes:
+  node-1:
+  node-2:
+  node-3:
+  node-4:
+  witness:
+  cold:

@@ -114,14 +114,23 @@ pub struct ClusterClient {
     /// Where each group's leader was last seen: a partition by its number,
     /// a module by `module-<name>`.
     leaders: Arc<Mutex<BTreeMap<String, String>>>,
+    /// Nodes that did not answer at all, and when. A node that could not be
+    /// reached is tried after the others for [`UNREACHABLE_FOR`], so that
+    /// with a region lost every request does not first wait out its voters.
+    unreachable: Arc<Mutex<BTreeMap<String, std::time::Instant>>>,
     attempt_timeout: Duration,
     auth: ClusterAuth,
 }
+
+/// How long a node that did not answer is tried last.
+pub const UNREACHABLE_FOR: Duration = Duration::from_secs(30);
 
 enum Attempt<T> {
     Done(T),
     Redirect(Option<String>),
     Failed(String),
+    /// No answer at all: the node is down, cut off or too slow.
+    Unreachable(String),
 }
 
 impl ClusterClient {
@@ -130,6 +139,7 @@ impl ClusterClient {
             http: reqwest::Client::new(),
             nodes: Arc::new(nodes),
             leaders: Arc::new(Mutex::new(BTreeMap::new())),
+            unreachable: Arc::new(Mutex::new(BTreeMap::new())),
             attempt_timeout: Duration::from_secs(5),
             auth: ClusterAuth::open(),
         }
@@ -167,10 +177,28 @@ impl ClusterClient {
         };
     }
 
+    /// Note whether a node answered, so one that did not is tried last.
+    fn answered(&self, addr: &str, answered: bool) {
+        let mut unreachable = self.unreachable.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if answered {
+            unreachable.remove(addr);
+        } else {
+            unreachable.insert(addr.to_string(), std::time::Instant::now());
+        }
+    }
+
+    /// The nodes in the order given, those that recently did not answer last.
+    fn in_order(&self) -> Vec<String> {
+        let unreachable = self.unreachable.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let recently = |addr: &String| unreachable.get(addr).is_some_and(|at| at.elapsed() < UNREACHABLE_FOR);
+        let (later, first): (Vec<String>, Vec<String>) = self.nodes.iter().cloned().partition(recently);
+        first.into_iter().chain(later).collect()
+    }
+
     async fn attempt<T: DeserializeOwned>(&self, request: reqwest::RequestBuilder) -> Attempt<T> {
         let response = match self.auth.sign(request).timeout(self.attempt_timeout).send().await {
             Ok(r) => r,
-            Err(e) => return Attempt::Failed(e.to_string()),
+            Err(e) => return Attempt::Unreachable(e.to_string()),
         };
         let status = response.status();
         if status.is_success() {
@@ -210,8 +238,9 @@ impl ClusterClient {
 
     /// The pass itself, for any group. The error says what the last node tried said.
     async fn sweep_group<T: DeserializeOwned>(&self, group: &str, build: impl Fn(&str) -> reqwest::RequestBuilder) -> Result<T, String> {
-        // A stack: the last known leader is on top, then the nodes in the order given.
-        let mut queue: Vec<String> = self.nodes.iter().rev().cloned().chain(self.hint(group)).collect();
+        // A stack: the last known leader is on top, then the nodes in the
+        // order given, with any that recently did not answer at the bottom.
+        let mut queue: Vec<String> = self.in_order().into_iter().rev().chain(self.hint(group)).collect();
         let mut tried = Vec::new();
         let mut detail = "no nodes configured".to_string();
         while let Some(addr) = queue.pop() {
@@ -219,7 +248,9 @@ impl ClusterClient {
                 continue;
             }
             tried.push(addr.clone());
-            match self.attempt(build(&addr)).await {
+            let attempt = self.attempt(build(&addr)).await;
+            self.answered(&addr, !matches!(attempt, Attempt::Unreachable(_)));
+            match attempt {
                 Attempt::Done(body) => {
                     self.remember(group, Some(&addr));
                     return Ok(body);
@@ -229,7 +260,7 @@ impl ClusterClient {
                     queue.push(leader);
                 }
                 Attempt::Redirect(None) => detail = format!("{addr} knows no leader"),
-                Attempt::Failed(e) => detail = format!("{addr}: {e}"),
+                Attempt::Failed(e) | Attempt::Unreachable(e) => detail = format!("{addr}: {e}"),
             }
         }
         self.remember(group, None);
