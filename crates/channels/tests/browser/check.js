@@ -43,6 +43,9 @@ const personas = {
   "/group sub-grp1": "ST7 Group administrator | Resolves a possible match, tries a file mapping",
   "/claims sub-cllead": "ST4 Senior claims assessor | Notifies a claim, works the queue, assigns it",
   "/claims sub-gl1": "ST10 Finance operator | Refused the claims console",
+  "/collections sub-colof": "Collections officer | Today's queue and the call tasks",
+  "/collections sub-colcfg": "Collections configuration | Sets a product's dunning sequence from the shipped best estimate",
+  "/collections sub-gl1": "ST10 Finance operator | Refused the collections console",
   "/reinsurance sub-ri1": "Reinsurance operations | Abandons a failed instruction, for a second signature",
   "/reinsurance sub-ri2": "Reinsurance lead | Signs and sends the abandonment",
   "/reinsurance sub-gl1": "ST10 Finance operator | Refused the reinsurance console",
@@ -527,6 +530,14 @@ const sees = async (page, text) => {
     await p.selectOption("#a-command", "record_cause"); await p.fill("#f-1", "CC-0003");
     await p.locator("#act button").click();
     await p.locator("#act-msg .banner.bad").waitFor();
+    // Every decision the claims module takes has its form: suspending a benefit in payment is one.
+    await p.selectOption("#a-command", "decide_suspend_benefit");
+    await p.locator("#a-fields").getByText("Evidence awaited").waitFor();
+    await p.fill("#f-1", "2027-11-20"); await p.fill("#f-2", "medical report"); await p.fill("#f-3", "awaiting_evidence");
+    await p.locator("#act button").click();
+    await p.locator("#act-msg .banner.bad").waitFor();
+    await p.selectOption("#a-command", "close_investigation");
+    await p.locator("#a-fields").getByText("Claims to decline").waitFor();
   }, expectStatus: [403] });
   await visit(browser, "/reinsurance", { subject: "sub-ri1" }, { run: async (p) => {
     await sees(p, "you act on exceptions");
@@ -670,6 +681,23 @@ const sees = async (page, text) => {
   await visit(browser, "/replacements", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/reinsurance", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/claims", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
+  await visit(browser, "/collections", { subject: "sub-colof" }, { run: async (p) => {
+    await say(p, "The officer's queue: the policy nearest to lapse first");
+    await p.locator("#queue").getByText(/pol-c1|Nothing is in arrears/).first().waitFor();
+    await tab(p, "Tasks");
+    await p.locator("#t-form button").click();
+    await p.locator("#tasks").getByText(/pol-c1|No open tasks|None/).first().waitFor();
+  } });
+  await visit(browser, "/collections", { subject: "sub-colcfg" }, { run: async (p) => {
+    await tab(p, "Sequences");
+    await say(p, "Configuration loads the shipped best estimate for a product, checks it and sets it");
+    await p.fill("#seq-product", "term-life");
+    await p.locator("#seq-load button").click();
+    await sees(p, "Nobody has approved it");
+    await p.locator("#seq-form button").click();
+    await sees(p, "Set for term-life.");
+  } });
+  await visit(browser, "/collections", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/finance", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await browser.close();
   if (failures.length) { console.error(failures.join("\n")); process.exit(1); }

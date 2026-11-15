@@ -2472,6 +2472,16 @@ async fn the_claims_console() {
         portal.write("POST", "sub-cllead", "/staff/v1/claims/commands", run).await.1["title"],
         "unknown_run"
     );
+    // An investigation case names no claim: it goes to the partition the cases list gave,
+    // and without one it goes nowhere.
+    let close = |partition: Option<u32>| json!({ "purpose": "case review", "partition": partition, "command": { "close_investigation": { "case": "inv-1", "outcome": "cleared" } } });
+    assert_eq!(
+        portal.write("POST", "sub-cllead", "/staff/v1/claims/commands", close(None)).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let (status, refused) = portal.write("POST", "sub-cllead", "/staff/v1/claims/commands", close(Some(1))).await;
+    assert_ne!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(refused["title"].is_string(), "the claims module decided it: {refused}");
 
     // The book and report come by partition; a remittance is asked of the run's own.
     let (status, book) = ask("sub-cl1", "book").await;
