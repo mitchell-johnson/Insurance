@@ -1064,6 +1064,10 @@ async fn the_service_routes_admit_only_what_a_portal_may_do() {
     assert_eq!((status, found["candidates"].clone()), (200, serde_json::json!(["party-x"])));
     let employer_only = token(&["employer-portal"]);
     assert_eq!(post("/v1/questions", Some(employer_only.as_str()), &[], ask_match.to_vec()).await.0, 403);
+    // Whose loading is in the employer's total is for staff too.
+    let loadings = br#"{"ask":"loadings_in_total","scheme":"harbour"}"#;
+    assert_eq!(post("/v1/questions", Some(employer_only.as_str()), &[], loadings.to_vec()).await.0, 403);
+    assert_eq!(post("/v1/questions", Some(all.as_str()), &[], loadings.to_vec()).await.0, 200);
     d.module.state.lock().unwrap().schemes.get_mut(SCHEME).unwrap().possible.clear();
     assert_eq!(
         post("/v1/questions", Some(all.as_str()), &[], br#"{"ask":"outbox","limit":10}"#.to_vec())

@@ -497,6 +497,15 @@ fn staff_are_told_when_leavers_leave_too_few_members_in_the_total() {
     assert_eq!(alerts(&h), 1, "one holder is left and their loading is the whole total");
     assert!(h.saw(|e| matches!(e, GroupEvent::ExceptionRaised { kind: ExceptionKind::LoadingTotalTooSmall, subject, .. } if subject == "loadings")));
     assert_eq!(payers(&h, "E005"), vec![MemberPays::Nothing], "what the member was told stands");
+    // Staff see whose loading is in the total, with the proposal to ask underwriting to re-offer.
+    let scheme = h.scheme().id.clone();
+    let listed = ic_group::host::answer(&h.g, serde_json::json!({ "ask": "loadings_in_total", "scheme": scheme })).unwrap();
+    let cases = listed["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 1, "{listed}");
+    assert_eq!(cases[0]["employee"], "E005");
+    assert_eq!(cases[0]["proposal"], format!("grp-uw:{scheme}:{}", case_of(&h, "E005")));
+    assert_eq!(listed["min_count"], 2);
+    assert!(ic_group::host::answer(&h.g, serde_json::json!({ "ask": "loadings_in_total", "scheme": "nope" })).is_err());
     h.days(2);
     assert_eq!(alerts(&h), 1, "it is raised once and stays until it is dealt with");
 

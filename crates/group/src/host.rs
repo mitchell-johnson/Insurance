@@ -109,6 +109,11 @@ pub enum Question {
     /// The people a member might be, for staff deciding a possible match.
     /// Never served to the employer.
     PossibleMatch { scheme: String, employee: String },
+    /// The underwritten cover whose loading the employer pays in one total,
+    /// with the underwriting proposal behind each: what staff may ask a
+    /// member to take over once too few members hold such cover. Never
+    /// served to the employer: it says who has a loading.
+    LoadingsInTotal { scheme: String },
 }
 
 /// A file the driver has work to do on.
@@ -207,6 +212,23 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
             let today = state.today();
             let compared = compare(s, today, kind, today, &rows, rejected);
             json!({ "summary": compared.summary, "rejected": compared.rejected, "ambiguities": compared.ambiguities, "would_be_held": compared.held })
+        }
+        Question::LoadingsInTotal { scheme: id } => {
+            let s = scheme(&id)?;
+            let cases: Vec<Value> = s
+                .cases
+                .values()
+                .filter(|c| c.end_from.is_none() && c.in_employer_total && matches!(c.status, CaseStatus::Writing | CaseStatus::Accepted))
+                .map(|c| {
+                    json!({
+                        "case": c.id,
+                        "employee": c.employee_id,
+                        "cover": c.cover,
+                        "proposal": format!("grp-uw:{}:{}", s.id, c.request_case()),
+                    })
+                })
+                .collect();
+            json!({ "scheme": s.id, "min_count": s.terms.excess_loading_min_count, "cases": cases })
         }
         Question::PossibleMatch { scheme: id, employee } => {
             let s = scheme(&id)?;

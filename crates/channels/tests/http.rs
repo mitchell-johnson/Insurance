@@ -4953,6 +4953,43 @@ async fn the_group_console() {
     assert_eq!(ask("sub-grp1", "possible_match?scheme=harbour").await.0, StatusCode::BAD_REQUEST);
 }
 
+/// Purpose: group administration asks underwriting to offer a member the loading the employer pays in one total: the
+/// console lists whose loading is in the total with the proposal behind each, only an administrator may ask, a case with no
+/// loading in the total and a request without a reason go nowhere, and the command names the proposal the group module gave.
+/// Why it matters: underwriting's re-offer existed with nothing to send it, so a small scheme's invoice kept showing one
+/// member's loading as the employer's whole total, from which the employer can tell whose health it reflects.
+#[tokio::test]
+async fn a_loading_is_reoffered_to_the_member_from_the_group_console() {
+    let module = Arc::new(common::group_module::seeded());
+    let portal = portal_with(|_| module.clone());
+    let (status, listed) = portal.get("sub-grpview", "/staff/v1/group/loadings_in_total?scheme=harbour").await;
+    assert_eq!((status, &listed["cases"]), (StatusCode::OK, &json!([])), "{listed}");
+    let reoffer = |who: &'static str, body: Value| {
+        let portal = &portal;
+        async move { portal.write("POST", who, "/staff/v1/group/reoffer", body).await }
+    };
+    let body = json!({ "scheme": "harbour", "case": 1, "reason": "one holder left in the total" });
+    assert_eq!(reoffer("sub-grpview", body.clone()).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(
+        reoffer("sub-grp1", body).await.0,
+        StatusCode::BAD_REQUEST,
+        "harbour has no loading in its total"
+    );
+    assert_eq!(
+        reoffer("sub-grp1", json!({ "scheme": "nope", "case": 1, "reason": "x" })).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    // The command, from a list that holds the case.
+    let listed = json!({ "cases": [{ "case": 7, "employee": "E005", "cover": "life", "proposal": "grp-uw:harbour:3" }] });
+    assert_eq!(
+        ic_channels::group::reoffer(&listed, 7, " one holder left ").unwrap(),
+        json!({ "reoffer_excess_terms": { "proposal": "grp-uw:harbour:3", "reason": "one holder left" } })
+    );
+    assert!(ic_channels::group::reoffer(&listed, 8, "why").is_err());
+    assert!(ic_channels::group::reoffer(&listed, 7, " ").is_err());
+}
+
 /// Purpose: a refusal of the portal itself by the group service (its token lacks the `group-admin` role) is the portal's
 /// fault, 502, not the person's; any other answer passes with the service's status; and a service that cannot be reached is
 /// 503.

@@ -85,10 +85,25 @@ function opener(e) {
       $("rm-emp").value = $("mb-emp").value = e.subject; portal.view("members");
       $("rm-find").click(); $("rm-party").focus(); return "";
     }
+    if (e.kind === "loading_total_too_small") return loadings(e.scheme);
     if (FILE_KINDS.has(e.kind) && e.kind !== "row_refused") { $("fi-id").value = e.subject; portal.view("files"); await showFile(); return ""; }
     portal.view("schemes"); await showScheme(); return "";
   };
   return h("button", { class: "quiet", type: "button", on: { click: run($("ex-msg"), go) } }, e.kind === "possible_match" ? "Decide" : "Open");
+}
+// Too few members hold underwritten cover for the employer's loading total to hide whose it is: the members whose
+// loading is in it, and, for an administrator, asking underwriting to offer one of them the loading on their own cover.
+async function loadings(scheme) {
+  const { cases, min_count } = await ask("loadings_in_total", { scheme });
+  const offer = (c) => h("button", { class: "quiet", type: "button", on: { click: run($("ex-msg"), async () => {
+    const reason = await portal.ask({ title: `Offer ${c.employee} their loading`, text: "Underwriting writes to the member. Nothing changes until they agree on their own device.", label: "Why (recorded, not sent to the member)", confirm: "Ask underwriting" });
+    if (!reason) return "";
+    await api(R, "POST", "/staff/v1/group/reoffer", { scheme, case: c.case, reason });
+    return `Underwriting will offer ${c.employee} their loading.`;
+  }) } }, "Offer them the loading");
+  put($("ex"), [h("p", {}, `Scheme ${scheme} bills loadings in one total while at least ${min_count} members hold underwritten cover.`),
+    cases.length ? table(["Member", "Cover", "Case", ""], cases.map((c) => [c.employee, c.cover, c.case, me.admin ? offer(c) : ""])) : h("p", { class: "muted" }, "No loading is in the total now.")]);
+  return "";
 }
 $("ex-form").addEventListener("submit", run($("ex-msg"), showExceptions));
 

@@ -394,6 +394,8 @@ The group service holds all of it. The portal sends each command under the calle
 - **Refusals.** The module's refusal comes back as `409` with its code, an unknown scheme or file as `404`. If the service refuses the portal itself (its token lacks `group-admin`), that is `502 role_not_held`, the portal's fault and not the person's; an unreachable service is `503`.
 - **Tests.** `tests/http.rs` `the_group_console` runs against the group module's own state machine and its own test harness (`tests/common/group_module.rs`), seeded with a possible match.
 
+**A loading over too few members** (15 Nov). Opening a `loading_total_too_small` exception lists the members whose loading is in the employer's total (`GET /staff/v1/group/loadings_in_total?scheme=`, which the group service serves to staff only). An administrator can ask underwriting to offer one of them the loading on their own cover: `POST /staff/v1/group/reoffer {scheme, case, reason}` sends `reoffer_excess_terms` with the proposal the group module named, under the caller `group-admin`. The member answers on their device; nothing moves until they agree.
+
 ## Operations console and status page (addendum entry 6)
 
 `IC_REGIONS` tells the service which ledger node is in which region and `IC_HOME_REGION` which regions normally lead, comma-separated. In the shipped settings both Sydney and Melbourne lead (each its share of the partitions) and the witness's region is listed but leads nothing (`deploy/k8s/portal.yaml`; `decisions.md`, "Where the ledger's voters run"). Leaders are at home when every home region is fully reachable and the home regions between them lead every partition. From that and what the nodes report:

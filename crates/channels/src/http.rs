@@ -1536,6 +1536,33 @@ async fn group_staff_command(State(s): State<Shared>, headers: HeaderMap, method
 }
 
 #[derive(Deserialize)]
+struct Reoffer {
+    scheme: String,
+    case: u64,
+    reason: String,
+}
+
+/// Ask underwriting to offer a member the loading the employer has paid in
+/// one total, under the caller `group-admin`. The member agrees or not on
+/// their own device; until they agree nothing moves.
+async fn group_reoffer(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let session = s.group_admin(&headers, &method, &uri, &body).await?;
+    let key = key(&headers, &session.party.0)?;
+    let asked: Reoffer = parse(&body)?;
+    let question = crate::group::staff_question("loadings_in_total", |f| (f == "scheme").then(|| asked.scheme.clone())).map_err(Problem::bad_request)?;
+    let (status, listed) = s.group()?.ask(question).await.map_err(group_down)?;
+    if status != 200 {
+        return group_staff_answer(Ok((status, listed)));
+    }
+    let command = crate::group::reoffer(&listed, asked.case, &asked.reason).map_err(Problem::bad_request)?;
+    let today = crate::payments::nz(session.at).date().to_string();
+    let mut envelope = crate::underwriting::envelope(&format!("reoffer:{key}"), session.at, &today, command);
+    envelope["caller"] = json!(crate::group::STAFF_CALLER);
+    tracing::info!(staff = %session.party.0, scheme = %asked.scheme, case = asked.case, "loading re-offered to the member");
+    s.to_underwriting(envelope).await
+}
+
+#[derive(Deserialize)]
 struct FirstAdmin {
     party: PartyId,
 }
@@ -4053,6 +4080,7 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/underwriting/{question}", get(underwriting_question))
         .route("/staff/v1/reinsurance/commands", post(reinsurance_command))
         .route("/staff/v1/reinsurance/{verb}/{id}", post(reinsurance_decide))
+        .route("/staff/v1/group/reoffer", post(group_reoffer))
         .route("/staff/v1/reinsurance/{question}", get(reinsurance_question))
         .route("/staff/v1/claims/{question}", get(claims_question))
         .route("/staff/v1/claims/definitions/{id}/{version}", get(claims_definition))

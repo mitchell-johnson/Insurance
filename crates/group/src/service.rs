@@ -443,8 +443,9 @@ where
         Ok(q) => q,
         Err(e) => return refused(StatusCode::BAD_REQUEST, "invalid_question", &e.to_string()),
     };
-    // Who else a member might be is for staff deciding it, never the employer.
-    if matches!(question, Question::PossibleMatch { .. }) && !staff {
+    // Who else a member might be, and whose loading is in the total, are for
+    // staff, never the employer.
+    if matches!(question, Question::PossibleMatch { .. } | Question::LoadingsInTotal { .. }) && !staff {
         return refused(
             StatusCode::FORBIDDEN,
             "role_not_held",

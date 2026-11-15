@@ -176,6 +176,24 @@ pub const STAFF_COMMANDS: [&str; 16] = [
     "terminate",
 ];
 
+/// Underwriting's command to offer a member the loading the employer has
+/// paid in one total, once too few members hold underwritten cover for
+/// the total to hide whose it is. `listed` is the group module's
+/// `loadings_in_total` answer, which names the proposal behind each case.
+pub fn reoffer(listed: &Value, case: u64, reason: &str) -> Result<Value, String> {
+    if reason.trim().is_empty() {
+        return Err("say why the member is being asked".to_string());
+    }
+    let proposal = listed["cases"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|c| c["case"] == case)
+        .and_then(|c| c["proposal"].as_str())
+        .ok_or("that case has no loading in the employer's total")?;
+    Ok(json!({ "reoffer_excess_terms": { "proposal": proposal, "reason": reason.trim() } }))
+}
+
 /// Whether a member of staff may open the group console, and whether they
 /// may act there.
 pub fn standing(staff: &crate::staff::StaffState, party: &ic_core::PartyId, at: crate::staff::At) -> Value {
@@ -203,6 +221,8 @@ pub fn staff_question(name: &str, given: impl Fn(&str) -> Option<String>) -> Res
         "scheme" | "invoices" | "mapping" => json!({ "ask": name, "scheme": named("scheme")? }),
         "file" => json!({ "ask": "file", "scheme": named("scheme")?, "file": named("file")? }),
         "member" => json!({ "ask": "member", "scheme": named("scheme")?, "employee": named("employee")? }),
+        // Whose loading is in the employer's total, for asking one to take it over.
+        "loadings_in_total" => json!({ "ask": "loadings_in_total", "scheme": named("scheme")? }),
         // The people the customer master found a member might be, for deciding the match.
         "possible_match" => json!({ "ask": "possible_match", "scheme": named("scheme")?, "employee": named("employee")? }),
         "scheme_of" => json!({ "ask": "scheme_of", "policy": named("policy")? }),
