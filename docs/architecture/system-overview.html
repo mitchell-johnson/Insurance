@@ -27,7 +27,7 @@ h1{font-size:26px;margin:0 0 4px}.sub{color:#5a6372;margin:0 0 18px;font-size:14
 .banner{background:#fff4f4;border:1.5px dashed #b23b3b;color:#7a2424;border-radius:9px;padding:8px 12px;font-size:13px;margin-bottom:14px}
 </style></head><body><div class="page">
 <h1>The insurance core: how the system is put together</h1>
-<p class="sub">Read from the code, manifests and templates on main, 14 Nov 2026. Every process and module drawn solid is built and tested on main. Dashed means designed but not built or not connected.</p>
+<p class="sub">Read from the code, manifests and templates on main, 15 Nov 2026. Every process and module drawn solid is built and tested on main. Dashed means designed but not built or not connected.</p>
 <div class="banner"><b>Nothing is deployed.</b> The Azure templates (<code>infra/*.bicep</code>) and Kubernetes manifests (<code>deploy/k8s</code>) compile in CI, and the whole arrangement runs on one machine under Docker Compose, but no Azure subscription has been deployed to yet.</div>
 
 <div class="band"><div class="bl">People and their systems</div><div class="row">
@@ -56,7 +56,7 @@ h1{font-size:26px;margin:0 0 4px}.sub{color:#5a6372;margin:0 0 18px;font-size:14
 </div></div>
 <div class="conn"><span><span class="arr">↓</span>Commands: a named caller, a stable idempotency key, the workload's own cluster token</span><span><span class="arr">↑</span>Events: gapless per partition, no personal data</span></div>
 
-<div class="cluster"><div class="bl" style="color:#26303f">Ledger cluster: <code>ic-node</code> StatefulSet × 3, one per availability zone of New Zealand North. Raft (openraft) replicates every group; a majority must have an entry on disk before it is acknowledged.</div>
+<div class="cluster"><div class="bl" style="color:#26303f">Ledger cluster: five voters per group: <code>ic-node</code> × 2 in Sydney, × 2 in Melbourne, and a witness in Canberra that holds no ledger. Raft (openraft) replicates every group; a majority must have an entry on disk before it is acknowledged.</div>
 <div class="row" style="gap:9px">
 <div class="b core" style="flex:1.4"><h3>64 partitions: the policy engine and the ledger</h3><p>Each partition is its own Raft group, log, business date and double-entry hash-chained ledger: policies, products and rates as Starlark data, billing, arrears, lapses, loans, the investment ledger, cohort migration. The only writer of policies and money.</p></div>
 <div class="b core"><h3>Claims engine</h3><p><code>crates/claims</code> inside each partition, so a decision and its postings commit together. Cross-partition offsets go as messages.</p></div>
@@ -92,7 +92,7 @@ h1{font-size:26px;margin:0 0 4px}.sub{color:#5a6372;margin:0 0 18px;font-size:14
 </div></div>
 <div class="conn"><span><span class="arr">⇅</span>Azure services and partners</span></div>
 
-<div class="band"><div class="bl">Azure platform (templates in <code>infra/</code>, one region: New Zealand North)</div><div class="row">
+<div class="band"><div class="bl">Azure platform (templates in <code>infra/</code>, home region Australia East, voters also in Australia Southeast and a witness in Australia Central)</div><div class="row">
 <div class="b az"><h3>Key Vault</h3><p>Merkle-root signing key, bank signing keys, cluster tokens, wrapping keys (HSM for clinical).</p></div>
 <div class="b az"><h3>Blob Storage</h3><p>Write-once: Merkle roots, sealed segments, payment evidence, reinsurance records, extracts, document vault. Clinical store erasable.</p></div>
 <div class="b az"><h3>Event Hubs</h3><p><code>policy-events</code> plus customer, documents, complaints, group, reinsurance and underwriting hubs.</p></div>
@@ -106,7 +106,7 @@ h1{font-size:26px;margin:0 0 4px}.sub{color:#5a6372;margin:0 0 18px;font-size:14
 <div class="b ext"><h3>Fund administrator</h3><p>Valuations over HTTPS under its own Entra identity. Not onboarded.</p></div>
 <div class="b ext nb"><h3>AIA Vitality feed</h3><p>Intake not built; format not known.</p></div>
 <div class="b ext"><h3>Inland Revenue, print house</h3><p>Withheld tax paid through payments; print collected from an outbox container.</p></div>
-<div class="b ext nb"><h3>Second and third region</h3><p>Fail-back is built; voters elsewhere are not provisioned.</p></div>
+<div class="b ext nb"><h3>Three regions, not deployed</h3><p>Two voters in Sydney, two in Melbourne, a witness in Canberra; both main regions lead and fail over by themselves (region drill in CI).</p></div>
 </div>
 
 <div class="legend"><b>Key</b>

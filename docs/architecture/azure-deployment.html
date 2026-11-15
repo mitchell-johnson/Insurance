@@ -25,16 +25,16 @@ code{font:11.5px ui-monospace,Menlo,monospace;background:#eef0f4;padding:0 3px;b
 .zones{display:flex;gap:9px;margin-bottom:9px}
 </style></head><body><div class="page">
 <h1>The insurance core on Azure: what the templates create</h1>
-<p class="sub">Read from <code>infra/*.bicep</code> and <code>deploy/k8s</code> on main, 14 Nov 2026. Workloads sign in with managed identities federated to their Kubernetes service accounts (Workload ID) and reach the ledger nodes with their own cluster token; there are no account keys or connection strings. One exception, by design: <code>ic-admin</code> and <code>ic-bootstrap</code> administer the cluster, so they run as <code>ic-node</code>'s.</p>
+<p class="sub">Read from <code>infra/*.bicep</code> and <code>deploy/k8s</code> on main, 15 Nov 2026. Workloads sign in with managed identities federated to their Kubernetes service accounts (Workload ID) and reach the ledger nodes with their own cluster token; there are no account keys or connection strings. One exception, by design: <code>ic-admin</code> and <code>ic-bootstrap</code> administer the cluster, so they run as <code>ic-node</code>'s.</p>
 <div class="banner"><b>Designed and templated, not deployed.</b> CI compiles every template and renders the manifests on each push. No subscription has been deployed to, so nothing here has run on Azure. <code>main.bicep</code> is deployed first; each module template is deployed on its own into the same resource group (<code>docs/operations.md</code>, "First deployment").</div>
 
-<div class="rg"><div class="bl" style="color:#9a5b05">Resource group, New Zealand North (one region; voters in a second and third region are not provisioned)</div>
+<div class="rg"><div class="bl" style="color:#9a5b05">Home resource group, Australia East (Sydney): every stateful service; two of the ledger's five voters</div>
 
 <div class="aks"><div class="bl" style="color:#1f4fa3">AKS cluster (<code>main.bicep</code>): system pool across zones 1, 2, 3; namespace <code>insurance-core</code>; WireGuard between pods; network policy admits the ingress namespace only to front doors</div>
 <div class="zones">
-<div class="b node"><h3><code>ic-node-1</code> · zone 1</h3><p>StatefulSet pod with a managed disk: replicas of all 64 partitions and the 12 module groups.</p></div>
-<div class="b node"><h3><code>ic-node-2</code> · zone 2</h3><p>Same. A disruption budget keeps two of three up during upgrades.</p></div>
-<div class="b node"><h3><code>ic-node-3</code> · zone 3</h3><p>Same. A node that loses its disk is replaced under a new number.</p></div>
+<div class="b node"><h3><code>ic-node-1</code> · zone 1</h3><p>StatefulSet pod with a managed disk: a voter of all 64 partitions and the 12 module groups. Leads the even partitions, shared with node 2.</p></div>
+<div class="b node"><h3><code>ic-node-2</code> · zone 2</h3><p>Same. Each voter has a fixed internal address in the <code>ledger-peers</code> subnet, named in <code>ledger.internal</code>.</p></div>
+<div class="b node"><h3>Voters 3, 4 and 5 elsewhere</h3><p>Two in Melbourne, the witness in Canberra (below). Losing any one region leaves three of five; leaders come home by themselves.</p></div>
 </div>
 <div class="grid">
 <div class="b k8s"><h3>Deployments</h3><p><code>ic-api</code>, <code>ic-portal</code>, <code>ic-worker</code>, <code>ic-customers</code>, <code>ic-documents</code>, <code>ic-group</code>, <code>ic-payments-pump</code>, <code>ic-reinsurance</code>, <code>ic-underwriting</code>, <code>ic-underwriting-intake</code>, <code>ic-unit-pricing</code>, <code>ic-finance-close</code>; each with a disruption budget.</p></div>
@@ -96,7 +96,7 @@ code{font:11.5px ui-monospace,Menlo,monospace;background:#eef0f4;padding:0 3px;b
 <div class="b az"><h3>Microsoft Entra ID</h3><p>App registrations and roles by <code>deploy/entra/apps.sh</code> (workforce and External ID tenants) and <code>group-app.sh</code>; one per reinsurer for the API.</p></div>
 <div class="b ext nb"><h3>Ingress controller</h3><p>The insurer's own; exposes <code>ic-api</code>, <code>ic-portal</code> and the reinsurer API. Not in the templates.</p></div>
 <div class="b ext nb"><h3>Bank</h3><p>mTLS channel from <code>ic-payments-pump</code>; credentials in the payments vault. No real bank chosen.</p></div>
-<div class="b ext nb"><h3>Second and third region</h3><p>Five voters across three regions would survive a region loss; not written, and a data residency decision.</p></div>
+<div class="b az"><h3>Melbourne and Canberra</h3><p><code>second-region.bicep</code>: an AKS cluster built like Sydney's with <code>ic-node-3</code>, <code>-4</code> (odd partitions) and every service, using Sydney's data over peering. <code>ledger-witness.bicep</code>: one VM in Australia Central, node 5, votes and keeps the log, holds no ledger. <code>regions.bicep</code> peers the three networks.</p></div>
 </div>
 
 <div class="legend"><b>Key</b>

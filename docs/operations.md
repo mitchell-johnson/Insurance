@@ -7,7 +7,7 @@ What these steps create, with every resource's size and what is needed beyond th
 1. **Create the platform.**
 
    ```sh
-   az group create -n <rg> -l newzealandnorth
+   az group create -n <rg> -l australiaeast
    az deployment group create -g <rg> -f infra/main.bicep -p infra/main.bicepparam
    az deployment group show -g <rg> -n main --query properties.outputs
    ```
@@ -147,10 +147,11 @@ To run a close by hand: `kubectl -n insurance-core create job close-now --from=c
 | --- | --- | --- | --- |
 | Partition has no leader | 0 | The watch logged `partition has no leader` | That partition takes no commands. `ic-admin status`: if two nodes are down, bring either back ("Losing things"). If all are up, look for a network policy or disk fault on the nodes' logs. |
 | Ledger state hashes differ | 0 | The watch logged `state hashes differ` | Stop. Do not move leaders or resume fail-back. Find which voter differs (`ic-admin status`), replace it as a new member ("Replacing a node that lost its disk") and keep its disk for the investigation. |
-| Ledger node down | 1 | Fewer `ic-node` pods running than `ledgerVoters`, or the watch could not reach one | One more loss stops writes. `kubectl -n insurance-core get pods -l app=ic-node -o wide`: a pod pending on its zone's disk waits for that zone; a pod crashing has the reason in its log. |
+| Ledger node down | 1 | Fewer `ic-node` pods running than `ledgerVoters` (both regions' clusters together), or the watch could not reach a voter, the witness included | Five voters keep writing with two lost; a third loss stops writes. If a whole region's voters are down, see "Losing a region". Otherwise `kubectl -n insurance-core get pods -l app=ic-node -o wide`: a pod pending on its zone's disk waits for that zone; a pod crashing has the reason in its log. |
 | Daily close failed | 1 | An `ic-close` pod failed, or ic-worker logged `ic-worker command failed` | Read the job's log. Reconciliation breaks: see "If a close fails". Anything else: fix and run the close by hand; the next run catches up every day due. |
 | Housekeeping backlog | 2 | A partition's backlog above the watch's limit three checks running | Sealing, root publication or event delivery is behind. Check Blob Storage, Key Vault and Event Hubs (and their private endpoints); the backlog falls once they answer. |
 | Unit orders left unpriced | 2 | The close or the unit-orders run logged `unit orders left` | See "Unit orders". Usually a price not yet activated by unit pricing. |
+| Witness log growing | 2 | The watch logged `witness log growing`: the witness holds over 200,000 entries of a partition's log | A data voter has been down long enough that the witness keeps the log for it. Bring it back or replace it as a new member ("Losing a region"). |
 | Ledger watch silent | 2 | No `ledger watch` line for fifteen minutes | The rules above are blind. Check the `ic-watch` CronJob and its pod's log. |
 
 ## Upgrades
@@ -277,36 +278,33 @@ To skip the collector and send straight from the processes, set `OTEL_EXPORTER_O
 
 ## Losing a region
 
-What happens depends on where the voters are, which is still to be chosen (`decisions.md`, "A second region"). The templates support either; this is what to do in each.
+The ledger's voters are two in Australia East (Sydney), two in Australia Southeast (Melbourne) and a witness in Australia Central (`decisions.md`, "Where the ledger's voters run"). Losing any one region leaves three of five, so every partition keeps a majority. Both main regions lead in normal running: even partitions and half the modules from Sydney, odd ones from Melbourne. `deploy/compose/regions.sh` rehearses all of this in the drill workflow.
 
-**Today and option A: three voters across the zones of one region, a standby region.** Losing the region stops the ledger: no voter is left. Nothing acknowledged is lost, because a write is acknowledged only once a majority has it on disk, and those disks are in the region. What is outside it:
+**What happens by itself.**
 
-- The proofs (Merkle roots, sealed segments, payment evidence, reinsurance records): the ledger account is RA-GZRS in prod, so a copy is readable in the paired region within about 15 minutes of each write (Azure's stated RPO).
-- The customer master and Temporal databases: geo-redundant backups (`geoRedundantBackup`).
-- The ledger disks' daily backup copies: the backup vault is geo-redundant in prod.
-- The images: replicate the registry (`az acr replication create`) to the standby region before it is needed.
+1. Within seconds, the voters left elect leaders for the lost region's groups. Nothing acknowledged is lost and nothing needs re-sending. Callers that were mid-request get a 503 (`ledger_unavailable`) for a few seconds and repeat with the same idempotency key. The ledger client tries the lost voters last for 30 seconds at a time, so requests do not keep waiting them out.
+2. Front Door's probe of the lost region's `/healthz` fails and it sends everyone to the other region.
+3. If the witness wins an election it hands the group straight to a data voter that holds the whole log; it never keeps a lead.
+4. When the region returns, its voters catch up and fail-back hands each group back to its home region, a share at a time, outside the frozen periods ("Fail-back to the preferred region").
 
-Decide first whether to wait. A region outage usually ends within hours, and waiting loses nothing. Failing over means running from a copy behind the last acknowledged write by up to the last sealed segment or disk backup, so every command since must be re-sent by its caller: the commands' idempotency keys make that safe.
+**What to watch.** "Ledger node down" fires for the lost voters; "Partition has no leader" should not. The status page (`IC_REGIONS`, `IC_HOME_REGION` in `deploy/k8s/portal.yaml`) shows the region as lost and the leaders all in one region until fail-back finishes.
 
-To fail over:
+**If Sydney is the region lost.** Sydney also holds the stateful services. The ledger carries on, but:
 
-1. Declare the incident and stop callers: the portal's status page shows the region lost when `IC_REGIONS` and `IC_HOME_REGION` are set (`deploy/k8s/portal.yaml`).
-2. Deploy `infra/main.bicep` and the module templates in the standby region under a new `name` (Melbourne is Australia Southeast).
-3. Restore each ledger node's last vault backup there ("Backups and restore", every voter lost), restore the customer master from its geo backup and replay its erasure register over it (`docs/customers.md`, "Restoring a backup").
-4. Initiate the storage account failover (`az storage account failover`) so the proofs are writable in the standby region, then check the last closed day's root against its blob.
-5. Point Front Door at the new cluster's Private Link Service (`infra/edge.bicep` with the new `privateLinkServiceResourceGroup`), and approve the connection.
-6. Tell the callers to re-send everything since the restored point; reconcile (`GET /v1/admin/reconciliation`) before the next close.
+- Sealing old log segments and publishing the day's root pause until the ledger storage account is failed over to Melbourne (`az storage account failover`; RA-GZRS, so the copy there is at most about 15 minutes behind). Nothing is lost: the outputs wait in the replicated state, and "Housekeeping backlog" fires if it goes on long. Decide whether to wait for Sydney or fail the account over; failing over makes it LRS in Melbourne until re-protected.
+- Events wait the same way. In prod the Event Hubs namespace is geo-replicated to Melbourne: promote the secondary (`az eventhubs namespace replica`, or the portal's Geo-replication blade) to send again.
+- The customer master and Temporal's PostgreSQL servers are zone redundant in Sydney with geo-redundant backups. If Sydney is down for long, restore them in Melbourne from the geo backup (`docs/customers.md`, "Restoring a backup") and point the services at the restored servers.
+- Key Vault fails over to its paired region by itself (read only until Sydney is back); the registry has a Melbourne replica.
 
-Fail back the same way once the home region is healthy, in a planned window.
+**If Melbourne is the region lost.** Nothing to do beyond watching the alerts. Melbourne holds no stateful services.
 
-**Option B: a voter in a third region as a tiebreaker (five voters: two, two and one).** Losing any one region keeps a majority. The voters elsewhere take over within seconds; nothing is lost and nothing needs re-sending. The API keeps answering, from further away. Set `IC_PREFERRED_NODES` to the home region's nodes, and when it returns each node hands its groups back (`ic_raft::failback`, "Fail-back to the preferred region"). What to do:
+**If the witness's region is lost.** Four data voters remain and every partition carries on. Nothing to do; it rejoins when back. The witness is one VM: if its disk is lost, replace it as a new member like any node ("Replacing a node that lost its disk").
 
-1. Nothing for the ledger. Watch the alerts: "Ledger node down" fires for the lost voters; "Partition has no leader" should not.
-2. Front Door has an origin per region (add the second to `infra/edge.bicep` with a health probe on `/healthz`); it stops sending to the lost one once the probe fails.
-3. Sealing and publication carry on against the surviving region's storage. If the lost region held the storage account, its RA-GZRS copy is read-only: fail it over as in option A, step 4.
-4. When the region returns, its voters rejoin and catch up; fail-back moves leadership home outside the frozen periods.
+**A data voter down for long.** The witness keeps the log until every data voter holds it, so while a voter is down the witness's log grows. "Witness log growing" fires at 200,000 entries held for a partition. Bring the voter back, or replace it as a new member, before the witness's 256 GB disk fills.
 
-Option B needs, beyond these templates: a cluster or node pool in each further region on a peered virtual network (Raft port 7000 between them, latency between Sydney and Melbourne about 10 to 15 ms), the extra voters added with `ic-admin members`, and a second origin in `infra/edge.bicep`.
+**Losing two regions at once** leaves fewer than three voters and stops the ledger. When the regions come back, so does the ledger, with nothing acknowledged lost. Only if their disks are gone, restore from the disks' vault backups in a working region ("Backups and restore", every voter lost) and have callers re-send since the restored point.
+
+**Setting it up.** In order: `infra/main.bicep` in Australia East; `infra/second-region.bicep` in Australia Southeast; `infra/ledger-witness.bicep` in Australia Central (check first that the subscription can deploy there; New Zealand North is the fallback); `infra/regions.bicep` to peer the three networks and name the voters; then `kubectl apply -k deploy/regions/australiaeast` on the home cluster and `deploy/regions/australiasoutheast` on the second (`deploy/regions/README.md`); then `infra/edge.bicep` with both clusters' Private Link Services. Run `ic-bootstrap` once, from home. `tools/check_regions.py` checks the addresses agree.
 
 ## Cluster access
 
@@ -344,7 +342,8 @@ Set on every ledger node:
 
 | Variable | Meaning | Default |
 | --- | --- | --- |
-| `IC_PREFERRED_NODES` | Node numbers in the preferred region, for example `1,2`. Unset turns fail-back off. | off |
+| `IC_PREFERRED_NODES` | Node numbers in the one region that leads every group, for example `1,2`. Unset (with `IC_LEADER_REGIONS` unset) turns fail-back off. | off |
+| `IC_LEADER_REGIONS`, `IC_REGION_NODES` | Instead: the regions that share the groups, and which nodes are in each region, for example `australiaeast,australiasoutheast` and `australiaeast=1,2;australiasoutheast=3,4;australiacentral=5`. Each group's home is one of the leading regions; a region not listed (the witness's) never leads. Set in `deploy/k8s/settings.yaml`. | off |
 | `IC_FAILBACK_SHARE_PERCENT` | Share of a node's groups handed back per round. | 20 |
 | `IC_FAILBACK_LATENCY_MS` | How long a moved group may take to answer a majority read. | 2000 |
 | `IC_FAILBACK_SETTLE_SECONDS` | How long a preferred voter must have been level before it is handed a group. | 120 |

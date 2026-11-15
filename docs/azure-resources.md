@@ -10,10 +10,12 @@ Where a template sizes something differently by environment, the table gives **p
 
 | | Today in the templates | Pending |
 | --- | --- | --- |
-| Region | One region. `infra/main.bicepparam` sets `newzealandnorth`, and every template takes the resource group's location. | **The Raft placement is still to be chosen.** One option is three voters across the three zones of Australia East (Sydney), with Australia Southeast (Melbourne) as a standby. The other is to add a voter in a third region as a tiebreaker, so that losing any one region keeps a majority (five voters across three regions; `decisions.md`, "A second region"). The templates support either (`operations.md`, "Losing a region"; `decisions.md`, "A second region"): the ledger storage is RA-GZRS to the paired region in prod, and the backups and databases are geo-redundant. Option B also needs a cluster or pool per further region and a second Front Door origin. Both put policy data outside New Zealand, which is a decision for the insurer and its regulator. |
-| Zones | Every AKS node pool spans zones 1, 2 and 3, and the three `ic-node` pods are spread one per zone on the ledger pool. Event Hubs is zone-redundant. In prod, storage is ZRS or GZRS and the PostgreSQL servers are zone-redundant. | None. |
-| Fail-back | Built, but `IC_PREFERRED_NODES` is unset, so nothing fails back until voters exist in a second region. | Depends on the placement choice. |
-| Communication Services data | `communicationDataLocation` = `Australia` (`infra/documents.bicep`). | Confirm with the placement choice. |
+| Region | Three. Australia East (Sydney) is home: `infra/main.bicep` (`main.bicepparam` sets `australiaeast`) with every stateful service. Australia Southeast (Melbourne): `infra/second-region.bicep`, a second AKS cluster with no stateful services of its own. Australia Central (Canberra): `infra/ledger-witness.bicep`, one VM for the ledger's witness. `infra/regions.bicep` peers the three networks and names the voters. | Decided 15 Nov 2026 (`decisions.md`, "Where the ledger's voters run"). Check that the subscription can deploy to Australia Central; New Zealand North is the fallback for the witness. Policy data is held in Australia, which is for the insurer and its regulator to accept. |
+| Ledger voters | Five per group: `ic-node-1` and `-2` in Sydney, `-3` and `-4` in Melbourne, the witness (node 5, no ledger data) in Canberra. Both main regions lead (even partitions from Sydney, odd from Melbourne); losing any one region leaves three of five. | None. |
+| Replication of the stateful services to Melbourne | Ledger storage RA-GZRS (Melbourne is Sydney's pair); Event Hubs geo-replicated to Melbourne in prod (`geoReplicate`); a registry replica in Melbourne; Key Vault's own paired-region copy; PostgreSQL geo-redundant backups. | None. |
+| Zones | Every AKS node pool spans zones 1, 2 and 3, and each region's two `ic-node` pods are on different zones of its ledger pool. Event Hubs is zone-redundant. In prod, storage is ZRS or GZRS and the PostgreSQL servers are zone-redundant. | None. |
+| Fail-back | On: `IC_LEADER_REGIONS` and `IC_REGION_NODES` in `deploy/k8s/settings.yaml`, so each group goes back to its home region after a loss. | None. |
+| Communication Services data | `communicationDataLocation` = `Australia` (`infra/documents.bicep`), matching the regions. | None. |
 
 ## Resource count
 
@@ -21,9 +23,13 @@ What one deployment of every template creates in prod, with no reinsurers config
 
 | Resource type | Count | Created by |
 | --- | ---: | --- |
-| AKS cluster | 1 | main |
-| AKS node pools | 3 pools: system 3 VMs, ledger 3 VMs, apps 3 to 9 VMs | main |
-| Virtual network, NSG, public IP prefix (egress) | 1 each, 3 subnets | main |
+| AKS cluster | 2 (Sydney, Melbourne) | main, second-region |
+| AKS node pools | 3 pools in each: system 3 VMs, ledger 2 VMs, apps 3 to 9 VMs | main, second-region |
+| Virtual network, NSG, public IP prefix (egress) | 1 each in Sydney (4 subnets) and Melbourne (3 subnets); the witness's network (1 subnet) with an NSG and a NAT gateway | main, second-region, ledger-witness |
+| Network peerings | 6 (each pair of the three networks, both ways) | regions |
+| Private DNS zone `ledger.internal` | 1, with 5 records and 3 links | regions |
+| Witness VM | 1 × `Standard_D2ds_v5` with a 256 GB Premium SSD data disk, its NIC and identity | ledger-witness |
+| Container Registry replication | 1 (Melbourne) | main |
 | Private DNS zones and links | 9 each | main |
 | Private endpoints | 6 in main (ledger blob, 2 vaults, Event Hubs, registry, Azure Monitor), 1 more with `deployPostgres`; 1 per module storage account (8) and the customer database; 1 for the backup account | main, every module |
 | Azure Monitor private link scope | 1 | main |
@@ -57,13 +63,23 @@ What one deployment of every template creates in prod, with no reinsurers config
 | Name | `<name>-aks` |
 | Tier | Standard in prod (uptime SLA), Free in dev/test |
 | Pool `system` | Mode System, tainted `CriticalAddonsOnly`: AKS's own pods only. **3 × `Standard_D2ds_v5`** (2 vCPU, 8 GiB), zones 1 to 3 (`systemVmSize`). |
-| Pool `ledger` | Mode User, tainted `insurance-core/ledger`, label `insurance-core/pool: ledger`: the three `ic-node` voters only. **3 × `Standard_D8ds_v5`** (8 vCPU, 32 GiB), one per zone, fixed (`ledgerVmSize`); a voter's disk is zonal, so it cannot move. |
+| Pool `ledger` | Mode User, tainted `insurance-core/ledger`, label `insurance-core/pool: ledger`: the region's two `ic-node` voters only. **2 × `Standard_D8ds_v5`** (8 vCPU, 32 GiB), on different zones, fixed (`ledgerVmSize`, `ledgerPoolCount`); a voter's disk is zonal, so it cannot move. |
 | Pool `apps` | Mode User: every other workload. **`Standard_D4ds_v5`** (4 vCPU, 16 GiB), the cluster autoscaler between **3 and 9** (`appsMinCount`, `appsMaxCount`), zones balanced, scale-down after 10 idle minutes. |
-| Total at rest | 42 vCPU and 168 GiB; up to 66 vCPU and 264 GiB at the apps pool's maximum. All pools Azure Linux. |
-| Networking | Nodes in the `aks-nodes` subnet (/22) of the virtual network `10.40.0.0/16` (`vnetAddressSpace`), with `private-endpoints` (/24) and `ingress` (/24) beside it. Outbound through the standard load balancer from one public IP prefix (/30, output `egressPrefix`), for providers to allow-list. Private API server unless `adminIpRanges` is given. Azure CNI overlay with Cilium as dataplane and network policy. Advanced Container Networking Services with **WireGuard** encrypts traffic between nodes on UDP 51871. |
+| Total at rest | 34 vCPU and 136 GiB per cluster; up to 58 vCPU and 232 GiB at the apps pool's maximum. All pools Azure Linux. The Melbourne cluster is built from the same block (`infra/second-region.bicep`; `tools/check_regions.py` fails CI if the two differ). |
+| Networking | Nodes in the `aks-nodes` subnet (/22) of the virtual network `10.40.0.0/16` (`vnetAddressSpace`; Melbourne's is `10.41.0.0/16`), with `private-endpoints` (/24), `ingress` (/24) and `ledger-peers` (/24, the voters' fixed internal load balancer addresses, `deploy/regions`) beside it. Outbound through the standard load balancer from one public IP prefix (/30, output `egressPrefix`), for providers to allow-list. Private API server unless `adminIpRanges` is given. Azure CNI overlay with Cilium as dataplane and network policy. Advanced Container Networking Services with **WireGuard** encrypts traffic between nodes on UDP 51871. |
 | Identity | Entra ID with Azure RBAC and local accounts off. OIDC issuer and Workload Identity are on. |
 | Add-ons | Key Vault Secrets Store CSI driver (rotation every 2 minutes), the monitoring agent to the Log Analytics workspace (Entra auth, through the private link scope), the Azure Disk CSI driver with the snapshot controller, application routing (managed NGINX, an internal controller of our own in `deploy/cluster.yaml`), and the Azure Backup extension. |
 | Upgrades | Patch channel; node OS on NodeImage. |
+
+### The ledger's witness (`infra/ledger-witness.bicep`)
+
+| Setting | Value |
+| --- | --- |
+| Where | Australia Central, its own resource group and network `10.42.0.0/24`, fixed address `10.42.0.10` (`ic-witness.ledger.internal`) |
+| VM | **1 × `Standard_D2ds_v5`** (2 vCPU, 8 GiB), Ubuntu 24.04, Trusted Launch, encryption at host; 256 GB Premium SSD data disk for the log |
+| Runs | `ic-node` as node 5 with `IC_WITNESS_NODES=5`, from the same image, under systemd; it reads the nodes' cluster token from Key Vault with its own identity at start |
+| Network | NSG admits port 7000 from the two clusters' networks and SSH from home only; outbound through a NAT gateway; sign-in by Entra ID (`AADSSHLoginForLinux`) |
+| Holds | The log of every partition until every data voter has it, and its vote. No ledger state, no personal data. |
 
 ### Container Registry (`infra/main.bicep`)
 
@@ -75,7 +91,7 @@ These are the requests and limits as written in the manifests. Memory has limits
 
 | Workload | Kind | Replicas | CPU request | Memory request / limit | Storage |
 | --- | --- | ---: | --- | --- | --- |
-| `ic-node` | StatefulSet, one per zone, on the ledger pool | 3 | 1 | 2 GiB / 4 GiB | 128 GiB `ic-ledger-premiumv2` each (Premium SSD v2, zonal LRS: 3,000 IOPS and 125 MB/s provisioned, sub-millisecond latency; see Sizing) |
+| `ic-node` | StatefulSet, two per region on different zones, on the ledger pool | 2 per region | 1 | 2 GiB / 4 GiB | 128 GiB `ic-ledger-premiumv2` each (Premium SSD v2, zonal LRS: 3,000 IOPS and 125 MB/s provisioned, sub-millisecond latency; see Sizing) |
 | `ic-api` | Deployment | 2 | 250m | 256 MiB / 1 GiB | none |
 | `ic-portal` | Deployment | 2 | 250m | 256 MiB / 1 GiB | none |
 | `ic-worker` | Deployment | 2 | 250m | 256 MiB / 1 GiB | none |
@@ -215,7 +231,6 @@ The apps pool's minimum of three D4ds_v5 covers the requests with a zone lost; t
 | **Public names** | Templated in `infra/edge.bicep` (Front Door, WAF, managed TLS, Azure DNS records). The domain names themselves, and the DNS zone if it is not in Azure. | The insurer |
 | **Email domain and SMS number** | The e-mail domain is templated (`emailDomain` in `infra/documents.bicep`; records written when its zone is in Azure DNS, then verification started once). An SMS number or short code is bought in the portal: New Zealand numbers need an application to Azure and a provider. | The insurer, and a provider for SMS |
 | **Bank connectivity** | Calls to the bank leave from the fixed egress range (`egressPrefix`) for the bank to allow-list. The mutual TLS channel, its credentials in the payments vault, and a private link (ExpressRoute or VPN) if the bank requires one. No bank is chosen. | The insurer and its bank |
-| **Second and third region** | Further voters, their AKS clusters or node pools, network links between the regions, and storage for the region-loss plan. | The pending placement choice above |
 | **Partners' address ranges** | The print house, the fund administrator and each SFTP reinsurer, to restrict their accounts (`printHouseIpRanges`, `fundAdministratorIpRanges`, `reinsurerIpRanges`). | Each partner |
 | **Alert recipients** | `alertEmails` for main and the module templates. | The insurer |
 | **Fund administrator's identity** | An Entra identity of the administrator's, granted write on the inbound valuations container (`administratorPrincipalId`). | The administrator |
@@ -227,5 +242,5 @@ Closed on 15 Nov 2026: core alerts, OpenTelemetry to Application Insights, separ
 
 1. **The module templates are separate deployments.** `main.bicep` does not reference them, so the deployment order in `operations.md` (main, tokens, the seven module templates, then the manifests) is the only thing that keeps them in step.
 2. **Communication Services has no private endpoint** (Azure offers none). It is reached over TLS with Entra ID.
-3. **The Raft placement is not chosen**, so only one region is deployed, and losing it means a restore (option A) until a third region's voter exists (option B).
+3. **Losing Sydney pauses what depends on its stateful services** until they fail over: sealing and root publication (storage account failover), events (promote the Event Hubs secondary), and the PostgreSQL databases (restore from geo backup). The ledger itself carries on in Melbourne (`operations.md`, "Losing a region").
 4. **Placeholders to confirm:** log retention (seven years), the WAF rate limit (600 a minute) and country list (none), and the disk baseline (3,000 IOPS), which a load test on the first deployment should confirm.

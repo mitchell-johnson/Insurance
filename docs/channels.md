@@ -368,7 +368,7 @@ The group service holds all of it. The portal sends each command under the calle
 
 ## Operations console and status page (addendum entry 6)
 
-`IC_REGIONS` tells the service which ledger node is in which region and `IC_HOME_REGION` which region normally leads. From that and what the nodes report:
+`IC_REGIONS` tells the service which ledger node is in which region and `IC_HOME_REGION` which regions normally lead, comma-separated. In the shipped settings both Sydney and Melbourne lead (each its share of the partitions) and the witness's region is listed but leads nothing (`deploy/k8s/portal.yaml`; `decisions.md`, "Where the ledger's voters run"). Leaders are at home when every home region is fully reachable and the home regions between them lead every partition. From that and what the nodes report:
 
 - `/ops` and `GET /ops/v1/regions` (role `operations`) show each region's reachable nodes and leaders, whether there is a majority, whether leaders are at home, and the channel module's own state.
 - `/status` and `GET /status.json` need no sign-in and say it in plain words. **Operational**: everything works. **Degraded**: the service is running from the other region, or with a region out of reach; everything still works and may be slower. **Outage**: no majority; people may not be able to sign in, cover is not affected, and nothing already sent is lost.

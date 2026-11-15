@@ -194,7 +194,7 @@ Works out each member's Vitality discount and tells the core. Fed by the Vitalit
 
 - No Azure subscription has been deployed to. Every Bicep file compiles in CI; none has run against Azure.
 - Cluster access is in report mode; enforcing it is a step in `operations.md`.
-- A second region is designed in the software but has no infrastructure.
+- The ledger's three regions (two voters in Sydney, two in Melbourne, a witness in Canberra) are templated and rehearsed by the region drill, and not deployed.
 - Where Temporal runs is undecided.
 - Not built: a real bank connection, the Vitality intake, the underwriting evidence-provider and delegate adapters, an ERP journal export, loading a new module's history from the cold tier.
 - Rates for every AIA product and treaty terms are placeholders.
