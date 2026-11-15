@@ -1,0 +1,42 @@
+# Laid over the collector configuration shipped in deploy/k8s/telemetry.yaml
+# for the test against a real collector (tests/collector.rs, started by
+# tools/ci/start-collector.sh). Everything else is the shipped file: the same
+# receiver, the same memory limit, personal-data filter and batching. Only
+# what cannot run outside a cluster is changed: the receiver listens on the
+# loopback at ports free when the job starts, the pipelines leave out the
+# Kubernetes metadata step (it needs the Kubernetes API), and they send to
+# the test, which decodes what arrives, instead of to Application Insights.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:${env:IC_OTEL_IN_PORT}
+      grpc:
+        endpoint: 127.0.0.1:${env:IC_OTEL_GRPC_PORT}
+
+exporters:
+  otlphttp/test:
+    endpoint: http://127.0.0.1:${env:IC_OTEL_RETURN_PORT}
+    encoding: proto
+    compression: none
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 2s
+      max_elapsed_time: 300s
+
+extensions:
+  health_check:
+    endpoint: 127.0.0.1:${env:IC_OTEL_HEALTH_PORT}
+
+service:
+  telemetry:
+    metrics:
+      level: none
+  pipelines:
+    traces:
+      processors: [memory_limiter, attributes/scrub, batch]
+      exporters: [otlphttp/test]
+    logs:
+      processors: [memory_limiter, attributes/scrub, batch]
+      exporters: [otlphttp/test]

@@ -114,6 +114,12 @@ jobs:
           done
           docker logs "$name"
           exit 1
+      # The telemetry crate's test against a real OpenTelemetry Collector: the
+      # image and configuration deploy/k8s ships, on the Docker machine's
+      # network and the loopback only, sending on to the test.
+      - name: Start an OpenTelemetry Collector
+        run: |
+          tools/ci/start-collector.sh "ci-otel-${{ github.run_id }}-${{ github.run_attempt }}" "insurance-ci.runner=$RUNNER_NAME" >> "$GITHUB_ENV"
       - name: Tests, with the coverage floor
         run: |
           cargo llvm-cov --workspace --locked --lcov --output-path lcov.info --fail-under-lines "$COVERAGE_FLOOR"

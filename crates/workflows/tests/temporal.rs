@@ -76,6 +76,16 @@ impl Fleet {
         command
     }
 
+    /// The same, with its traces sent to `collector` and `role` on its resource.
+    fn traced(&self, nodes: &str, collector: &str, role: &str) -> Process {
+        let mut command = self.command(nodes);
+        command
+            .env("OTEL_EXPORTER_OTLP_ENDPOINT", format!("http://{collector}"))
+            .env("OTEL_LOGS_EXPORTER", "none")
+            .env("OTEL_RESOURCE_ATTRIBUTES", format!("test.role={role}"));
+        command
+    }
+
     fn worker(&self) -> Child {
         self.command(&self.nodes).stdout(Stdio::null()).stderr(worker_log()).spawn().unwrap()
     }
@@ -220,6 +230,116 @@ async fn the_workflow_survives_workers_dying() {
     if let Some(local) = server.local {
         local.shutdown().await.unwrap();
     }
+    let _ = std::fs::remove_dir_all(&fleet.roots);
+}
+
+/// A stand-in collector for the worker processes' traces: each span with the `test.role` of
+/// the process that sent it.
+fn span_collector() -> (
+    String,
+    std::sync::Arc<std::sync::Mutex<Vec<(String, opentelemetry_proto::tonic::trace::v1::Span)>>>,
+) {
+    use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+    use prost::Message;
+    let spans = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let into = spans.clone();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    listener.set_nonblocking(true).unwrap();
+    tokio::spawn(async move {
+        let app = axum::Router::new().fallback(move |uri: axum::http::Uri, body: axum::body::Bytes| {
+            let into = into.clone();
+            async move {
+                if uri.path().ends_with("/v1/traces") {
+                    let request = ExportTraceServiceRequest::decode(body).unwrap();
+                    let mut got = into.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    for resource in request.resource_spans {
+                        let role = resource
+                            .resource
+                            .iter()
+                            .flat_map(|r| &r.attributes)
+                            .find(|a| a.key == "test.role")
+                            .map(|a| format!("{:?}", a.value))
+                            .unwrap_or_default();
+                        for span in resource.scope_spans.into_iter().flat_map(|s| s.spans) {
+                            got.push((role.clone(), span));
+                        }
+                    }
+                }
+                axum::http::StatusCode::OK
+            }
+        });
+        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        axum::serve(listener, app).await.unwrap();
+    });
+    (address, spans)
+}
+
+/// Purpose: a close run by `ic-worker close` and carried out by a separate worker process is
+/// one trace: the close command's own span, and the workflow and activity spans the worker
+/// process makes as Temporal hands it the steps, all share the close's trace ID, with the
+/// worker's spans exported by the worker process itself.
+/// Why it matters: the close crosses processes only through Temporal, so this is the proof
+/// that the trace survives Temporal; without it the steps of a failed close could not be
+/// followed back to the run that started them, and the commands each step sends the ledger
+/// would start traces of their own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_close_is_one_trace_across_temporal() {
+    if std::env::var("IC_SKIP_TEMPORAL_TESTS").is_ok_and(|v| v == "1") {
+        eprintln!("IC_SKIP_TEMPORAL_TESTS=1: the Temporal trace test was NOT run");
+        return;
+    }
+    let server = temporal().await;
+    let ledger = Ledger::start("traced", 3, 1).await;
+    let (collector, spans) = span_collector();
+    let fleet = Fleet {
+        temporal: server.address.clone(),
+        task_queue: format!("ic-test-{}-{}", std::process::id(), free_port()),
+        nodes: ledger.client.nodes().join(","),
+        roots: scratch("traced-roots"),
+    };
+    let mut worker = fleet
+        .traced(&fleet.nodes, &collector, "worker")
+        .stdout(Stdio::null())
+        .stderr(worker_log())
+        .spawn()
+        .unwrap();
+    let closing = fleet
+        .traced(&fleet.nodes, &collector, "close")
+        .args(["close", &day(0).to_string(), "1"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let closed = report(closing).await;
+    assert_eq!(closed.closed, day(0));
+    // A clean stop, so the worker flushes what it holds.
+    assert!(Process::new("kill").args(["-TERM", &worker.id().to_string()]).status().unwrap().success());
+    tokio::task::spawn_blocking(move || worker.wait().unwrap()).await.unwrap();
+
+    let got = spans.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    let (_, root) = got
+        .iter()
+        .find(|(role, s)| role.contains("close") && s.name == "ic-worker")
+        .unwrap_or_else(|| panic!("the close command's span: {:?}", got.iter().map(|(r, s)| (r, &s.name)).collect::<Vec<_>>()));
+    let in_trace: Vec<_> = got.iter().filter(|(_, s)| s.trace_id == root.trace_id).collect();
+    let names = |role: &str| {
+        in_trace
+            .iter()
+            .filter(|(r, _)| r.contains(role))
+            .map(|(_, s)| s.name.clone())
+            .collect::<Vec<_>>()
+    };
+    let worker_names = names("worker");
+    assert!(
+        worker_names.iter().any(|n| n.contains("Workflow")) && worker_names.iter().any(|n| n.contains("Activity")),
+        "the worker's workflow and activity spans are in the close's trace: worker {worker_names:?}, close {:?}, all {:?}",
+        names("close"),
+        got.iter().map(|(r, s)| (r, &s.name)).collect::<Vec<_>>()
+    );
+
+    drop(server.local);
+    ledger.stop().await;
     let _ = std::fs::remove_dir_all(&fleet.roots);
 }
 

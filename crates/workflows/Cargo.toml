@@ -43,6 +43,9 @@ ic-product.workspace = true
 ic-money.workspace = true
 reqwest.workspace = true
 temporalio-sdk = { version = "=1.2.0", features = ["testing"] }
+axum.workspace = true
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace"] }
+prost = "0.14"
 
 [lints]
 workspace = true
