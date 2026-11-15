@@ -185,6 +185,15 @@ fn paid_up(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mu
     if policy.status != PolicyStatus::InForce {
         return Err(Reject::new("not_in_force", "only a policy in force can be made paid up"));
     }
+    let product = catalog
+        .product(&policy.product_hash)
+        .ok_or_else(|| Reject::new("unknown_product", "the policy's product version is not active"))?;
+    let def = product
+        .cover(&spec.cover)
+        .ok_or_else(|| Reject::new("unknown_cover", format!("the product has no cover {}", spec.cover)))?;
+    if def.paid_up_option.is_none() {
+        return Err(Reject::new("no_paid_up_option", format!("cover {} cannot be made paid up", spec.cover)));
+    }
     // Paid up means paid: premium owing is settled first, or the policy
     // goes the way of any policy in arrears.
     if !on_arrears && policy.policyholder_outstanding_minor() > 0 {
@@ -199,9 +208,9 @@ fn paid_up(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mu
         .get_mut(&spec.cover)
         .ok_or_else(|| Reject::new("unknown_cover", format!("the policy has no cover {}", spec.cover)))?;
     let cover_type = cover.cover_type.clone();
-    let mut next_id = cover.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
+    let first_id = cover.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
     let (mut was_total, mut kept_total) = (0i64, 0i64);
-    for (i, kept) in plan {
+    for (next_id, (i, kept)) in (first_id..).zip(plan) {
         let old = cover.layers[i].clone();
         cover.layers[i].end = Some(today);
         was_total += old.sum_insured_minor;
@@ -246,7 +255,6 @@ fn paid_up(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mu
             origin: old.origin,
             continues: None,
         });
-        next_id += 1;
     }
     // Premium billed for the days from today is handed back.
     crate::reduce::adjust(ledger, catalog, &before, policy, ctx, &spec.life)?;

@@ -1001,6 +1001,7 @@ async fn aia_living_cover_is_not_increased_or_converted_while_a_claim_is_open() 
         to_cover: "critical-conditions-accelerated".into(),
         excess_option: option,
         reference: "sc-1".into(),
+        evidence: None,
     }));
     assert_eq!(send(convert).unwrap_err().code, "claim_open");
     b.with_cluster(|c| {

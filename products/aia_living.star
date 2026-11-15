@@ -403,6 +403,17 @@ def property_special_event():
         max_cover_after = dollars(20000),
     )
 
+# Waiting Period Reduction (1108 AL-IP, 1109, 1115, 1117 section 22): when the life's
+# Business Continuity, Rural Continuity, Business Overheads or Locum cover is cancelled
+# because the business was sold, stopped trading or the life left it, a 26, 52 or
+# 104 week waiting period drops to the cancelled cover's, without evidence, on the
+# lesser of the two monthly benefits. Underwriting checks the cancellation and the
+# amount; the request names the evidence.
+def waiting_period_reduction(code, weeks):
+    longest_first = ["%dw" % w for w in sorted(weeks, reverse = True)]
+    return conversion(code, 65, axis = "waiting", choices = longest_first,
+                      from_choices = [w for w in ["26w", "52w", "104w"] if w in longest_first], requires_evidence = True)
+
 def income_cover(code, definitions, premier, weeks, periods, max_monthly):
     mirc = code == "mortgage-income-rent"
     built_ins = income_built_ins(premier)
@@ -428,6 +439,7 @@ def income_cover(code, definitions, premier, weeks, periods, max_monthly):
         max_sum_insured = max_monthly,
         insurability_option = property_special_event() if mirc else income_increase(),
         anniversary_option = None if mirc else income_future_insurability(),
+        conversions = [waiting_period_reduction(code, weeks)],
         option_axes = income_axes(weeks, periods, premier) + [optional("redundancy", "Redundancy Cover", "1.04")],  # PH
         built_in = built_ins,
     )
@@ -530,7 +542,7 @@ LEVEL_CHOICES = ["level-to-80", "level-to-65", "level-10y"]
 
 def with_conversions(c):
     codes = [b["code"] for b in c["built_in"]]
-    convs = []
+    convs = list(c["conversions"])
     if "premium-conversion" in codes:
         axis = [a for a in c["option_axes"] if a["code"] == "premium"][0]
         offered = [ch["code"] for ch in axis["choices"]]

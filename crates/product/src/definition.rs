@@ -495,6 +495,14 @@ pub struct ConversionOption {
     /// the conversion (AIA: accelerated trauma comes with equal life cover).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub with_cover: Option<String>,
+    /// For a conversion within the cover: only from these choices on `axis`
+    /// (AIA's Waiting Period Reduction: from 26, 52 or 104 weeks). Empty: any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub from_choices: Vec<String>,
+    /// The request names where the evidence of its trigger is kept (AIA's
+    /// Waiting Period Reduction: the business cover cancelled).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub requires_evidence: bool,
 }
 
 /// The event an anniversary option is used under, in place of one of the

@@ -828,7 +828,7 @@ fn the_loader_refuses_unsound_option_totals_and_anniversary_options() {
     // Conversions: to the cover's own axis choices on any cover; to another cover only
     // between lump sum covers.
     let conv = |axes: &str, c: &str| format!("[{axes}], conversions = [{c}]");
-    let level = r#"conversion("income", 65, axis = "premium", choices = ["level"])"#;
+    let level = r#"conversion("income", 65, axis = "premium", choices = ["stepped", "level"], from_choices = ["stepped"], requires_evidence = True)"#;
     assert!(mini(&[("INCOME_AXES", &conv(PREMIUM, level)), ("GROUP", trauma)]).is_ok());
     let to_life = r#"conversion("trauma", 60, standard_terms_only = True)"#;
     assert!(mini(&[("LIFE_AXES", &conv(PREMIUM, to_life)), ("GROUP", trauma)]).is_ok());
@@ -840,6 +840,8 @@ fn the_loader_refuses_unsound_option_totals_and_anniversary_options() {
         ("INCOME_AXES", r#"conversion("income", 0, axis = "premium", choices = ["level"])"#),
         ("LIFE_AXES", r#"conversion("trauma", 60, with_cover = "life")"#),
         ("LIFE_AXES", r#"conversion("income", 60)"#),
+        ("INCOME_AXES", r#"conversion("income", 65, axis = "premium", choices = ["level"], from_choices = ["stepped"])"#),
+        ("LIFE_AXES", r#"conversion("trauma", 60, from_choices = ["level"])"#),
     ] {
         let err = mini(&[(slot, &conv(PREMIUM, c)), ("GROUP", trauma)]).unwrap_err();
         assert!(err.contains(conversion_wrong), "{c}: {err}");

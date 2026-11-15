@@ -206,7 +206,8 @@ def buyback(restores, requires, after_days, within_days, max = None, only_after_
         option["only_after_nil"] = True
     return option
 
-def conversion(to, before_age, axis = None, choices = [], standard_terms_only = False, with_cover = None):
+def conversion(to, before_age, axis = None, choices = [], standard_terms_only = False, with_cover = None,
+               from_choices = [], requires_evidence = False):
     """All or part of the cover converted without evidence: to another choice on `axis` of the
     same cover (`to` is its own code; `choices` longest commitment first), or to cover `to`."""
     option = {"to": to, "before_age": before_age, "choices": choices}
@@ -216,6 +217,10 @@ def conversion(to, before_age, axis = None, choices = [], standard_terms_only = 
         option["standard_terms_only"] = True
     if with_cover != None:
         option["with_cover"] = with_cover
+    if from_choices:
+        option["from_choices"] = from_choices
+    if requires_evidence:
+        option["requires_evidence"] = True
     return option
 
 def anniversary_option(every_years, max_percent_of_original, at_least, max_total_percent_of_original, max_total_increase,

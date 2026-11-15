@@ -39,6 +39,10 @@ pub struct ConvertCover {
     pub excess_option: String,
     /// The request's own reference. The same one again changes nothing.
     pub reference: String,
+    /// Where the evidence of the conversion's trigger is kept, where the
+    /// product asks for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
 }
 
 /// A conversion made, kept on the policy.
@@ -50,6 +54,8 @@ pub struct ConversionRecord {
     pub on: NaiveDate,
     pub sum_insured_minor: i64,
     pub excess_option: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
 }
 
 fn held_layers<'a>(policy: &'a Policy, cover: &str, life: &LifeId, on: NaiveDate) -> Vec<&'a Layer> {
@@ -133,6 +139,9 @@ pub(crate) fn convert(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Polic
             format!("cover {} cannot be converted to {}", spec.cover, spec.to_cover),
         ));
     };
+    if rule.requires_evidence && spec.evidence.as_deref().is_none_or(|e| e.trim().is_empty()) {
+        return Err(Reject::new("evidence_required", "this conversion names where the evidence of its trigger is kept"));
+    }
     let today = ctx.date.max(policy.inception);
     let Some(life) = policy.lives.get(&spec.life).filter(|l| l.in_force_on(today)) else {
         return Err(Reject::new("unknown_life", format!("life {} is not on the policy", spec.life)));
@@ -170,7 +179,8 @@ pub(crate) fn convert(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Polic
         let to = choice_on(&spec.excess_option, axis).unwrap_or_default();
         let from_at = choice_on(&from, axis).and_then(|c| rule.choices.iter().position(|x| x == c));
         let to_at = rule.choices.iter().position(|x| x == to);
-        let allowed = match (from_at, to_at) {
+        let from_listed = rule.from_choices.is_empty() || choice_on(&from, axis).is_some_and(|c| rule.from_choices.iter().any(|x| x == c));
+        let allowed = from_listed && match (from_at, to_at) {
             (_, None) => false,
             (None, Some(_)) => true,
             (Some(f), Some(t)) => t >= f,
@@ -311,6 +321,7 @@ pub(crate) fn convert(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Polic
             on: today,
             sum_insured_minor: spec.sum_insured_minor,
             excess_option: spec.excess_option,
+            evidence: spec.evidence,
         },
     );
     Ok(())

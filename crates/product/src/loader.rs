@@ -384,9 +384,10 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                         !conv.choices.is_empty()
                             && conv.choices.iter().all(|ch| a.choices.iter().any(|x| &x.code == ch))
                             && conv.choices.iter().collect::<BTreeSet<_>>().len() == conv.choices.len()
+                            && conv.from_choices.iter().all(|ch| conv.choices.contains(ch))
                     }) && conv.with_cover.is_none()
                 } else {
-                    conv.axis.is_none() && conv.choices.is_empty() && lump_sum(&conv.to)
+                    conv.axis.is_none() && conv.choices.is_empty() && conv.from_choices.is_empty() && lump_sum(&conv.to)
                 }
                 && conv.with_cover.as_ref().is_none_or(|w| w != &c.code && w != &conv.to && lump_sum(w));
             if !sound || !(within || lump_sum(&c.code)) {

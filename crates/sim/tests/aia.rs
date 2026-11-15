@@ -1003,6 +1003,7 @@ fn convert(c: &mut Cluster, policy: &PolicyId, cover: &str, to: &str, option: &s
         to_cover: to.to_string(),
         excess_option: option.to_string(),
         reference: reference.to_string(),
+        evidence: None,
     };
     c.submit(0, "policy-servicing", Command::ConvertCover(Box::new(ask)))
 }
@@ -1327,4 +1328,45 @@ fn a_later_trauma_definition_reaches_cover_already_written() {
     assert!(trauma.contains(&"aia-critical-conditions@1".to_string()) && trauma.contains(&"aia-critical-conditions@2".to_string()), "{trauma:?}");
     assert!(!facts("critical-conditions", d(2028, 2, 1)).iter().any(|d| d.ends_with("@2")));
     assert!(!facts("life", d(2028, 4, 1)).iter().any(|d| d.ends_with("@2")));
+}
+
+/// Purpose: AIA Living income protection's Waiting Period Reduction moves part of a 26, 52 or
+/// 104 week cover to a shorter waiting period, without evidence, only where the request names
+/// the evidence of the cancelled business cover; a cover already at 13 weeks, a longer waiting
+/// period, or a request without evidence is refused with nothing written.
+/// Why it matters: a shorter waiting period is a dearer, larger risk. The wording (1108 AL-IP
+/// section 22) gives it without evidence only on that trigger and only from the long waits;
+/// anything else is a change underwriting must look at.
+#[test]
+fn a_long_income_waiting_period_is_shortened_when_the_business_cover_ends() {
+    let mut c = cluster();
+    let living = product("aia_living.star");
+    let at = |w: &str| pick(&living, "income-agreed-value", &[("waiting", w)]);
+    let long = income_policy(&mut c, 1, "income-agreed-value", 6_000_00, at("52w"));
+    let short = income_policy(&mut c, 2, "income-agreed-value", 6_000_00, at("13w"));
+    next_day(&mut c);
+    let ask = |id: &PolicyId, to: &str, amount: i64, evidence: Option<&str>| {
+        Command::ConvertCover(Box::new(ic_core::conversion::ConvertCover {
+            policy: id.clone(),
+            cover: "income-agreed-value".into(),
+            life: ic_core::LifeId("life-1".into()),
+            sum_insured_minor: amount,
+            to_cover: "income-agreed-value".into(),
+            excess_option: at(to),
+            reference: "wpr-1".into(),
+            evidence: evidence.map(str::to_string),
+        }))
+    };
+    let code = |r: Result<(), Reject>| r.unwrap_err().code;
+    let proof = Some("vault/bc-cancelled-1");
+    assert_eq!(code(c.submit(0, "policy-servicing", ask(&long, "4w", 4_000_00, None))), "evidence_required");
+    assert_eq!(code(c.submit(0, "policy-servicing", ask(&long, "104w", 4_000_00, proof))), "excess_option");
+    assert_eq!(code(c.submit(0, "policy-servicing", ask(&short, "4w", 4_000_00, proof))), "excess_option");
+    c.submit(0, "policy-servicing", ask(&long, "4w", 4_000_00, proof)).unwrap();
+    assert_eq!(
+        (held_at(&c, &long, "income-agreed-value", &at("4w")), held_at(&c, &long, "income-agreed-value", &at("52w"))),
+        (4_000_00, 2_000_00)
+    );
+    let done = &c.state(0).policies[&long].conversions["wpr-1"];
+    assert_eq!(done.evidence.as_deref(), proof);
 }

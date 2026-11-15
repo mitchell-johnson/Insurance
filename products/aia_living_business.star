@@ -324,7 +324,7 @@ LEVEL_CHOICES = ["level-to-80", "level-to-65", "level-10y"]
 
 def with_conversions(c):
     codes = [b["code"] for b in c["built_in"]]
-    convs = []
+    convs = list(c["conversions"])
     if "premium-conversion" in codes:
         axis = [a for a in c["option_axes"] if a["code"] == "premium"][0]
         offered = [ch["code"] for ch in axis["choices"]]
