@@ -8,9 +8,9 @@
   <form id="change"><div class="row"><div><label for="kind">Change</label><select id="kind"><option value="add_member">Add a member</option><option value="remove_member">Remove a member</option><option value="change_salary">Change a member's salary</option></select></div>
   <div><label for="member">Member reference</label><input id="member" required maxlength="64"></div><div><label for="effective">Effective date</label><input id="effective" type="date" required></div><button>Send</button></div></form>
   <div id="change-msg" aria-live="polite"></div>
-  <h2>Approve a colleague's change</h2><form id="approve"><div class="row"><div><label for="rid">Request</label><input id="rid" required></div><button>Approve</button></div></form><div id="approve-msg" aria-live="polite"></div>
+  <h2>Approve a colleague's change</h2><p class="muted">Changes waiting for you have an Approve button under Your requests.</p><form id="approve"><div class="row"><div><label for="rid">Or a request by its reference</label><input id="rid" required></div><button>Approve</button></div></form><div id="approve-msg" aria-live="polite"></div>
   <h2>Administrators</h2><form id="admin"><div class="row"><div><label for="who">Person</label><input id="who" required></div><div><label for="is">Access</label><select id="is"><option value="true">Administrator</option><option value="false">Remove</option></select></div><button>Save</button></div></form>
-  <form id="second"><label for="kinds">Changes that need a second administrator (comma separated)</label><div class="row"><input id="kinds" placeholder="remove_member, change_salary" size="40"><button>Save</button></div></form><div id="admin-msg" aria-live="polite"></div></section>
+  <form id="second"><fieldset><legend>Changes that need a second administrator</legend><div class="choices" id="kinds"><label><input type="checkbox" value="add_member"> Adding a member</label><label><input type="checkbox" value="remove_member"> Removing a member</label><label><input type="checkbox" value="change_salary"> Changing a salary</label></div></fieldset><p><button>Save</button></p></form><div id="admin-msg" aria-live="polite"></div></section>
 <section data-view="Files and members" id="group" hidden><h2>Membership files</h2>
   <p class="muted">Send the scheme's membership file. It is checked for viruses before anything reads it; then its preview shows who joins, leaves and changes, and you approve it.</p>
   <div id="standing"></div>
@@ -31,7 +31,12 @@ const R = "customers";
 let scheme = null;
 async function requests() {
   const list = await api(R, "GET", "/app/v1/requests");
-  put($("requests"), table(["Request", "Change", "State", "Approved by"], list.map((r) => [r.id, r.kind, String(r.status).replace(/_/g, " ") + (r.from ? " from a " + String(r.from).replace(/_/g, " ") : ""), r.approved_by || ""])));
+  const words = (v) => String(v || "").replace(/_/g, " ");
+  // A colleague's change waiting for a second administrator is approved from its row.
+  const waiting = (r) => /await/.test(String(r.status)) && /second/.test(String(r.from || ""));
+  put($("requests"), list.length ? table(["Request", "Change", "State", "Approved by", ""], list.map((r) => [r.id, words(r.kind), words(r.status) + (r.from ? " from a " + words(r.from) : ""), r.approved_by || "",
+    waiting(r) ? h("button", { class: "quiet", type: "button", on: { click: run($("approve-msg"), async () => { await api(R, "POST", `/app/v1/requests/${encodeURIComponent(r.id)}/approve`, {}); await requests(); return "Approved."; }) } }, "Approve") : ""]))
+    : portal.empty("You have asked for no changes."));
 }
 async function open(s) {
   scheme = s.policy;
@@ -72,6 +77,8 @@ async function load() {
   const schemes = await api(R, "GET", "/employer/v1/schemes");
   put($("schemes"), table(["Scheme", "Product", "Status", ""], schemes.map((s) => [s.number, s.product, s.status, h("button", { class: "quiet", on: { click: run($("msg"), () => open(s)) } }, "Open")])));
   await requests();
+  // Most employers have one scheme: it opens on arrival.
+  if (schemes.length === 1) await open(schemes[0]);
 }
 $("change").addEventListener("submit", run($("change-msg"), async () => {
   const sent = await api(R, "POST", "/app/v1/requests", { id: crypto.randomUUID(), policy: scheme, kind: $("kind").value, module: "group-admin", payload: { member: $("member").value, effective: $("effective").value } });
@@ -80,7 +87,7 @@ $("change").addEventListener("submit", run($("change-msg"), async () => {
 }));
 $("approve").addEventListener("submit", run($("approve-msg"), async () => { await api(R, "POST", `/app/v1/requests/${encodeURIComponent($("rid").value)}/approve`, {}); await requests(); return "Approved."; }));
 $("admin").addEventListener("submit", run($("admin-msg"), async () => { await api(R, "PUT", `/employer/v1/schemes/${encodeURIComponent(scheme)}/admins/${encodeURIComponent($("who").value)}`, { admin: $("is").value === "true" }); return "Saved."; }));
-$("second").addEventListener("submit", run($("admin-msg"), async () => { await api(R, "PUT", `/employer/v1/schemes/${encodeURIComponent(scheme)}/second-admin`, { changes: $("kinds").value.split(",").map((s) => s.trim()).filter(Boolean) }); return "Saved."; }));
+$("second").addEventListener("submit", run($("admin-msg"), async () => { await api(R, "PUT", `/employer/v1/schemes/${encodeURIComponent(scheme)}/second-admin`, { changes: [...$("kinds").querySelectorAll("input:checked")].map((c) => c.value) }); return "Saved."; }));
 $("upload").addEventListener("submit", run($("file-msg"), async () => {
   const file = $("file").files[0];
   const name = file.name.replace(/[^A-Za-z0-9._-]/g, "_");
@@ -97,5 +104,6 @@ $("lookup").addEventListener("submit", run($("lookup-msg"), async () => {
     table(["Cover", "Formula", "Automatic"], m.covers.map((c) => [c.cover, money(c.formula_minor), money(c.automatic_minor)])),
     m.above_automatic.length ? table(["Above automatic", "Asked", "State", "In place"], m.above_automatic.map((a) => [a.cover, money(a.asked_minor), String(a.state).replace(/_/g, " "), a.in_place_minor ? money(a.in_place_minor) : ""])) : null));
 }));
+$("effective").value = portal.today();
 signIn(R).then(load).catch(portal.refuse);
 </script></body></html>

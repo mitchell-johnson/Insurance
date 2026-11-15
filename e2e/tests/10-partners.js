@@ -142,9 +142,10 @@ test({ id: "E2E-268", area: ADV, persona: "D1", story: "US-D01-3", title: "A cha
   await s.fill("#note", "Asked for by phone on " + t.stack.opening);
   await s.press("Send to customer");
   await s.done("#change-msg", "The customer has been asked to approve it");
-  await s.sees(p.id, "#requests");
-  const row = await s.row("#requests", p.id).innerText();
-  if (!row.includes("decline_indexation") || !row.includes("awaiting approval")) throw new Error(`the request row reads "${row}"`);
+  // The request names the policy by the number the adviser knows it by, and the change in words.
+  await s.sees(p.number, "#requests");
+  const row = await s.row("#requests", p.number).innerText();
+  if (!row.includes("decline indexation") || !row.includes("awaiting approval")) throw new Error(`the request row reads "${row}"`);
 });
 
 test({ id: "E2E-269", area: ADV, persona: "D6", story: "US-D06-1", title: "An advice provider sees the advisers engaged with it and the policies they look after", matrix: ["ADV-035"],

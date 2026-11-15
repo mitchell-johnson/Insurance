@@ -71,7 +71,10 @@ async function load() {
     !m.disputed && !m.overturned ? h("button", { class: "quiet", type: "button", on: { click: () => { disputing = m.layer; $("dispute").hidden = false; $("d-reason").focus(); } } }, "Dispute") : ""]))
     : h("p", { class: "muted" }, "None of your business has been treated as a replacement."));
   const requests = await api(R, "GET", "/app/v1/requests");
-  put($("requests"), table(["Request", "Policy", "Change", "State"], requests.map((r) => [r.id, r.policy || "", r.kind, String(r.status).replace(/_/g, " ")])));
+  // A request names its policy by the number the adviser knows it by.
+  const numbers = Object.fromEntries(book.policies.map((p) => [p.policy, p.number]));
+  put($("requests"), requests.length ? table(["Request", "Policy", "Change", "State"], requests.map((r) => [r.id, numbers[r.policy] || r.policy || "", String(r.kind).replace(/_/g, " "), String(r.status).replace(/_/g, " ")]))
+    : portal.empty("You have sent no changes for customers to approve."));
 }
 $("st-form").addEventListener("submit", run($("st-msg"), async () => {
   const st = await api(R, "GET", "/adviser/v1/statements/" + encodeURIComponent($("st-number").value));
