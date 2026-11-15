@@ -1,11 +1,11 @@
 //! A ledger node as a process: one member of every partition's Raft group,
 //! served over HTTP.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -19,21 +19,25 @@ use ic_azure::eventhubs::{EventHubsSink, EventSink};
 use ic_azure::AzureError;
 use ic_core::{recon, Envelope, Policy};
 use ic_ledger::PartitionId;
+use openraft::alias::LogIdOf;
+use openraft::async_runtime::WatchReceiver;
 use openraft::raft::ReadPolicy;
+use openraft::storage::RaftStateMachine;
 use openraft::BasicNode;
 
 use crate::access::Guard;
 use crate::auth::ClusterAuth;
 use crate::client::{BreakView, ClusterClient, Consumed, EndOfDayView, EventPage, MoveLeader, Refusal};
-use crate::failback::{Failback, FailbackSettings, FailbackStatus};
+use crate::failback::{self as fb, Failback, FailbackSettings, FailbackStatus, GroupKey};
+use crate::group;
 use crate::machine::Machine;
 use crate::module::{CoreOutcome, CorePosting, ModuleGroup, ModuleMachine, ModuleSpec, ModuleStatus, Outbox, Route};
-use crate::network::{self, Network};
+use crate::network::{self, GroupOf, Network};
 use crate::node::{self, Node, NodeStatus, ProposeError};
 use crate::peers::Identity;
 use crate::query::Query as Question;
 use crate::store::LogStore;
-use crate::types::{Housekeeping, NodeId, Reply};
+use crate::types::{Housekeeping, NodeId, Proposal, Reply, TypeConfig};
 
 /// How a node is configured. Read from the environment by the binary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +62,9 @@ pub struct Settings {
     pub segment_entries: u64,
     /// Log entries between snapshots.
     pub snapshot_every: u64,
+    /// The witnesses among the peers: voters that keep the log and no
+    /// state ([`crate::witness`]). This node is one if its number is here.
+    pub witnesses: BTreeSet<NodeId>,
 }
 
 /// Where sealed journal segments are written.
@@ -100,6 +107,9 @@ impl Settings {
     /// - `IC_CLUSTER_ACCESS_FILE`: the access map that gives each workload
     ///   its own token and grant ([`crate::access`]). Without it every
     ///   accepted token may do everything.
+    /// - `IC_WITNESS_NODES`: `5` — the witnesses among the peers, set the same
+    ///   on every node. A witness needs no cold tier and no event hub: it
+    ///   seals and publishes nothing.
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
         let auth = ClusterAuth::from_lookup(&get, |path| std::fs::read_to_string(path))?;
         let get = |key: &str| get(key).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
@@ -130,10 +140,24 @@ impl Settings {
         if heartbeat_ms == 0 {
             return Err("IC_RAFT_HEARTBEAT_MS must be positive".to_string());
         }
+        let mut witnesses = BTreeSet::new();
+        for w in get("IC_WITNESS_NODES").unwrap_or_default().split(',').filter(|w| !w.trim().is_empty()) {
+            let w: NodeId = w.trim().parse().map_err(|e| format!("IC_WITNESS_NODES: {e}"))?;
+            if !peers.contains_key(&w) {
+                return Err(format!("IC_WITNESS_NODES: node {w} is not in IC_NODE_PEERS"));
+            }
+            witnesses.insert(w);
+        }
+        if witnesses.len() * 2 >= peers.len() {
+            return Err("IC_WITNESS_NODES: the witnesses must be fewer than half the peers, or a majority could hold no data".to_string());
+        }
+        let witness = witnesses.contains(&id);
         let cold = match (get("IC_BLOB_ENDPOINT"), get("IC_COLD_DIR")) {
             (Some(_), Some(_)) => return Err("set IC_BLOB_ENDPOINT or IC_COLD_DIR, not both".to_string()),
             (Some(endpoint), None) => ColdTarget::Azure(endpoint, get("IC_COLD_CONTAINER").unwrap_or_else(|| "cold-segments".to_string())),
             (None, Some(dir)) => ColdTarget::Dir(PathBuf::from(dir)),
+            // A witness seals nothing; the directory is never written.
+            (None, None) if witness => ColdTarget::Dir(PathBuf::from(required("IC_NODE_DATA_DIR")?).join("unused")),
             (None, None) => return Err("set IC_BLOB_ENDPOINT or IC_COLD_DIR: the journal must have somewhere to be sealed".to_string()),
         };
         let events = match (get("IC_EVENT_HUBS_ENDPOINT"), get("IC_EVENT_SINK").as_deref()) {
@@ -141,6 +165,7 @@ impl Settings {
             (None, Some("discard")) => EventTarget::Discard,
             (Some(_), Some(_)) => return Err("set IC_EVENT_HUBS_ENDPOINT or IC_EVENT_SINK, not both".to_string()),
             (None, Some(other)) => return Err(format!("IC_EVENT_SINK must be discard, not {other:?}")),
+            (None, None) if witness => EventTarget::Discard,
             (None, None) => return Err("set IC_EVENT_HUBS_ENDPOINT, or IC_EVENT_SINK=discard to drop events".to_string()),
         };
         let positive = |key: &str, default: u64| -> Result<u64, String> {
@@ -168,6 +193,7 @@ impl Settings {
             events,
             segment_entries,
             snapshot_every,
+            witnesses,
         })
     }
 }
@@ -178,8 +204,16 @@ pub struct Host {
     pub groups: BTreeMap<PartitionId, Node>,
     /// A member of each hosted module's group, by the module's name.
     pub modules: BTreeMap<String, ModuleGroup>,
-    /// Hands leadership back to the preferred region. Off unless configured.
+    /// Hands leadership back to each group's home region. Off unless configured.
     pub failback: Failback,
+    /// This node is a witness: it keeps the logs and no state, serves no
+    /// caller, and hands over any group it comes to lead.
+    pub witness: bool,
+    /// The witnesses among the voters.
+    witnesses: BTreeSet<NodeId>,
+    /// Per group, the last durable mark this node proposed as leader: how far
+    /// it said the data voters held the log, and the mark's own log index.
+    marks: Mutex<BTreeMap<GroupKey, Mark>>,
     /// The hosted modules that post to the core, and how to read their
     /// outboxes.
     outboxes: BTreeMap<String, Outbox>,
@@ -193,6 +227,15 @@ pub struct Host {
     sink: Sink,
     segment_entries: u64,
 }
+
+#[derive(Debug, Clone, Copy)]
+struct Mark {
+    log_index: u64,
+    at: Instant,
+}
+
+/// How often a leader records how far the data voters hold the log, at most.
+const MARK_EVERY: Duration = Duration::from_secs(5);
 
 enum Cold {
     Azure(BlobContainer),
@@ -235,13 +278,26 @@ impl Host {
         // Checked before anything is opened: a node with a bad access map does not start.
         let guard = Guard::for_node(&settings.auth, |path| std::fs::read_to_string(path))?;
         let _ = guard.watch();
+        let witness = settings.witnesses.contains(&settings.id);
+        let timings = |name: &str| {
+            if witness {
+                node::witness_config(name, settings.heartbeat_ms)
+            } else {
+                node::config(name, settings.heartbeat_ms, settings.snapshot_every)
+            }
+        };
         let mut modules = BTreeMap::new();
         for spec in specs {
             let group = ModuleGroup::group_name(&spec.name);
             let dir = settings.data_dir.join(&group);
             let log = LogStore::open(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-            let machine = ModuleMachine::open(spec.clone(), &dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-            let config = node::config(&group, settings.heartbeat_ms, settings.snapshot_every)?;
+            let machine = if witness {
+                ModuleMachine::open_witness(spec.clone(), &dir)
+            } else {
+                ModuleMachine::open(spec.clone(), &dir)
+            }
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+            let config = timings(&group)?;
             let identity = Identity::open(settings.id, &dir).map_err(|e| e.to_string())?;
             let network = Network::http_group(identity.clone(), group, settings.auth.clone());
             let member = ModuleGroup::start(identity, &spec.name, log, machine, network, config).await?;
@@ -253,8 +309,13 @@ impl Host {
         for partition in 0..settings.partitions {
             let dir = settings.data_dir.join(format!("partition-{partition}"));
             let log = LogStore::open(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-            let machine = Machine::open(partition, &dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-            let config = node::config(&format!("partition-{partition}"), settings.heartbeat_ms, settings.snapshot_every)?;
+            let machine = if witness {
+                Machine::open_witness(partition, &dir)
+            } else {
+                Machine::open(partition, &dir)
+            }
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+            let config = timings(&format!("partition-{partition}"))?;
             let identity = Identity::open(settings.id, &dir).map_err(|e| e.to_string())?;
             let network = Network::http(identity.clone(), partition, settings.auth.clone());
             let member = Node::start(identity, partition, log, machine, network, config).await?;
@@ -277,6 +338,9 @@ impl Host {
             groups,
             modules,
             failback: Failback::new(failback),
+            witness,
+            witnesses: settings.witnesses.clone(),
+            marks: Mutex::new(BTreeMap::new()),
             readers: specs.iter().filter(|s| s.events).map(|s| s.name.clone()).collect(),
             outboxes: specs.iter().filter_map(|s| s.outbox.map(|o| (s.name.clone(), o))).collect(),
             partitions: settings.partitions,
@@ -475,6 +539,11 @@ impl Host {
     /// items stay with every member until a later pass, by this leader or
     /// the next, succeeds.
     pub async fn housekeep_once(&self, client: &ClusterClient) -> usize {
+        if self.witness {
+            self.witness_once().await;
+            return 0;
+        }
+        self.mark_durable().await;
         let mut moved = 0;
         for member in self.groups.values() {
             if !member.raft.is_leader() {
@@ -513,6 +582,121 @@ impl Host {
             }
         }
         moved
+    }
+
+    /// How far every data voter holds a group's log, as its leader sees
+    /// it: the least of their acknowledged positions, this leader's own
+    /// included. `None` when a data voter's position is not known.
+    fn durable_of<SM: RaftStateMachine<TypeConfig>>(&self, raft: &GroupOf<SM>) -> Option<LogIdOf<TypeConfig>> {
+        let metrics = raft.metrics().borrow_watched().clone();
+        let replication = metrics.replication.filter(|_| metrics.state.is_leader())?;
+        let mut least: Option<LogIdOf<TypeConfig>> = None;
+        for id in raft.voter_ids().filter(|id| !self.witnesses.contains(id)) {
+            let at = (*replication.get(&id)?)?;
+            least = Some(least.map_or(at, |l| l.min(at)));
+        }
+        least
+    }
+
+    /// Record in the log of every group this node leads how far the data
+    /// voters hold it, so the witness can let go of what is behind
+    /// ([`crate::witness`]). Only where a witness votes, at most every
+    /// [`MARK_EVERY`], and only when something besides the last mark has
+    /// been written since, so an idle group is not kept busy by marks.
+    async fn mark_durable(&self) {
+        if self.witnesses.is_empty() {
+            return;
+        }
+        let mut led: Vec<(GroupKey, Option<LogIdOf<TypeConfig>>, bool)> = Vec::new();
+        for (partition, member) in &self.groups {
+            let voted = member.raft.voter_ids().any(|id| self.witnesses.contains(&id));
+            led.push((GroupKey::Partition(*partition), self.durable_of(&member.raft), voted));
+        }
+        for (name, module) in &self.modules {
+            let voted = module.raft.voter_ids().any(|id| self.witnesses.contains(&id));
+            led.push((GroupKey::Module(name.clone()), self.durable_of(&module.raft), voted));
+        }
+        for (key, durable, voted) in led {
+            let Some(through) = durable.filter(|_| voted) else {
+                continue;
+            };
+            let last = self.marks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key).copied();
+            if last.is_some_and(|m| through.index() <= m.log_index || m.at.elapsed() < MARK_EVERY) {
+                continue;
+            }
+            let proposal = Proposal::Durable { through };
+            let written = match &key {
+                GroupKey::Partition(p) => group::write(&self.groups[p].raft, proposal).await,
+                GroupKey::Module(m) => group::write(&self.modules[m].raft, proposal).await,
+            };
+            match written {
+                Ok(reply) => {
+                    let mark = Mark {
+                        log_index: reply.log_index,
+                        at: Instant::now(),
+                    };
+                    self.marks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key, mark);
+                }
+                Err(error) => tracing::debug!(group = %key, %error, "durable mark not written; will retry"),
+            }
+        }
+    }
+
+    /// A witness's own pass: take a new marker where the data voters have
+    /// moved on, and hand over any group it leads.
+    async fn witness_once(&self) {
+        for member in self.groups.values() {
+            if member.machine.witness().is_some_and(crate::witness::Witness::wants_marker) {
+                let _ = member.raft.trigger().snapshot().await;
+            }
+        }
+        for module in self.modules.values() {
+            if module.machine.witness().is_some_and(crate::witness::Witness::wants_marker) {
+                let _ = module.raft.trigger().snapshot().await;
+            }
+        }
+        self.hand_off_as_witness().await;
+    }
+
+    /// A witness leads a group only when it held entries no data voter had
+    /// (its leader's region was lost). As leader it sends them on; as soon
+    /// as a data voter holds the whole log, the witness hands it the lead,
+    /// preferring the group's home. Nothing waits for a quiet window: a
+    /// witness serves no caller, so the group takes no writes until it has.
+    pub async fn hand_off_as_witness(&self) -> usize {
+        let mut handed = 0;
+        let mut led = Vec::new();
+        for (partition, member) in &self.groups {
+            led.extend(fb::lead_of(&member.raft).map(|lead| (GroupKey::Partition(*partition), lead)));
+        }
+        for (name, module) in &self.modules {
+            led.extend(fb::lead_of(&module.raft).map(|lead| (GroupKey::Module(name.clone()), lead)));
+        }
+        for (key, lead) in led {
+            let home = self.failback.home_of(&key);
+            let whole: Vec<NodeId> = lead
+                .matched
+                .iter()
+                .filter(|(id, m)| !self.witnesses.contains(id) && **m == lead.last_log_index)
+                .map(|(id, _)| *id)
+                .collect();
+            let Some(to) = whole.iter().find(|id| home.contains(id)).or_else(|| whole.first()).copied() else {
+                continue;
+            };
+            let done = match &key {
+                GroupKey::Partition(p) => self.groups[p].raft.trigger().transfer_leader(to).await,
+                GroupKey::Module(m) => self.modules[m].raft.trigger().transfer_leader(to).await,
+            };
+            match done {
+                Ok(()) => {
+                    tracing::info!(group = %key, to, "the witness handed the lead to a data voter");
+                    self.failback.witness_handed();
+                    handed += 1;
+                }
+                Err(error) => tracing::warn!(group = %key, to, %error, "the witness could not hand over the lead; will retry"),
+            }
+        }
+        handed
     }
 
     pub async fn shutdown(&self) {
@@ -676,6 +860,12 @@ async fn move_leader(State(host): State<Arc<Host>>, Path(partition): Path<Partit
             ProposeError::Unknown(format!("node {} is not a voter of partition {partition}", to.to)),
         );
     }
+    if host.witnesses.contains(&to.to) {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            ProposeError::Unknown(format!("node {} is a witness: it holds no state and cannot lead", to.to)),
+        );
+    }
     match member.raft.trigger().transfer_leader(to.to).await {
         Ok(()) => Json(()).into_response(),
         Err(e) => refusal(ProposeError::Unknown(e.to_string())),
@@ -728,9 +918,34 @@ async fn status(State(host): State<Arc<Host>>) -> Json<Vec<NodeStatus>> {
     Json(host.statuses())
 }
 
+/// What a witness answers every caller but an operator asking its status:
+/// it holds no state to read and takes no writes, so the caller tries
+/// another node.
+async fn witness_refuses() -> Response {
+    refusal(ProposeError::NotLeader { leader: None, addr: None })
+}
+
 /// The node's HTTP surface: client routes and, per partition, Raft's own.
 pub fn router(host: Arc<Host>) -> Router {
-    let mut router = Router::new()
+    let router = if host.witness { witness_router(&host) } else { client_router(&host) };
+    raft_routes(router, &host)
+}
+
+/// A witness's surface: its status, fail-back's, and nothing a caller could use.
+fn witness_router(host: &Arc<Host>) -> Router {
+    Router::new()
+        .route("/v1/status", get(status))
+        .route("/v1/init", post(init))
+        .route("/v1/failback", get(failback_status))
+        .route("/v1/modules", get(module_status))
+        .route("/v1/partitions/{*rest}", axum::routing::any(witness_refuses))
+        .route("/v1/modules/{*rest}", axum::routing::any(witness_refuses))
+        .layer(axum::middleware::from_fn(ic_telemetry::http::trace))
+        .with_state(host.clone())
+}
+
+fn client_router(host: &Arc<Host>) -> Router {
+    Router::new()
         .route("/v1/status", get(status))
         .route("/v1/init", post(init))
         .route("/v1/partitions/{partition}/commands", post(propose))
@@ -754,7 +969,10 @@ pub fn router(host: Arc<Host>) -> Router {
         // own traffic, nested below, is not traced: it is heartbeats and
         // replication, many a second.
         .layer(axum::middleware::from_fn(ic_telemetry::http::trace))
-        .with_state(host.clone());
+        .with_state(host.clone())
+}
+
+fn raft_routes(mut router: Router, host: &Arc<Host>) -> Router {
     for (partition, member) in &host.groups {
         router = router.nest(&format!("/raft/{partition}"), network::routes(member.raft.clone(), member.identity.clone()));
     }

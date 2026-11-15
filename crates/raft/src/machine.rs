@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::store::write_atomic;
 use crate::types::{Housekeeping, Proposal, Reply, TypeConfig};
+use crate::witness::{self, Witness};
 
 const SNAPSHOT_FILE: &str = "snapshot.json";
 
@@ -68,6 +69,9 @@ struct Inner {
 #[derive(Clone)]
 pub struct Machine {
     inner: Arc<Mutex<Inner>>,
+    /// Set on a witness: the member keeps the log's position and nothing
+    /// else, and its state above stays empty ([`crate::witness`]).
+    witness: Option<Witness>,
 }
 
 /// How much output a member is holding for the leader's host to move on.
@@ -134,7 +138,24 @@ impl Machine {
         });
         Self {
             inner: Arc::new(Mutex::new(Inner { state, dir })),
+            witness: None,
         }
+    }
+
+    /// A witness's member of the partition's group: it votes and keeps the
+    /// log, applies nothing and holds no state.
+    pub fn open_witness(partition: PartitionId, dir: impl AsRef<Path>) -> io::Result<Self> {
+        let dir = dir.as_ref().to_path_buf();
+        let witness = Witness::open(&dir)?;
+        Ok(Self {
+            witness: Some(witness),
+            ..Self::with(partition, dir, None)
+        })
+    }
+
+    /// The witness record, on a witness.
+    pub fn witness(&self) -> Option<&Witness> {
+        self.witness.as_ref()
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -154,6 +175,9 @@ impl Machine {
 
     /// Raft log index of the last entry applied.
     pub fn last_applied_index(&self) -> Option<u64> {
+        if let Some(witness) = &self.witness {
+            return witness.last_applied_index();
+        }
         self.lock().state.last_applied.as_ref().map(|l| l.index())
     }
 
@@ -231,6 +255,9 @@ impl Machine {
 
     /// Replace this member's state with a snapshot's, on disk first.
     fn adopt(&self, bytes: &[u8]) -> io::Result<()> {
+        if witness::is_marker(bytes) {
+            return Err(witness::refuse_marker());
+        }
         let state: Replicated = serde_json::from_slice(bytes).map_err(invalid)?;
         let mut inner = self.lock();
         write_atomic(&inner.dir.join(SNAPSHOT_FILE), bytes)?;
@@ -243,6 +270,9 @@ impl RaftSnapshotBuilder<TypeConfig> for Machine {
     type SnapshotData = Vec<u8>;
 
     async fn build_snapshot(&mut self) -> Result<SnapshotOf<TypeConfig, Vec<u8>>, io::Error> {
+        if let Some(witness) = &self.witness {
+            return witness.build();
+        }
         // Copy under the lock, encode and write outside it: applying entries
         // is not held up by a large state going to disk.
         let (state, dir) = {
@@ -266,6 +296,9 @@ impl RaftStateMachine<TypeConfig> for Machine {
     type SnapshotBuilder = Self;
 
     async fn applied_state(&mut self) -> Result<(Option<LogIdOf<TypeConfig>>, StoredMembershipOf<TypeConfig>), io::Error> {
+        if let Some(witness) = &self.witness {
+            return Ok(witness.applied_state());
+        }
         let inner = self.lock();
         Ok((inner.state.last_applied, inner.state.membership.clone()))
     }
@@ -275,6 +308,13 @@ impl RaftStateMachine<TypeConfig> for Machine {
         Strm: Stream<Item = Result<EntryResponder<TypeConfig>, io::Error>> + Unpin + OptionalSend,
     {
         while let Some((entry, responder)) = entries.try_next().await? {
+            if let Some(witness) = &self.witness {
+                let reply = witness.apply(entry.log_id, entry.payload);
+                if let Some(responder) = responder {
+                    responder.send(reply);
+                }
+                continue;
+            }
             let reply = {
                 let mut inner = self.lock();
                 let state = &mut inner.state;
@@ -309,6 +349,11 @@ impl RaftStateMachine<TypeConfig> for Machine {
                     // A module's command has no meaning to a partition. The
                     // node never proposes one here; a log that holds one is
                     // applied the same way by every member: as nothing.
+                    // For a witness only.
+                    EntryPayload::Normal(Proposal::Durable { .. }) => Reply {
+                        log_index: entry.log_id.index(),
+                        ..Reply::default()
+                    },
                     EntryPayload::Normal(Proposal::Module(_) | Proposal::Feed { .. }) => Reply {
                         log_index: entry.log_id.index(),
                         module: Some(Err("this group is a ledger partition, not a module".to_string())),
@@ -324,6 +369,10 @@ impl RaftStateMachine<TypeConfig> for Machine {
     }
 
     async fn try_create_snapshot_builder(&mut self, _force: bool) -> Option<Self::SnapshotBuilder> {
+        // A witness has a marker to take only when the data voters have moved on.
+        if self.witness.as_ref().is_some_and(|w| !w.wants_marker()) {
+            return None;
+        }
         Some(self.clone())
     }
 
@@ -332,12 +381,18 @@ impl RaftStateMachine<TypeConfig> for Machine {
     }
 
     async fn install_snapshot(&mut self, meta: &SnapshotMetaOf<TypeConfig>, snapshot: Vec<u8>) -> Result<(), io::Error> {
+        if let Some(witness) = &self.witness {
+            return witness.install(meta);
+        }
         self.adopt(&snapshot)?;
         tracing::info!(through = ?meta.last_log_id.map(|l| l.index()), bytes = snapshot.len(), "snapshot installed from the leader");
         Ok(())
     }
 
     async fn get_current_snapshot(&mut self) -> Result<Option<SnapshotOf<TypeConfig, Vec<u8>>>, io::Error> {
+        if let Some(witness) = &self.witness {
+            return Ok(witness.current());
+        }
         let dir = self.lock().dir.clone();
         Ok(read_snapshot(&dir)?.map(|(bytes, state)| SnapshotOf::<TypeConfig, Vec<u8>> {
             meta: meta_of(&state),

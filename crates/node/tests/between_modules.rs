@@ -41,6 +41,7 @@ async fn other_modules_read_reinsurance_notices_and_it_reads_theirs() {
         events: EventTarget::Discard,
         segment_entries: 10,
         snapshot_every: 1000,
+        witnesses: Default::default(),
     };
     let node = server::start_with(settings, ic_node::modules().unwrap()).await.unwrap();
     let client = ClusterClient::new(vec![addr]).with_auth(auth);

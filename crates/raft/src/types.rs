@@ -27,6 +27,11 @@ pub enum Proposal {
         after: u64,
         events: Vec<EventRecord>,
     },
+    /// The leader recording that every voter that holds data has the log up
+    /// to and including `through`. Only a witness acts on it: the log behind
+    /// it is held by a data voter in every region, so the witness may let
+    /// it go ([`crate::witness`]). Every other member applies it as nothing.
+    Durable { through: openraft::alias::LogIdOf<TypeConfig> },
 }
 
 /// Outputs of applied commands are held by every member until the leader's
@@ -60,6 +65,7 @@ impl fmt::Display for Proposal {
             Proposal::Housekeeping(Housekeeping::Unsubscribed { consumer }) => write!(f, "{consumer} no longer reads events"),
             Proposal::Module(_) => write!(f, "a module command"),
             Proposal::Feed { partition, after, events } => write!(f, "{} events of partition {partition} after {after}", events.len()),
+            Proposal::Durable { through } => write!(f, "every data voter holds the log through {}", through.index()),
         }
     }
 }

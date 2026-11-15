@@ -12,7 +12,12 @@
 //!   limit (cross-partition messages, journal entries not sealed to Blob
 //!   Storage, events not on Event Hubs), so a downstream service is failing.
 //! - `state hashes differ`: two members that applied the same entries
-//!   report different state, which is never expected.
+//!   report different state, which is never expected. A witness holds no
+//!   state and is left out.
+//! - `witness log growing`: a witness holds more log than
+//!   [`WITNESS_LOG_LIMIT`] entries for a partition. It lets go of the log
+//!   only behind the point every data voter holds, so a data voter that has
+//!   been down a long time holds it back (crates/raft/src/witness.rs).
 //!
 //! and one `ledger watch` line with the counts, every run, so that an alert
 //! can also fire when the watch itself stops running.
@@ -27,6 +32,10 @@ use serde::Serialize;
 /// names another.
 pub const DEFAULT_BACKLOG_LIMIT: u64 = 5000;
 
+/// The log a witness may hold for one partition before it is reported:
+/// about a day of a busy partition. Normally it holds seconds' worth.
+pub const WITNESS_LOG_LIMIT: u64 = 200_000;
+
 /// What one run found.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub struct Watch {
@@ -40,12 +49,15 @@ pub struct Watch {
     pub largest_backlog: u64,
     /// Partitions where members at the same applied index report different state.
     pub diverged: Vec<PartitionId>,
+    /// Partitions whose witness holds more log than [`WITNESS_LOG_LIMIT`], with how much.
+    #[serde(default)]
+    pub witness_log: BTreeMap<PartitionId, u64>,
 }
 
 impl Watch {
     /// Whether anything needs a person.
     pub fn healthy(&self) -> bool {
-        self.unreachable.is_empty() && self.leaderless.is_empty() && self.backlogged.is_empty() && self.diverged.is_empty()
+        self.unreachable.is_empty() && self.leaderless.is_empty() && self.backlogged.is_empty() && self.diverged.is_empty() && self.witness_log.is_empty()
     }
 }
 
@@ -69,7 +81,8 @@ pub fn findings(status: &BTreeMap<String, Result<Vec<NodeStatus>, String>>, back
         }
         // The leader's own backlog is the one that is moved on; a follower
         // holds the same output until the leader says it has gone.
-        let leader = rows.iter().find(|r| r.role == "leader").or_else(|| rows.first());
+        let data: Vec<&&NodeStatus> = rows.iter().filter(|r| !r.witness).collect();
+        let leader = data.iter().find(|r| r.role == "leader").or_else(|| data.first());
         if let Some(l) = leader {
             let backlog = l.backlog.messages + l.backlog.journal + l.backlog.events;
             watch.largest_backlog = watch.largest_backlog.max(backlog);
@@ -78,8 +91,14 @@ pub fn findings(status: &BTreeMap<String, Result<Vec<NodeStatus>, String>>, back
             }
         }
         let mut hashes: BTreeMap<Option<u64>, BTreeSet<&str>> = BTreeMap::new();
-        for r in rows {
+        for r in &data {
             hashes.entry(r.last_applied).or_default().insert(r.state_hash.as_str());
+        }
+        for r in rows.iter().filter(|r| r.witness) {
+            let held = r.last_log_index.unwrap_or(0).saturating_sub(r.first_log_index.unwrap_or(0));
+            if held > WITNESS_LOG_LIMIT {
+                watch.witness_log.insert(*partition, held);
+            }
         }
         if hashes.values().any(|h| h.len() > 1) {
             watch.diverged.push(*partition);
@@ -101,6 +120,9 @@ pub fn log(watch: &Watch, backlog_limit: u64) {
     }
     for partition in &watch.diverged {
         tracing::error!(target: "ledger.watch", partition = *partition, "state hashes differ");
+    }
+    for (partition, held) in &watch.witness_log {
+        tracing::warn!(target: "ledger.watch", partition = *partition, held = *held, limit = WITNESS_LOG_LIMIT, "witness log growing");
     }
     tracing::info!(
         target: "ledger.watch",

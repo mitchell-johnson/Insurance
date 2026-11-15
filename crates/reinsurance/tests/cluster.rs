@@ -63,6 +63,7 @@ async fn the_hosted_module_and_its_driver_cede_a_policy_on_a_real_node() {
         events: EventTarget::Discard,
         segment_entries: 10,
         snapshot_every: 1000,
+        witnesses: Default::default(),
     };
     let node = server::start_with(settings, vec![module_spec().unwrap()]).await.unwrap();
     let client = ClusterClient::new(vec![addr.clone()]).with_auth(auth);

@@ -841,6 +841,39 @@ fn node_settings_have_defaults_and_refuse_nonsense() {
     );
 }
 
+/// Purpose: the witnesses are read from `IC_WITNESS_NODES`; a witness needs no cold tier and
+/// no event hub (it seals and publishes nothing), while a data voter still does; a witness that
+/// is not a peer, a number that does not parse, and so many witnesses that a majority could
+/// hold no data are refused, naming the setting.
+/// Why it matters: which node is a witness decides which node holds no state. A data voter
+/// that thought itself a witness would drop its copy of the ledger; a cluster where witnesses
+/// are half the voters could commit writes that no data voter holds.
+#[test]
+fn witnesses_are_read_and_checked() {
+    let base = [
+        ("IC_NODE_ID", "5"),
+        ("IC_NODE_PEERS", "1=a:7000,2=b:7000,3=c:7000,4=d:7000,5=e:7000"),
+        ("IC_NODE_DATA_DIR", "/data"),
+        ("IC_CLUSTER_TOKEN", TOKEN),
+        ("IC_WITNESS_NODES", "5"),
+    ];
+    let witness = settings(&base).unwrap();
+    assert_eq!(witness.witnesses, std::collections::BTreeSet::from([5]));
+    assert_eq!(witness.events, EventTarget::Discard);
+    assert_eq!(witness.cold, ColdTarget::Dir(PathBuf::from("/data/unused")));
+    let with = |extra: &[(&str, &str)]| {
+        let mut all: Vec<(&str, &str)> = base.iter().copied().filter(|(k, _)| !extra.iter().any(|(e, _)| e == k)).collect();
+        all.extend_from_slice(extra);
+        settings(&all)
+    };
+    let data = with(&[("IC_NODE_ID", "1")]).unwrap_err();
+    assert!(data.contains("IC_COLD_DIR"), "{data}");
+    for (extra, names) in [("9", "not in IC_NODE_PEERS"), ("five", "IC_WITNESS_NODES"), ("3,4,5", "fewer than half")] {
+        let error = with(&[("IC_WITNESS_NODES", extra)]).unwrap_err();
+        assert!(error.contains(names), "{error}");
+    }
+}
+
 /// Purpose: the client's address list parses, and an empty list is refused.
 /// Why it matters: the worker is configured with this list. An empty one would make every
 /// activity fail with a confusing "no nodes" error long after start instead of at start.

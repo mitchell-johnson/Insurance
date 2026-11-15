@@ -96,6 +96,7 @@ async fn start(dir: &std::path::Path, file: &std::path::Path) -> (server::Runnin
         events: EventTarget::Discard,
         segment_entries: 10,
         snapshot_every: 50,
+        witnesses: Default::default(),
     };
     let node = server::start_with(settings, vec![ModuleSpec::new("count", count).unwrap()]).await.unwrap();
     // Wait, as the node itself, until the groups have leaders: a busy machine

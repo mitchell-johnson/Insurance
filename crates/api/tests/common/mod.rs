@@ -171,6 +171,7 @@ impl Ledger {
                     segment_entries: 50,
                     // Small, so the read models cross a snapshot in the tests.
                     snapshot_every: 20,
+                    witnesses: Default::default(),
                 };
                 (*id, s)
             })

@@ -49,7 +49,7 @@ fn desk() -> Box<dyn ModuleState> {
 
 fn failback(share_percent: u32, latency_budget: Duration, frozen: Vec<(NaiveTime, NaiveTime)>) -> FailbackSettings {
     FailbackSettings {
-        preferred: BTreeSet::from([1]),
+        homes: vec![BTreeSet::from([1])],
         share_percent,
         latency_budget,
         settle: Duration::from_millis(400),
@@ -108,6 +108,7 @@ impl Cluster {
             events: EventTarget::Discard,
             segment_entries: 10,
             snapshot_every: 1000,
+            witnesses: Default::default(),
         };
         let modules = vec![ModuleSpec::new("desk", desk).unwrap()];
         let node = server::start_full(settings, modules, Some(self.failback.clone())).await.unwrap();
@@ -362,7 +363,7 @@ fn fail_back_settings_are_read_strictly() {
     let settings = read(&[("IC_PREFERRED_NODES", "1, 2"), ("IC_FAILBACK_FROZEN", "23:30-02:30, 06:00-08:00")])
         .unwrap()
         .unwrap();
-    assert_eq!(settings.preferred, BTreeSet::from([1, 2]));
+    assert_eq!(settings.homes, vec![BTreeSet::from([1, 2])]);
     assert_eq!(
         (settings.share_percent, settings.latency_budget, settings.settle),
         (20, Duration::from_secs(2), Duration::from_secs(120))
@@ -396,4 +397,50 @@ fn fail_back_settings_are_read_strictly() {
     assert!(!settings.is_frozen(at(14, 0)), "03:00 in Auckland");
     assert!(settings.is_frozen(at(18, 0)), "07:00 in Auckland is inside 06:00-08:00");
     assert!(!settings.is_frozen(at(19, 0)), "08:00 in Auckland: the period has ended");
+}
+
+/// Purpose: with two leading regions the groups are shared between them: partitions take
+/// the regions in turn and each module always falls to the same one; the witness's region,
+/// named in the node map but not among the leading regions, leads nothing. Settings that
+/// cannot be right (both kinds of home, a leading region with no nodes, no node map, a home
+/// with no nodes) are refused, naming the setting.
+/// Why it matters: this split is what makes both regions take writes. A group with no home
+/// in a leading region would be left wherever an election put it, and two nodes that read the
+/// map differently would hand a group back and forth.
+#[test]
+fn two_leading_regions_share_the_groups() {
+    use ic_raft::failback::GroupKey;
+    let read = |pairs: &[(&str, &str)]| {
+        let pairs: BTreeMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        FailbackSettings::from_lookup(|key| pairs.get(key).cloned())
+    };
+    let map = ("IC_REGION_NODES", "australiaeast=1,2; australiasoutheast=3,4; australiacentral=5");
+    let settings = read(&[("IC_LEADER_REGIONS", "australiaeast, australiasoutheast"), map]).unwrap().unwrap();
+    let (sydney, melbourne) = (BTreeSet::from([1, 2]), BTreeSet::from([3, 4]));
+    assert_eq!(settings.homes, vec![sydney.clone(), melbourne.clone()]);
+    let homes: Vec<&BTreeSet<NodeId>> = (0..4).map(|p| settings.home_of(&GroupKey::Partition(p))).collect();
+    assert_eq!(homes, vec![&sydney, &melbourne, &sydney, &melbourne]);
+    let finance = settings.home_of(&GroupKey::Module("finance".to_string())).clone();
+    assert_eq!(
+        settings.home_of(&GroupKey::Module("finance".to_string())),
+        &finance,
+        "a module's home is stable"
+    );
+    assert!(!finance.contains(&5));
+    for (bad, names) in [
+        (vec![("IC_LEADER_REGIONS", "australiaeast"), ("IC_PREFERRED_NODES", "1")], "not both"),
+        (vec![("IC_LEADER_REGIONS", "australiaeast")], "IC_REGION_NODES"),
+        (vec![("IC_LEADER_REGIONS", "westus"), map], "westus"),
+        (
+            vec![("IC_LEADER_REGIONS", "australiaeast"), ("IC_REGION_NODES", "australiaeast")],
+            "IC_REGION_NODES",
+        ),
+        (
+            vec![("IC_LEADER_REGIONS", "australiaeast"), ("IC_REGION_NODES", "australiaeast=,")],
+            "at least one node",
+        ),
+    ] {
+        let error = read(&bad).unwrap_err();
+        assert!(error.contains(names), "{error}");
+    }
 }

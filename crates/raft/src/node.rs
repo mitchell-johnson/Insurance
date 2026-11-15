@@ -54,6 +54,10 @@ pub struct NodeStatus {
     pub first_log_index: Option<u64>,
     /// Output waiting for the leader's host to move it on.
     pub backlog: Backlog,
+    /// This member is a witness: it keeps the log and no state, so its
+    /// state hash is of an empty partition and is not compared.
+    #[serde(default)]
+    pub witness: bool,
 }
 
 pub struct Node {
@@ -83,6 +87,27 @@ pub fn config(cluster_name: &str, heartbeat_ms: u64, snapshot_every: u64) -> Res
         install_snapshot_timeout: 120_000,
         // A member that was cut off asks whether it could win before it
         // raises the term, so its return does not unseat a healthy leader.
+        enable_pre_vote: Some(true),
+        ..Config::default()
+    };
+    config.validate().map(Arc::new).map_err(|e| e.to_string())
+}
+
+/// Timings for a witness's member of a group ([`crate::witness`]). It waits
+/// three times as long as a data voter before standing, so that a data
+/// voter is nearly always elected; it stands only when no data voter can
+/// win, which is when it holds entries they lack. It never snapshots by
+/// itself: the host asks it to when the data voters have moved on, and it
+/// keeps no log behind its marker.
+pub fn witness_config(cluster_name: &str, heartbeat_ms: u64) -> Result<Arc<Config>, String> {
+    let config = Config {
+        cluster_name: cluster_name.to_string(),
+        heartbeat_interval: heartbeat_ms,
+        election_timeout_min: heartbeat_ms * 12,
+        election_timeout_max: heartbeat_ms * 24,
+        snapshot_policy: SnapshotPolicy::Never,
+        max_in_snapshot_log_to_keep: 0,
+        install_snapshot_timeout: 120_000,
         enable_pre_vote: Some(true),
         ..Config::default()
     };
@@ -184,6 +209,7 @@ impl Node {
             voters: self.raft.voter_ids().collect(),
             first_log_index: self.log.first_index(),
             backlog: self.machine.backlog(),
+            witness: self.machine.witness().is_some(),
         }
     }
 

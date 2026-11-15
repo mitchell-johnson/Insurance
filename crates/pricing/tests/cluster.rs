@@ -116,6 +116,7 @@ async fn a_valuation_becomes_a_price_an_order_and_an_extract() {
         events: EventTarget::Discard,
         segment_entries: 1000,
         snapshot_every: 1000,
+        witnesses: Default::default(),
     };
     let node = server::start_with(settings, vec![ic_pricing::module_spec().unwrap()]).await.unwrap();
     let client = ClusterClient::new(vec![addr.clone()]).with_auth(auth.clone());

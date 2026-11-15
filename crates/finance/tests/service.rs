@@ -135,6 +135,7 @@ async fn against_a_real_node(temporal: Option<&str>) {
         events: EventTarget::Discard,
         segment_entries: 1000,
         snapshot_every: 1000,
+        witnesses: Default::default(),
     };
     let node = server::start_with(settings, vec![ic_finance::host::module_spec().unwrap()]).await.unwrap();
     let client = ClusterClient::new(vec![addr.clone()]).with_auth(auth);

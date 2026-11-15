@@ -49,6 +49,7 @@ async fn a_node_that_fell_behind_the_log_is_caught_up_by_snapshot_over_http() {
         events: EventTarget::Discard,
         segment_entries: 10,
         snapshot_every: 15,
+        witnesses: Default::default(),
     };
     let mut running = BTreeMap::new();
     for id in 1..=3 {
@@ -170,6 +171,7 @@ async fn raft_endpoints_refuse_callers_they_cannot_place() {
         events: EventTarget::Discard,
         segment_entries: 10,
         snapshot_every: 1000,
+        witnesses: Default::default(),
     })
     .await
     .unwrap();

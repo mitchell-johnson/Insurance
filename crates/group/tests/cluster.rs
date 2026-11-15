@@ -515,6 +515,7 @@ async fn a_file_reaches_the_core_on_a_real_node() {
         events: EventTarget::Discard,
         segment_entries: 1000,
         snapshot_every: 1000,
+        witnesses: Default::default(),
     };
     let modules = vec![
         ic_group::module_spec().unwrap(),
@@ -1000,6 +1001,7 @@ async fn the_driver_reaches_documents_commission_and_underwriting_on_a_real_node
         events: EventTarget::Discard,
         segment_entries: 1000,
         snapshot_every: 1000,
+        witnesses: Default::default(),
     };
     let modules = vec![
         ic_documents::module::module_spec().unwrap(),

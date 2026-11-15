@@ -142,6 +142,7 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
         events: EventTarget::Discard,
         segment_entries: 1000,
         snapshot_every: 1000,
+        witnesses: Default::default(),
     };
     let modules = vec![
         ic_underwriting::module_spec().unwrap(),

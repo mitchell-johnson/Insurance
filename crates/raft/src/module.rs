@@ -49,6 +49,7 @@ use crate::node::ProposeError;
 use crate::peers::Identity;
 use crate::store::{write_atomic, LogStore};
 use crate::types::{NodeId, Proposal, Reply, TypeConfig};
+use crate::witness::{self, Witness};
 
 const SNAPSHOT_FILE: &str = "snapshot.json";
 
@@ -267,6 +268,10 @@ pub struct ModuleStatus {
     /// The last event taken in from each partition.
     #[serde(default)]
     pub cursors: BTreeMap<PartitionId, u64>,
+    /// This member is a witness: it keeps the log and no state, so its
+    /// state hash is of an empty module and is not compared.
+    #[serde(default)]
+    pub witness: bool,
 }
 
 /// A snapshot of a module's group, as written to disk and sent to a member
@@ -303,6 +308,9 @@ struct Inner {
 #[derive(Clone)]
 pub struct ModuleMachine {
     inner: Arc<Mutex<Inner>>,
+    /// Set on a witness: the member keeps the log's position and nothing
+    /// else, and the module's state above stays as it was made ([`crate::witness`]).
+    witness: Option<Witness>,
 }
 
 fn invalid(e: impl ToString) -> io::Error {
@@ -400,7 +408,31 @@ impl ModuleMachine {
                 cursors: restored.cursors,
                 dir,
             })),
+            witness: None,
         })
+    }
+
+    /// A witness's member of the module's group: it votes and keeps the
+    /// log, applies nothing and holds no state.
+    pub fn open_witness(spec: ModuleSpec, dir: impl AsRef<Path>) -> io::Result<Self> {
+        let dir = dir.as_ref().to_path_buf();
+        std::fs::create_dir_all(&dir)?;
+        Ok(Self {
+            inner: Arc::new(Mutex::new(Inner {
+                state: (spec.make)(),
+                spec,
+                last_applied: None,
+                membership: StoredMembershipOf::<TypeConfig>::default(),
+                cursors: BTreeMap::new(),
+                dir: dir.clone(),
+            })),
+            witness: Some(Witness::open(&dir)?),
+        })
+    }
+
+    /// The witness record, on a witness.
+    pub fn witness(&self) -> Option<&Witness> {
+        self.witness.as_ref()
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -414,6 +446,9 @@ impl ModuleMachine {
 
     /// Raft log index of the last entry applied.
     pub fn last_applied_index(&self) -> Option<u64> {
+        if let Some(witness) = &self.witness {
+            return witness.last_applied_index();
+        }
         self.lock().last_applied.as_ref().map(|l| l.index())
     }
 
@@ -454,6 +489,9 @@ impl RaftSnapshotBuilder<TypeConfig> for ModuleMachine {
     type SnapshotData = Vec<u8>;
 
     async fn build_snapshot(&mut self) -> Result<SnapshotOf<TypeConfig, Vec<u8>>, io::Error> {
+        if let Some(witness) = &self.witness {
+            return witness.build();
+        }
         // Copy under the lock, encode and write outside it.
         let (saved, dir) = self.saved()?;
         let bytes = serde_json::to_vec(&saved).map_err(invalid)?;
@@ -473,6 +511,9 @@ impl RaftStateMachine<TypeConfig> for ModuleMachine {
     type SnapshotBuilder = Self;
 
     async fn applied_state(&mut self) -> Result<(Option<LogIdOf<TypeConfig>>, StoredMembershipOf<TypeConfig>), io::Error> {
+        if let Some(witness) = &self.witness {
+            return Ok(witness.applied_state());
+        }
         let inner = self.lock();
         Ok((inner.last_applied, inner.membership.clone()))
     }
@@ -482,6 +523,13 @@ impl RaftStateMachine<TypeConfig> for ModuleMachine {
         Strm: Stream<Item = Result<EntryResponder<TypeConfig>, io::Error>> + Unpin + OptionalSend,
     {
         while let Some((entry, responder)) = entries.try_next().await? {
+            if let Some(witness) = &self.witness {
+                let reply = witness.apply(entry.log_id, entry.payload);
+                if let Some(responder) = responder {
+                    responder.send(reply);
+                }
+                continue;
+            }
             let reply = {
                 let mut inner = self.lock();
                 inner.last_applied = Some(entry.log_id);
@@ -502,6 +550,8 @@ impl RaftStateMachine<TypeConfig> for ModuleMachine {
                         module: Some(inner.feed(log_index, partition, after, &events)),
                         ..Reply::default()
                     },
+                    // For a witness only.
+                    EntryPayload::Normal(Proposal::Durable { .. }) => Reply { log_index, ..Reply::default() },
                     // A partition's entry has no meaning to a module. The
                     // node never proposes one here; a log that holds one is
                     // applied the same way by every member: as nothing.
@@ -520,6 +570,10 @@ impl RaftStateMachine<TypeConfig> for ModuleMachine {
     }
 
     async fn try_create_snapshot_builder(&mut self, _force: bool) -> Option<Self::SnapshotBuilder> {
+        // A witness has a marker to take only when the data voters have moved on.
+        if self.witness.as_ref().is_some_and(|w| !w.wants_marker()) {
+            return None;
+        }
         Some(self.clone())
     }
 
@@ -528,6 +582,12 @@ impl RaftStateMachine<TypeConfig> for ModuleMachine {
     }
 
     async fn install_snapshot(&mut self, meta: &SnapshotMetaOf<TypeConfig>, snapshot: Vec<u8>) -> Result<(), io::Error> {
+        if let Some(witness) = &self.witness {
+            return witness.install(meta);
+        }
+        if witness::is_marker(&snapshot) {
+            return Err(witness::refuse_marker());
+        }
         let saved: Saved = serde_json::from_slice(&snapshot).map_err(invalid)?;
         let mut inner = self.lock();
         // Build the new state apart, write it to disk, then switch: a
@@ -543,6 +603,9 @@ impl RaftStateMachine<TypeConfig> for ModuleMachine {
     }
 
     async fn get_current_snapshot(&mut self) -> Result<Option<SnapshotOf<TypeConfig, Vec<u8>>>, io::Error> {
+        if let Some(witness) = &self.witness {
+            return Ok(witness.current());
+        }
         let dir = self.lock().dir.clone();
         Ok(read_snapshot(&dir)?.map(|(bytes, saved)| SnapshotOf::<TypeConfig, Vec<u8>> {
             meta: meta_of(&saved),
@@ -646,6 +709,7 @@ impl ModuleGroup {
             voters: self.raft.voter_ids().collect(),
             first_log_index: self.log.first_index(),
             cursors: self.machine.cursors(),
+            witness: self.machine.witness().is_some(),
         }
     }
 

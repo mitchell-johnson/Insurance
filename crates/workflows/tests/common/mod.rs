@@ -180,6 +180,7 @@ impl Ledger {
                     events: EventTarget::Discard,
                     segment_entries: 50,
                     snapshot_every: 200,
+                    witnesses: Default::default(),
                 };
                 (*id, s)
             })
