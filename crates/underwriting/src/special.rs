@@ -191,6 +191,11 @@ pub enum Query {
     Exclusions {
         on: NaiveDate,
     },
+    /// The reason code library in force on a date, so a person picks a
+    /// reason from it rather than typing a code from memory.
+    Reasons {
+        on: NaiveDate,
+    },
     /// Effects waiting for delivery after number `after`, oldest first.
     Outbox {
         after: u64,
@@ -232,6 +237,7 @@ pub fn answer(state: &UnderwritingState, query: serde_json::Value) -> Result<ser
         Query::Workload { underwriter } => json(serde_json::to_value(state.workload(&underwriter))),
         Query::Report { from, to } => json(serde_json::to_value(state.report(from, to))),
         Query::Exclusions { on } => json(serde_json::to_value(state.exclusions(on))),
+        Query::Reasons { on } => json(serde_json::to_value(state.config.reasons_on(on))),
         Query::EvidenceOrder { request } => json(serde_json::to_value(state.evidence_order(&request))),
         Query::Outbox { after, max } => json(serde_json::to_value(state.outbox(after, max))),
         Query::Parked => json(serde_json::to_value(state.parked())),

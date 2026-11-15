@@ -69,13 +69,14 @@ pub const COUNTERSIGNED: [&str; 1] = ["record_non_disclosure_outcome"];
 const SENIOR_ONLY: [&str; 3] = ["draw_peer_review_sample", "record_peer_finding", "record_non_disclosure_outcome"];
 
 /// The questions the console may put, with their text fields.
-const QUESTIONS: [(&str, &[&str]); 7] = [
+const QUESTIONS: [(&str, &[&str]); 8] = [
     ("proposal", &["proposal"]),
     ("disclosure_basis", &["proposal"]),
     ("queue", &["queue"]),
     ("workload", &[]),
     ("report", &["from", "to"]),
     ("exclusions", &["on"]),
+    ("reasons", &["on"]),
     ("parked", &[]),
 ];
 

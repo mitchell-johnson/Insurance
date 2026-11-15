@@ -9,10 +9,11 @@
 <option value="tele_interview">Tele-interview</option><option value="senior_review">Senior review</option><option value="reinsurer_liaison">Reinsurer liaison</option>
 </select></div><button>Show</button></div></form>
 <div id="q-msg" aria-live="polite"></div><div id="queue"></div></section>
+<section data-view="Queues"><h2>Cases you hold</h2><p class="muted">Cases you have taken from any queue, oldest first.</p><div id="mine"></div></section>
 
-<section data-view="Cases"><h2>Work a case</h2>
+<section data-view="Cases"><h2>Work a case</h2><div id="case-head"></div>
 <p class="muted">Everything you send is recorded as yours. The underwriting module checks your grade, accreditation, limits and any conflict.</p>
-<div class="row"><div><label for="c-case">Case</label><input id="c-case" placeholder="P1/L1/c1"></div>
+<div class="row"><div><label for="c-case">Case</label><input id="c-case" size="28"></div>
 <div><label for="c-what">Action</label><select id="c-what">
 <option value="propose">Propose a decision</option><option value="evidence">Ask for evidence</option><option value="opinion">Ask another underwriter's opinion</option>
 <option value="record_opinion">Record your opinion</option><option value="countersign">Countersign a decision</option><option value="hand_over">Hand the case over</option>
@@ -28,7 +29,7 @@
 <h3>Read a life's disclosures</h3>
 <p class="muted">Each reading is recorded with its purpose before anything is opened.</p>
 <form id="d-form"><div class="row"><div><label for="d-life">Life</label><input id="d-life" required></div>
-<div><label for="d-purpose">Purpose</label><input id="d-purpose" required></div><button>Read</button></div></form>
+<div><label for="d-purpose">Purpose</label><input id="d-purpose" required size="32"></div><button>Read</button></div></form>
 <div id="d-msg" aria-live="polite"></div><div id="disclosures"></div></section>
 
 <section data-view="Conflicts and reports"><h2>A conflict of interest</h2>
@@ -38,16 +39,16 @@
 <section data-view="Remedies and review" id="senior" hidden><h2>Non-disclosure remedy</h2>
 <p class="banner warn">A remedy changes or ends someone's cover. You prepare it, and a second senior signs it before it is sent.</p>
 <form id="n-form"><div class="row">
-<div><label for="n-review">Review</label><input id="n-review" required placeholder="ndr/CLM-1/L1"></div>
+<div><label for="n-review">Review</label><input id="n-review" required size="28"></div>
 <div><label for="n-outcome">Outcome</label><select id="n-outcome"><option value="no_action">No action</option><option value="vary">Vary the terms</option><option value="avoid">Avoid the policy</option></select></div>
-<div><label for="n-reasons">Reason codes</label><input id="n-reasons" required placeholder="RC-0980"></div>
+<div><label for="n-reasons">Reason codes</label><input id="n-reasons" required></div>
 <div><label for="n-cover">Cover varied</label><input id="n-cover" placeholder="life"></div>
 <div><label for="n-loading">Loading %</label><input id="n-loading" type="number" min="0"></div>
 <div><label for="n-premium">On avoidance</label><select id="n-premium"><option value="">Not an avoidance</option><option value="refund">Refund premiums</option><option value="retain">Keep premiums</option></select></div>
 </div><p><button>Prepare</button></p></form>
 <div id="n-msg" aria-live="polite"></div>
 <h3>Peer review</h3>
-<form id="r-form"><div class="row"><div><label for="r-period">Period</label><input id="r-period" required placeholder="2026-11"></div>
+<form id="r-form"><div class="row"><div><label for="r-period">Period</label><input id="r-period" required pattern="\d{4}-\d{2}"></div>
 <div><label for="r-from">From</label><input id="r-from" type="date" required></div><div><label for="r-to">To</label><input id="r-to" type="date" required></div><button>Draw a sample</button></div></form>
 <form id="f-form"><div class="row"><div><label for="f-decision">Decision</label><input id="f-decision" required></div>
 <div><label for="f-agrees">Finding</label><select id="f-agrees"><option value="true">Agree</option><option value="false">Disagree</option></select></div>
@@ -108,7 +109,28 @@ function value([key, , kind]) {
   if (kind === "multi") return [...document.querySelectorAll(`input[name="cf-${key}"]:checked`)].map((i) => i.value);
   return $("cf-" + key).value.trim();
 }
-function showAction() { put($("c-fields"), ACTIONS[$("c-what").value][0].map(field)); }
+// What fields are filled from: colleagues who underwrite, the reason and exclusion libraries in force,
+// and the case open now. Codes may still be typed in full by someone who knows them.
+let reasons = [], exclusions = [], held = [], listed = [];
+const codeItems = (list) => list.map((e) => ({ value: e.code, label: e.code, hint: [words(e.kind || e.category || ""), e.text || ""].filter(Boolean).join(" · ") }));
+function pickers(scope) {
+  for (const input of scope.querySelectorAll("input")) {
+    if (input.dataset.picked) continue;
+    const key = input.id.replace(/^cf-/, "");
+    if (key === "of" || key === "to") portal.picker(input, () => portal.colleagues("underwriting.work"), { min: 0 });
+    else if (key === "reasons" || input.id === "n-reasons" || input.id === "f-reasons") portal.picker(input, () => Promise.resolve(codeItems(reasons)), { min: 0, empty: "No reason codes are in force." });
+    else if (key === "exclusion") portal.picker(input, () => Promise.resolve(codeItems(exclusions)), { min: 0, empty: "No exclusion codes are in force." });
+    else if (key === "cover") portal.picker(input, () => Promise.resolve(coversHere()), { min: 0 });
+    else continue;
+    input.dataset.picked = "yes";
+  }
+}
+let proposal = null;
+const coversHere = () => {
+  const life = proposal && $("d-life").value && proposal.lives && proposal.lives[$("d-life").value];
+  return ((life && life.covers) || []).map((c) => typeof c === "string" ? { value: c, label: c } : { value: c.cover || c.code, label: c.cover || c.code, hint: c.sum_insured_minor != null ? portal.money(c.sum_insured_minor) : "" });
+};
+function showAction() { put($("c-fields"), ACTIONS[$("c-what").value][0].map(field)); pickers($("c-fields")); }
 $("c-what").addEventListener("change", showAction);
 $("c-form").addEventListener("submit", run($("c-msg"), async () => {
   const [spec, build] = ACTIONS[$("c-what").value];
@@ -126,20 +148,52 @@ function take(c) {
     return `You hold ${c}.`;
   });
 }
+// Open a case: its proposal and life come with it, and the Cases tab is where it is worked.
+async function openCase(item) {
+  $("c-case").value = item.case; $("p-id").value = item.proposal; $("d-life").value = item.life;
+  if (!$("d-purpose").value) $("d-purpose").value = `Assessing case ${item.case}`;
+  put($("case-head"), h("p", { class: "working" }, h("strong", {}, item.case), ` ${words(item.case_type)} for life ${item.life} on proposal ${item.proposal}`, item.owner ? `, held by ${item.owner}` : ", not yet taken"));
+  await openProposal(item.proposal).catch((e) => say($("p-msg"), "bad", e.message));
+  portal.view("cases");
+}
+const row = (i, also) => [i.case, i.proposal, i.life, words(i.case_type), i.owner || "", (i.reasons || []).join(", "),
+  h("span", {}, also, " ", h("button", { class: "quiet", type: "button", on: { click: run($("q-msg"), () => openCase(i)) } }, "Open"))];
 async function showQueue() {
   const items = await ask("queue", { queue: $("q-name").value });
-  put($("queue"), items.length ? table(["Case", "Proposal", "Life", "Type", "Held by", "Why", ""], items.map((i) => [i.case, i.proposal, i.life, words(i.case_type), i.owner || "",
-    (i.reasons || []).join(", "), i.owner ? "" : h("button", { class: "quiet", type: "button", on: { click: take(i.case) } }, "Take")])) : h("p", { class: "muted" }, "Nothing is waiting in this queue."));
+  listed = items;
+  put($("queue"), items.length ? table(["Case", "Proposal", "Life", "Type", "Held by", "Why", ""], items.map((i) => row(i, i.owner ? null : h("button", { class: "quiet", type: "button", on: { click: take(i.case) } }, "Take"))))
+    : portal.empty("Nothing is waiting in this queue."));
+  await showMine();
+}
+// The cases this person holds, from every queue.
+async function showMine() {
+  const all = await Promise.all(QUEUES.map((q) => ask("queue", { queue: q }).catch(() => [])));
+  held = all.flat().filter((i) => i.owner === me.staff);
+  // Each queue says how much is in it, so nobody opens six queues to find the work.
+  QUEUES.forEach((q, n) => { const o = $("q-name").querySelector(`option[value="${q}"]`); if (o) o.textContent = `${words(q).replace(/^./, (c) => c.toUpperCase())} (${all[n].length})`; });
+  put($("mine"), held.length ? table(["Case", "Proposal", "Life", "Type", "Held by", "Why", ""], held.map((i) => row(i))) : portal.empty("You hold no cases. Take one from a queue."));
+  return all;
 }
 $("q-form").addEventListener("submit", run($("q-msg"), showQueue));
+$("q-name").addEventListener("change", run($("q-msg"), showQueue));
+portal.picker($("c-case"), () => Promise.resolve([...held, ...listed.filter((i) => !held.includes(i))].map((i) => ({ value: i.case, label: i.case, hint: `${words(i.case_type)} · life ${i.life} · ${i.owner ? "held by " + i.owner : "not taken"}`, item: i }))), { min: 0, onPick: (x) => run($("c-msg"), () => openCase(x.item))() });
 
-$("p-form").addEventListener("submit", run($("p-msg"), async () => {
-  const p = await ask("proposal", { proposal: $("p-id").value.trim() });
+async function openProposal(id) {
+  const p = await ask("proposal", { proposal: id });
+  proposal = p;
   const lives = Object.entries(p.lives || {});
   put($("proposal"), h("p", {}, `${p.id}: ${words(p.status)}, policy ${p.policy_number}, ${p.product_code}, received ${p.received_on}, expires ${p.expires_on}.`),
     table(["Life", "Stage", "Cases", "Decisions"], lives.map(([life, f]) => [life, words(f.stage), (f.cases || []).map((c) => `${c.id} (${words(c.status || c.case_type)})`).join(", "),
       (f.decisions || []).map((d) => `${d.reference} ${words(d.status)}`).join(", ")])));
-}));
+}
+$("p-form").addEventListener("submit", run($("p-msg"), () => openProposal($("p-id").value.trim())));
+portal.picker($("p-id"), () => Promise.resolve([...new Map([...held, ...listed].map((i) => [i.proposal, i])).values()].map((i) => ({ value: i.proposal, label: i.proposal, hint: `life ${i.life} · ${words(i.case_type)}` }))), { min: 0, empty: "Open a case from a queue, or type the proposal reference." });
+portal.picker($("d-life"), () => Promise.resolve(Object.keys((proposal && proposal.lives) || {}).map((l) => ({ value: l, label: l, hint: words(proposal.lives[l].stage) }))), { min: 0, empty: "Open the proposal first." });
+portal.picker($("x-party"), portal.people);
+portal.picker($("n-review"), () => Promise.resolve(listed.concat(held).filter((i) => i.case_type === "non_disclosure_review").map((i) => ({ value: i.case, label: i.case, hint: `life ${i.life} · proposal ${i.proposal}` }))), { min: 0, empty: "No non-disclosure review is in the queues you have open." });
+let drawn = [];
+portal.picker($("f-decision"), () => Promise.resolve(drawn.map((d) => ({ value: d, label: d, hint: "drawn for peer review" }))), { min: 0, empty: "Draw a sample first." });
+pickers(document);
 $("p-retry").addEventListener("click", run($("p-msg"), async () => done(await send({ retry_issue: { proposal: $("p-id").value.trim() } }))));
 $("d-form").addEventListener("submit", run($("d-msg"), async () => {
   const records = await api(R, "POST", BASE + "disclosures", { proposal: $("p-id").value.trim(), life: $("d-life").value.trim(), purpose: $("d-purpose").value.trim() });
@@ -158,8 +212,8 @@ $("n-form").addEventListener("submit", run($("n-msg"), async () => {
 $("r-form").addEventListener("submit", run($("r-msg"), async () => {
   const seed = crypto.getRandomValues(new Uint32Array(1))[0];
   const answer = await send({ draw_peer_review_sample: { period: $("r-period").value.trim(), from: iso($("r-from").value), to: iso($("r-to").value, true), seed } });
-  const drawn = (answer.events || []).flatMap((e) => Object.values(e)).flatMap((e) => e.decisions || []);
-  return drawn.length ? `Drawn for review: ${drawn.join(", ")}.` : done(answer);
+  drawn = (answer.events || []).flatMap((e) => Object.values(e)).flatMap((e) => e.decisions || []);
+  return drawn.length ? `Drawn for review: ${drawn.join(", ")}. Record a finding on each below.` : done(answer);
 }));
 $("f-form").addEventListener("submit", run($("r-msg"), async () => done(await send({ record_peer_finding: { decision: $("f-decision").value.trim(), agrees: $("f-agrees").value === "true", reasons: codes($("f-reasons").value) } }))));
 
@@ -193,6 +247,17 @@ signIn(R).then(async () => {
   const load = await ask("workload");
   $("senior").hidden = !me.senior;
   $("me").textContent = `You are ${me.staff}${me.senior ? ", a senior underwriter" : ""}. You hold ${load} open case${load === 1 ? "" : "s"}. Commands are made on ${me.today || "today's date"}.`;
+  // Defaults: this month for peer review, the last month for the report.
+  $("r-period").value = portal.month(); $("r-from").value = portal.month() + "-01"; $("r-to").value = portal.today();
+  $("m-from").value = portal.days(-30); $("m-to").value = portal.today();
+  const on = me.today || portal.today();
+  [reasons, exclusions] = await Promise.all([ask("reasons", { on }).then((l) => Object.values((l && l.entries) || {})).catch(() => []), ask("exclusions", { on }).then((l) => Object.values((l && l.entries) || {})).catch(() => [])]);
   showAction();
+  await run($("q-msg"), async () => {
+    const all = await showMine();
+    const first = all.findIndex((items) => items.some((i) => !i.owner));
+    if (first >= 0) $("q-name").value = QUEUES[first];
+    await showQueue();
+  })();
 }).catch(portal.refuse);
 </script></body></html>

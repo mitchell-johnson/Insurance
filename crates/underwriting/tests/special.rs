@@ -437,6 +437,9 @@ fn claims_reads_terms_and_opens_the_file_with_a_logged_purpose() {
         serde_json::json!([])
     );
     assert_eq!(ask(&w, Query::Exclusions { on: d(2026, 11, 11) })["id"], "exclusions");
+    // The reason codes in force, for the console to offer instead of a code typed from memory.
+    let reasons = ask(&w, Query::Reasons { on: d(2026, 11, 11) });
+    assert!(reasons["entries"]["RC-0901"]["code"] == "RC-0901", "{reasons}");
     let report = ask(
         &w,
         Query::Report {
