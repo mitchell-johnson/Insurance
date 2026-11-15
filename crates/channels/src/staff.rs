@@ -854,6 +854,8 @@ impl StaffState {
             "staff": member.is_some(),
             "team": member.map(|m| m.team.clone()),
             "templates": templates,
+            // The actions those templates give, so a page offers only what the person may do.
+            "actions": self.templates_of(party, at).iter().flat_map(|t| t.actions.iter()).collect::<std::collections::BTreeSet<_>>(),
             "profile": profile,
             "paths": self.paths.get(party).cloned().unwrap_or_default(),
             "grants": self.grants.values().filter(|g| &g.holder == party && (g.active(at) || g.state == GrantState::Requested)).collect::<Vec<_>>(),

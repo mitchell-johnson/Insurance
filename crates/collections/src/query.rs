@@ -51,12 +51,21 @@ pub enum Question {
         case: String,
         role: Role,
     },
+    /// Hardship cases still open on a date: waiting for a decision, or
+    /// approved with relief not yet over, oldest application first, each
+    /// shown as `hardship_case` shows it to the role.
+    HardshipCases {
+        as_at: NaiveDate,
+        role: Role,
+    },
     /// Postings for the core not yet answered, oldest first.
     Outbox {
         limit: usize,
     },
     /// Products with policies and no sequence: nothing is sent for them.
     Unsequenced,
+    /// Every product's dunning sequence in force, by product code.
+    Sequences,
     /// Lapsed policies the core sent to underwriting for reinstatement
     /// (an open `reinstatement_underwriting` task names them). The
     /// underwriting driver opens a proposal for each, as caller
@@ -167,6 +176,19 @@ impl CollectionsState {
         Some(value)
     }
 
+    /// Cases waiting for a decision, or approved with relief running on or
+    /// after `as_at`, oldest application first.
+    pub fn open_hardship_cases(&self, as_at: NaiveDate, role: Role) -> Vec<Value> {
+        let mut open: Vec<&HardshipCase> = self
+            .hardship
+            .values()
+            .filter(|c| c.decision.is_none() || c.last_day().is_some_and(|last| last >= as_at))
+            .collect();
+        open.sort_by(|a, b| (a.applied_on, &a.id).cmp(&(b.applied_on, &b.id)));
+        open.truncate(MAX_ANSWER);
+        open.iter().filter_map(|c| self.hardship_case(&c.id, role)).collect()
+    }
+
     pub fn notices_due(&self, limit: usize) -> Vec<&Notice> {
         self.notices_in(NoticeState::Due, limit)
     }
@@ -206,8 +228,10 @@ pub fn answer(state: &CollectionsState, question: Value) -> Result<Value, String
         Question::NoticesSent { limit } => value(state.notices_in(NoticeState::Sent, limit)),
         Question::Tasks { role, limit } => value(state.tasks_for(role, limit)),
         Question::HardshipCase { case, role } => value(state.hardship_case(&case, role)),
+        Question::HardshipCases { as_at, role } => value(state.open_hardship_cases(as_at, role)),
         Question::Outbox { limit } => value(state.outbox.values().take(limit.min(MAX_ANSWER)).collect::<Vec<_>>()),
         Question::Unsequenced => value(&state.unsequenced),
+        Question::Sequences => value(&state.sequences),
         Question::ReinstatementsForUnderwriting => value(state.reinstatements_for_underwriting()),
         Question::StateHash => value(state.state_hash()),
     }

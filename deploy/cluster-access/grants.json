@@ -51,10 +51,10 @@
         "reinsurance",
         "underwriting",
         "unit-pricing",
-        "documents"
+        "documents",
+        "collections"
       ],
       "read_modules": [
-        "collections",
         "group"
       ]
     },

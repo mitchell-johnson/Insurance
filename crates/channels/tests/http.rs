@@ -45,6 +45,7 @@ struct Portal {
     reinsurance: Arc<common::reinsurance::ReinsuranceModule>,
     underwriting: Arc<common::underwriting::UnderwritingModule>,
     payments: Arc<common::payments::PaymentsModule>,
+    collections: Arc<common::collections::CollectionsModule>,
     master: Arc<common::customers::MasterDouble>,
     commission: Arc<common::commission::CommissionModule>,
     intake: Arc<common::intake::IntakeDouble>,
@@ -159,6 +160,12 @@ fn portal_signed_in_by(
         ("sub-paybad", "pay-bad"),
         ("sub-payview", "pay-view"),
         ("sub-paycmp", "pay-cmp"),
+        ("sub-colof", "col-of"),
+        ("sub-colof2", "col-of2"),
+        ("sub-colhs", "col-hs"),
+        ("sub-colcfg", "col-cfg"),
+        ("sub-colview", "col-view"),
+        ("sub-svc", "svc-1"),
         ("sub-grp1", "grp-1"),
         ("sub-grpview", "grp-view"),
         ("sub-hcs", "hcs-1"),
@@ -302,6 +309,19 @@ fn portal_signed_in_by(
                 ),
                 template("payments-reader", &[ic_channels::payments::actions::VIEW], &[DataClass::Financial]),
                 template("payments-compliance", &[ic_channels::payments::actions::COMPLIANCE], &[DataClass::Financial]),
+                template("collections-officer", &[ic_channels::collections::actions::OFFICER], &[DataClass::Financial]),
+                template(
+                    "collections-hardship",
+                    &[ic_channels::collections::actions::HARDSHIP],
+                    &[DataClass::Financial, DataClass::InsuranceSensitive],
+                ),
+                template(
+                    "collections-config",
+                    &[ic_channels::collections::actions::CONFIGURATION],
+                    &[DataClass::Ordinary],
+                ),
+                template("collections-reader", &[ic_channels::collections::actions::VIEW], &[DataClass::Financial]),
+                template("servicing-person", &[ic_channels::servicing::actions::CARRY_OUT], &[DataClass::Ordinary]),
                 // Group administrators find a scheme's administrator by name, so they may search the customer master.
                 template(
                     "group-admin",
@@ -393,6 +413,12 @@ fn portal_signed_in_by(
         ("pay-bad", "payments-conflicted"),
         ("pay-view", "payments-reader"),
         ("pay-cmp", "payments-compliance"),
+        ("col-of", "collections-officer"),
+        ("col-of2", "collections-officer"),
+        ("col-hs", "collections-hardship"),
+        ("col-cfg", "collections-config"),
+        ("col-view", "collections-reader"),
+        ("svc-1", "servicing-person"),
         ("grp-1", "group-admin"),
         ("grp-view", "group-reader"),
         ("hcs-1", "hardship"),
@@ -439,6 +465,7 @@ fn portal_signed_in_by(
     let reinsurance = Arc::new(common::reinsurance::seeded());
     let underwriting = Arc::new(common::underwriting::seeded());
     let payments = Arc::new(common::payments::seeded());
+    let collections = Arc::new(common::collections::seeded());
     let commission = Arc::new(common::commission::seeded());
     let intake = Arc::new(common::intake::IntakeDouble::default());
     let documents = Arc::new(common::documents::DocumentsDouble::default());
@@ -468,6 +495,7 @@ fn portal_signed_in_by(
         claims: claims.clone(),
         reinsurance: reinsurance.clone(),
         payments: payments.clone(),
+        collections: collections.clone(),
         underwriting: underwriting.clone(),
         master: Some(master.clone()),
         intake: Some(intake.clone()),
@@ -489,6 +517,7 @@ fn portal_signed_in_by(
         reinsurance,
         underwriting,
         payments,
+        collections,
         master,
         commission,
         intake,
@@ -1165,7 +1194,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 42);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 48);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -1633,6 +1662,7 @@ async fn pages_are_served_locked_down() {
         "/reinsurance",
         "/underwriting",
         "/payments",
+        "/collections",
         "/replacements",
         "/ops",
         "/status",
@@ -1907,6 +1937,7 @@ async fn the_unit_pricing_console() {
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
         payments: Arc::new(common::pricing::Down),
+        collections: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -2123,6 +2154,7 @@ async fn the_complaints_and_conduct_workbench() {
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
         payments: Arc::new(common::pricing::Down),
+        collections: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -2225,6 +2257,7 @@ async fn the_reinsurance_exceptions_console() {
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
         payments: Arc::new(common::pricing::Down),
+        collections: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -2439,6 +2472,16 @@ async fn the_claims_console() {
         portal.write("POST", "sub-cllead", "/staff/v1/claims/commands", run).await.1["title"],
         "unknown_run"
     );
+    // An investigation case names no claim: it goes to the partition the cases list gave,
+    // and without one it goes nowhere.
+    let close = |partition: Option<u32>| json!({ "purpose": "case review", "partition": partition, "command": { "close_investigation": { "case": "inv-1", "outcome": "cleared" } } });
+    assert_eq!(
+        portal.write("POST", "sub-cllead", "/staff/v1/claims/commands", close(None)).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let (status, refused) = portal.write("POST", "sub-cllead", "/staff/v1/claims/commands", close(Some(1))).await;
+    assert_ne!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(refused["title"].is_string(), "the claims module decided it: {refused}");
 
     // The book and report come by partition; a remittance is asked of the run's own.
     let (status, book) = ask("sub-cl1", "book").await;
@@ -2468,6 +2511,7 @@ async fn the_claims_console() {
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
         payments: Arc::new(common::pricing::Down),
+        collections: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -2710,6 +2754,7 @@ async fn the_finance_console() {
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
         payments: Arc::new(common::pricing::Down),
+        collections: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -2916,6 +2961,7 @@ async fn a_person_keeps_their_own_customer_record() {
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
         payments: portal.payments.clone(),
+        collections: portal.collections.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -2977,6 +3023,7 @@ async fn the_conduct_officer_decides_disputed_replacements() {
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
         payments: portal.payments.clone(),
+        collections: portal.collections.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -3249,6 +3296,7 @@ async fn the_person_insured_signs_their_disclosure() {
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
         payments: portal.payments.clone(),
+        collections: portal.collections.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -3347,6 +3395,7 @@ async fn documents_are_downloaded_by_their_owner_or_by_staff_with_a_purpose() {
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
         payments: portal.payments.clone(),
+        collections: portal.collections.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -4015,6 +4064,7 @@ async fn an_employer_runs_the_scheme_membership() {
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
         payments: portal.payments.clone(),
+        collections: portal.collections.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -4308,6 +4358,7 @@ async fn the_underwriting_console() {
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
         payments: Arc::new(common::pricing::Down),
+        collections: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -4485,6 +4536,7 @@ async fn the_payments_console() {
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
         payments: Arc::new(common::pricing::Down),
+        collections: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -5379,6 +5431,7 @@ async fn the_mcp_endpoint_says_where_to_sign_in() {
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
         payments: portal.payments.clone(),
+        collections: portal.collections.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -5832,4 +5885,296 @@ async fn a_customers_claim_notice_reaches_claims_once() {
     elsewhere.claims = Arc::new(common::claims::seeded());
     assert_eq!(elsewhere.carry_claim_notices().await, Ok(1));
     assert_eq!(mine("n-4").await["code"], "policy_not_found");
+}
+
+/// Purpose: staff work collections from the collections console. An officer reads the day's queue as an officer and records
+/// what a customer said, proposes an arrangement and applies for hardship; the module hears each as the person signed in, as
+/// caller `staff`, with the roles their staff actions give them. Someone in the hardship team decides the case, never the
+/// officer who applied; a configuration person loads the best-estimate sequence shipped for a product and sets it; a reader
+/// reads but cannot act or read another team's tasks; someone with no collections action is kept out; and a command that is
+/// not people's to send is refused before it reaches the module.
+/// Why it matters: the collections module had no screen, route or tool, so arrears were never worked by a person, hardship
+/// was never decided and no product had a dunning sequence. The module trusts the roles it is told, so the console must be the
+/// one to say who the person is.
+#[tokio::test]
+async fn the_collections_console() {
+    let portal = portal();
+    let ask = |who: &'static str, rest: &str| {
+        let path = format!("/staff/v1/collections/{rest}");
+        let portal = &portal;
+        async move { portal.get(who, &path).await }
+    };
+    let tell = |who: &'static str, command: Value| {
+        let portal = &portal;
+        async move { portal.write("POST", who, "/staff/v1/collections/commands", command).await }
+    };
+
+    // Who gets in, and with which roles.
+    assert_eq!(ask("sub-gl1", "me").await.0, StatusCode::FORBIDDEN);
+    let (status, me) = ask("sub-colview", "me").await;
+    assert_eq!((status, &me["roles"], &me["view"]), (StatusCode::OK, &json!([]), &json!(true)), "{me}");
+    assert_eq!(ask("sub-colof", "me").await.1["roles"], json!(["collections"]));
+    assert_eq!(ask("sub-colhs", "me").await.1["roles"], json!(["hardship"]));
+
+    // The queue, as an officer reads it, with what an officer is not shown.
+    let (status, queue) = ask("sub-colof", "queue").await;
+    assert_eq!(status, StatusCode::OK, "{queue}");
+    assert_eq!(queue["items"][0]["policy"], "pol-c1");
+    assert_eq!(queue["withheld"][0], "hardship_note");
+    assert_eq!(ask("sub-colview", "policy?policy=pol-c1").await.1["number"], "N-pol-c1");
+    assert_eq!(ask("sub-colview", "policy?policy=pol-none").await.0, StatusCode::NOT_FOUND);
+    let (status, tasks) = ask("sub-colof", "tasks?team=collections").await;
+    assert_eq!(status, StatusCode::OK, "{tasks}");
+    let task = tasks[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(tasks[0]["kind"], "call");
+    // A reader sees the officers' tasks, not the hardship team's; a team that does not exist is refused.
+    assert_eq!(ask("sub-colview", "tasks?team=hardship").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(ask("sub-colview", "tasks?team=everyone").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(ask("sub-colview", "tasks").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(ask("sub-colview", "everything").await.0, StatusCode::BAD_REQUEST);
+    for question in [
+        "notices_due",
+        "notices_sent",
+        "unsequenced",
+        "sequences",
+        "reinstatements_for_underwriting",
+        "hardship_cases",
+    ] {
+        assert_eq!(ask("sub-colview", question).await.0, StatusCode::OK, "{question}");
+    }
+
+    // A reader cannot act; an officer records an outcome and the module hears it from them.
+    let outcome = json!({ "type": "record_outcome", "task": task, "reason": "arrangement", "note": "will pay over two months" });
+    assert_eq!(tell("sub-colview", outcome.clone()).await.0, StatusCode::FORBIDDEN);
+    let (status, done) = tell("sub-colof", outcome).await;
+    assert_eq!((status, &done["accepted"]), (StatusCode::OK, &json!(true)), "{done}");
+    let sent = portal.collections.received().last().cloned().unwrap();
+    assert_eq!((sent.caller.as_str(), sent.actor.as_str()), ("staff", "col-of"));
+    assert_eq!(sent.roles, vec![ic_collections::Role::Collections]);
+    assert!(sent.key.starts_with("console:"));
+    let arrangement = json!({ "type": "propose_arrangement", "policy": "pol-c1", "arrangement": "arr-1",
+        "instalments": [{ "due": "2027-11-30", "amount_minor": 5_000 }, { "due": "2027-12-31", "amount_minor": 5_000 }] });
+    let (status, done) = tell("sub-colof", arrangement).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+
+    // Hardship: an officer applies, the same person may not decide, the hardship team does.
+    let apply = json!({ "type": "apply_hardship", "case": "hs-1", "party": "party-c1", "policies": ["pol-c1"], "relief": "holiday",
+        "from": "2027-11-20", "to": "2028-02-19", "discloses_health": true, "note": "off work after an operation" });
+    assert_eq!(tell("sub-colof", apply).await.0, StatusCode::OK);
+    let (_, cases) = ask("sub-colof", "hardship_cases").await;
+    assert_eq!((cases[0]["id"].as_str(), cases[0]["note"].as_str()), (Some("hs-1"), Some("")), "{cases}");
+    assert_eq!(ask("sub-colhs", "hardship_cases").await.1[0]["note"], "off work after an operation");
+    assert_eq!(ask("sub-colhs", "hardship_case?case=hs-1").await.1["applied_by"], "col-of");
+    let decide = json!({ "type": "decide_hardship", "case": "hs-1", "approve": true, "note": "medical certificate seen" });
+    let (status, problem) = tell("sub-colof", decide.clone()).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("not_allowed")), "{problem}");
+    let (status, done) = tell("sub-colhs", decide).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(ask("sub-colhs", "tasks?team=hardship").await.0, StatusCode::OK);
+
+    // Sequences: the shipped best estimate is offered, and only a configuration person sets one.
+    let (status, shipped) = ask("sub-colcfg", "shipped_sequence?product=term-life").await;
+    assert_eq!((status, &shipped["lapse_day"]), (StatusCode::OK, &json!(91)), "{shipped}");
+    assert_eq!(ask("sub-colcfg", "shipped_sequence?product=no-such-product").await.0, StatusCode::NOT_FOUND);
+    let set = json!({ "type": "set_sequence", "sequence": shipped });
+    assert_eq!(tell("sub-colof", set.clone()).await.1["title"], "not_allowed");
+    let (status, done) = tell("sub-colcfg", set).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(ask("sub-colview", "sequences").await.1["term-life"]["lapse_day"], 91);
+
+    // What is not people's to send never reaches the module.
+    let before = portal.collections.received().len();
+    let core = json!({ "type": "record_notice_sent", "notice": "n-1" });
+    assert_eq!(tell("sub-colof", core).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(portal.collections.received().len(), before);
+}
+
+/// Purpose: the best-estimate dunning sequence shipped for each product names a shipped product, every shipped product
+/// has one, and each one's lapse day is the day the core lapses that product (its arrears `lapse_days` plus one).
+/// Why it matters: a sequence whose lapse day is not the core's would count days to lapse wrongly on the queue and could
+/// put the final notice closer to the real lapse than the law allows; a product with none sends nothing.
+#[test]
+fn the_shipped_sequences_follow_each_products_lapse_day() {
+    let products: Vec<_> = ic_sim::config::shipped_activations()
+        .unwrap()
+        .into_iter()
+        .filter_map(|c| match c {
+            ic_core::Command::ActivateProduct { product } => Some(*product),
+            _ => None,
+        })
+        .collect();
+    let sequences = ic_collections::shipped_sequences().unwrap();
+    assert_eq!(sequences.len(), products.len());
+    for product in &products {
+        let sequence = sequences
+            .iter()
+            .find(|s| s.product == product.code)
+            .unwrap_or_else(|| panic!("no sequence for {}", product.code));
+        let lapse = product.arrears().unwrap().lapse_days + 1;
+        assert_eq!(sequence.lapse_day, lapse, "{}", product.code);
+        assert!(ic_channels::collections::shipped_sequence(&product.code).is_some());
+    }
+    assert_eq!(ic_channels::collections::reading_role(&["configuration".into()]), "collections");
+    assert_eq!(ic_channels::collections::reading_role(&["team_lead".into(), "hardship".into()]), "hardship");
+}
+
+/// Purpose: a change the customer asked for in the app (decline indexation, change how often they pay, cancel) is carried to
+/// the core as caller `policy-servicing` once it is pending, under a key made from the request so carrying twice changes the
+/// policy once, and the request is closed with the core's answer, applied or refused with the core's own code. A request the
+/// customer master sent to a person first, or of a kind the portal cannot carry out, waits; a member of staff who may carry
+/// them out sees it (who asked and for what), carries it out or declines it in words the customer reads; anyone else is
+/// refused. A request whose policy no partition answers for waits for the next sweep.
+/// Why it matters: these requests were recorded, signed and shown as pending, and nothing ever carried them to the core: a
+/// customer's cancellation or change of frequency simply never happened.
+#[tokio::test]
+async fn customers_changes_are_carried_to_the_core() {
+    use ic_core::Command as Core;
+    let portal = &portal();
+    let file =
+        |id: &str, kind: &str, payload: Value| json!({ "id": id, "policy": portal.retail, "kind": kind, "module": "policy-servicing", "payload": payload });
+    let mine = |id: &'static str| async move {
+        let (_, all) = portal.get("sub-kiri", "/app/v1/requests").await;
+        all.as_array().unwrap().iter().find(|r| r["id"] == id).cloned().unwrap()
+    };
+    // Not yet placed on a partition: it waits, and is carried once a partition answers for it.
+    portal
+        .write("POST", "sub-kiri", "/app/v1/requests", file("s-0", "cancel_policy", json!({})))
+        .await;
+    assert_eq!(mine("s-0").await["status"], "pending");
+    assert_eq!(portal.state.carry_servicing_requests().await, Ok(0));
+    portal.claims.cover(0, &portal.retail.to_string());
+    assert_eq!(portal.state.carry_servicing_requests().await, Ok(1));
+    assert_eq!(mine("s-0").await["status"], "applied");
+
+    let (status, _) = portal
+        .write(
+            "POST",
+            "sub-kiri",
+            "/app/v1/requests",
+            file("s-1", "change_frequency", json!({ "frequency": "yearly" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let carried = mine("s-1").await;
+    assert_eq!((&carried["status"], &carried["reference"]), (&json!("applied"), &json!("s-1")), "{carried}");
+    portal
+        .write(
+            "POST",
+            "sub-kiri",
+            "/app/v1/requests",
+            file("s-2", "decline_indexation", json!({ "declined": false })),
+        )
+        .await;
+    let sent = portal.claims.servicing(0);
+    assert!(sent.iter().all(|(caller, _)| caller == "policy-servicing"));
+    assert!(matches!(&sent[0].1, Core::CancelPolicy { .. }));
+    assert!(matches!(&sent[1].1, Core::ChangeBilling(c) if c.frequency == Some(ic_product::Frequency::Yearly) && c.reference == "s-1"));
+    assert!(matches!(&sent[2].1, Core::DeclineIndexation { declined: false, .. }));
+    // Carrying again sends nothing new.
+    assert_eq!(portal.state.carry_servicing_requests().await, Ok(0));
+    assert_eq!(portal.claims.servicing(0).len(), 3);
+
+    // The core's refusal closes the request with its code; a payload the core could not read is refused before it is sent.
+    portal.claims.refuse_servicing(0, "indexation_compulsory");
+    portal
+        .write("POST", "sub-kiri", "/app/v1/requests", file("s-3", "decline_indexation", json!({})))
+        .await;
+    let refused = mine("s-3").await;
+    assert_eq!(
+        (&refused["status"], &refused["code"]),
+        (&json!("rejected"), &json!("indexation_compulsory")),
+        "{refused}"
+    );
+    portal
+        .write(
+            "POST",
+            "sub-kiri",
+            "/app/v1/requests",
+            file("s-4", "change_frequency", json!({ "frequency": "daily" })),
+        )
+        .await;
+    assert_eq!(mine("s-4").await["code"], "bad_frequency");
+
+    // A kind the portal cannot carry out waits for a person, who may decline it.
+    portal
+        .write("POST", "sub-kiri", "/app/v1/requests", file("s-5", "change_sum_insured", json!({ "to": 1 })))
+        .await;
+    assert_eq!(mine("s-5").await["status"], "pending");
+    assert_eq!(portal.get("sub-sue", "/staff/v1/servicing/waiting").await.0, StatusCode::FORBIDDEN);
+    let (status, waiting) = portal.get("sub-svc", "/staff/v1/servicing/waiting").await;
+    assert_eq!(
+        (status, &waiting["rows"][0]["id"], &waiting["rows"][0]["kind"]),
+        (StatusCode::OK, &json!("s-5"), &json!("change_sum_insured")),
+        "{waiting}"
+    );
+    let (status, _) = portal
+        .write("POST", "sub-svc", "/staff/v1/servicing/s-5/decline", json!({ "reason": " " }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = portal
+        .write(
+            "POST",
+            "sub-svc",
+            "/staff/v1/servicing/s-5/decline",
+            json!({ "reason": "We will call you to talk this through." }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let declined = mine("s-5").await;
+    assert_eq!(
+        (&declined["status"], &declined["code"]),
+        (&json!("rejected"), &json!("declined_by_service")),
+        "{declined}"
+    );
+    assert_eq!(
+        portal.write("POST", "sub-svc", "/staff/v1/servicing/s-5/carry-out", json!({})).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    // A carried-out request goes as the sweep would send it; one the core refuses comes back with the core's words.
+    portal
+        .write("POST", "sub-kiri", "/app/v1/requests", file("s-6", "change_sum_insured", json!({})))
+        .await;
+    let (status, carried) = portal
+        .write("POST", "sub-svc", "/staff/v1/servicing/s-6/carry-out", json!({ "conversation": "call-9" }))
+        .await;
+    assert_eq!(
+        (status, &carried["applied"], &carried["code"]),
+        (StatusCode::OK, &json!(false), &json!("not_carried")),
+        "{carried}"
+    );
+    assert_eq!(
+        portal.write("POST", "sub-sue", "/staff/v1/servicing/s-6/carry-out", json!({})).await.0,
+        StatusCode::FORBIDDEN
+    );
+}
+
+/// Purpose: each servicing request kind becomes the core command it names, from the payload the screens send, and a request
+/// missing what the core needs is refused with a code that says what: no policy, no change, a frequency or billing day that is
+/// not one.
+/// Why it matters: the customer reads these codes on their request; a malformed payload must never reach the core as a
+/// different change from the one the customer signed.
+#[test]
+fn servicing_requests_become_the_core_commands_they_name() {
+    use ic_channels::servicing::{carried_by_sweep, command};
+    use ic_core::Command as Core;
+    let request = |kind: &str, payload: Value| json!({ "id": "r", "policy": "pol-1", "kind": kind, "payload": payload });
+    assert!(matches!(
+        command(&request("decline_indexation", json!({}))),
+        Ok(Core::DeclineIndexation { declined: true, .. })
+    ));
+    assert!(
+        matches!(command(&request("change_frequency", json!({ "billing_day": 15 }))), Ok(Core::ChangeBilling(c)) if c.billing_day == Some(15) && c.frequency.is_none())
+    );
+    let code = |r: Value| command(&r).unwrap_err().0;
+    assert_eq!(code(request("change_frequency", json!({}))), "nothing_to_change");
+    assert_eq!(code(request("change_frequency", json!({ "billing_day": "15th" }))), "bad_billing_day");
+    assert_eq!(code(request("change_frequency", json!({ "frequency": 12 }))), "bad_frequency");
+    assert_eq!(code(json!({ "id": "r", "kind": "cancel_policy" })), "no_policy");
+    assert_eq!(code(request("surrender", json!({}))), "not_carried");
+    assert!(carried_by_sweep(&request("cancel_policy", json!({}))));
+    let mut cared = request("cancel_policy", json!({}));
+    cared["route_to_person"] = json!(true);
+    assert!(!carried_by_sweep(&cared));
+    assert!(!carried_by_sweep(&request("surrender", json!({}))));
 }
