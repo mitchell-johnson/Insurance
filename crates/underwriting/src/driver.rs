@@ -708,10 +708,12 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                     } else {
                         // The cover keeps its sum insured: an alteration changes the terms
                         // on what the life already holds.
-                        // A change of occupation reaches the core as the life's new class too,
-                        // so the rewritten layers are rated on it.
+                        // A change of occupation, or a smoker reviewed as a non-smoker, reaches
+                        // the core as the life's new class and status too, so the rewritten
+                        // layers are rated on them.
                         ic_core::Command::AlterUnderwrittenTerms(Box::new(ic_core::command::AlteredTerms {
                             occupation_class: held.lives.get(life).and_then(|f| f.factors.occupation_class.clone()),
+                            smoker: held.lives.get(life).and_then(|f| f.factors.smoker),
                             policy: policy.clone(),
                             cover: cover.code.clone(),
                             life: life.clone(),

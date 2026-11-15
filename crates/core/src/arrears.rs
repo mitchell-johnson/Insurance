@@ -82,7 +82,7 @@ pub(crate) fn overdue_to_lapse(product: &ProductDefinition, policy: &Policy, on:
     product.arrears().is_some_and(|rules| matches!(derive(policy, rules, on), Derived::Lapse))
 }
 
-pub(crate) fn run(ledger: &mut Ledger, product: &ProductDefinition, policy: &mut Policy, ctx: &mut Ctx<'_>) -> Result<(), Reject> {
+pub(crate) fn run(ledger: &mut Ledger, catalog: &crate::catalog::Catalog, product: &ProductDefinition, policy: &mut Policy, ctx: &mut Ctx<'_>) -> Result<(), Reject> {
     if policy.status != PolicyStatus::InForce {
         return Ok(());
     }
@@ -101,6 +101,8 @@ pub(crate) fn run(ledger: &mut Ledger, product: &ProductDefinition, policy: &mut
         // A policy does not lapse before its lapse notice, as last proven
         // delivered, allows it to.
         Derived::Lapse if policy.notices.get("lapse").is_some_and(|n| n.earliest_effect > ctx.date) => Ok(()),
+        // Cover that can be made paid up is, instead of the policy lapsing.
+        Derived::Lapse if crate::paid_up::instead_of_lapse(ledger, catalog, product, policy, ctx)? => Ok(()),
         Derived::Lapse => lapse(ledger, product, policy, ctx),
     }
 }
@@ -161,28 +163,13 @@ pub(crate) fn write_off(policy: &Policy, set: &mut PostingSet, mine: impl Fn(&Re
 /// that was paid but not yet earned is returned to policy suspense.
 fn lapse(ledger: &mut Ledger, product: &ProductDefinition, policy: &mut Policy, ctx: &mut Ctx<'_>) -> Result<(), Reject> {
     voluntary::close_all(ledger, product, policy, ctx)?;
-    let c = policy.currency;
-    let mut set = PostingSet::new();
-    let (arrears, leftover_fine) = write_off(policy, &mut set, |_| true);
-    let (refund, rem) = AccrualAmount::new(leftover_fine, c).round_to_money(product.rounding)?;
-    set.credit(accounts::policy_suspense(&policy.id, c), refund.minor as i128, Dimensions::default());
-    set.credit(accounts::rounding(c), rem.fine, dims(policy, None, "rounding"));
-
-    let postings = set.into_postings(ledger)?;
-    if !postings.is_empty() {
-        ctx.post(ledger, "policy_lapsed", Some(policy), ctx.date, postings.clone(), BTreeMap::new())?;
-    }
-    let before = policy.receivables.clone();
-    for r in policy.receivables.iter_mut().filter(|r| !r.closed) {
-        r.outstanding_minor = 0;
-        r.closed = true;
-    }
+    let (postings, before, arrears_minor) = write_off_open(ledger, product, policy, ctx, "policy_lapsed")?;
     policy.lapse = Some(LapseRecord {
         approval: None,
         lapsed_on: ctx.date,
         postings,
         receivables_before: before,
-        arrears_minor: arrears + refund.minor,
+        arrears_minor,
     });
     set_standing(policy, ctx, None);
     ctx.emit(Event::PolicyStatusChanged {
@@ -192,4 +179,32 @@ fn lapse(ledger: &mut Ledger, product: &ProductDefinition, policy: &mut Policy, 
     });
     policy.status = PolicyStatus::Lapsed;
     Ok(())
+}
+
+/// Every open receivable written off as at a lapse, and closed: what was
+/// written, the receivables as they stood, and the arrears with the refund.
+pub(crate) fn write_off_open(
+    ledger: &mut Ledger,
+    product: &ProductDefinition,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    kind: &str,
+) -> Result<(Vec<ic_ledger::Posting>, Vec<Receivable>, i64), Reject> {
+    let c = policy.currency;
+    let mut set = PostingSet::new();
+    let (arrears, leftover_fine) = write_off(policy, &mut set, |_| true);
+    let (refund, rem) = AccrualAmount::new(leftover_fine, c).round_to_money(product.rounding)?;
+    set.credit(accounts::policy_suspense(&policy.id, c), refund.minor as i128, Dimensions::default());
+    set.credit(accounts::rounding(c), rem.fine, dims(policy, None, "rounding"));
+
+    let postings = set.into_postings(ledger)?;
+    if !postings.is_empty() {
+        ctx.post(ledger, kind, Some(policy), ctx.date, postings.clone(), BTreeMap::new())?;
+    }
+    let before = policy.receivables.clone();
+    for r in policy.receivables.iter_mut().filter(|r| !r.closed) {
+        r.outstanding_minor = 0;
+        r.closed = true;
+    }
+    Ok((postings, before, arrears + refund.minor))
 }

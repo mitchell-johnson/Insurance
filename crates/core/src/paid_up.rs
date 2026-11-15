@@ -56,60 +56,88 @@ pub(crate) fn reduced(sum_insured_minor: i64, years_paid: u32, term_years: u32, 
 }
 
 pub(crate) fn make_paid_up(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut Ctx<'_>, spec: MakePaidUp) -> Result<(), Reject> {
-    if !plain(&spec.reference) {
-        return Err(Reject::new("invalid_request", "a request has a plain reference"));
+    paid_up(ledger, catalog, policy, ctx, spec, false)
+}
+
+/// Premium past its lapse period on a policy whose every cover still paying
+/// premium has a paid-up option it qualifies for (AIA Cover for Life after the
+/// paid-up date): each is made paid up today instead of the policy lapsing,
+/// premium billed for the days ahead handed back and what is left unpaid for
+/// the days already covered written off as at a lapse. False, with nothing
+/// written, where any cover does not qualify: the policy then lapses as usual.
+pub(crate) fn instead_of_lapse(
+    ledger: &mut Ledger,
+    catalog: &Catalog,
+    product: &ic_product::ProductDefinition,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+) -> Result<bool, Reject> {
+    let today = ctx.date;
+    let mut paying: Vec<(String, LifeId)> = Vec::new();
+    for (code, cover) in &policy.covers {
+        for layer in cover.layers.iter().filter(|l| l.in_force_on(today) && !l.paid_up) {
+            if product.cover(code).is_none_or(|d| d.paid_up_option.is_none()) {
+                return Ok(false);
+            }
+            if !paying.contains(&(code.clone(), layer.life.clone())) {
+                paying.push((code.clone(), layer.life.clone()));
+            }
+        }
     }
-    if let Some(done) = policy.paid_up.get(&spec.reference) {
-        return if done.cover == spec.cover && done.life == spec.life {
-            Ok(())
-        } else {
-            Err(Reject::new(
-                "duplicate_request",
-                format!("reference {} made another cover paid up", spec.reference),
-            ))
+    if paying.is_empty() {
+        return Ok(false);
+    }
+    // Every cover must qualify before anything is written.
+    for (code, life) in &paying {
+        if plan_for(catalog, policy, code, life, today).is_err() {
+            return Ok(false);
+        }
+    }
+    for (code, life) in paying {
+        let reference = format!("arrears-{today}-{code}-{}", life.0);
+        let spec = MakePaidUp {
+            policy: policy.id.clone(),
+            cover: code,
+            life,
+            reference,
         };
+        paid_up(ledger, catalog, policy, ctx, spec, true)?;
     }
-    if policy.status != PolicyStatus::InForce {
-        return Err(Reject::new("not_in_force", "only a policy in force can be made paid up"));
-    }
+    crate::arrears::write_off_open(ledger, product, policy, ctx, "paid_up_arrears")?;
+    crate::arrears::set_standing(policy, ctx, None);
+    Ok(true)
+}
+
+/// How each layer the life holds on the cover and still pays for would be
+/// made paid up today: the layer's index and the sum insured it keeps.
+fn plan_for(catalog: &Catalog, policy: &Policy, code: &str, life: &LifeId, today: NaiveDate) -> Result<Vec<(usize, i64)>, Reject> {
     let product = catalog
         .product(&policy.product_hash)
-        .cloned()
         .ok_or_else(|| Reject::new("unknown_product", "the policy's product version is not active"))?;
     let def = product
-        .cover(&spec.cover)
-        .ok_or_else(|| Reject::new("unknown_cover", format!("the product has no cover {}", spec.cover)))?;
+        .cover(code)
+        .ok_or_else(|| Reject::new("unknown_cover", format!("the product has no cover {code}")))?;
     let option = def
         .paid_up_option
         .as_ref()
-        .ok_or_else(|| Reject::new("no_paid_up_option", format!("cover {} cannot be made paid up", spec.cover)))?;
-    // Paid up means paid: premium owing is settled first, or the policy
-    // goes the way of any policy in arrears.
-    if policy.policyholder_outstanding_minor() > 0 {
-        return Err(Reject::new("premium_owing", "premium is owing; it is paid before a cover is made paid up"));
-    }
-    let today = ctx.date;
+        .ok_or_else(|| Reject::new("no_paid_up_option", format!("cover {code} cannot be made paid up")))?;
     let born = policy
         .lives
-        .get(&spec.life)
+        .get(life)
         .and_then(|l| l.factors.as_of(today))
         .and_then(|f| f.date_of_birth)
-        .ok_or_else(|| Reject::new("life_not_covered", format!("{} is not a life on the policy with a date of birth", spec.life)))?;
-    let before = policy.clone();
-    let id = policy.id.clone();
+        .ok_or_else(|| Reject::new("life_not_covered", format!("{life} is not a life on the policy with a date of birth")))?;
     let cover = policy
         .covers
-        .get_mut(&spec.cover)
-        .ok_or_else(|| Reject::new("unknown_cover", format!("the policy has no cover {}", spec.cover)))?;
-    let cover_type = cover.cover_type.clone();
-    let mut next_id = cover.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
+        .get(code)
+        .ok_or_else(|| Reject::new("unknown_cover", format!("the policy has no cover {code}")))?;
     let held: Vec<usize> = (0..cover.layers.len())
-        .filter(|&i| cover.layers[i].life == spec.life && cover.layers[i].in_force_on(today) && !cover.layers[i].paid_up)
+        .filter(|&i| &cover.layers[i].life == life && cover.layers[i].in_force_on(today) && !cover.layers[i].paid_up)
         .collect();
     if held.is_empty() {
         return Err(Reject::new(
             "life_not_covered",
-            format!("{} holds no cover {} still paying premium", spec.life, spec.cover),
+            format!("{life} holds no cover {code} still paying premium"),
         ));
     }
     // Every layer must qualify, or none is touched.
@@ -137,6 +165,41 @@ pub(crate) fn make_paid_up(ledger: &mut Ledger, catalog: &Catalog, policy: &mut 
         })?;
         plan.push((i, kept));
     }
+    Ok(plan)
+}
+
+fn paid_up(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut Ctx<'_>, spec: MakePaidUp, on_arrears: bool) -> Result<(), Reject> {
+    if !plain(&spec.reference) {
+        return Err(Reject::new("invalid_request", "a request has a plain reference"));
+    }
+    if let Some(done) = policy.paid_up.get(&spec.reference) {
+        return if done.cover == spec.cover && done.life == spec.life {
+            Ok(())
+        } else {
+            Err(Reject::new(
+                "duplicate_request",
+                format!("reference {} made another cover paid up", spec.reference),
+            ))
+        };
+    }
+    if policy.status != PolicyStatus::InForce {
+        return Err(Reject::new("not_in_force", "only a policy in force can be made paid up"));
+    }
+    // Paid up means paid: premium owing is settled first, or the policy
+    // goes the way of any policy in arrears.
+    if !on_arrears && policy.policyholder_outstanding_minor() > 0 {
+        return Err(Reject::new("premium_owing", "premium is owing; it is paid before a cover is made paid up"));
+    }
+    let today = ctx.date;
+    let plan = plan_for(catalog, policy, &spec.cover, &spec.life, today)?;
+    let before = policy.clone();
+    let id = policy.id.clone();
+    let cover = policy
+        .covers
+        .get_mut(&spec.cover)
+        .ok_or_else(|| Reject::new("unknown_cover", format!("the policy has no cover {}", spec.cover)))?;
+    let cover_type = cover.cover_type.clone();
+    let mut next_id = cover.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
     let (mut was_total, mut kept_total) = (0i64, 0i64);
     for (i, kept) in plan {
         let old = cover.layers[i].clone();

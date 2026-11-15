@@ -474,6 +474,7 @@ fn a_layer_underwriting_rewrote_carries_its_commission_on() {
     let before = w.events.len();
     let command = CoreCommand::AlterUnderwrittenTerms(Box::new(ic_core::command::AlteredTerms {
         occupation_class: None,
+        smoker: None,
         policy: policy.clone(),
         cover: "life".into(),
         life: ic_core::LifeId("life-1".into()),

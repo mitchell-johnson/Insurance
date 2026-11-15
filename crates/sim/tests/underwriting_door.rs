@@ -288,6 +288,7 @@ fn an_increase_that_cannot_be_priced_or_is_not_underwritings_is_refused() {
 fn terms(policy: &PolicyId, life: &str, cover: &str, loading: Option<&str>, exclusions: &[&str]) -> Command {
     Command::AlterUnderwrittenTerms(Box::new(ic_core::command::AlteredTerms {
         occupation_class: None,
+        smoker: None,
         policy: policy.clone(),
         cover: cover.into(),
         life: ic_core::LifeId(life.into()),

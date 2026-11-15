@@ -364,6 +364,7 @@ fn a_rate_row_for_an_occupation_class_prices_only_lives_in_that_class() {
             exclusions: vec![],
             reference: "uw-occupation-1".into(),
             occupation_class: Some(class.into()),
+            smoker: None,
         }))
     };
     assert_eq!(code(c.submit(0, "underwriting", reclass("1"))), "no_change");

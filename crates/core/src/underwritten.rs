@@ -712,6 +712,7 @@ pub(crate) fn alter_terms(ledger: &mut Ledger, catalog: &Catalog, policy: &mut P
         loadings: spec.loadings,
         exclusions: spec.exclusions,
         occupation_class: spec.occupation_class,
+        smoker: spec.smoker,
     };
     alter(ledger, catalog, &mut draft, ctx, &spec.cover, &spec.life, change)?;
     *policy = draft;
@@ -733,6 +734,7 @@ enum Change {
         loadings: Vec<ic_money::DecStr>,
         exclusions: Vec<String>,
         occupation_class: Option<String>,
+        smoker: Option<bool>,
     },
     Excess(String),
 }
@@ -777,16 +779,20 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
             }
         }
     }
-    // A new occupation class is a change even where the terms stay as they were.
+    // A new occupation class or smoker status is a change even where the terms
+    // stay as they were.
     let held = policy.lives.get(spec.life).and_then(|l| l.factors.as_of(effective));
     let reclassed = match &change {
-        Change::Terms {
-            occupation_class: Some(class), ..
-        } if held.is_some_and(|f| f.occupation_class.as_ref() != Some(class)) => held.map(|f| crate::policy::LifeFactors {
-            occupation_class: Some(class.clone()),
-            ..f.clone()
+        Change::Terms { occupation_class, smoker, .. } => held.and_then(|f| {
+            let class = occupation_class.clone().or_else(|| f.occupation_class.clone());
+            let smokes = smoker.or(f.smoker);
+            (class != f.occupation_class || smokes != f.smoker).then(|| crate::policy::LifeFactors {
+                occupation_class: class,
+                smoker: smokes,
+                ..f.clone()
+            })
         }),
-        _ => None,
+        Change::Excess(_) => None,
     };
     let altered: Vec<Layer> = cover
         .layers
@@ -934,6 +940,7 @@ pub(crate) fn approve_reinstatement(catalog: &Catalog, policy: &mut Policy, ctx:
 pub(crate) fn reinstated_terms(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut Ctx<'_>, terms: LayerTerms) -> Result<(), Reject> {
     let spec = AlteredTerms {
         occupation_class: None,
+        smoker: None,
         policy: policy.id.clone(),
         cover: terms.cover,
         life: terms.life,

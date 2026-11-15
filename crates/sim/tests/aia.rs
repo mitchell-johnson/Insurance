@@ -1188,3 +1188,114 @@ fn income_cover_grows_without_evidence_inside_the_income_wordings_limits() {
     assert_eq!(code(anniversary(&mut c, &large, "an-0", 1_00)), "option_total");
     assert_eq!(held(&c, &small, "income-agreed-value"), 6_000_00);
 }
+
+/// Purpose: AIA Cover for Life's premiums are guaranteed: a later, dearer version of the rate
+/// table reprices AIA Living's stepped life cover at its next anniversary but not Cover for
+/// Life; and a smoker whom underwriting reviews as a non-smoker is rated as a non-smoker from
+/// that day, the days left of the year billed credited, on the rates the cover was written on.
+/// Why it matters: guaranteed premiums and the non-smoker review are both in the Cover for
+/// Life wording (1400 A-CFL). A repricing that reached guaranteed cover would break a promise
+/// made to every customer; a review that changed nothing would keep charging a smoker's rate
+/// to a customer who has stopped.
+#[test]
+fn cover_for_life_premiums_are_guaranteed_and_a_smoker_can_be_reviewed() {
+    let mut c = cluster();
+    let cfl = product("aia_cover_for_life.star");
+    let living = product("aia_living.star");
+    let mut whole = policy(1, "aia-cover-for-life", d(1987, 6, 1), &[("life", 500_000_00, Some(pick(&cfl, "life", &[("pay-to", "to-65")])))]);
+    whole.lives[0].factors.smoker = Some(true);
+    let whole = issue(&mut c, whole).unwrap();
+    let stepped = issue(&mut c, policy(2, "aia-living", d(1987, 6, 1), &[("life", 500_000_00, Some(pick(&living, "life", &[])))])).unwrap();
+    let source = include_str!("../../../products/rates/aia_life.star")
+        .replace("version = 1,", "version = 2,")
+        .replace("effective_from = \"2026-11-14\"", "effective_from = \"2028-03-01\"")
+        .lines()
+        .map(|line| match line.trim_start().strip_prefix("rate(\"") {
+            Some(rest) => {
+                let (value, tail) = rest.split_once('"').unwrap();
+                format!("        rate(\"{}\"{tail}", ic_money::dec(value).unwrap() * ic_money::dec("2").unwrap())
+            }
+            None => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let dearer = ic_product::load_rate_table("aia_life_v2.star", &source).unwrap();
+    c.activate_everywhere(Command::ActivateRateTable { table: Box::new(dearer) }).unwrap();
+    close_to(&mut c, d(2028, 11, 16));
+    let (w, s) = (billed(&c, &whole, "life"), billed(&c, &stepped, "life"));
+    assert_eq!((w.len(), s.len()), (2, 2), "{w:?} {s:?}");
+    assert_eq!(w[1], w[0], "guaranteed: the second year is billed as the first");
+    assert!(s[1] > s[0] * 3 / 2, "stepped cover is repriced on the dearer table: {s:?}");
+
+    let review = |smoker: bool| {
+        Command::AlterUnderwrittenTerms(Box::new(ic_core::command::AlteredTerms {
+            policy: whole.clone(),
+            cover: "life".into(),
+            life: ic_core::LifeId("life-1".into()),
+            loadings: vec![],
+            exclusions: vec![],
+            reference: "uw-non-smoker-1".into(),
+            occupation_class: None,
+            smoker: Some(smoker),
+        }))
+    };
+    let code = |r: Result<(), Reject>| r.unwrap_err().code;
+    assert_eq!(code(c.submit(0, "underwriting", review(true))), "no_change");
+    let before = billed_for(&c, &whole, "life");
+    c.submit(0, "underwriting", review(false)).unwrap();
+    let today = c.state(0).business_date.unwrap();
+    assert_eq!(c.state(0).policies[&whole].lives[&ic_core::LifeId("life-1".into())].factors.as_of(today).unwrap().smoker, Some(false));
+    assert!(billed_for(&c, &whole, "life") < before, "the rest of the year is credited at the non-smoker rate");
+    assert_eq!(code(c.submit(0, "underwriting", review(false))), "no_change");
+}
+
+/// Close days to `to`, only the policies named paying what they owe.
+fn close_paying(c: &mut Cluster, to: NaiveDate, paying: &[&PolicyId]) {
+    while c.state(0).business_date.unwrap() < to {
+        let today = c.state(0).business_date.unwrap();
+        for id in paying {
+            let owing = c.state(0).policies[*id].outstanding_minor();
+            if owing > 0 {
+                let pay = Command::ApplyReceipt {
+                    policy: (*id).clone(),
+                    receipt: format!("on-{today}"),
+                    amount: Money::new(owing, NZD),
+                };
+                c.submit(0, "cash-matching", pay).unwrap();
+            }
+        }
+        let close = c.end_of_day().unwrap();
+        assert!(close.breaks.is_empty(), "{:?}", close.breaks);
+    }
+}
+
+/// Purpose: AIA Cover for Life whose premium stops after half the premium term is made paid up
+/// when the premium passes its lapse period, keeping the share of the term paid for times 0.95
+/// with nothing more billed and the unpaid premium written off; the same policy stopping in its
+/// first year lapses as before.
+/// Why it matters: the wording (1400 A-CFL) says a policy past its paid-up date is made paid up,
+/// not cancelled. Lapsing it would take away cover the customer has paid years of premium for.
+#[test]
+fn cover_for_life_is_made_paid_up_instead_of_lapsing_after_its_paid_up_date() {
+    let mut c = cluster();
+    let cfl = product("aia_cover_for_life.star");
+    let to_65 = pick(&cfl, "life", &[("pay-to", "to-65")]);
+    let late = issue(&mut c, policy(1, "aia-cover-for-life", d(1972, 6, 1), &[("life", 200_000_00, Some(to_65.clone()))])).unwrap();
+    let early = issue(&mut c, policy(2, "aia-cover-for-life", d(1972, 6, 1), &[("life", 200_000_00, Some(to_65))])).unwrap();
+    // Early stops paying at its first anniversary; late pays five years and stops.
+    close_paying(&mut c, d(2028, 11, 15), &[&late, &early]);
+    close_paying(&mut c, d(2029, 1, 31), &[&late]);
+    assert_eq!(c.state(0).policies[&early].status, PolicyStatus::Lapsed);
+    close_paying(&mut c, d(2032, 11, 15), &[&late]);
+    close_paying(&mut c, d(2033, 1, 31), &[]);
+    let p = &c.state(0).policies[&late];
+    assert_eq!(p.status, PolicyStatus::InForce);
+    // Five of ten years paid, times 0.95, of $200,000.
+    assert_eq!(held(&c, &late, "life"), 95_000_00);
+    assert!(p.paid_up.values().any(|r| r.paid_up_minor == 95_000_00 && r.on == d(2032, 12, 17)), "{:?}", p.paid_up);
+    assert_eq!(p.outstanding_minor(), 0);
+    close_paying(&mut c, d(2034, 1, 31), &[]);
+    let p = &c.state(0).policies[&late];
+    assert_eq!(p.status, PolicyStatus::InForce);
+    assert!(p.receivables.iter().all(|r| r.due <= d(2032, 12, 17)), "nothing more is billed");
+}

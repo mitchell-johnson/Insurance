@@ -229,6 +229,11 @@ pub struct CoverDefinition {
     /// from life cover names the life cover here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reduces: Vec<String>,
+    /// Premium rates are guaranteed: each layer is priced on the rate table in
+    /// force when it was priced, and a later table version does not reach it
+    /// (AIA Cover for Life's guaranteed level premiums).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub guaranteed_rates: bool,
     /// One sum insured across every life on the cover, paid once on the
     /// first event to any of them. A payment reduces or ends the cover for
     /// all of them. A cover that carries on in full for the survivor is not

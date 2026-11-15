@@ -8,6 +8,10 @@
 # sum assured (paid up): the proportion of the term paid, times the sum
 # assured, times 0.95 (`paid_up_option` below; the core's MakePaidUp).
 #
+# Premiums are guaranteed (`guaranteed_rates`): a later rate table does not
+# reach cover already written. A smoker reviewed by underwriting as a
+# non-smoker is rated as one from that day (AlterUnderwrittenTerms).
+#
 # Built from AIA's published wording and product page as at November 2026.
 # Rates and factors are placeholders marked PH.
 
@@ -45,6 +49,9 @@ PRODUCT = product(
             max_entry_age = 70,
             # No minimum and no maximum cover amount.
             min_sum_insured = 1,
+            # Guaranteed level premiums (1400 A-CFL): a later rate table does not
+            # reach cover already written.
+            guaranteed_rates = True,
             option_axes = [
                 # The premium payment term ends at the anniversary after the
                 # life reaches the age chosen. It cannot be changed later.
@@ -84,8 +91,8 @@ PRODUCT = product(
         ),
         earning(),
         # A premium 31 days overdue: before the paid-up date AIA may cancel;
-        # after it the policy is made paid up (the automatic conversion is not
-        # built; the owner's request is).
+        # after it the policy is made paid up instead (the core's arrears run),
+        # as it is on the owner's request.
         arrears(grace_days = 30, lapse_days = 31, reinstatement_days = 180, reinstatement_evidence_free_days = 60),  # PH
         cooling_off(days = 20),
     ],

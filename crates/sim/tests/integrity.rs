@@ -463,6 +463,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         })),
         Command::AlterUnderwrittenTerms(Box::new(ic_core::command::AlteredTerms {
             occupation_class: None,
+            smoker: None,
             policy: p.clone(),
             cover: "life".into(),
             life: LifeId("l".into()),

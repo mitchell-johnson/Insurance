@@ -1340,7 +1340,7 @@ impl CoreState {
             if let Some(closed_day) = ctx.date.pred_opt() {
                 earning::earn_through(&mut self.ledger, policy, ctx, closed_day)?;
             }
-            arrears::run(&mut self.ledger, &product, policy, ctx)?;
+            arrears::run(&mut self.ledger, &self.catalog, &product, policy, ctx)?;
             if policy.status != PolicyStatus::InForce {
                 return Ok(());
             }
@@ -1349,7 +1349,7 @@ impl CoreState {
         if let Some(closed_day) = ctx.date.pred_opt() {
             earning::earn_through(&mut self.ledger, policy, ctx, closed_day)?;
         }
-        arrears::run(&mut self.ledger, &product, policy, ctx)?;
+        arrears::run(&mut self.ledger, &self.catalog, &product, policy, ctx)?;
         voluntary::run_arrears(&mut self.ledger, &self.catalog, &product, policy, ctx)?;
         crate::loan::end_of_day(&mut self.ledger, &self.catalog, &self.investment, policy, ctx)?;
         if let Some(keep_from) = ctx.date.checked_sub_days(chrono::Days::new(400)) {

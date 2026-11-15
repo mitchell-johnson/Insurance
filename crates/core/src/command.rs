@@ -270,6 +270,11 @@ pub struct AlteredTerms {
     /// start, on every cover that rates by class.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occupation_class: Option<String>,
+    /// Whether the life smokes from today, where underwriting has reviewed it
+    /// (AIA's non-smoker review: a year without smoking). The life is rated on
+    /// it from the new layers' start, on every cover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoker: Option<bool>,
 }
 
 /// Underwriting's decision that a lapsed policy may be reinstated.

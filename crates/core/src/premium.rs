@@ -135,6 +135,14 @@ pub(crate) fn retail_premium_with(
                 excess_option: layer.excess_option.clone(),
                 loadings: layer.loadings.clone(),
             };
+            // Guaranteed rates: each layer keeps the table in force when it was priced.
+            let table = if def.guaranteed_rates {
+                catalog
+                    .rate_table_on(&def.rating.table, layer.rating_start(), &policy.group)
+                    .ok_or_else(|| PremiumError::NoRateTable(def.rating.table.clone()))?
+            } else {
+                table
+            };
             let p = cover_premium(def, table, &rf, layer.sum_insured_minor)?;
             let line = Line {
                 cover: cover.code.clone(),
