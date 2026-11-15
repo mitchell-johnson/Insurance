@@ -1,6 +1,7 @@
 //! The claims module's own tests, against a stand-in for the core.
 
 mod book;
+mod channel;
 mod controls;
 mod covers;
 mod decisions;
