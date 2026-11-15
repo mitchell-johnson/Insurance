@@ -124,6 +124,11 @@ pub enum Question {
     Pending {
         module: String,
     },
+    /// The engagement an adviser holds authority on a policy under, if any.
+    AdviserEngagement {
+        policy: PolicyId,
+        adviser: PartyId,
+    },
     Devices {
         party: PartyId,
     },
@@ -516,6 +521,9 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
         }
         Question::Requests { party } => json!(d.requests.values().filter(|r| r.party == party).collect::<Vec<_>>()),
         Question::Pending { module } => json!(state.pending_for(&module)),
+        Question::AdviserEngagement { policy, adviser } => {
+            json!(d.directory.authorities.get(&policy).and_then(|a| a.get(&adviser)).map(|a| a.engagement.clone()))
+        }
         Question::Devices { party } => json!(d
             .identity
             .by_party

@@ -75,8 +75,25 @@ pub(crate) fn check(
     accepted: bool,
     note: &str,
 ) -> Result<(), Reject> {
-    let Entry::InsurabilityOption { event, .. } = p.entry.clone() else {
-        return reject("entry", "only an insurability option has proof of a life event to check");
+    // What is checked, the decision's source and the reasons, by entry.
+    let (source, given, refused) = match p.entry.clone() {
+        Entry::InsurabilityOption { event, .. } => (
+            DecisionSource::InsurabilityOption {
+                event,
+                checked_by: underwriter.to_string(),
+            },
+            reason::INSURABILITY_OPTION,
+            reason::OPTION_EVIDENCE_REFUSED,
+        ),
+        Entry::Facility { facility, .. } => (
+            DecisionSource::Facility {
+                facility,
+                checked_by: underwriter.to_string(),
+            },
+            reason::FACILITY,
+            reason::FACILITY_REFUSED,
+        ),
+        _ => return reject("entry", "only an insurability option or a conversion facility has proof to check"),
     };
     if p.status != ProposalStatus::Open {
         return reject("closed", "the proposal is no longer open");
@@ -86,11 +103,20 @@ pub(crate) fn check(
         return reject("note", "say why the proof of the event is not accepted");
     }
     let proposal = p.id.clone();
-    cx.event(Event::OptionEvidenceChecked {
-        proposal: proposal.clone(),
-        life: life.clone(),
-        accepted,
-        by: underwriter.to_string(),
+    cx.event(match &source {
+        DecisionSource::Facility { facility, .. } => Event::FacilityChecked {
+            proposal: proposal.clone(),
+            life: life.clone(),
+            facility: *facility,
+            accepted,
+            by: underwriter.to_string(),
+        },
+        _ => Event::OptionEvidenceChecked {
+            proposal: proposal.clone(),
+            life: life.clone(),
+            accepted,
+            by: underwriter.to_string(),
+        },
     });
     flow::close_cases(life_mut(p, life)?, cx);
     if !accepted {
@@ -102,11 +128,12 @@ pub(crate) fn check(
             kind: NoticeKind::ProposalWithdrawn,
             proposal,
             life: None,
-            reasons: vec![reason::OPTION_EVIDENCE_REFUSED.to_string()],
+            reasons: vec![refused.to_string()],
         });
         return Ok(());
     }
-    // The core writes the layer on the terms of the life's original cover:
+    // The core writes the layer on the terms of the life's original cover,
+    // and a moved cover takes its terms from the cover it moves from:
     // nothing here adds to them or takes from them.
     let terms: Vec<CoverTerms> = p
         .covers_on(life)
@@ -119,11 +146,7 @@ pub(crate) fn check(
             },
         })
         .collect();
-    let source = DecisionSource::InsurabilityOption {
-        event,
-        checked_by: underwriter.to_string(),
-    };
-    let reasons: BTreeSet<String> = [reason::INSURABILITY_OPTION.to_string()].into();
+    let reasons: BTreeSet<String> = [given.to_string()].into();
     let decision = flow::new_decision(&st.config, p, life_ref(p, life)?, source, terms, reasons, cx);
     life_mut(p, life)?.decisions.push(decision);
     flow::after_signed(&st.config, p, life, cx)

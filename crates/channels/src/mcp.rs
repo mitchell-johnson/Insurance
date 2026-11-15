@@ -356,10 +356,12 @@ pub fn catalogue() -> Vec<Tool> {
         tool("collections_command", "Act in collections", S, M::POST, "/staff/v1/collections/commands", "A command to the collections module in its own JSON: record an outcome, propose or end an arrangement, apply for, decide or end hardship, ask for reinstatement, set a product's sequence.")
             .json(r#"{"type": "<command>", ...}"#),
         tool("group_question", "Ask group administration", S, M::GET, "/staff/v1/group/{question}", "Exceptions, a scheme, its invoices and mapping, an uploaded file, a member, a possible match, or the scheme a policy belongs to.")
-            .choose("question", vec!["me", "exceptions", "scheme", "invoices", "mapping", "file", "member", "possible_match", "scheme_of"])
+            .choose("question", vec!["me", "exceptions", "scheme", "invoices", "mapping", "file", "member", "possible_match", "scheme_of", "loadings_in_total"])
             .query("`scheme`, `file`, `employee`, `policy` as the question needs."),
         tool("group_command", "Act in group administration", S, M::POST, "/staff/v1/group/commands", "A command to group administration.")
             .json(r#"{"command": "<one of the group commands>", ...}"#),
+        tool("group_reoffer", "Offer a member their loading", S, M::POST, "/staff/v1/group/reoffer", "When too few members hold underwritten cover for the employer's loading total to hide whose it is, ask underwriting to offer one member the loading on their own cover. Nothing moves until they agree on their device.")
+            .json(r#"{"scheme": "<scheme>", "case": <case number from loadings_in_total>, "reason": "<why>"}"#),
         tool("try_mapping", "Try a membership file mapping", S, M::POST, "/staff/v1/group/schemes/{scheme}/mappings/try", "What a sample file would do read with a mapping, before it is set.")
             .json(r#"{"mapping": {...}, "sample": "<CSV text>"}"#),
         tool("first_scheme_admin", "Name a scheme's first administrator", S, M::PUT, "/staff/v1/group/schemes/{policy}/first-admin", "Name the first administrator of a scheme that has none.")

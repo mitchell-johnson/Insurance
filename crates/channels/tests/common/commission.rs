@@ -28,7 +28,24 @@ impl CommissionModule {
     /// The disputes the module was sent while it answered from scripted
     /// matches.
     pub fn disputes(&self) -> Vec<Value> {
-        self.2.lock().unwrap().clone()
+        self.2
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e["command"].get("attribute_alteration").is_none())
+            .cloned()
+            .collect()
+    }
+
+    /// What servicing said about who submitted an alteration.
+    pub fn attributions(&self) -> Vec<Value> {
+        self.2
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e["command"].get("attribute_alteration").is_some())
+            .cloned()
+            .collect()
     }
 }
 
@@ -70,6 +87,10 @@ impl Source for CommissionModule {
     }
 
     fn tell(&self, envelope: Value) -> Asked<'_> {
+        // Servicing's word on who submitted an alteration is kept, to be read back.
+        if envelope["command"].get("attribute_alteration").is_some() {
+            self.2.lock().unwrap().push(envelope.clone());
+        }
         // With scripted matches, a decision on one is accepted, as the module does once the dispute is open.
         if self.1.lock().unwrap().is_some() && envelope["command"].get("decide_replacement").is_some() {
             return Box::pin(async move { Ok(serde_json::json!({ "result": { "Ok": null }, "duplicate": false })) });

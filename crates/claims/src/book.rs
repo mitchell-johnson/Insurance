@@ -219,7 +219,8 @@ impl ClaimsState {
             claim: claim.id.clone(),
             policy: claim.policy.clone(),
             cover: claim.cover.clone(),
-            only_cover: false,
+            // AIA's pregnancy waiver is the income cover's own premium, not the policy's.
+            only_cover: claim.built_in.contains_key(crate::decide::PREGNANCY_WAIVER),
             from,
             until: s.end,
         })

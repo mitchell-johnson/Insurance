@@ -4595,6 +4595,24 @@ async fn the_payments_console() {
     let (status, party) = ask("sub-payview", "party?party=party-p1").await;
     assert_eq!((status, &party["payees"][0]["payee"]), (StatusCode::OK, &json!("p1")), "{party}");
     assert!(!party.to_string().contains("0101234567"), "no account number: {party}");
+    // Notices: a role's own list, and only for someone who holds the role.
+    let (status, notices) = ask("sub-paymk", "notices?role=maker").await;
+    assert_eq!((status, notices.is_array()), (StatusCode::OK, true), "{notices}");
+    assert_eq!(
+        ask("sub-paymk", "notices?role=approver").await.0,
+        StatusCode::BAD_REQUEST,
+        "not a role the maker holds"
+    );
+    assert_eq!(ask("sub-payview", "notices?role=maker").await.0, StatusCode::BAD_REQUEST);
+    // Misdirected money and the other new lookups reach the module.
+    assert_eq!(ask("sub-payview", "open_misdirections").await, (StatusCode::OK, json!({})));
+    assert_eq!(ask("sub-payview", "misdirection?misdirection=m-none").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(ask("sub-payview", "incident?incident=i-none").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(ask("sub-payview", "tax_remittance?remittance=t-none").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(ask("sub-payview", "funding_forecast?from=2027-01-01&to=2027-01-31").await.0, StatusCode::OK);
+    // A notice that does not exist is refused by the module, not by the console's list.
+    let (status, problem) = tell("sub-paymk", json!({ "type": "close_notice", "notice": 999, "action": "looked" })).await;
+    assert_ne!(status, StatusCode::BAD_REQUEST, "close_notice is a console command: {problem}");
 
     // The module unreachable: the console says so.
     let now = portal.now();
@@ -4951,6 +4969,43 @@ async fn the_group_console() {
     assert_eq!(first("sub-grp1", portal.retail.to_string(), "hr-10").await.0, StatusCode::CONFLICT);
     // The candidates for a possible match are asked of the group service by scheme and employee.
     assert_eq!(ask("sub-grp1", "possible_match?scheme=harbour").await.0, StatusCode::BAD_REQUEST);
+}
+
+/// Purpose: group administration asks underwriting to offer a member the loading the employer pays in one total: the
+/// console lists whose loading is in the total with the proposal behind each, only an administrator may ask, a case with no
+/// loading in the total and a request without a reason go nowhere, and the command names the proposal the group module gave.
+/// Why it matters: underwriting's re-offer existed with nothing to send it, so a small scheme's invoice kept showing one
+/// member's loading as the employer's whole total, from which the employer can tell whose health it reflects.
+#[tokio::test]
+async fn a_loading_is_reoffered_to_the_member_from_the_group_console() {
+    let module = Arc::new(common::group_module::seeded());
+    let portal = portal_with(|_| module.clone());
+    let (status, listed) = portal.get("sub-grpview", "/staff/v1/group/loadings_in_total?scheme=harbour").await;
+    assert_eq!((status, &listed["cases"]), (StatusCode::OK, &json!([])), "{listed}");
+    let reoffer = |who: &'static str, body: Value| {
+        let portal = &portal;
+        async move { portal.write("POST", who, "/staff/v1/group/reoffer", body).await }
+    };
+    let body = json!({ "scheme": "harbour", "case": 1, "reason": "one holder left in the total" });
+    assert_eq!(reoffer("sub-grpview", body.clone()).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(
+        reoffer("sub-grp1", body).await.0,
+        StatusCode::BAD_REQUEST,
+        "harbour has no loading in its total"
+    );
+    assert_eq!(
+        reoffer("sub-grp1", json!({ "scheme": "nope", "case": 1, "reason": "x" })).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    // The command, from a list that holds the case.
+    let listed = json!({ "cases": [{ "case": 7, "employee": "E005", "cover": "life", "proposal": "grp-uw:harbour:3" }] });
+    assert_eq!(
+        ic_channels::group::reoffer(&listed, 7, " one holder left ").unwrap(),
+        json!({ "reoffer_excess_terms": { "proposal": "grp-uw:harbour:3", "reason": "one holder left" } })
+    );
+    assert!(ic_channels::group::reoffer(&listed, 8, "why").is_err());
+    assert!(ic_channels::group::reoffer(&listed, 7, " ").is_err());
 }
 
 /// Purpose: a refusal of the portal itself by the group service (its token lacks the `group-admin` role) is the portal's
@@ -6095,6 +6150,61 @@ fn the_shipped_sequences_follow_each_products_lapse_day() {
     }
     assert_eq!(ic_channels::collections::reading_role(&["configuration".into()]), "collections");
     assert_eq!(ic_channels::collections::reading_role(&["team_lead".into(), "hardship".into()]), "hardship");
+}
+
+/// Purpose: a cancellation an adviser submitted is attributed to the adviser's engagement in the commission module, as
+/// `policy-servicing` and before the core is asked, and then carried to the core; one the customer submitted is not
+/// attributed; a change that gives up no cover is not attributed.
+/// Why it matters: clawback by cause (an agreement's `clawback_by_cause`) puts the clawback on whoever caused the
+/// cancellation only if the commission module is told who that was. Nothing told it, so the switch did nothing.
+#[tokio::test]
+async fn an_advisers_cancellation_is_attributed_to_their_engagement() {
+    use ic_channels::state::{Request, RequestStatus};
+    let portal = portal();
+    let policy = portal.retail.clone();
+    let pending = |id: &str, party: &str, kind: &str| Request {
+        id: id.into(),
+        party: p(party),
+        policy: Some(policy.clone()),
+        kind: kind.into(),
+        module: "policy-servicing".into(),
+        payload: json!({}),
+        signed: true,
+        submitted: 0,
+        status: RequestStatus::Pending,
+        approved_by: Some(p(KIRI)),
+        signed_by: Default::default(),
+        route_to_person: false,
+        assisted: None,
+    };
+    portal.local.with(|state| {
+        state.data.directory.authorities.entry(policy.clone()).or_default().insert(
+            p("adv-1"),
+            ic_channels::directory::Authority {
+                engagement: "e1".into(),
+                granted_by: p(KIRI),
+                granted: 0,
+            },
+        );
+        state.data.requests.insert("a-1".into(), pending("a-1", "adv-1", "decline_indexation"));
+        state.data.requests.insert("a-2".into(), pending("a-2", "adv-1", "cancel_policy"));
+    });
+    portal.claims.cover(0, &policy.to_string());
+    assert_eq!(portal.state.carry_servicing_requests().await, Ok(2));
+    let told = portal.commission.attributions();
+    assert_eq!(told.len(), 1, "only the cancellation gives up cover: {told:?}");
+    assert_eq!(told[0]["actor"], json!({ "module": "policy-servicing" }));
+    assert_eq!(told[0]["command"]["attribute_alteration"], json!({ "policy": policy, "engagement": "e1" }));
+    let serde_ok: Result<ic_distribution::state::Envelope, _> = serde_json::from_value(told[0].clone());
+    assert!(serde_ok.is_ok(), "the commission module reads it: {serde_ok:?}");
+    assert_eq!(portal.claims.servicing(0).len(), 2, "both reached the core");
+
+    // The customer's own cancellation names no engagement.
+    portal.local.with(|state| {
+        state.data.requests.insert("a-3".into(), pending("a-3", KIRI, "cancel_policy"));
+    });
+    assert_eq!(portal.state.carry_servicing_requests().await, Ok(1));
+    assert_eq!(portal.commission.attributions().len(), 1);
 }
 
 /// Purpose: a change the customer asked for in the app (decline indexation, change how often they pay, cancel) is carried to

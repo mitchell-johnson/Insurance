@@ -401,6 +401,7 @@ pub enum Command {
     /// The person holding an insurability option's case accepts the proof
     /// of the life event, or does not (with why). Accepted, the extra cover
     /// goes to the core with no underwriting; not accepted, the request ends.
+    /// A conversion facility's case is checked the same way.
     CheckOptionEvidence {
         case: String,
         underwriter: String,
@@ -791,6 +792,19 @@ pub enum Effect {
         expected_product_hash: String,
         migrated: bool,
         command: Box<IssuePolicy>,
+        /// A policy written under a conversion facility: the entry, which
+        /// names the policy it comes from. The driver checks that policy in
+        /// the core before it issues, and carries its terms over.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        facility: Option<Box<Entry>>,
+    },
+    /// The policy a conversion moved the cover from ends, now the new one
+    /// is in force (Start-Up Income once Business Continuity is issued).
+    EndConverted {
+        key: String,
+        proposal: ProposalId,
+        group: GroupId,
+        policy: PolicyId,
     },
     /// Terms for a policy already in force: a new layer, a replaced layer or
     /// a reinstatement, as the entry point says.
@@ -1050,6 +1064,14 @@ pub enum Event {
     OptionEvidenceChecked {
         proposal: ProposalId,
         life: LifeId,
+        accepted: bool,
+        by: String,
+    },
+    /// A person checked what a conversion facility asks.
+    FacilityChecked {
+        proposal: ProposalId,
+        life: LifeId,
+        facility: crate::model::Facility,
         accepted: bool,
         by: String,
     },

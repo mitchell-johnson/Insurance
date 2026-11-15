@@ -120,6 +120,13 @@ impl Core for Ledger {
             .filter_map(|p| cluster.state(0).policies.get(p).cloned())
             .collect())
     }
+
+    async fn policy(&self, _group: &ic_core::GroupId, policy: &PolicyId) -> Result<Option<ic_core::policy::Policy>, DriverError> {
+        if *self.down.lock().unwrap() {
+            return Err(DriverError::Unavailable("no ledger node answered".into()));
+        }
+        Ok(self.cluster.lock().unwrap().state(0).policies.get(policy).cloned())
+    }
 }
 
 /// Group administration as a recorder: what it was sent, and whether it refuses.

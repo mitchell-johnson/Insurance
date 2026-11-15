@@ -113,9 +113,11 @@ fn settings_have_defaults_and_bad_ones_are_refused_by_name() {
 /// core's reply with the layers it wrote. A group excess answer for a case group administration
 /// does not know is refused by that module and parked with its reason. The channel module
 /// takes the proposal's progress rows under this module's name. The commission module takes
-/// an adviser's new business advice once and refuses it by code otherwise. The daily sweep runs
+/// an adviser's new business advice once and refuses it by code otherwise. A policy is read
+/// whole from the core, as a conversion facility's source policy is. The daily sweep runs
 /// once for the day. With no node to reach the pass stops as unavailable. The driver reads
-/// collections' list of lapsed policies through the core in either shape it may come in. The
+/// collections' list of lapsed policies through the core in either shape it may come in, and a
+/// policy whole from its group's home partition, as a conversion facility's source is. The
 /// process itself refuses to start without its settings, runs its cycles and stops when told; and the shipped
 /// binary does the same from its environment and exits cleanly on SIGTERM.
 /// Why it matters: every other driver test runs the modules in the test's own process. This is
@@ -263,6 +265,16 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
     assert!(policy.is_some(), "the policy is in the ledger's directory");
     let view = client.policy_by_number(0, &proposal.policy_number).await.unwrap().unwrap();
     assert_eq!(view.policy.status, PolicyStatus::InForce);
+    // A policy read whole from its group's home partition, as a facility's source is; one the
+    // ledger does not hold is none.
+    let read = ic_underwriting::driver::Core::policy(&cluster, &proposal.group, &proposal.policy)
+        .await
+        .unwrap();
+    assert_eq!(read.map(|p| p.status), Some(PolicyStatus::InForce));
+    let none = ic_underwriting::driver::Core::policy(&cluster, &proposal.group, &"POL-NOBODY".into())
+        .await
+        .unwrap();
+    assert!(none.is_none());
 
     // Collections' list read through the core: a policy with its partition, a bare ID found by
     // asking each partition, and one the ledger does not hold, which is left out.

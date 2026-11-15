@@ -57,6 +57,10 @@
 <div><label for="aml-rel">Relationship in the customer master, as party/id (optional)</label><input id="aml-rel"></div>
 <div><label for="aml-note">Why it is explained</label><input id="aml-note" required></div><button>Clear</button></div></form><div id="aml-msg" aria-live="polite"></div></section>
 
+<section data-view="Notices and cases"><h2>Notices for your roles</h2><p class="muted">What the payments module raised for a role you hold. Close one with what you did.</p><div id="nt-msg" aria-live="polite"></div><div id="notices"></div></section>
+<section data-view="Notices and cases"><h2>Money paid to the wrong account</h2><p class="muted">Open recalls of money that went to the wrong account. An approver who did not report one writes off what will not come back.</p><div id="mis-msg" aria-live="polite"></div><div id="misdirections"></div></section>
+<section data-view="Notices and cases"><h2>Look up an incident or a tax remittance</h2><form id="lk-form"><div class="row"><div><label for="lk-what">What</label><select id="lk-what"><option value="incident">Collection incident</option><option value="tax_remittance">Tax or levy remittance</option><option value="misdirection">Misdirected payment</option></select></div><div><label for="lk-id">Reference</label><input id="lk-id" required></div><button>Show</button></div></form><div id="lk-msg" aria-live="polite"></div><div id="lk"></div></section>
+<section data-view="Act"><h2>Act</h2><p class="muted">Every action the payments module takes from a person, for the roles you hold. The module decides again by your roles.</p><div id="acts"></div></section>
 <section data-view="Controls" id="raw" hidden><h2>Another command, for the rare case the page has no button</h2><p class="muted">Any command people send, in the payments module's JSON (<code>{"type": "suspend_authority", ...}</code>). The module decides by your roles.</p>
 <form id="raw-form"><div><label for="raw-cmd">The command, as the payments module reads it</label><textarea id="raw-cmd" rows="5" required></textarea></div><p><button>Send</button></p></form><div id="raw-msg" aria-live="polite"></div></section>
 </main>
@@ -130,7 +134,8 @@ async function showExceptions() {
   // An exception is worked where it is listed: its account's reconciliation, or the money applied by hand.
   put($("exceptions"), open.length ? table(["Exception", "Account", "Kind", "Amount", "Reference", "Owner", "Opened", ""], open.map((e) => [e.exception, e.account, words(e.kind), money(e.amount_minor), e.reference || "", e.owner || "", e.opened_on,
     h("span", {}, button("Its account", $("exc-msg"), async () => { $("rec-account").value = e.account; await showRec(); return ""; }),
-      has("reconciler") ? button("Apply", $("exc-msg"), async () => { $("mm-exception").value = e.exception; $("mm-parts").focus(); return `Say which policies ${e.exception} belongs to below.`; }) : null)]))
+      has("reconciler") ? button("Apply", $("exc-msg"), async () => { $("mm-exception").value = e.exception; $("mm-parts").focus(); return `Say which policies ${e.exception} belongs to below.`; }) : null,
+      has("reconciler") ? button("Give it back", $("exc-msg"), async () => { const reason = await portal.ask({ title: `Give back ${e.exception}`, text: "Every policy it was applied to has that receipt reversed, and the bank's debit is expected under its reference.", label: "Why", confirm: "Give it back" }); if (!reason) return ""; await send({ type: "return_credit", exception: e.exception, reason }); await showExceptions(); return "Given back."; }) : null)]))
     : h("p", { class: "muted" }, "None."));
 }
 $("party-form").addEventListener("submit", run($("party-msg"), async () => {
@@ -205,6 +210,53 @@ $("aml-form").addEventListener("submit", run($("aml-msg"), async () => {
   await showPayerCases();
   return "Cleared.";
 }));
+// Every action people send, by the role that sends it.
+const ACCOUNT = [["account.name", "Account name", "text"], ["account.number", "Account number", "text"], ["name_check", "Name check", "select", ["match", "close", "no_match", "unavailable"]]];
+const RUN_TYPES = ["collection", "lump_sum_claims", "benefit_payments", "provider_payments", "premium_refunds", "commission", "reinsurer", "fund_settlement", "tax_and_levies", "unclaimed_money", "fund_transfer", "ex_gratia"];
+const PAYEE_KINDS = ["customer", "beneficiary", "estate", "liquidator", "provider", "adviser"];
+const ACTIONS = {
+  create_authority: { label: "Set up a direct debit authority", can: () => has("payee_maintainer"), fields: [["authority", "Authority reference", "reference", "DDA"], ["policy", "Policy", "text"], ["party", "Payer (customer reference)", "text"], ["life", "Member who pays for their own cover (optional)", "optional"], ["account.name", "Account name", "text"], ["account.number", "Account number", "text"], ["sole_name", "The account is in the payer's sole name", "bool"]] },
+  suspend_authority: { label: "Suspend an authority", can: () => has("payee_maintainer"), fields: [["authority", "Authority", "text"], ["reason", "Why", "text"]] },
+  reinstate_authority: { label: "Reinstate an authority", can: () => has("payee_maintainer"), fields: [["authority", "Authority", "text"]] },
+  cancel_authority: { label: "Cancel an authority", can: () => has("payee_maintainer"), fields: [["authority", "Authority", "text"], ["reason", "Why", "text"]] },
+  mark_hardship: { label: "Mark a payer as in hardship", can: () => has("payee_maintainer") || has("collections"), fields: [["authority", "Authority", "text"], ["hardship", "In hardship", "bool"]] },
+  record_conversation: { label: "Record a conversation about a failed collection", can: () => has("collections"), fields: [["item", "Item", "text"], ["outcome", "Outcome", "select", ["represent", "do_not_represent"]], ["note", "Note", "text"]] },
+  register_payee: { label: "Register a payee", can: () => has("payee_maintainer"), fields: [["payee", "Payee reference", "reference", "PYE"], ["party", "Party (customer reference)", "text"], ["kind", "Kind", "select", PAYEE_KINDS], ...ACCOUNT] },
+  register_foreign_payee: { label: "Register a payee abroad", can: () => has("payee_maintainer"), fields: [["payee", "Payee reference", "reference", "PYE"], ["party", "Party (customer reference)", "text"], ["kind", "Kind", "select", PAYEE_KINDS], ["account.name", "Account name", "text"], ["account.number", "Account number or IBAN", "text"], ["foreign.bic", "Bank's BIC", "text"], ["foreign.country", "Country (two letters)", "text"], ["foreign.currency", "Currency received (three letters)", "text"], ["foreign.address", "Beneficiary's address", "text"], ["name_check", "Name check", "select", ["match", "close", "no_match", "unavailable"]]] },
+  change_payee_account: { label: "Change a payee's account", can: () => has("payee_maintainer"), fields: [["payee", "Payee", "text"], ...ACCOUNT] },
+  add_run_items: { label: "Add an item to a run", can: () => has("maker"), fields: [["run", "Run", "text"], ["item", "Item reference", "reference", "ITM"], ["source", "What it is for", "text"], ["to", "Pays", "select", ["payee", "authority"]], ["who", "Payee or authority", "text"], ["amount_minor", "Amount", "money"], ["policy", "Policy (optional)", "optional"]],
+    build: (v) => ({ type: "add_run_items", run: v.run, items: [{ item: v.item, source: v.source, counterparty: { [v.to]: v.who }, amount_minor: v.amount_minor, ...(v.policy ? { policy: v.policy } : {}) }] }) },
+  remove_run_item: { label: "Take an item out of a run", can: () => has("maker"), fields: [["run", "Run", "text"], ["item", "Item", "text"]] },
+  release_item: { label: "Release a held item", can: () => has("maker"), fields: [["run", "Run", "text"], ["item", "Item", "text"]] },
+  redirect_route: { label: "Send a run type through the second bank", can: () => has("connectivity_admin"), fields: [["run_type", "Run type", "select", RUN_TYPES], ["secondary", "Through the second bank", "bool"]] },
+  request_refund: { label: "Request a refund", can: () => has("maker"), fields: [["refund", "Refund reference", "reference", "RFD"], ["policy", "Policy", "text"], ["amount_minor", "Amount", "money"], ["currency", "Currency", "select", ["NZD", "AUD", "USD"]], ["to", "Paid to", "select", ["source", "payee"]], ["who", "The authority it came from, or the payee", "text"]],
+    build: (v) => ({ type: "request_refund", refund: v.refund, policy: v.policy, amount_minor: v.amount_minor, currency: v.currency, destination: v.to === "source" ? { source: { authority: v.who } } : { payee: { payee: v.who } } }) },
+  request_tax_remittance: { label: "Request a tax or levy remittance", can: () => has("maker"), note: "Finance prices it; it is paid in a tax and levies run.", fields: [["remittance", "Remittance reference", "reference", "TAX"], ["kind", "Tax or levy", "text"], ["period", "Period", "text"], ["payee", "Payee (the revenue authority)", "text"]] },
+  declare_incident: { label: "Declare a collection incident", can: () => has("reconciler"), note: "Failures on these authorities between the dates are not the payers' doing: no dishonour, no suspension, no second presentment.", fields: [["incident", "Incident reference", "reference", "INC"], ["authorities", "Authorities (comma separated)", "list"], ["from", "From", "date"], ["to", "To", "date"], ["reason", "What happened", "text"]] },
+  report_misdirected: { label: "Report money paid to the wrong account", can: () => has("reconciler"), fields: [["misdirection", "Reference", "reference", "MIS"], ["item", "The settled item", "text"], ["amount_minor", "Amount that went astray", "money"], ["holder", "Who holds it (optional)", "optional"], ["note", "What happened", "text"]] },
+  write_off_misdirected: { label: "Write off misdirected money", can: () => has("approver"), fields: [["misdirection", "Misdirection", "text"], ["amount_minor", "Amount", "money"], ["reason", "Reason code", "text"]] },
+  return_credit: { label: "Give back a credit its payer's bank recalled", can: () => has("reconciler"), fields: [["exception", "Exception", "text"], ["reason", "Why", "text"]] },
+  activate_config: { label: "Activate a connectivity configuration", can: () => has("connectivity_admin"), fields: [["config", "The configuration, as JSON", "json"]], build: (v) => ({ type: "activate_config", ...v.config }) },
+};
+let acts = null;
+function showActs() { acts = portal.actions($("acts"), ACTIONS, { id: "pa", send, after: () => Promise.all([showRuns(), showExceptions(), showNotices(), showMisdirections()]) }); }
+async function showNotices() {
+  const held = me.roles || [];
+  const lists = await Promise.all(held.map((role) => ask("notices", { role }).then((n) => (n || []).map((x) => ({ role, ...(Array.isArray(x) ? { id: x[0], ...x[1] } : x) })))));
+  const all = lists.flat();
+  put($("notices"), all.length ? table(["Notice", "For", "Subject", "Detail", ""], all.map((n) => [n.id, words(n.role), n.subject || "", n.detail || "",
+    button("Close", $("nt-msg"), async () => { const action = await portal.ask({ title: `Close notice ${n.id}`, label: "What you did", confirm: "Close it" }); if (!action) return ""; await send({ type: "close_notice", notice: Number(n.id), action }); await showNotices(); return "Closed."; })]))
+    : portal.empty(held.length ? "Nothing is waiting for your roles." : "You hold no role here."));
+}
+async function showMisdirections() {
+  const open = Object.entries(await ask("open_misdirections") || {});
+  put($("misdirections"), open.length ? table(["Misdirection", "Item", "Amount", "Reported by", ""], open.map(([id, m]) => [id, m.item || "", money(m.amount_minor), m.reported_by || "",
+    has("approver") && m.reported_by !== me.staff ? button("Write off", $("mis-msg"), async () => { portal.view("act"); acts.choose("write_off_misdirected", { misdirection: id, amount_minor: (Number(m.amount_minor) / 100).toFixed(2) }); return ""; }) : ""])) : portal.empty("None open."));
+}
+$("lk-form").addEventListener("submit", run($("lk-msg"), async () => {
+  const what = $("lk-what").value, key = { incident: "incident", tax_remittance: "remittance", misdirection: "misdirection" }[what];
+  put($("lk"), portal.details(await ask(what, { [key]: $("lk-id").value.trim() })));
+}));
 $("raw-form").addEventListener("submit", run($("raw-msg"), async () => { await send(JSON.parse($("raw-cmd").value)); return "Done."; }));
 
 // Runs, exceptions and accounts are picked from what is open, never typed from memory.
@@ -221,7 +273,8 @@ signIn(R).then(async () => {
   $("raw").hidden = !(me.roles || []).length;
   document.querySelectorAll(".compliance").forEach((e) => { e.hidden = !has("compliance"); });
   if (has("compliance")) await showPayerCases();
-  await Promise.all([showWaiting(), showRuns(), showExceptions(), showMatches()]);
+  await Promise.all([showWaiting(), showRuns(), showExceptions(), showMatches(), showNotices(), showMisdirections()]);
+  showActs();
   // The run most likely meant: the only one being prepared.
   const preparing = openRuns.filter((r) => /prepar/i.test(status(r.status)));
   if (preparing.length === 1 && !$("t-run").value) $("t-run").value = preparing[0].run;

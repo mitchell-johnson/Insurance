@@ -122,6 +122,7 @@ Nobody should have to know a reference to type it. A field that takes a referenc
 | The case in hand | `portal.working()`, `portal.workOn(ref)`, `portal.onWork(fn)` | Said once per tab; fills every purpose field. |
 | New references | `portal.reference("CLM")` | Dated and unique: `CLM-20261115-7KQ2M`. |
 | Dates | `portal.today()`, `portal.month(back)`, `portal.days(n, from)` | As New Zealand reckons them. A period being closed comes from the books, not the clock. |
+| Action forms | `portal.actions(el, spec, opts)` | One form for a module's commands: a choice of action, then its fields. `spec[name] = { label, can, note, fields: [[key, label, kind, options]], build }`; `can()` hides an action the person may not send. Kinds: text, optional, date, optdate, money and optmoney (typed in dollars, sent in cents), int, zint, bool, nobool, select, list (comma separated), json, reference (a new reference with the prefix in `options`). A dotted key nests. Sent as `{type: name, ...values}` unless `build(values, name)` shapes it. `opts`: `id`, `send`, `after`, `prefill`, `pickers` (a picker source per key). `.choose(name, prefill)` opens one action filled in, for a row's button. |
 | Links | `portal.go(page, view, params)`, `portal.link(...)`, `portal.params()` | `#view?key=value`; a sign-in keeps it. |
 
 Rules: a queue or list of work comes first and loads itself; each row has the button that works it; a form opened from a row is filled in; a code is shown in words; money is typed in dollars.

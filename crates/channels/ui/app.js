@@ -497,7 +497,58 @@ const portal = (() => {
     const card = ([path, name, pic, about]) => h("a", { href: "/" + path }, h("span", { class: "tile" }, icon(pic)), h("span", {}, h("strong", {}, name), h("span", {}, about)));
     put(el, [["Partners", PARTNERS], ...NAV].map(([group, items]) => [h("h2", { class: "group" }, group), h("div", { class: "launch" }, items.map(card))]));
   }
+  // A form for every action a module takes from a person: pick the action, fill its fields, send.
+  // `spec` maps an action's name to { label, can, fields: [[key, label, kind, options]], build, makes }.
+  // A dotted key nests; kinds are text, optional, date, optdate, money, optmoney, int, zint, bool, nobool,
+  // select, list, json and reference (a fresh reference made with `options` as its prefix).
+  // `opts.send(command)` sends what `build(values, name)` returns, or { type: name, ...values } by default.
+  function actions(el, spec, opts = {}) {
+    const usable = Object.entries(spec).filter(([, a]) => !a.can || a.can());
+    if (!usable.length) { put(el, null); return { choose: () => {} }; }
+    const pick = h("select", { id: (opts.id || "act") + "-which" }, usable.map(([name, a]) => h("option", { value: name }, a.label || name.replace(/_/g, " "))));
+    const fields = h("div", { class: "row" }), out = h("div", { "aria-live": "polite" }), note = h("p", { class: "muted" });
+    const draw = () => {
+      const a = spec[pick.value];
+      note.textContent = a.note || "";
+      put(fields, a.fields.map(([key, label, kind, options], n) => {
+        const id = `${opts.id || "act"}-f${n}`;
+        const input = kind === "select" ? h("select", { id }, options.map((o) => h("option", { value: o }, String(o).replace(/_/g, " "))))
+          : kind === "bool" || kind === "nobool" ? h("select", { id }, h("option", { value: "true", selected: kind === "bool" }, "Yes"), h("option", { value: "false", selected: kind === "nobool" }, "No"))
+          : kind === "json" ? h("textarea", { id, rows: 4 })
+          : h("input", { id, type: /date/.test(kind) ? "date" : /money|int/.test(kind) ? "number" : "text", step: /money/.test(kind) ? "0.01" : null,
+            required: !["optional", "optdate", "optmoney", "list", "zint"].includes(kind) });
+        if (kind === "reference") input.value = reference(options || "REF");
+        if (opts.prefill && opts.prefill[key] != null) input.value = opts.prefill[key];
+        if (opts.pickers && opts.pickers[key] && input.tagName === "INPUT") picker(input, opts.pickers[key], { min: 0 });
+        return h("div", {}, h("label", { for: id }, label), input);
+      }));
+    };
+    const form = h("form", { on: { submit: run(out, async (ev) => {
+      if (ev && ev.preventDefault) ev.preventDefault();
+      const name = pick.value, a = spec[name], values = {};
+      a.fields.forEach(([key, , kind], n) => {
+        const raw = document.getElementById(`${opts.id || "act"}-f${n}`).value;
+        const value = kind === "bool" || kind === "nobool" ? raw === "true" : kind === "list" ? raw.split(",").map((x) => x.trim()).filter(Boolean)
+          : kind === "int" || kind === "zint" ? Number(raw || 0) : kind === "money" ? Math.round(Number(raw) * 100)
+          : kind === "optmoney" ? (raw.trim() ? Math.round(Number(raw) * 100) : undefined) : kind === "optional" || kind === "optdate" ? (raw.trim() || undefined)
+          : kind === "json" ? JSON.parse(raw || "null") : raw.trim();
+        if (value === undefined) return;
+        const path = key.split("."); let at = values;
+        for (const part of path.slice(0, -1)) at = at[part] = at[part] || {};
+        at[path[path.length - 1]] = value;
+      });
+      const answer = await opts.send(a.build ? a.build(values, name) : { type: name, ...values });
+      if (opts.after) await opts.after(name, answer);
+      draw();
+      return (answer && answer.prepared) ? "Prepared. Someone else signs it before it is sent." : `Done: ${a.label || name.replace(/_/g, " ")}.`;
+    }) } }, h("div", { class: "row" }, h("div", {}, h("label", { for: pick.id }, "Action"), pick)), note, fields, h("p", {}, h("button", {}, "Send")));
+    pick.addEventListener("change", draw);
+    put(el, [form, out]);
+    draw();
+    return { choose: (name, prefill = {}) => { pick.value = name; draw(); a_fill(prefill); form.scrollIntoView({ behavior: "smooth", block: "start" }); } };
+    function a_fill(prefill) { spec[pick.value].fields.forEach(([key], n) => { if (prefill[key] != null) document.getElementById(`${opts.id || "act"}-f${n}`).value = prefill[key]; }); }
+  }
   frame();
   return { h, clear, put, money, table, text, details, say, refuse, signIn, signOut, api, run, loadConfig, download, documents, icon, pill, stats, empty, ask, view, onView: (fn) => listeners.push(fn), launcher, prove: (fn) => { prover = fn; },
-    picker, pickMany, today, month, days, reference, working, workOn, onWork: (fn) => workers.push(fn), go, link, params, once, colleagues, find, people, policies, born };
+    picker, pickMany, actions, today, month, days, reference, working, workOn, onWork: (fn) => workers.push(fn), go, link, params, once, colleagues, find, people, policies, born };
 })();

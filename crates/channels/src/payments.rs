@@ -55,7 +55,7 @@ pub const ROLES: [(&str, &str); 9] = [
 
 /// The commands a person may send. That module decides whether this
 /// person's roles allow it.
-pub const COMMANDS: [&str; 30] = [
+pub const COMMANDS: [&str; 37] = [
     "activate_config",
     "create_authority",
     "suspend_authority",
@@ -87,12 +87,24 @@ pub const COMMANDS: [&str; 30] = [
     "propose_receipt_match",
     "approve_receipt_match",
     "clear_payer",
+    // A payee abroad (payee maintainer), a tax or levy remittance (maker).
+    "register_foreign_payee",
+    "request_tax_remittance",
+    // Many collections failing for a reason not the payers' (reconciler).
+    "declare_incident",
+    // Money paid to the wrong account: reported by a reconciler, written off by an approver who did not report it.
+    "report_misdirected",
+    "write_off_misdirected",
+    // A credit its payer's bank recalled, given back (reconciler).
+    "return_credit",
+    // A notice to a role, closed by someone holding it with what they did.
+    "close_notice",
 ];
 
 /// The questions the console may put, with their fields. `reconciliation`
 /// and `readiness` are asked as of today; the outbox, messages read and the
 /// trail are the drivers'.
-const QUESTIONS: [(&str, &[&str]); 25] = [
+const QUESTIONS: [(&str, &[&str]); 32] = [
     ("open_runs", &[]),
     ("open_exceptions", &[]),
     ("matches_to_approve", &[]),
@@ -118,6 +130,14 @@ const QUESTIONS: [(&str, &[&str]); 25] = [
     ("readiness", &[]),
     ("payer_cases", &[]),
     ("payer_case", &["case"]),
+    // The notices waiting for one of the person's roles.
+    ("notices", &["role"]),
+    ("incident", &["incident"]),
+    ("misdirection", &["misdirection"]),
+    ("open_misdirections", &[]),
+    ("misdirection_reference", &["misdirection"]),
+    ("tax_remittance", &["remittance"]),
+    ("funding_forecast", &["from", "to"]),
 ];
 
 /// Questions whose answers carry bank account details: only for someone
@@ -168,6 +188,10 @@ pub fn question(name: &str, fields: &BTreeMap<String, String>, roles: &[String],
     }
     if COMPLIANCE_ONLY.contains(&name) && !roles.iter().any(|r| r == "compliance") {
         return Err(format!("{name} is compliance's"));
+    }
+    // A role's notices are for the people who hold it.
+    if name == "notices" && !fields.get("role").is_some_and(|role| roles.contains(role)) {
+        return Err("you see the notices for the roles you hold".to_string());
     }
     let mut out = Map::new();
     out.insert("q".to_string(), json!(name));

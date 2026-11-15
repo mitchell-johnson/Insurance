@@ -26,7 +26,7 @@ use ic_reinsurance::driver::LocalModule;
 use ic_reinsurance::loader::{load_rate_table, load_treaty};
 use ic_sim::config::shipped_activations;
 use ic_sim::Cluster;
-use ic_underwriting::command::{Applied, Command, Effect, Envelope, Reject};
+use ic_underwriting::command::{Applied, Command, Effect, Envelope, OpenProposal, Reject};
 use ic_underwriting::driver::{Channels, Core, CoreAnswer, Driver, DriverError, Forward, Pass, Refusal, Reinsurer, Schemes, Underwriting};
 use ic_underwriting::model::ProposalStatus;
 use ic_underwriting::progress::ProgressRow;
@@ -97,6 +97,9 @@ impl Core for Ledger {
     }
     async fn lapsed_for_underwriting(&self) -> Result<Vec<ic_core::policy::Policy>, DriverError> {
         Ok(vec![])
+    }
+    async fn policy(&self, _group: &ic_core::GroupId, policy: &ic_core::PolicyId) -> Result<Option<ic_core::policy::Policy>, DriverError> {
+        Ok(self.cluster.lock().unwrap().state(0).policies.get(policy).cloned())
     }
 }
 
@@ -312,6 +315,33 @@ impl Bench {
 
     /// Quote, propose, disclose a clean history and let the driver carry the proposal to a policy.
     async fn apply(&self, id: &str, product: &str, covers: &[Applying<'_>], age: i32, class: Option<&str>) -> Issued {
+        let (open, hash, quoted_minor) = self.quoted(id, product, covers, age, class);
+        self.module
+            .with(|w| w.send("new-business", Command::OpenProposal(Box::new(open))))
+            .unwrap_or_else(|r| panic!("{product}: the proposal was refused: {}: {}", r.code, r.message));
+        self.module.with(|w| w.disclose(id, "L1", &clean()));
+        for _ in 0..3 {
+            let pass: Pass = self.driver.deliver().await.unwrap();
+            assert!(pass.parked.is_empty(), "{product}: {pass:?}");
+        }
+        let status = self.module.with(|w| w.p(id).status.clone());
+        assert!(matches!(status, ProposalStatus::Issued { .. }), "{product}: {status:?}");
+
+        let policy = self.module.with(|w| w.p(id).policy.clone());
+        self.with_cluster(|c| {
+            let issued = &c.state(0).policies[&policy];
+            assert_eq!(
+                (issued.status, issued.product_hash.as_str()),
+                (PolicyStatus::InForce, hash.as_str()),
+                "{product}"
+            );
+        });
+        Issued { policy, quoted_minor }
+    }
+
+    /// An application quoted by the core as the screens ask for it: the proposal, the product
+    /// version and the first month's premium.
+    fn quoted(&self, id: &str, product: &str, covers: &[Applying<'_>], age: i32, class: Option<&str>) -> (OpenProposal, String, i64) {
         let today = start();
         let mut open = self.module.with(|w| {
             let specs: Vec<(&str, &str, &str, i64)> = covers.iter().map(|(code, kind, sum, _)| ("L1", *code, *kind, *sum)).collect();
@@ -384,28 +414,7 @@ impl Bench {
         assert!(quoted_minor > 0, "{product}: a quote of nothing");
         open.quote.product_hash = hash.clone();
         open.quote.premium_minor = quoted_minor;
-
-        self.module
-            .with(|w| w.send("new-business", Command::OpenProposal(Box::new(open))))
-            .unwrap_or_else(|r| panic!("{product}: the proposal was refused: {}: {}", r.code, r.message));
-        self.module.with(|w| w.disclose(id, "L1", &clean()));
-        for _ in 0..3 {
-            let pass: Pass = self.driver.deliver().await.unwrap();
-            assert!(pass.parked.is_empty(), "{product}: {pass:?}");
-        }
-        let status = self.module.with(|w| w.p(id).status.clone());
-        assert!(matches!(status, ProposalStatus::Issued { .. }), "{product}: {status:?}");
-
-        let policy = self.module.with(|w| w.p(id).policy.clone());
-        self.with_cluster(|c| {
-            let issued = &c.state(0).policies[&policy];
-            assert_eq!(
-                (issued.status, issued.product_hash.as_str()),
-                (PolicyStatus::InForce, hash.as_str()),
-                "{product}"
-            );
-        });
-        Issued { policy, quoted_minor }
+        (open, hash, quoted_minor)
     }
 
     /// Close `n` days, the customer paying what is owed each morning; returns what was paid.
@@ -724,6 +733,72 @@ async fn aia_start_up_income_from_quote_to_a_paid_benefit_month() {
         .await;
     billed_as_quoted(&b, &issued).await;
     b.income("clm-sui", &issued.policy, "start-up-income", 3_000_00);
+}
+
+/// Purpose: a business owner's Start-Up Income moves to AIA Living Business Business
+/// Continuity after three years of trading: the request is quoted by the core at the owner's
+/// age, checked by a person on the financial queue, checked again by the driver against the
+/// Start-Up policy in the core, issued as a new policy with no health questions, and the
+/// Start-Up policy is then cancelled in the core. A second pass delivers nothing more.
+/// Why it matters: this is the facility working through the real core and products; with
+/// the Start-Up policy left running the business would pay for, and could claim, two income
+/// benefits for the same loss.
+#[tokio::test]
+async fn aia_start_up_income_moves_to_business_continuity_after_three_years() {
+    let b = bench();
+    let start_up = b
+        .apply(
+            "SUI",
+            "aia-start-up-income",
+            &[("start-up-income", "income_protection", 3_000_00, None)],
+            30,
+            Some("2"),
+        )
+        .await;
+    let (mut open, hash, _) = b.quoted(
+        "BCM",
+        "aia-living-business",
+        &[("business-continuity-agreed-value", "income_protection", 3_000_00, None)],
+        30,
+        Some("2"),
+    );
+    open.entry = ic_underwriting::model::Entry::Facility {
+        facility: ic_underwriting::model::Facility::BusinessContinuity,
+        from_policy: start_up.policy.clone(),
+        from_group: GroupId::from("grp-SUI"),
+        from_life: "L1".into(),
+        from_cover: "start-up-income".into(),
+        trigger_date: start().checked_sub_months(chrono::Months::new(40)).unwrap(),
+        evidence: "vault://accounts/sui".into(),
+    };
+    b.module.with(|w| w.ok("new-business", Command::OpenProposal(Box::new(open))));
+    let case = b.module.with(|w| w.take("BCM", "L1", "amy"));
+    b.module.with(|w| {
+        w.ok(
+            "underwriting-console",
+            Command::CheckOptionEvidence {
+                case: case.clone(),
+                underwriter: "amy".into(),
+                accepted: true,
+                note: String::new(),
+            },
+        )
+    });
+    for _ in 0..4 {
+        let pass: Pass = b.driver.deliver().await.unwrap();
+        assert!(pass.parked.is_empty(), "{pass:?}");
+    }
+    let status = b.module.with(|w| w.p("BCM").status.clone());
+    assert!(matches!(status, ProposalStatus::Issued { .. }), "{status:?}");
+    b.with_cluster(|c| {
+        let policies = &c.state(0).policies;
+        let moved = &policies[&PolicyId::from("POL-BCM")];
+        assert_eq!((moved.status, moved.product_hash.as_str()), (PolicyStatus::InForce, hash.as_str()));
+        assert_eq!(moved.covers["business-continuity-agreed-value"].sum_insured_on(start()), 3_000_00);
+        assert_eq!(policies[&start_up.policy].status, PolicyStatus::Cancelled);
+    });
+    let pass: Pass = b.driver.deliver().await.unwrap();
+    assert_eq!((pass.delivered, pass.parked.len()), (0, 0));
 }
 
 /// Purpose: Cover for Life, whole of life cover with no minimum amount, is quoted, underwritten,

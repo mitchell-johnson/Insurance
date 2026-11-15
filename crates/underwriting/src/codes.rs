@@ -339,6 +339,8 @@ pub mod reason {
     pub const CONTINUATION: &str = "RC-0976";
     pub const INSURABILITY_OPTION: &str = "RC-0977";
     pub const OPTION_EVIDENCE_REFUSED: &str = "RC-0978";
+    pub const FACILITY: &str = "RC-0979";
+    pub const FACILITY_REFUSED: &str = "RC-0981";
     pub const DELEGATED_REJECTED: &str = "RC-0971";
     pub const NON_DISCLOSURE_REVIEW: &str = "RC-0980";
     pub const QUOTE_SUPERSEDED: &str = "RC-0990";
@@ -365,6 +367,8 @@ pub mod reason {
         CONTINUATION,
         INSURABILITY_OPTION,
         OPTION_EVIDENCE_REFUSED,
+        FACILITY,
+        FACILITY_REFUSED,
         DELEGATED_REJECTED,
         NON_DISCLOSURE_REVIEW,
         QUOTE_SUPERSEDED,

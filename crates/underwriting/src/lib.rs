@@ -22,6 +22,7 @@ pub mod config;
 pub mod driver;
 pub mod eligibility;
 pub mod evidence;
+pub mod facility;
 pub mod host;
 pub mod load;
 pub mod machine;
