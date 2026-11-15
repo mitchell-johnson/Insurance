@@ -13,6 +13,19 @@ async function lookup(s, policy, { purpose = "CASE-1", scope } = {}) {
   if (scope) await s.fill("#scope", scope);
   await s.press("Open", "#lookup");
 }
+/// Agree a change by its reference, from the form under the queue of changes waiting.
+async function byReference(s, id) {
+  await s.tab("Second approvals");
+  await s.page.click("details:has(#second) > summary");
+  await s.fill("#second-id", id);
+  await s.press("Agree it", "#second");
+}
+/// Agree a change from the queue of changes waiting for a second person.
+async function fromQueue(s, id) {
+  await s.tab("Second approvals");
+  await s.sees(id, "#waiting");
+  await s.row("#waiting", id).getByRole("button", { name: "Agree", exact: true }).click();
+}
 const request = (t, who, policy, id, kind, payload) => t.does(who, "POST", "/staff/v1/requests", { id, policy, kind, module: "policy-servicing", payload, reason: "customer rang", case: "CASE-1" }, "enters a change");
 /// A customer whose paid health claim can have an overpayment raised on it.
 async function paid(t) {
@@ -178,8 +191,7 @@ test({ id: "E2E-123", area: A, persona: "ST17", story: "US-ST17-1", title: "The 
   const id = t.ref("REQ");
   await request(t, cast.st5l, p.id, id, "cancel_policy", { note: "cancel and refund", amount_minor: 600_00 });
   const s = await t.open("/staff", cast.st5l);
-  await s.fill("#second-id", id);
-  await s.press("Agree it", "#second");
+  await byReference(s, id);
   await s.stopped("#second-msg", "the person who entered a change is not its second approver", 422);
 });
 
@@ -190,9 +202,10 @@ test({ id: "E2E-124", area: A, persona: "ST5", story: "US-ST17-1", title: "A tea
   const id = t.ref("REQ");
   await request(t, cast.st5b, p.id, id, "cancel_policy", { note: "cancel and refund", amount_minor: 600_00 });
   const s = await t.open("/staff", cast.st5l);
-  await s.fill("#second-id", id);
-  await s.press("Agree it", "#second");
+  await fromQueue(s, id);
   await s.done("#second-msg", "Agreed. It now waits for the customer's approval in their app.");
+  await s.page.click("details:has(#second) > summary");
+  await s.fill("#second-id", id);
   await s.press("Agree it", "#second");
   await s.stopped("#second-msg", "that request is not waiting for a second member of staff", 409);
 });
@@ -204,8 +217,7 @@ test({ id: "E2E-125", area: A, persona: "ST5", story: "US-ST17-1", title: "An of
   const id = t.ref("REQ");
   await request(t, cast.st5b, p.id, id, "cancel_policy", { note: "cancel", amount_minor: 600_00 });
   const s = await t.open("/staff", cast.st5);
-  await s.fill("#second-id", id);
-  await s.press("Agree it", "#second");
+  await byReference(s, id);
   await s.stopped("#second-msg", "your roles do not include approving changes others entered", 403);
 });
 
@@ -216,8 +228,7 @@ test({ id: "E2E-126", area: A, persona: "ST5", story: "US-ST17-1", title: "A cha
   const id = t.ref("REQ");
   await request(t, cast.st5b, p.id, id, "change_frequency", { note: "to annual" });
   const s = await t.open("/staff", cast.st5l);
-  await s.fill("#second-id", id);
-  await s.press("Agree it", "#second");
+  await byReference(s, id);
   await s.stopped("#second-msg", "that request is not waiting for a second member of staff", 409);
 });
 
@@ -232,8 +243,7 @@ test({ id: "E2E-127", area: A, persona: "ST5", story: "US-ST05-1", title: "A bac
   await s.press("Send to customer's app", "#for-customer");
   const id = (await s.done("#cust-msg", "recorded")).match(/Request ([0-9a-f-]{36})/)[1];
   const lead = await t.open("/staff", cast.st5l);
-  await lead.fill("#second-id", id);
-  await lead.press("Agree it", "#second");
+  await fromQueue(lead, id);
   await lead.done("#second-msg", "Agreed.");
 });
 
@@ -300,6 +310,7 @@ test({ id: "E2E-132", area: A, persona: "N7", story: "US-N07-1", title: "Declari
   await s.tab("My access");
   await s.fill("#conn", party);
   await s.press("Declare", "#connect");
+  await s.page.click("dialog[open] .actions button:last-child");
   await s.done("#conn-msg", "Declared.");
   await s.sees(party, "#connections");
   await s.tab("Policies");

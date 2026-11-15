@@ -47,6 +47,11 @@ pub struct MasterDouble {
 }
 
 impl MasterDouble {
+    /// Add a person to the double, as `with` does for the first.
+    pub fn add(&self, party: &str, record: Value) {
+        self.records.lock().unwrap().insert(party.to_string(), (1, record));
+    }
+
     pub fn with(party: &str, record: Value) -> Self {
         let double = Self::default();
         double.records.lock().unwrap().insert(party.to_string(), (1, record));
@@ -244,10 +249,37 @@ impl Master for MasterDouble {
             }
             let (method, path, key, body) = desk.request();
             let (role, purpose) = desk.role();
-            Ok((
-                200,
-                json!({ "method": method.as_str(), "path": path, "key": key, "body": body, "as": role, "purpose": purpose }),
-            ))
+            let mut echo = json!({ "method": method.as_str(), "path": path, "key": key, "body": body, "as": role, "purpose": purpose });
+            match &desk {
+                // A search scores the double's records as the master would at its simplest: the family
+                // name must agree, and a given name or birth date that agrees makes it strong.
+                Desk::Search(probe) => {
+                    let lower = |v: &Value| v.as_str().map(str::to_lowercase);
+                    let results: Vec<Value> = self
+                        .records
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|(_, (_, r))| lower(&r["family_name"]).is_some() && lower(&r["family_name"]) == lower(&probe["family_name"]))
+                        .map(|(party, (_, r))| {
+                            let strong = (probe["given_name"].is_string() && lower(&r["given_name"]) == lower(&probe["given_name"]))
+                                || (probe["date_of_birth"].is_string() && r["date_of_birth"] == probe["date_of_birth"]);
+                            json!({ "party": party, "score": if strong { 90 } else { 40 }, "strong": strong })
+                        })
+                        .collect();
+                    echo["results"] = json!(results);
+                }
+                Desk::Read { party, .. } => {
+                    if let Some((version, record)) = self.found(party) {
+                        let read = answer(&party.0, version, &record);
+                        for (k, v) in read.as_object().into_iter().flatten() {
+                            echo[k] = v.clone();
+                        }
+                    }
+                }
+                _ => {}
+            }
+            Ok((200, echo))
         })
     }
 

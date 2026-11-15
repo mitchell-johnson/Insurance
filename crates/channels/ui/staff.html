@@ -1,14 +1,19 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Staff console · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
 <body data-shell="workforce" data-page="staff" data-realm="workforce">
-<main><header class="page"><div><h1>Staff console</h1><p>Policies, customer requests, held balances and your own access.</p></div></header><div id="msg" aria-live="polite"></div>
+<main data-views="Policies,Second approvals,Held balances,Markers to review,My access,Access administration"><header class="page"><div><h1>Staff console</h1><p>Find a customer, open their policy, help them with a change, and your own access.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
 
 <div data-view="Policies">
-<section><h2>Look up a policy</h2><form id="lookup"><div class="row"><div><label for="pol">Policy ID</label><input id="pol" required></div><div><label for="case">Case or task you are working on</label><input id="case" required></div><div><label for="scope">Queue or team (optional)</label><input id="scope" placeholder="queue:claims-life"></div><button>Open</button></div></form><div id="lookup-msg" aria-live="polite"></div></section>
-<section id="pol-view" hidden><h2>Policy</h2><div id="approach"></div><div id="withheld"></div><div id="pol-rows"></div><h2>Advisers</h2><div id="pol-advisers"></div>
-<h2>Someone has phoned about this policy</h2><p class="muted">Check before you say anything, including whether a policy exists. Leave the reference empty if the caller is not a customer or you cannot identify them. The contact is recorded either way.</p><form id="caller-form"><div class="row"><div><label for="caller-ref">Caller's customer reference</label><input id="caller-ref"></div><button>Check the caller</button></div></form><div id="caller-msg" aria-live="polite"></div>
+<section><h2>Find a customer or a policy</h2><p class="muted">Type what the caller tells you: their name and birth date, an email, a phone or IRD number, or a policy number. Every search is recorded against the case you are working on.</p>
+<form id="find"><div class="row"><div><label for="case">Case, call or task you are working on</label><input id="case" required></div><button type="button" class="quiet" id="new-call">A customer is on the phone</button></div>
+<div class="row"><div><label for="find-q">Name and birth date, email, phone, IRD or policy number</label><input id="find-q" type="search" size="40" placeholder="Kiri Ngata 7/3/1984" required></div><button>Search</button></div></form>
+<div id="find-msg" aria-live="polite"></div><div id="found" class="results"></div></section>
+<section><h2>Open a policy you have the number of</h2><form id="lookup"><div class="row"><div><label for="pol">Policy</label><input id="pol" required></div><div><label for="scope">Queue or team it reaches you through (optional)</label><input id="scope"></div><button>Open</button></div></form><div id="lookup-msg" aria-live="polite"></div></section>
+<section id="pol-view" hidden><h2 id="pol-title" tabindex="-1">Policy</h2><div id="approach"></div><div id="pol-next" class="next"></div><div id="withheld"></div><div id="pol-rows"></div><h2>Advisers</h2><div id="pol-advisers"></div>
+<h2>Someone has phoned about this policy</h2><p class="muted">Check before you say anything, including whether a policy exists. Find the caller by the name and birth date they give you; leave it empty if they are not a customer or you cannot identify them. The contact is recorded either way.</p><form id="caller-form"><div class="row"><div><label for="caller-ref">Who is calling</label><input id="caller-ref" size="36"></div><button>Check the caller</button></div></form><div id="caller-msg" aria-live="polite"></div>
 <h2>Make a request for the customer</h2><form id="for-customer"><div class="row"><div><label for="ckind">Change</label><select id="ckind"><option value="change_frequency">Change payment frequency</option><option value="decline_indexation">Decline indexation</option><option value="cancel_policy">Cancel policy</option></select></div><div><label for="cnote">Details</label><input id="cnote"></div><div><label for="creason">Why (recorded with your name and the case)</label><input id="creason" required></div><div><label for="ceffective">Effective from (optional)</label><input id="ceffective" type="date"></div><div><label for="camount">Amount it moves, in dollars (optional)</label><input id="camount" type="number" min="0" step="0.01"></div><button>Send to customer's app</button></div><p class="muted">The customer approves it in their app. You cannot approve it for them. A change above your limit, or dated in the past, goes to a second member of staff first.</p></form><div id="cust-msg" aria-live="polite"></div></section></div>
-<section data-view="Policies"><h2>Be the second person on a colleague's change</h2><p class="muted">A change a colleague entered for a customer that is above their limit, or dated in the past, needs you to agree it before it goes to the customer.</p><form id="second"><div class="row"><div><label for="second-id">Request</label><input id="second-id" required></div><button>Agree it</button></div></form><div id="second-msg" aria-live="polite"></div></section>
+<section data-view="Second approvals"><h2>Changes waiting for a second person</h2><p class="muted">A change a colleague entered for a customer that is above their limit, or dated in the past, needs someone else to agree it before it goes to the customer. Oldest first.</p><div id="waiting"></div>
+<details><summary>Agree one by its request reference</summary><form id="second"><div class="row"><div><label for="second-id">Request</label><input id="second-id" required></div><button>Agree it</button></div></form></details><div id="second-msg" aria-live="polite"></div></section>
 
 <div data-view="Held balances">
 <section><h2>Daily control: held money by age</h2><div id="control"></div></section>
@@ -18,11 +23,11 @@
 <div><label for="act">Action</label><select id="act"><option value="release">Release</option><option value="offset">Offset against a receivable</option><option value="hold_pending">Hold pending review</option><option value="write_off">Write off</option><option value="record_dividend">Record a liquidator's dividend</option></select></div>
 <div><label for="cur">Currency</label><input id="cur" value="NZD" size="4" maxlength="3" required></div>
 <div><label for="amt">Amount</label><input id="amt" type="number" step="0.01" min="0"></div>
-<div><label for="ref">Account, receivable line or legal reference</label><input id="ref"></div>
+<div><label for="ref" id="ref-label">Account to pay into</label><input id="ref"></div>
 <div><label for="newacct">New account?</label><select id="newacct"><option value="false">No</option><option value="true">Yes</option></select></div>
 <div><label for="review">Review date</label><input id="review" type="date"></div>
 <div><label for="reason">Reason code</label><input id="reason" required></div>
-<div><label for="doc">Document reference</label><input id="doc" required></div><button>Prepare</button></div>
+<div><label for="doc">Document on file it rests on</label><input id="doc" required></div><button>Prepare</button></div>
 <p class="muted">Someone else approves it. Large amounts need two approvers and legal. While a conduct case is open on the party, the conduct officer signs too. A new account for a party in liquidation or deceased always needs legal.</p></form>
 <p><button class="quiet" id="proof">Proof of debt extract</button></p><div id="bench-msg" aria-live="polite"></div><div id="proof-out"></div></section></div>
 
@@ -35,7 +40,7 @@
 <div id="care-date-box"><label for="care-date">Next review</label><input id="care-date" type="date"></div></div>
 <fieldset id="care-adj-box"><legend>Serve this customer with</legend><div id="care-adj" class="choices"></div></fieldset>
 <p><button>Record the decision</button></p></form><div id="care-one-msg" aria-live="polite"></div></section></div>
-<div data-view="My access"><section><h2>What you can do</h2><div id="mine"></div></section><section><h2>Your recent access</h2><div id="recent"></div></section><section><h2>Personal connections</h2><p class="muted">Declare anyone whose records you must not handle: relatives, friends, a former partner. Their policies and your own are then closed to you here. Only a staff administrator can remove a declaration.</p><div id="connections"></div><form id="connect"><div class="row"><div><label for="conn">Customer reference</label><input id="conn" required></div><button>Declare</button></div></form><div id="conn-msg" aria-live="polite"></div></section></div>
+<div data-view="My access"><section><h2>What you can do</h2><div id="mine"></div></section><section><h2>Your recent access</h2><div id="recent"></div></section><section><h2>Personal connections</h2><p class="muted">Declare anyone whose records you must not handle: relatives, friends, a former partner. Their policies and your own are then closed to you here. Only a staff administrator can remove a declaration.</p><div id="connections"></div><form id="connect"><div class="row"><div><label for="conn">Find them by name and birth date</label><input id="conn" required size="36"></div><button>Declare</button></div></form><div id="conn-msg" aria-live="polite"></div></section></div>
 <div data-view="Access administration"><section><h2>Grants</h2><div id="grants"></div><div id="admin-msg" aria-live="polite"></div></section><section><h2>Alignment with the entitlement source</h2><div id="alignment"></div></section></div>
 </main>
 <script src="/ui/app.js"></script>
@@ -47,13 +52,49 @@ const R = "workforce";
 let policy = null, party = null;
 const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 const amounts = (m) => Object.entries(m || {}).map(([c, v]) => money(v, c)).join(", ") || "none";
-const loaders = { "policies": async () => {}, "held-balances": bench, "markers-to-review": care, "my-access": access, "access-administration": admin };
+const loaders = { "policies": async () => {}, "second-approvals": waiting, "held-balances": bench, "markers-to-review": care, "my-access": access, "access-administration": admin };
 portal.onView((key) => run($("msg"), loaders[key] || (async () => {}))());
 
-$("lookup").addEventListener("submit", run($("lookup-msg"), async () => {
-  const q = new URLSearchParams({ case: $("case").value }); if ($("scope").value) q.set("scope", $("scope").value);
-  const view = await api(R, "GET", `/staff/v1/policies/${encodeURIComponent($("pol").value)}?${q}`);
-  policy = $("pol").value; $("pol-view").hidden = false; clear($("lookup-msg"));
+// ---- What the person is working on: said once, kept for this sign-in, sent with every look-up.
+$("case").value = portal.working();
+$("case").addEventListener("change", () => portal.workOn($("case").value.trim()));
+$("new-call").addEventListener("click", () => { $("case").value = portal.reference("CALL"); portal.workOn($("case").value); $("find-q").focus(); });
+const needCase = () => { if (!$("case").value.trim()) { $("case").focus(); throw new Error("Say what you are working on first: the case or task, or press \"A customer is on the phone\" for a call reference."); } portal.workOn($("case").value.trim()); };
+
+// ---- Find: people with their policies, and policies by number, each opened with one press.
+const statusOf = (p) => String(p.status || "").replace(/_/g, " ");
+function policyButton(p, label) { return h("button", { class: "quiet", type: "button", on: { click: run($("find-msg"), () => openPolicy(p.policy, p.number)) } }, label || `Open ${p.number || p.policy}`); }
+$("find").addEventListener("submit", run($("find-msg"), async () => {
+  needCase();
+  const r = await portal.find($("find-q").value);
+  const cards = [];
+  for (const person of r.people) {
+    if (person.closed) { cards.push(h("article", { class: "result" }, h("header", {}, h("strong", {}, "A record closed to you"), h("span", {}, "You, or someone you have declared a connection with. Pass the call to a colleague.")))); continue; }
+    cards.push(h("article", { class: "result" }, h("header", {}, h("strong", {}, person.name || "Name not held"), h("span", {}, [person.born ? "Born " + portal.born(person.born) : "", person.died ? "Died " + portal.born(person.died) : "", person.strong ? "Strong match" : ""].filter(Boolean).join(" · "))),
+      person.policies.length ? table(["Policy", "Product", "As", "Status", ""], person.policies.map((p) => [p.number || p.policy, p.product, p.as, statusOf(p), policyButton(p, "Open")]))
+        : h("p", { class: "muted" }, "No policies in their name or on their life."),
+      h("p", { class: "actions" }, portal.link("complaints", "record-a-complaint", { complainant: person.party }, "Record a complaint from them"), " ", portal.link("complaints", "register-and-report", { party: person.party }, "Their complaints"))));
+  }
+  if (r.policies.length) cards.push(h("article", { class: "result" }, h("header", {}, h("strong", {}, "Policies with that number")), table(["Policy", "Product", "Status", ""], r.policies.map((p) => [p.number || p.policy, p.product, statusOf(p), policyButton(p, "Open")]))));
+  if (r.customer_master_unavailable) cards.unshift(h("div", { class: "banner warn" }, "The customer records cannot be reached just now, so only policy numbers were searched. Try a name again in a minute."));
+  if (r.hint) cards.unshift(h("div", { class: "banner" }, r.hint.replace(/^./, (c) => c.toUpperCase()) + "."));
+  put($("found"), cards.length ? cards : portal.empty("Nobody and no policy matches that. Check the spelling, or add the birth date; a policy number can be typed in part."));
+}));
+async function openPolicy(id, number) { $("pol").value = number || id; $("pol").dataset.policy = id; await show(id); }
+portal.picker($("pol"), async (text) => { needCase(); return portal.policies(text); }, { onPick: (item) => { $("pol").dataset.policy = item.value; } });
+$("pol").addEventListener("input", () => { delete $("pol").dataset.policy; });
+$("lookup").addEventListener("submit", run($("lookup-msg"), () => show($("pol").dataset.policy || $("pol").value.trim())));
+async function show(id) {
+  needCase();
+  const q = new URLSearchParams({ case: $("case").value.trim() }); if ($("scope").value) q.set("scope", $("scope").value);
+  const view = await api(R, "GET", `/staff/v1/policies/${encodeURIComponent(id)}?${q}`);
+  policy = id; $("pol-view").hidden = false; clear($("lookup-msg")); clear($("cust-msg")); clear($("caller-msg"));
+  $("pol-title").textContent = `Policy ${$("pol").value || id}`;
+  // The next things people do from a policy, in the consoles that do them.
+  const holder = (view.policyholders || [])[0];
+  put($("pol-next"), portal.link("claims", "claim", { policy: id }, "Notify a claim on it"), holder ? portal.link("complaints", "record-a-complaint", { complainant: holder, policies: id }, "Record a complaint") : null,
+    holder ? portal.link("complaints", "register-and-report", { party: holder }, "The policyholder's complaints") : null);
+  $("pol-title").focus();
   // How to serve the policyholder: adjustments only, never a label; why only for a role that needs it.
   const a = view.approach;
   put($("approach"), !a ? null : a.unavailable
@@ -62,9 +103,11 @@ $("lookup").addEventListener("submit", run($("lookup-msg"), async () => {
   put($("withheld"), view.withheld ? h("div", { class: "banner warn" }, `${view.withheld} item(s) are withheld because your role does not include that class of data.`) : null);
   put($("pol-rows"), table(["What", "About", "Details"], view.rows.map((r) => [r.kind + (r.sensitive ? " (sensitive)" : ""), r.subject || "", portal.details(r.body)])));
   put($("pol-advisers"), table(["Adviser", "Standing"], view.advisers.map((a) => [a.adviser, a.standing.state === "read_only" ? `Read-only since ${a.standing.since} (${words(a.standing.status)} licence of ${a.standing.licence_of})` : words(a.standing.state)])));
-}));
+}
+portal.picker($("caller-ref"), (text) => { needCase(); return portal.people(text); }, { onPick: (item) => { $("caller-ref").dataset.party = item.value; } });
+$("caller-ref").addEventListener("input", () => { delete $("caller-ref").dataset.party; });
 $("caller-form").addEventListener("submit", run($("caller-msg"), async () => {
-  const body = { caller: $("caller-ref").value.trim() || null, case: $("case").value };
+  const body = { caller: $("caller-ref").dataset.party || $("caller-ref").value.trim() || null, case: $("case").value };
   if ($("scope").value) body.scope = $("scope").value;
   const r = await api(R, "POST", `/staff/v1/policies/${encodeURIComponent(policy)}/caller`, body);
   const head = { discuss: "You may discuss this policy with the caller.", refer: "Refer this call.", refuse: "Do not discuss this policy with the caller. Say:" }[r.outcome];
@@ -79,10 +122,25 @@ $("for-customer").addEventListener("submit", run($("cust-msg"), async () => {
   await api(R, "POST", "/staff/v1/requests", { id, policy, kind: $("ckind").value, module: "policy-servicing", payload, reason: $("creason").value.trim(), case: $("case").value.trim() });
   return `Request ${id} recorded. If it is above your limit or backdated, a colleague agrees it first; then it goes to the customer's app.`;
 }));
-$("second").addEventListener("submit", run($("second-msg"), async () => {
-  await api(R, "POST", "/staff/v1/requests/" + encodeURIComponent($("second-id").value.trim()) + "/second-approval", {});
+// ---- Second approvals: the changes waiting, each agreed with one press.
+let queued = [];
+const agree = (id) => run($("second-msg"), async () => {
+  await api(R, "POST", "/staff/v1/requests/" + encodeURIComponent(id) + "/second-approval", {});
+  await waiting().catch(() => {});
   return "Agreed. It now waits for the customer's approval in their app.";
-}));
+});
+const what = (r) => [words(r.kind), r.payload && r.payload.note, r.payload && r.payload.amount_minor != null ? money(r.payload.amount_minor) : "", r.payload && r.payload.effective ? "from " + r.payload.effective : ""].filter(Boolean).join(", ");
+async function waiting() {
+  const w = await api(R, "GET", "/staff/v1/requests");
+  queued = w.rows;
+  put($("waiting"), !w.may_approve ? portal.empty("Agreeing a colleague's change is for team leads and others whose roles include it. Yours do not.")
+    : w.rows.length ? table(["Request", "Policy", "Change", "Why", "Entered by", "Needs a second person because", ""], w.rows.map((r) => [r.id, r.policy || "", what(r), r.reason || "", `${r.entered_by}, ${new Date(r.entered_at * 1000).toLocaleString()}`,
+      [r.above_limit ? "above their limit" : "", r.backdated ? "dated in the past" : ""].filter(Boolean).join(" and ") || "",
+      h("span", {}, h("button", { class: "quiet", type: "button", on: { click: agree(r.id) } }, "Agree"), " ", r.policy ? h("button", { class: "quiet", type: "button", on: { click: run($("second-msg"), async () => { portal.view("policies"); await openPolicy(r.policy); }) } }, "See the policy") : null)]))
+    : portal.empty("Nothing is waiting for a second person."));
+}
+portal.picker($("second-id"), () => Promise.resolve(queued.map((r) => ({ value: r.id, label: r.id, hint: `${what(r)} · ${r.entered_by}` }))), { min: 0 });
+$("second").addEventListener("submit", (ev) => agree($("second-id").value.trim())(ev));
 
 // ---- Markers to review: for people trained in vulnerability support only.
 let reviewing = null;
@@ -165,12 +223,29 @@ async function access() {
   put($("recent"), table(["When", "Action", "Record", "Allowed", "Flagged"], (me.recent || []).map((r) => [new Date(r.at * 1000).toLocaleString(), r.action, r.record || "", r.decision.allowed ? "yes" : "no: " + words(r.decision.denied), r.flag ? words(r.flag) : ""])));
   put($("connections"), table(["Customer"], (me.connections || []).map((c) => [c])));
 }
-$("connect").addEventListener("submit", run($("conn-msg"), async () => { await api(R, "POST", "/staff/v1/access", { declare_connection: { party: $("conn").value } }); $("conn").value = ""; await access(); return "Declared."; }));
+// A connection is declared by finding the person, never by typing their reference. Searching for
+// them is itself recorded, under the declaration as its purpose.
+portal.picker($("conn"), async (text) => { if (!portal.working()) portal.workOn(portal.reference("CONNECTION")); return portal.people(text); }, { onPick: (item) => { $("conn").dataset.party = item.value; $("conn").dataset.name = item.label; } });
+$("conn").addEventListener("input", () => { delete $("conn").dataset.party; });
+$("connect").addEventListener("submit", run($("conn-msg"), async () => {
+  const party = $("conn").dataset.party || $("conn").value.trim(), name = $("conn").dataset.name;
+  const sure = await portal.ask({ title: "Declare a personal connection", text: `${name ? name + " (" + party + ")" : party}'s records and policies will be closed to you. Only a staff administrator can remove this.`, confirm: "Declare it" });
+  if (!sure) return null;
+  await api(R, "POST", "/staff/v1/access", { declare_connection: { party } }); $("conn").value = ""; delete $("conn").dataset.party; await access(); return "Declared.";
+}));
 async function admin() {
   const view = await api(R, "GET", "/staff/v1/admin");
   put($("grants"), table(["Grant", "Holder", "State", ""], view.grants.map((g) => [g.id, g.holder, words(g.state), g.state === "requested" ? h("button", { class: "quiet", on: { click: run($("admin-msg"), async () => { await api(R, "POST", "/staff/v1/access", { approve_grant: { id: g.id } }); await admin(); return "Approved."; }) } }, "Approve") : ""])));
   portal.put($("alignment"), portal.details(view.alignment)) + (view.external_source_available ? "" : "\nThe entitlement source is unavailable: nothing new is granted from it until it returns.");
 }
 // Someone with no staff record is refused at the door, not shown forms that will each refuse them.
-signIn(R).then(() => api(R, "GET", "/staff/v1/me")).catch(portal.refuse);
+signIn(R).then(() => api(R, "GET", "/staff/v1/me")).then((me) => {
+  $("me").textContent = [me.team, (me.templates || []).map(words).join(", ")].filter(Boolean).join(" · ");
+  portal.picker($("scope"), (me.paths || []).map((p) => ({ value: p, label: words(p.replace(/^[a-z]+:/, "")), hint: p.split(":")[0] })), { empty: "No queues or teams reach records for you." });
+  // Opened from another console: a policy to show, or a customer to find.
+  const sent = portal.params();
+  if (sent.case) { $("case").value = sent.case; portal.workOn(sent.case); }
+  if (sent.policy && $("case").value) run($("lookup-msg"), () => openPolicy(sent.policy))();
+  else if (sent.policy) { $("pol").value = sent.policy; $("pol").dataset.policy = sent.policy; }
+}).catch(portal.refuse);
 </script></body></html>

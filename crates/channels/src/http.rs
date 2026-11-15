@@ -3229,6 +3229,132 @@ async fn desk(s: &Shared, headers: &HeaderMap, method: &Method, uri: &Uri, body:
     desked(master.desk(&session.party, desk).await)
 }
 
+#[derive(Deserialize)]
+struct Find {
+    q: String,
+    case: Option<String>,
+    scope: Option<String>,
+}
+
+/// Find a customer or a policy from what the person knows: a name and
+/// birth date, a contact point, an IRD number, or a policy number in whole
+/// or in part (`crate::find`). The search is asked of the four questions
+/// and logged; so is each person read for the list, under the same finding
+/// action, since a list of names and birth dates is what finding shows (the
+/// whole record needs `customers.view`). Someone the member of staff may not
+/// handle (their own record, or someone they are connected to) is listed
+/// as closed, without a name or policies.
+async fn staff_find(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Query(find): Query<Find>) -> Answer {
+    use crate::customers::Desk;
+    let session = s.staff(&headers, &method, &uri, b"").await?;
+    let wanted = crate::find::read(&find.q).map_err(Problem::bad_request)?;
+    let why = || Why {
+        case: find.case.clone(),
+        scope: find.scope.clone(),
+    };
+    s.may_act(
+        &session,
+        staff_actions::FIND_CUSTOMER,
+        DataClass::Personal,
+        "customers".to_string(),
+        None,
+        why(),
+    )
+    .await?;
+    let mut people: Vec<Value> = Vec::new();
+    let mut master_down = false;
+    if let (Some(probe), Some(master)) = (&wanted.probe, &s.master) {
+        match master.desk(&session.party, Desk::Search(probe.clone())).await {
+            Ok((200, found)) => {
+                for hit in found["results"].as_array().into_iter().flatten().take(crate::find::PEOPLE) {
+                    let Some(party) = hit["party"].as_str().map(PartyId::from) else {
+                        continue;
+                    };
+                    let open = s
+                        .may_act(
+                            &session,
+                            staff_actions::FIND_CUSTOMER,
+                            DataClass::Personal,
+                            format!("party:{}", party.0),
+                            Some(party.clone()),
+                            why(),
+                        )
+                        .await;
+                    let mut row = match open {
+                        Err(_) => json!({ "party": party, "name": null, "closed": true }),
+                        Ok(()) => match master
+                            .desk(
+                                &session.party,
+                                Desk::Read {
+                                    party: party.clone(),
+                                    query: String::new(),
+                                },
+                            )
+                            .await
+                        {
+                            Ok((200, record)) => crate::find::person(&party, &record),
+                            _ => json!({ "party": party, "name": null }),
+                        },
+                    };
+                    row["score"] = hit["score"].clone();
+                    row["strong"] = hit["strong"].clone();
+                    people.push(row);
+                }
+            }
+            _ => master_down = true,
+        }
+    }
+    let open: Vec<PartyId> = people
+        .iter()
+        .filter(|p| p["closed"] != true)
+        .filter_map(|p| p["party"].as_str().map(PartyId::from))
+        .collect();
+    let mut found = s
+        .ask(Question::StaffFind {
+            number: wanted.number.clone(),
+            parties: open,
+        })
+        .await?;
+    for person in &mut people {
+        let held = person["party"].as_str().map(|p| found["parties"][p].clone()).unwrap_or(Value::Null);
+        person["policies"] = if held.is_array() { held } else { json!([]) };
+    }
+    ok(json!({
+        "policies": found["policies"].take(),
+        "people": people,
+        "searched_people": wanted.probe.is_some(),
+        "customer_master_unavailable": master_down || (wanted.probe.is_some() && s.master.is_none()),
+        "hint": wanted.hint,
+    }))
+}
+
+#[derive(Deserialize)]
+struct WhoFor {
+    action: Option<String>,
+}
+
+/// The colleagues who may be picked for work, so nobody types a staff
+/// reference: everyone current, or those who hold `action` today.
+async fn staff_colleagues(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Query(who): Query<WhoFor>) -> Answer {
+    let session = s.staff(&headers, &method, &uri, b"").await?;
+    ok(s.ask(Question::Colleagues {
+        action: who.action.filter(|a| !a.trim().is_empty()),
+        at: session.at,
+    })
+    .await?)
+}
+
+/// Changes colleagues entered for customers that wait for a second member
+/// of staff: the work queue for "be the second person".
+async fn staff_second_waiting(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
+    let session = s.staff(&headers, &method, &uri, b"").await?;
+    ok(s.ask(Question::SecondApprovals {
+        staff: session.party,
+        at: session.at,
+    })
+    .await?)
+}
+
 /// Operations work in the customer master: the operations role decides.
 async fn ops_desk(s: &Shared, headers: &HeaderMap, desk: crate::customers::Desk) -> Answer {
     let caller = s.workforce.authenticate(headers).await?;
@@ -3613,7 +3739,9 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/access", post(staff_command))
         .route("/staff/v1/policies/{policy}", get(staff_policy))
         .route("/staff/v1/policies/{policy}/caller", post(staff_caller))
-        .route("/staff/v1/requests", post(staff_request))
+        .route("/staff/v1/requests", post(staff_request).get(staff_second_waiting))
+        .route("/staff/v1/find", get(staff_find))
+        .route("/staff/v1/colleagues", get(staff_colleagues))
         .route("/staff/v1/requests/{id}/second-approval", post(staff_second_approval))
         .route("/staff/v1/care/reviews", get(care_reviews))
         .route("/staff/v1/care/reviews/{review}", post(care_decide))

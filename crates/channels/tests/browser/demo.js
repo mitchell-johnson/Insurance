@@ -302,12 +302,15 @@ async function video(name, persona, title, lines, run) {
   });
 
   await video("07-service-officer", "ST5 Service officer, then a second approver", "A change for a customer who rang", [
-    "Open the policy for the case being worked, with the access logged", "Enter the change the customer asked for",
+    "Find the caller by name and birth date, and open their policy, with the access logged", "Enter the change the customer asked for",
     "It is above her limit, so a colleague must agree", "Then it waits for the customer to approve in their app"], async (d, p) => {
     await d.open("/staff", "sub-sue");
-    await d.say("Sue takes a call. She opens the policy by naming the case she is working on");
-    await d.type("#pol", policy); await d.type("#case", "case-1");
-    await d.click(p.locator("#lookup button"));
+    await d.say("Sue takes a call. She starts a call reference, so every look-up is recorded against it");
+    await d.click(p.locator("#new-call"));
+    await d.say("The caller gives their name and birth date. Nobody needs a reference they were never given");
+    await d.type("#find-q", "Kiri Parata 12/4/1988"); await d.click(p.locator("#find button:not([type])"));
+    await d.see(p.locator("#found").getByText("Kiri Parata").first(), 2400);
+    await d.click(p.locator("#found").getByRole("button", { name: "Open" }).first());
     await p.locator("#pol-view:not([hidden])").waitFor();
     await d.say("The policy, as far as her role allows. Anything above her data classes is withheld and counted");
     await d.see("#pol-rows", 3000);
@@ -322,8 +325,9 @@ async function video(name, persona, title, lines, run) {
     await d.intro("Next", "The second approver", ["Alice signs in separately", "She cannot be the person who entered the change"], 3000);
     await d.open("/staff", "sub-alice");
     await d.say("Alice agrees her colleague's change");
-    await d.type("#second-id", entered);
-    await d.click(p.locator("#second button"));
+    await d.click(p.getByRole("tab", { name: "Second approvals" }));
+    await d.see(entered, 2200);
+    await d.click(p.locator("#waiting tbody tr").filter({ hasText: entered }).getByRole("button", { name: "Agree", exact: true }));
     await d.see(p.locator("#second-msg").getByText("Agreed."), 2600);
     await d.say("It now waits for the customer's own approval in their app. Staff cannot approve for them", 3000);
   });
@@ -457,6 +461,7 @@ async function video(name, persona, title, lines, run) {
     await d.see("finance", 2200);
     await d.say("She declares a personal connection. That person's policies are then closed to her");
     await d.type("#conn", "party-00000009"); await d.click(p.locator("#connect button"));
+    await d.click(p.locator("dialog[open] .actions button:last-child"));
     await d.see("Declared.");
     await d.see(p.locator("#connections").getByText("party-00000009"), 2600);
   });

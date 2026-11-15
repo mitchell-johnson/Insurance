@@ -214,7 +214,8 @@ const sees = async (page, text) => {
     await p.locator("#detail:not([hidden])").waitFor();
     await p.locator("#rows").getByText("prop-1").waitFor();
     await sees(p, "The applicant");
-    await p.locator("#claims").getByText("No claims.").waitFor();
+    // Kiri notified a claim from her own page earlier in this run: her adviser sees its status.
+    await p.locator("#claims").getByText(/^No claims\.$|^open$/).first().waitFor();
     // The schedule is listed; the documents module decides who may download it, and it is the customer's.
     await p.locator("#invest").getByText("No units held.").waitFor();
     await p.locator("#docs").getByText("Policy schedule").waitFor();
@@ -295,14 +296,17 @@ const sees = async (page, text) => {
     await p.getByRole("tab", { name: "My access" }).click();
     await sees(p, "finance");
     await p.fill("#conn", "party-00000009"); await p.locator("#connect button").click();
+    await p.locator("dialog[open] .actions button:last-child").click();
     await sees(p, "Declared.");
     await p.locator("#connections").getByText("party-00000009").waitFor();
   }, expectStatus: [403, 409, 422] });
   let entered = null;
   await visit(browser, "/staff", { subject: "sub-sue" }, { run: async (p) => {
-    await say(p, "A policy is opened only with the case being worked on, and the access is logged");
-    await p.fill("#pol", process.env.POLICY || "missing"); await p.fill("#case", "case-1");
-    await p.locator("#lookup button").click();
+    await say(p, "A customer rings: she starts a call reference and finds them by name and birth date");
+    await p.locator("#new-call").click();
+    await p.fill("#find-q", "Kiri Parata 12/4/1988"); await p.locator("#find button:not([type])").click();
+    await p.locator("#found").getByText("Kiri Parata").first().waitFor();
+    await p.locator("#found").getByRole("button", { name: "Open" }).first().click();
     await p.locator("#pol-view:not([hidden])").waitFor();
     await say(p, "Someone phones about the policy and cannot be identified: she is given words that confirm nothing");
     await p.locator("#caller-form button").click();
@@ -316,8 +320,8 @@ const sees = async (page, text) => {
   } });
   await visit(browser, "/staff", { subject: "sub-alice" }, { run: async (p) => {
     await say(p, "A colleague agrees it; then it waits for the customer to approve in their app");
-    await p.fill("#second-id", entered);
-    await p.locator("#second button").click();
+    await p.getByRole("tab", { name: "Second approvals" }).click();
+    await p.locator("#waiting tbody tr").filter({ hasText: entered }).getByRole("button", { name: "Agree", exact: true }).click();
     await p.locator("#second-msg").getByText("Agreed.").waitFor();
   } });
   await visit(browser, "/pricing", { subject: "sub-up1" }, { run: async (p) => {

@@ -208,7 +208,7 @@ fn portal_signed_in_by(
                 ),
                 template(
                     "service",
-                    &["policy.view", ic_channels::state::assisted::ENTER],
+                    &["policy.view", ic_channels::state::assisted::ENTER, staff_actions::FIND_CUSTOMER],
                     &[DataClass::Ordinary, DataClass::Personal],
                 ),
                 template(
@@ -424,7 +424,7 @@ fn portal_signed_in_by(
     let group = Arc::new(common::group::GroupDouble::with("harbour", &scheme.0));
     let master = Arc::new(common::customers::MasterDouble::with(
         KIRI,
-        json!({ "given_name": "Kiri", "email": "kiri@example.nz" }),
+        json!({ "given_name": "Kiri", "family_name": "Parata", "date_of_birth": "1988-04-12", "email": "kiri@example.nz" }),
     ));
     let clock = Arc::new(AtomicI64::new(w.at + 10));
     let local = Arc::new(Local::new(w.ch));
@@ -1181,10 +1181,162 @@ async fn the_staff_console_asks_the_four_questions() {
         portal.local.with(|s| serde_json::to_value(&s.data.requests["r2"]).unwrap())["from"],
         "second_staff"
     );
+    // It is on the second person's queue with what it is and why it is there, and not on the queue of the person who entered it.
+    let queue = portal.get("sub-alice", "/staff/v1/requests").await.1;
+    assert_eq!(queue["may_approve"], true);
+    let row = &queue["rows"][0];
+    assert_eq!(
+        (
+            row["id"].as_str(),
+            row["entered_by"].as_str(),
+            row["above_limit"].as_bool(),
+            row["case"].as_str(),
+            row["payload"]["amount_minor"].as_i64()
+        ),
+        (Some("r2"), Some("sue"), Some(true), Some("case-8"), Some(900_00)),
+        "{queue}"
+    );
+    assert_eq!(queue["rows"].as_array().unwrap().len(), 1, "a change waiting for the customer is not on it");
+    assert_eq!(portal.get("sub-sue", "/staff/v1/requests").await.1, json!({ "may_approve": false, "rows": [] }));
     let second = "/staff/v1/requests/r2/second-approval";
     assert_eq!(portal.write("POST", "sub-sue", second, json!({})).await.1["title"], "maker_checker");
     assert_eq!(portal.write("POST", "sub-alice", second, json!({})).await.0, StatusCode::ACCEPTED);
     assert_eq!(portal.local.with(|s| serde_json::to_value(&s.data.requests["r2"]).unwrap())["from"], "customer");
+    assert_eq!(
+        portal.get("sub-alice", "/staff/v1/requests").await.1["rows"],
+        json!([]),
+        "once agreed it leaves the queue"
+    );
+}
+
+/// Purpose: staff find a customer from the name and birth date a caller gives, or a policy from its number typed in part; each
+/// person comes with the policies they own, the search and each person listed are asked of the four questions under the case in
+/// hand, someone the member of staff is connected to is listed as closed, and a customer master that cannot be reached still
+/// leaves policy numbers searchable.
+/// Why it matters: a caller knows their name and birth date, never a party or policy reference. Without this the console asks
+/// for references nobody on a call can know; with it done carelessly, anyone with a staff sign-in could browse every customer.
+#[tokio::test]
+async fn staff_find_customers_and_policies_from_what_they_know() {
+    let portal = portal();
+    let policy = portal.retail.clone();
+    portal.master.add(
+        "party-77",
+        json!({ "given_name": "Rewi", "family_name": "Parata", "date_of_birth": "1950-01-01" }),
+    );
+    let find = |q: &str| format!("/staff/v1/find?q={}&case=CALL-1", q.replace(' ', "%20").replace('/', "%2F"));
+
+    // Without a case there is no search: the four questions ask why.
+    let (status, problem) = portal.get("sub-sue", "/staff/v1/find?q=Kiri%20Parata").await;
+    assert_eq!(
+        (status, problem["detail"].as_str().unwrap().contains("purpose")),
+        (StatusCode::FORBIDDEN, true),
+        "{problem}"
+    );
+    assert_eq!(portal.get("sub-sue", &find("K")).await.0, StatusCode::BAD_REQUEST);
+
+    let (status, found) = portal.get("sub-sue", &find("Kiri Parata 12/4/1988")).await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    let people = found["people"].as_array().unwrap();
+    assert_eq!(people.len(), 2, "both Paratas are scored: {found}");
+    let kiri = people.iter().find(|p| p["party"] == KIRI).unwrap();
+    assert_eq!(
+        (kiri["name"].as_str(), kiri["born"].as_str(), kiri["strong"].as_bool()),
+        (Some("Kiri Parata"), Some("1988-04-12"), Some(true))
+    );
+    assert_eq!(
+        (kiri["policies"][0]["policy"].as_str(), kiri["policies"][0]["as"].as_str()),
+        (Some(policy.0.as_str()), Some("owner"))
+    );
+    let rewi = people.iter().find(|p| p["party"] == "party-77").unwrap();
+    assert_eq!((rewi["name"].as_str(), rewi["policies"].clone()), (Some("Rewi Parata"), json!([])));
+    assert_eq!(found["policies"], json!([]), "two words are not a policy number");
+    // The master was asked to search with the probe the words make, as staff.
+    let probe = portal.master.desks.lock().unwrap().iter().find_map(|(who, d)| match d {
+        ic_channels::customers::Desk::Search(p) if who == "sue" => Some(p.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        probe,
+        Some(json!({ "family_name": "Parata", "given_name": "Kiri", "date_of_birth": "1988-04-12" }))
+    );
+    // The search and each person listed are in her access log, under the case.
+    let me = portal.get("sub-sue", "/staff/v1/me").await.1;
+    let lines: Vec<(String, String)> = me["recent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["action"].as_str().unwrap_or_default().to_string(),
+                r["record"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    for record in ["customers", &format!("party:{KIRI}"), "party:party-77"] {
+        assert!(lines.contains(&("customers.find".to_string(), record.to_string())), "{record} in {lines:?}");
+    }
+
+    // A policy by its reference typed in part, with what it is.
+    let part: String = policy.0.chars().take(policy.0.len() - 1).collect();
+    let by_number = portal.get("sub-sue", &find(&part)).await.1;
+    let hit = &by_number["policies"][0];
+    assert_eq!(
+        (hit["policy"].as_str(), hit["status"].is_string()),
+        (Some(policy.0.as_str()), true),
+        "{by_number}"
+    );
+    assert_eq!(by_number["searched_people"], false, "a reference is not a name");
+    // A birth date alone says what else is needed.
+    assert_eq!(
+        portal.get("sub-sue", &find("12/4/1988")).await.1["hint"],
+        "add the person's family name to search the customer master"
+    );
+
+    // Once she declares her connection to Kiri, Kiri is listed as closed: no name, no policies.
+    let declare = json!({ "declare_connection": { "party": KIRI } });
+    assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", declare).await.0, StatusCode::OK);
+    let closed = portal.get("sub-sue", &find("Kiri Parata")).await.1;
+    let kiri = closed["people"].as_array().unwrap().iter().find(|p| p["party"] == KIRI).unwrap().clone();
+    assert_eq!(
+        (kiri["closed"].as_bool(), kiri["name"].is_null(), kiri["policies"].clone()),
+        (Some(true), true, json!([]))
+    );
+
+    // With the master down, policy numbers are still found and the page is told why nobody was.
+    portal.master.down.store(true, Ordering::SeqCst);
+    let down = portal.get("sub-sue", &find("Kiri Parata")).await.1;
+    assert_eq!(
+        (down["customer_master_unavailable"].as_bool(), down["people"].clone()),
+        (Some(true), json!([])),
+        "{down}"
+    );
+    let numbers = portal.get("sub-sue", &find(&part)).await.1;
+    assert!(
+        numbers["policies"].as_array().unwrap().iter().any(|p| p["policy"] == policy.0.as_str()),
+        "{numbers}"
+    );
+
+    // Someone without the finding action is refused.
+    assert_eq!(portal.get("sub-fin1", &find("Kiri Parata")).await.0, StatusCode::FORBIDDEN);
+}
+
+/// Purpose: the colleagues list offers everyone current on the staff directory with their team and roles, or only those who hold an action today.
+/// Why it matters: work is handed to a person by picking them, not by typing a reference; a list that offered someone without the action would hand them work they cannot take.
+#[tokio::test]
+async fn colleagues_are_offered_by_what_they_may_do() {
+    let portal = portal();
+    let all = portal.get("sub-sue", "/staff/v1/colleagues").await.1;
+    let names: Vec<&str> = all["people"].as_array().unwrap().iter().filter_map(|p| p["party"].as_str()).collect();
+    assert!(names.contains(&"sue") && names.contains(&"alice"), "{all}");
+    let sue = all["people"].as_array().unwrap().iter().find(|p| p["party"] == "sue").unwrap();
+    assert_eq!((sue["team"].as_str(), sue["roles"].clone()), (Some("ops"), json!(["service"])));
+    let approvers = portal
+        .get("sub-sue", &format!("/staff/v1/colleagues?action={}", ic_channels::state::assisted::APPROVE))
+        .await
+        .1;
+    let names: Vec<&str> = approvers["people"].as_array().unwrap().iter().filter_map(|p| p["party"].as_str()).collect();
+    assert!(names.contains(&"alice") && !names.contains(&"sue"), "{approvers}");
+    assert_eq!(portal.get("sub-kiri", "/staff/v1/colleagues").await.0, StatusCode::FORBIDDEN);
 }
 
 /// Purpose: a staff read of a policy or of the workbench leaves a line in the access log, a refusal does too, and nobody can write the log by hand.

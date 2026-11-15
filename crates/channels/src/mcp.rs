@@ -307,6 +307,11 @@ pub fn catalogue() -> Vec<Tool> {
         tool("enter_change_for_customer", "Enter a change for a customer", S, M::POST, "/staff/v1/requests", "A change for a customer on the phone. The customer approves it; above your limit or backdated, a second member of staff agrees it first.")
             .json(r#"{"id", "policy", "kind", "module", "payload": {...}, "reason": "<why>", "case": "<case>"}"#),
         tool("second_approval", "Agree a colleague's change", S, M::POST, "/staff/v1/requests/{id}/second-approval", "As a second member of staff, agree a change a colleague entered."),
+        tool("changes_for_second_approval", "Changes waiting for a second person", S, M::GET, "/staff/v1/requests", "Changes colleagues entered for customers that wait for a second member of staff, oldest first. Empty unless your roles include agreeing them."),
+        tool("find", "Find a customer or a policy", S, M::GET, "/staff/v1/find", "From what you know: a name with a birth date (Kiri Ngata 7/3/1984), an email, a phone or IRD number, or a policy number in whole or in part. Each person comes with the policies they own or are insured on.")
+            .query("`q`: what you know; `case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record."),
+        tool("colleagues", "Colleagues to pick for work", S, M::GET, "/staff/v1/colleagues", "Current staff with their team and roles; with `action`, only those who may take it today.")
+            .query("`action`: a staff action such as `claims.work`, optional."),
         tool("marker_reviews", "Vulnerability markers to review", S, M::GET, "/staff/v1/care/reviews", "For staff trained in vulnerability support: markers due for review and prompts to consider one."),
         tool("decide_marker_review", "Decide a marker review", S, M::POST, "/staff/v1/care/reviews/{review}", "Renew, change or remove a vulnerability marker, or close a prompt with none needed.")
             .json(r#"{"party", "outcome": "renew" | "change" | "remove" | "no_marker", "kind"?, "review_on"?: "YYYY-MM-DD", "adjustments"?: [...]}"#),

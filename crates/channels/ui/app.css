@@ -286,3 +286,25 @@ ul.checks li:last-child { border-bottom: 0; }
 .mark .a { fill: #4656dc; } .mark .b { fill: #fff; } .mark .c { fill: #4656dc; }
 .bar .who strong { color: #fff; }
 .bar > .brand + .who { margin-left: auto; }
+
+/* ---------- Pickers: choose, do not type ---------- */
+.pick-holder { position: relative; }
+.picks { position: absolute; z-index: 20; left: 0; right: 0; top: 100%; margin: var(--s1) 0 0; padding: var(--s1); list-style: none; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r-s); box-shadow: var(--shadow-2); max-height: 320px; overflow-y: auto; min-width: 260px; }
+.picks li { display: flex; flex-direction: column; gap: 2px; padding: var(--s2) var(--s3); border-radius: var(--r-s); cursor: pointer; font-size: var(--t-s); color: var(--ink); }
+.picks li span { color: var(--muted); font-size: var(--t-xs); }
+.picks li[aria-selected="true"], .picks li:hover { background: var(--accent-soft); }
+.picks li.none { cursor: default; color: var(--muted); }
+.picks li.none:hover { background: none; }
+.picked { display: flex; flex-wrap: wrap; gap: var(--s1); margin-top: var(--s1); }
+.picked .pill button { padding: 0 var(--s1); min-height: 0; border: 0; background: none; color: inherit; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* The record a person is working on, and the next things to do on it. */
+.working { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s3); align-items: center; font-size: var(--t-s); color: var(--ink-2); margin: 0 0 var(--s4); }
+.working strong { color: var(--ink); }
+.next { display: flex; flex-wrap: wrap; gap: var(--s2); margin: 0 0 var(--s4); }
+.results { display: grid; gap: var(--s3); }
+.result { border: 1px solid var(--line); border-radius: var(--r-s); padding: var(--s3) var(--s4); background: var(--surface); }
+.result header { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s3); align-items: baseline; margin-bottom: var(--s2); }
+.result header strong { font-size: var(--t-m); }
+.result header span { color: var(--muted); font-size: var(--t-s); }
+.result .actions { display: flex; flex-wrap: wrap; gap: var(--s2); }

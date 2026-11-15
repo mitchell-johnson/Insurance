@@ -249,6 +249,26 @@ pub enum Question {
         module: String,
         at: At,
     },
+    /// Policies a search found: those numbered as typed, and those each
+    /// person found in the customer master owns or is insured on.
+    /// References, products and standing only (`crate::find`).
+    StaffFind {
+        number: Option<String>,
+        parties: Vec<PartyId>,
+    },
+    /// The people on the staff directory who may be picked for work: who
+    /// holds `action` today, or everyone current when none is named. A
+    /// person is never offered work they could not take.
+    Colleagues {
+        action: Option<String>,
+        at: At,
+    },
+    /// Changes colleagues entered for customers that wait for a second
+    /// member of staff, other than the asker's own, oldest first.
+    SecondApprovals {
+        staff: PartyId,
+        at: At,
+    },
     /// How current the module is, for health checks and the operations console.
     Status,
 }
@@ -768,6 +788,51 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 })
                 .collect();
             json!(waiting)
+        }
+        Question::StaffFind { number, parties } => json!({
+            "policies": number.as_deref().map(|n| crate::find::numbered(&d.view, n)).unwrap_or_default(),
+            "parties": crate::find::policies_of(&d.view, &d.directory, &parties),
+        }),
+        Question::Colleagues { action, at } => {
+            let people: Vec<Value> = d
+                .staff
+                .members
+                .values()
+                .filter(|m| m.ended.is_none_or(|e| at < e))
+                .filter(|m| action.as_deref().is_none_or(|a| d.staff.holds_action(&m.party, a, at)))
+                .map(|m| {
+                    let roles: Vec<&str> = d.staff.templates_of(&m.party, at).iter().map(|t| t.id.as_str()).collect();
+                    json!({ "party": m.party, "team": m.team, "roles": roles })
+                })
+                .collect();
+            json!({ "people": people })
+        }
+        Question::SecondApprovals { staff, at } => {
+            if !d.staff.holds_action(&staff, crate::state::assisted::APPROVE, at) {
+                return json!({ "may_approve": false, "rows": [] });
+            }
+            let mut rows: Vec<&crate::state::Request> = d
+                .requests
+                .values()
+                .filter(|r| {
+                    r.status
+                        == crate::state::RequestStatus::AwaitingApproval {
+                            from: crate::state::Approver::SecondStaff,
+                        }
+                })
+                .filter(|r| r.party != staff)
+                .collect();
+            rows.sort_by(|a, b| a.submitted.cmp(&b.submitted).then_with(|| a.id.cmp(&b.id)));
+            let rows: Vec<Value> = rows
+                .into_iter()
+                .map(|r| {
+                    let why = r.assisted.as_ref();
+                    json!({ "id": r.id, "policy": r.policy, "kind": r.kind, "payload": r.payload, "entered_by": r.party, "entered_at": r.submitted,
+                        "reason": why.map(|a| a.reason.clone()), "case": why.map(|a| a.case.clone()),
+                        "backdated": why.is_some_and(|a| a.backdated), "above_limit": why.is_some_and(|a| a.above_limit) })
+                })
+                .collect();
+            json!({ "may_approve": true, "rows": rows })
         }
         Question::Status => json!({
             "business_date": d.today,

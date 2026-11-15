@@ -29,6 +29,7 @@ pub mod disclosures;
 pub mod documents;
 pub mod feed;
 pub mod finance;
+pub mod find;
 pub mod forward;
 pub mod group;
 pub mod http;

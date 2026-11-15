@@ -12,10 +12,10 @@
 const O = "ordinary", P = "personal", F = "financial", S = "insurance_sensitive";
 const templates = [
   ["administrator", ["staff.manage", "staff.approve_grant", "service.approve_change"], [O]],
-  ["service", ["policy.view", "service.enter_change"], [O, P]],
-  ["service-lead", ["policy.view", "service.enter_change", "service.approve_change"], [O, P]],
-  ["collections", ["policy.view", "service.enter_change", "payments.collections", "payments.view"], [O, P, F]],
-  ["hardship", ["policy.view", "service.enter_change", "service.vulnerability_kind"], [O, P]],
+  ["service", ["policy.view", "service.enter_change", "customers.find"], [O, P]],
+  ["service-lead", ["policy.view", "service.enter_change", "service.approve_change", "customers.find"], [O, P]],
+  ["collections", ["policy.view", "service.enter_change", "payments.collections", "payments.view", "customers.find"], [O, P, F]],
+  ["hardship", ["policy.view", "service.enter_change", "service.vulnerability_kind", "customers.find"], [O, P]],
   ["held-balance", ["held_balance.view", "held_balance.prepare", "held_balance.approve"], [O, F]],
   ["held-balance-legal", ["held_balance.view", "held_balance.approve", "held_balance.approve_legal"], [O, F]],
   ["conduct-officer", ["held_balance.view", "held_balance.approve_conduct", "complaints.conduct"], [O, F]],

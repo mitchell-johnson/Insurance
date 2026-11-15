@@ -171,13 +171,16 @@ const portal = (() => {
       store.removeItem("pkce:verifier"); store.removeItem("pkce:state");
       if (!res.ok) throw new Error("Sign-in failed.");
       store.setItem("token:" + realm, (await res.json()).access_token);
-      window.history.replaceState({}, "", redirect);
+      window.history.replaceState({}, "", redirect + (store.getItem("pkce:hash") || ""));
+      store.removeItem("pkce:hash"); sent = null;
       return entered(realm);
     }
     const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
     const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
     const challenge = b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
     store.setItem("pkce:verifier", verifier); store.setItem("pkce:state", state);
+    // The identity provider sends the person back without the address's fragment: keep the view and what it was opened with.
+    if (window.location.hash) store.setItem("pkce:hash", window.location.hash);
     window.location.assign(base + "/authorize?" + new URLSearchParams({ client_id: idp.client_id, response_type: "code", redirect_uri: redirect, scope: idp.scope, state, code_challenge: challenge, code_challenge_method: "S256" }));
     await new Promise(() => {});
   }
@@ -261,6 +264,128 @@ const portal = (() => {
     };
   }
 
+  // ---- Picking instead of typing. Nobody should have to know a reference to type it.
+  // A field becomes a combobox: as the person types (or on focus, for a short list), it offers
+  // matches from `source`, an array of { value, label, hint } or an async function of the text.
+  // Choosing one puts its value in the field and calls `onPick(item)`. The field still takes a
+  // value typed in full, for the person who has the reference on a letter in front of them.
+  let picks = 0;
+  function picker(input, source, opts = {}) {
+    const id = (input.id || "pick") + "-picks-" + (++picks);
+    const list = h("ul", { class: "picks", role: "listbox", id, hidden: true });
+    const status = h("span", { class: "visually-hidden", "aria-live": "polite" });
+    let items = [], at = -1, timer = null, asked = 0;
+    input.setAttribute("role", "combobox"); input.setAttribute("aria-autocomplete", "list");
+    input.setAttribute("aria-expanded", "false"); input.setAttribute("aria-controls", id); input.autocomplete = "off";
+    const holder = input.parentElement; holder.classList.add("pick-holder"); holder.append(list, status);
+    const close = () => { list.hidden = true; input.setAttribute("aria-expanded", "false"); input.removeAttribute("aria-activedescendant"); at = -1; };
+    const mark = (n) => {
+      at = n; [...list.children].forEach((li, i) => li.setAttribute("aria-selected", String(i === n)));
+      if (n >= 0 && list.children[n]) { input.setAttribute("aria-activedescendant", list.children[n].id); list.children[n].scrollIntoView({ block: "nearest" }); }
+    };
+    const choose = (item) => {
+      input.value = item.value; input.dataset.label = item.label || item.value; close();
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      if (opts.onPick) opts.onPick(item);
+    };
+    function show(found, text) {
+      items = found.slice(0, opts.max || 12);
+      put(list, items.length ? items.map((item, n) => h("li", { role: "option", id: id + "-" + n, "aria-selected": "false",
+        on: { mousedown: (ev) => { ev.preventDefault(); choose(item); } } }, h("strong", {}, item.label || item.value), item.hint ? h("span", {}, item.hint) : null))
+        : h("li", { class: "none", role: "option", "aria-disabled": "true", "aria-selected": "false", id: id + "-none" }, text ? opts.none || "Nothing matches that." : opts.empty || "Nothing to choose from yet."));
+      list.hidden = false; input.setAttribute("aria-expanded", "true"); at = -1;
+      status.textContent = items.length ? `${items.length} to choose from.` : "";
+    }
+    async function lookup() {
+      const text = input.value.trim(), mine = ++asked;
+      if (typeof source !== "function") {
+        const want = text.toLowerCase();
+        return show(source.filter((i) => !want || `${i.value} ${i.label || ""} ${i.hint || ""}`.toLowerCase().includes(want)), text);
+      }
+      if (text.length < (opts.min == null ? 2 : opts.min)) return close();
+      try { const found = await source(text); if (mine === asked) show(found || [], text); }
+      catch (e) { if (mine === asked) put(list, h("li", { class: "none", role: "option", "aria-disabled": "true", "aria-selected": "false", id: id + "-err" }, e.message)), list.hidden = false; }
+    }
+    input.addEventListener("input", () => { delete input.dataset.label; clearTimeout(timer); timer = setTimeout(lookup, typeof source === "function" ? 250 : 0); });
+    input.addEventListener("focus", () => { if (typeof source !== "function" || opts.min === 0) lookup(); });
+    input.addEventListener("blur", () => setTimeout(close, 120));
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "ArrowDown") { ev.preventDefault(); if (list.hidden) lookup(); else mark(Math.min(at + 1, items.length - 1)); }
+      else if (ev.key === "ArrowUp") { ev.preventDefault(); mark(Math.max(at - 1, 0)); }
+      else if (ev.key === "Enter" && !list.hidden && at >= 0 && items[at]) { ev.preventDefault(); choose(items[at]); }
+      else if (ev.key === "Escape" && !list.hidden) { ev.preventDefault(); close(); }
+    });
+    return { set: (next) => { source = next; }, close };
+  }
+  // A field that takes several picks, kept as a comma-separated value.
+  function pickMany(input, source, opts = {}) {
+    const chosen = h("div", { class: "picked" }), all = () => String(input.dataset.many || "").split(",").filter(Boolean);
+    const draw = () => put(chosen, all().map((v) => h("span", { class: "pill" }, v, h("button", { type: "button", class: "quiet", "aria-label": "Remove " + v, on: { click: () => { input.dataset.many = all().filter((x) => x !== v).join(","); draw(); } } }, "×"))));
+    input.parentElement.append(chosen);
+    picker(input, source, { ...opts, onPick: (item) => { input.dataset.many = [...new Set([...all(), item.value])].join(","); input.value = ""; draw(); } });
+    return { values: () => [...all(), ...String(input.value).split(",").map((x) => x.trim()).filter(Boolean)], clear: () => { input.dataset.many = ""; input.value = ""; draw(); } };
+  }
+
+  // ---- Defaults a person should not have to work out.
+  // Today and this month as New Zealand reckons them.
+  const nzDate = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: "Pacific/Auckland", year: "numeric", month: "2-digit", day: "2-digit" }).format(d || new Date());
+  const today = () => nzDate();
+  const month = (back = 0) => { const [y, m] = today().split("-").map(Number); const t = new Date(Date.UTC(y, m - 1 - back, 1)); return t.toISOString().slice(0, 7); };
+  const days = (n, from) => { const d = new Date((from || today()) + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  // A new reference for something this person is creating: readable, dated and unique enough
+  // that two people starting the same kind of thing at once never collide.
+  const reference = (prefix) => { const a = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789", r = crypto.getRandomValues(new Uint8Array(5)); return `${prefix}-${today().replace(/-/g, "")}-${Array.from(r, (b) => a[b % a.length]).join("")}`; };
+
+  // ---- What the person is working on. The access rules ask why a record is opened; the answer is
+  // the case, call or task in hand. It is kept for the sign-in's tab, so it is said once, not on every form.
+  const WORK = "working-on";
+  const working = () => store.getItem(WORK) || "";
+  const workOn = (ref) => { if (ref) store.setItem(WORK, ref); else store.removeItem(WORK); for (const fn of workers) fn(working()); };
+  const workers = [];
+
+  // ---- Links between consoles. `go("claims", "claim", { claim: "CLM-1" })` opens that claim's view;
+  // the page reads what it was sent with `params()` once it has signed the person in.
+  const go = (page, key, params) => "/" + page + "#" + (key || "") + (params && Object.keys(params).length ? "?" + new URLSearchParams(params) : "");
+  const link = (page, key, params, words) => h("a", { href: go(page, key, params) }, words);
+  let sent = null;
+  function params() {
+    if (sent) return sent;
+    const hash = window.location.hash.slice(1), q = hash.indexOf("?");
+    sent = Object.fromEntries(new URLSearchParams(q < 0 ? "" : hash.slice(q + 1)));
+    return sent;
+  }
+
+  // ---- Shared lists, asked once per page.
+  const cache = {};
+  const once = (key, fn) => (cache[key] = cache[key] || fn().catch((e) => { delete cache[key]; throw e; }));
+  // Colleagues who may take `action` today (everyone current, with none), as picker items.
+  async function colleagues(action) {
+    const { people } = await once("colleagues:" + (action || ""), () => api("workforce", "GET", "/staff/v1/colleagues" + (action ? "?action=" + encodeURIComponent(action) : "")));
+    return people.map((p) => ({ value: p.party, label: p.party, hint: [p.team, (p.roles || []).join(", ")].filter(Boolean).join(" · ") }));
+  }
+  // Customers and policies from what the person knows, under the case they are working on.
+  async function find(text) {
+    const q = new URLSearchParams({ q: text }); if (working()) q.set("case", working());
+    return api("workforce", "GET", "/staff/v1/find?" + q);
+  }
+  const born = (d) => d ? new Date(d + "T00:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : "";
+  // Picker sources over find: people (value is the party) and policies (value is the policy).
+  async function people(text) {
+    const r = await find(text);
+    if (r.hint) throw new Error(r.hint.replace(/^./, (c) => c.toUpperCase()) + ".");
+    if (r.customer_master_unavailable) throw new Error("The customer records cannot be reached just now. Try again in a minute.");
+    return r.people.map((p) => p.closed ? { value: p.party, label: "Closed to you", hint: "Someone you are connected to, or yourself" }
+      : { value: p.party, label: p.name || p.party, hint: [p.born ? "born " + born(p.born) : "", `${p.policies.length} polic${p.policies.length === 1 ? "y" : "ies"}`].filter(Boolean).join(" · "), person: p });
+  }
+  async function policies(text) {
+    const r = await find(text), out = [], seen = new Set();
+    const add = (p, who) => { if (seen.has(p.policy)) return; seen.add(p.policy); out.push({ value: p.policy, label: p.number || p.policy, hint: [who, p.product, String(p.status || "").replace(/_/g, " ")].filter(Boolean).join(" · "), policy: p }); };
+    for (const p of r.policies) add(p, "");
+    for (const person of r.people) for (const p of person.policies || []) add(p, `${person.name || person.party}${p.as === "owner" ? "" : " (" + p.as + ")"}`);
+    if (!out.length && r.hint) throw new Error(r.hint.replace(/^./, (c) => c.toUpperCase()) + ".");
+    return out;
+  }
+
   // ---- The frame around every page: navigation, who is signed in, theme, and the page's views.
   // [path, name, icon, what it is for]
   const PARTNERS = [["customer", "Your policies", "shield", "Your cover, bills and claims, changes waiting for you, and your details."], ["adviser", "Adviser portal", "briefcase", "Your book, your standing, and anything held from you."], ["employer", "Employer portal", "building", "Your scheme, its members and its administrators."]];
@@ -293,7 +418,7 @@ const portal = (() => {
       else { const claims = JSON.parse(atob(store.getItem("token:" + realm).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))); name = claims.name || claims.preferred_username || ""; }
     } catch { name = ""; }
     if (name) { put(who, h("span", { class: "avatar", "aria-hidden": "true" }, name.replace(/^sub-/, "").slice(0, 2)), h("div", {}, h("strong", {}, name), h("span", {}, realm === "workforce" ? "Staff" : here() === "customer" ? "Customer" : "Partner"))); who.hidden = false; }
-    if (window.location.hash.length > 1) view(window.location.hash.slice(1));
+    if (window.location.hash.length > 1) view(window.location.hash.slice(1).split("?")[0]);
   }
 
   // Views: a page's cards grouped under tabs, one group on screen at a time.
@@ -362,5 +487,6 @@ const portal = (() => {
     put(el, [["Partners", PARTNERS], ...NAV].map(([group, items]) => [h("h2", { class: "group" }, group), h("div", { class: "launch" }, items.map(card))]));
   }
   frame();
-  return { h, clear, put, money, table, text, details, say, refuse, signIn, signOut, api, run, loadConfig, download, documents, icon, pill, stats, empty, ask, view, onView: (fn) => listeners.push(fn), launcher, prove: (fn) => { prover = fn; } };
+  return { h, clear, put, money, table, text, details, say, refuse, signIn, signOut, api, run, loadConfig, download, documents, icon, pill, stats, empty, ask, view, onView: (fn) => listeners.push(fn), launcher, prove: (fn) => { prover = fn; },
+    picker, pickMany, today, month, days, reference, working, workOn, onWork: (fn) => workers.push(fn), go, link, params, once, colleagues, find, people, policies, born };
 })();
