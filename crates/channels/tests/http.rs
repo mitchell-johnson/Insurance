@@ -4595,6 +4595,24 @@ async fn the_payments_console() {
     let (status, party) = ask("sub-payview", "party?party=party-p1").await;
     assert_eq!((status, &party["payees"][0]["payee"]), (StatusCode::OK, &json!("p1")), "{party}");
     assert!(!party.to_string().contains("0101234567"), "no account number: {party}");
+    // Notices: a role's own list, and only for someone who holds the role.
+    let (status, notices) = ask("sub-paymk", "notices?role=maker").await;
+    assert_eq!((status, notices.is_array()), (StatusCode::OK, true), "{notices}");
+    assert_eq!(
+        ask("sub-paymk", "notices?role=approver").await.0,
+        StatusCode::BAD_REQUEST,
+        "not a role the maker holds"
+    );
+    assert_eq!(ask("sub-payview", "notices?role=maker").await.0, StatusCode::BAD_REQUEST);
+    // Misdirected money and the other new lookups reach the module.
+    assert_eq!(ask("sub-payview", "open_misdirections").await, (StatusCode::OK, json!({})));
+    assert_eq!(ask("sub-payview", "misdirection?misdirection=m-none").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(ask("sub-payview", "incident?incident=i-none").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(ask("sub-payview", "tax_remittance?remittance=t-none").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(ask("sub-payview", "funding_forecast?from=2027-01-01&to=2027-01-31").await.0, StatusCode::OK);
+    // A notice that does not exist is refused by the module, not by the console's list.
+    let (status, problem) = tell("sub-paymk", json!({ "type": "close_notice", "notice": 999, "action": "looked" })).await;
+    assert_ne!(status, StatusCode::BAD_REQUEST, "close_notice is a console command: {problem}");
 
     // The module unreachable: the console says so.
     let now = portal.now();
