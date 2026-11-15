@@ -410,9 +410,14 @@ impl Bench {
 
     /// Close `n` days, the customer paying what is owed each morning; returns what was paid.
     fn months(&self, n: u32, policy: &PolicyId) -> i64 {
+        let until = self.today().checked_add_months(chrono::Months::new(n)).unwrap();
+        self.until(until, policy)
+    }
+
+    /// Close days to `until`, the policyholder paying what is owed each day.
+    fn until(&self, until: NaiveDate, policy: &PolicyId) -> i64 {
         self.with_cluster(|c| {
             let mut paid = 0;
-            let until = c.business_date().unwrap().checked_add_months(chrono::Months::new(n)).unwrap();
             while c.business_date().unwrap() < until {
                 let owing = c.state(0).policies[policy].outstanding_minor();
                 if owing > 0 {
@@ -427,7 +432,7 @@ impl Bench {
                 let close = c.end_of_day().unwrap();
                 assert!(close.breaks.is_empty(), "breaks on {}: {:?}", close.closed, close.breaks);
             }
-            assert_eq!(c.state(0).policies[policy].status, PolicyStatus::InForce, "still in force after {n} months");
+            assert_eq!(c.state(0).policies[policy].status, PolicyStatus::InForce, "still in force on {until}");
             paid
         })
     }
@@ -524,7 +529,12 @@ impl Bench {
         let today = self.today();
         let died = claim_type == ClaimType::Death;
         self.notify(claim, policy, cover, life, claim_type, today);
-        assert_eq!(self.claim(claim).cover_check.unwrap().facts.sum_insured_minor, sum, "{claim}");
+        let facts = self.claim(claim).cover_check.unwrap().facts;
+        assert_eq!(facts.sum_insured_minor, sum, "{claim}");
+        // A benefit with a survival period is decided once the life has survived it.
+        if !died && facts.survival_days > 0 {
+            self.until(today + chrono::Days::new(u64::from(facts.survival_days) + 1), policy);
+        }
         self.admit(claim, None, None, died);
         assert_eq!(self.claim(claim).payable_minor, sum, "{claim}: admitted at the sum insured");
         self.claims(claims::Command::Pay {

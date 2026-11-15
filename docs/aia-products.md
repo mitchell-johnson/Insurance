@@ -137,9 +137,10 @@ Each benefit the products declare as a `facility` now has code behind it, or is 
 | Non-smoker review | Cover for Life (any product) | underwriting's `AlterUnderwrittenTerms` carries `smoker`; the life is rated on it from that day | same |
 | Paid up instead of lapsing | Cover for Life | the arrears run makes every paying cover paid up when it qualifies, writing off what is unpaid | `cover_for_life_is_made_paid_up_instead_of_lapsing_after_its_paid_up_date` |
 | Medical Advancements, Enhancement Pass Back | AIA Living trauma, Start-Up Income | `pass_back_definitions`: the cover check lists a later definition version in force on the event date beside the bound one | `a_later_trauma_definition_reaches_cover_already_written` |
+| Waiting Period Reduction | AIA Living income covers | a `waiting` conversion through `ConvertCover`: only from 26, 52 or 104 weeks to a shorter wait, with the evidence of the cancelled business cover named (`evidence_required`); underwriting checks the cancellation and the lesser amount | `a_long_income_waiting_period_is_shortened_when_the_business_cover_ends` |
 | Income and disablement benefits | AIA Living, Business | built by claims (docs/claims.md) | claims tests |
 
-Asked of the underwriting thread on 15 November, because each writes new cover without evidence after underwriting checks a trigger: Children's Trauma Conversion, Move to Business Continuity and Waiting Period Reduction.
+Being built by the underwriting thread (asked 15 November), because each writes new cover without evidence after underwriting checks a trigger: Children's Trauma Conversion, Move to Business Continuity, and the underwriting door for Waiting Period Reduction.
 
 ## Not built yet, and who owns it
 
