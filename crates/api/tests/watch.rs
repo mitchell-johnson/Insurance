@@ -29,6 +29,10 @@ fn row(partition: u16, role: &str, leader: Option<u64>, applied: u64, hash: &str
 /// with nobody told, and counting a follower's stale backlog would page people for nothing.
 #[test]
 fn the_watch_finds_what_needs_a_person() {
+    // The lines are written through the real subscriber, as in the CronJob.
+    let settings = ic_telemetry::Settings::from_lookup("ic-admin-test", |_| None).unwrap();
+    let (subscriber, _telemetry) = ic_telemetry::subscriber(&settings, ic_telemetry::Output::Stderr).unwrap();
+    let _installed = tracing::subscriber::set_default(subscriber);
     let mut status = BTreeMap::new();
     status.insert(
         "ic-node-1".to_string(),

@@ -347,6 +347,37 @@ async fn a_close_is_one_trace_across_temporal() {
     let _ = std::fs::remove_dir_all(&fleet.roots);
 }
 
+/// Purpose: `ic-worker unit-orders`, as the fifteen-minute CronJob runs it, asks the ledger for
+/// its business date and partitions, runs every partition's unit orders, and prints what it left
+/// on each as JSON; it needs no Temporal server.
+/// Why it matters: this is the job that moves unit-linked money between closes; if it failed to
+/// read the ledger or skipped a partition, orders would wait for midnight and the "unit orders
+/// left" alert, which reads its log, would never see them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_unit_orders_job_runs_every_partition_and_reports() {
+    let ledger = Ledger::start("unit-orders-job", 3, 2).await;
+    let fleet = Fleet {
+        temporal: "127.0.0.1:1".to_string(),
+        task_queue: "unused".to_string(),
+        nodes: ledger.client.nodes().join(","),
+        roots: scratch("unit-orders-roots"),
+    };
+    let child = fleet
+        .command(&fleet.nodes)
+        .arg("unit-orders")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let output = finish(child).await;
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let said: serde_json::Value = serde_json::from_slice(&output.stdout).expect("the report is not JSON");
+    assert_eq!(said["business_date"], day(0).to_string());
+    assert_eq!(said["left"], serde_json::json!({ "0": 0, "1": 0 }));
+    ledger.stop().await;
+    let _ = std::fs::remove_dir_all(&fleet.roots);
+}
+
 fn run(args: &[&str], env: &[(&str, &str)]) -> (bool, String) {
     let output = Process::new(WORKER)
         .env_clear()
