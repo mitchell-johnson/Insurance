@@ -107,6 +107,24 @@ A new console is added there once.
 | Empty state | `portal.empty(words)` | A dashed well with a sentence, never a blank space. |
 | Icon | `portal.icon(name)` | Drawn inline, 24 unit grid, 1.75 stroke, inherits colour. |
 | Launcher | `portal.launcher(el)` | The front page's cards. |
+| Picker | `portal.picker(input, source, opts)` | See "Picking, finding and defaults". |
+
+## Picking, finding and defaults
+
+Nobody should have to know a reference to type it. A field that takes a reference offers what it could be; a form fills in what the page already knows. The review behind this is in `docs/staff-ui-review.md`.
+
+| Helper | How | Notes |
+|---|---|---|
+| Picker | `portal.picker(input, source, opts)` | A combobox. `source` is a list of `{ value, label, hint }` or an async function of the text. `min: 0` fetches the whole list on focus and narrows it as the person types; otherwise the function is a search, run from `min` characters (default 2). `label: true` shows the chosen item's label (a person's name) while the value is kept by `onPick`. A value typed in full is accepted as it is. When nothing matches, a note under the field says so; the list never covers the rest of the form. |
+| Several picks | `portal.pickMany(input, source, opts)` | Picks shown as removable pills; `.values()` reads them with anything typed. |
+| Find | `portal.find(text)`, `portal.people`, `portal.policies` | Over `GET /staff/v1/find`, under the case in hand. `people` and `policies` are picker sources. |
+| Colleagues | `portal.colleagues(action)` | Picker items of the people who hold `action` today. |
+| The case in hand | `portal.working()`, `portal.workOn(ref)`, `portal.onWork(fn)` | Said once per tab; fills every purpose field. |
+| New references | `portal.reference("CLM")` | Dated and unique: `CLM-20261115-7KQ2M`. |
+| Dates | `portal.today()`, `portal.month(back)`, `portal.days(n, from)` | As New Zealand reckons them. A period being closed comes from the books, not the clock. |
+| Links | `portal.go(page, view, params)`, `portal.link(...)`, `portal.params()` | `#view?key=value`; a sign-in keeps it. |
+
+Rules: a queue or list of work comes first and loads itself; each row has the button that works it; a form opened from a row is filled in; a code is shown in words; money is typed in dollars.
 
 ## Accessibility
 
