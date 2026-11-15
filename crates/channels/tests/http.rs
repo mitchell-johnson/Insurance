@@ -302,7 +302,12 @@ fn portal_signed_in_by(
                 ),
                 template("payments-reader", &[ic_channels::payments::actions::VIEW], &[DataClass::Financial]),
                 template("payments-compliance", &[ic_channels::payments::actions::COMPLIANCE], &[DataClass::Financial]),
-                template("group-admin", &[ic_channels::group::actions::ADMIN], &[DataClass::Ordinary]),
+                // Group administrators find a scheme's administrator by name, so they may search the customer master.
+                template(
+                    "group-admin",
+                    &[ic_channels::group::actions::ADMIN, staff_actions::FIND_CUSTOMER],
+                    &[DataClass::Ordinary, DataClass::Personal],
+                ),
                 template("group-reader", &[ic_channels::group::actions::VIEW], &[DataClass::Ordinary]),
                 template("commission-reader", &[ic_channels::commission::actions::VIEW], &[DataClass::Ordinary]),
                 template(

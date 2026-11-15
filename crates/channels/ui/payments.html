@@ -5,14 +5,14 @@
 
 <section data-view="Runs"><h2>Payments waiting</h2><p class="muted">Released by claims, servicing and other modules. A maker takes them into a run; they are checked and approved like any other item.</p>
 <div id="w-msg" aria-live="polite"></div><div id="waiting"></div>
-<form id="take" class="maker" hidden><div class="row"><div><label for="t-run">Into run</label><input id="t-run" required></div><button>Take the ticked payments</button></div></form></section>
+<form id="take" class="maker" hidden><div class="row"><div><label for="t-run">Into run (pick an open one)</label><input id="t-run" required></div><button>Take the ticked payments</button></div></form></section>
 
 <section data-view="Runs" class="maker" hidden><h2>Prepare a run</h2>
 <form id="prep"><div class="row">
-<div><label for="r-id">Run</label><input id="r-id" required maxlength="31"></div>
+<div><label for="r-id">Run reference (made for you)</label><input id="r-id" required maxlength="31"></div>
 <div><label for="r-type">Type</label><select id="r-type">
-<option>lump_sum_claims</option><option>benefit_payments</option><option>provider_payments</option><option>premium_refunds</option><option>commission</option><option>reinsurer</option>
-<option>fund_settlement</option><option>tax_and_levies</option><option>unclaimed_money</option><option>fund_transfer</option><option>ex_gratia</option><option>collection</option></select></div>
+<option value="lump_sum_claims">Lump sum claims</option><option value="benefit_payments">Benefit payments</option><option value="provider_payments">Provider payments</option><option value="premium_refunds">Premium refunds</option><option value="commission">Commission</option><option value="reinsurer">Reinsurer</option>
+<option value="fund_settlement">Fund settlement</option><option value="tax_and_levies">Tax and levies</option><option value="unclaimed_money">Unclaimed money</option><option value="fund_transfer">Fund transfer</option><option value="ex_gratia">Ex gratia</option><option value="collection">Collection</option></select></div>
 <div><label for="r-fund">Statutory fund</label><input id="r-fund" required value="sf1"></div>
 <div><label for="r-date">Value date</label><input id="r-date" type="date" required></div>
 <div><label for="r-urgent">Urgent</label><select id="r-urgent"><option value="false">No</option><option value="true">Yes, by API</option></select></div>
@@ -39,12 +39,12 @@
 <section data-view="Reconciliation"><h2>Open reconciliation exceptions</h2><div id="exc-msg" aria-live="polite"></div><div id="exceptions"></div></section>
 
 <section data-view="Reconciliation"><h2>Apply unidentified money by hand</h2><p class="muted">Money that reached the bank with no usable reference. One reconciler says which policies it belongs to; above the threshold a second reconciler approves before it is applied. The parts must add up to the receipt.</p>
-<form id="mm-form"><div class="row"><div><label for="mm-exception">Exception</label><input id="mm-exception" required></div>
+<form id="mm-form"><div class="row"><div><label for="mm-exception">Exception (or press Apply on one above)</label><input id="mm-exception" required></div>
 <div><label for="mm-parts">Parts, one per line: policy, amount</label><textarea id="mm-parts" rows="3" cols="36" required placeholder="pol-00000001, 120.00"></textarea></div><button id="mm-send">Propose</button></div></form>
 <div id="mm-msg" aria-live="polite"></div><h2>Waiting for a second reconciler</h2><div id="mm-waiting"></div></section>
 
 <section data-view="Reconciliation"><h2>Reconciliation</h2>
-<form id="rec-form"><div class="row"><div><label for="rec-account">Bank account</label><input id="rec-account" required placeholder="anz-sf1-claims"></div><button>Show</button></div></form>
+<form id="rec-form"><div class="row"><div><label for="rec-account">Bank account</label><input id="rec-account" required></div><button>Show</button></div></form>
 <div class="row"><div><label for="rec-resolution">How an exception was resolved</label><input id="rec-resolution"></div></div>
 <div id="rec-msg" aria-live="polite"></div><div id="rec"></div></section>
 
@@ -53,11 +53,11 @@
 
 <section data-view="Controls" class="compliance" hidden><h2>Premium paid by someone else</h2><p class="muted">Cases where a premium came from someone other than the policy owner, oldest first. Clear one by naming the relationship recorded in the customer master, so it never fires again for that payer and owner; without one it is cleared for this month only.</p>
 <div id="aml"></div>
-<form id="aml-form"><div class="row"><div><label for="aml-case">Case</label><input id="aml-case" required></div>
+<form id="aml-form"><div class="row"><div><label for="aml-case">Case (or press Clear on one above)</label><input id="aml-case" required></div>
 <div><label for="aml-rel">Relationship in the customer master, as party/id (optional)</label><input id="aml-rel"></div>
 <div><label for="aml-note">Why it is explained</label><input id="aml-note" required></div><button>Clear</button></div></form><div id="aml-msg" aria-live="polite"></div></section>
 
-<section data-view="Controls" id="raw" hidden><h2>Another command</h2><p class="muted">Any command people send, in the payments module's JSON (<code>{"type": "suspend_authority", ...}</code>). The module decides by your roles.</p>
+<section data-view="Controls" id="raw" hidden><h2>Another command, for the rare case the page has no button</h2><p class="muted">Any command people send, in the payments module's JSON (<code>{"type": "suspend_authority", ...}</code>). The module decides by your roles.</p>
 <form id="raw-form"><div><label for="raw-cmd">The command, as the payments module reads it</label><textarea id="raw-cmd" rows="5" required></textarea></div><p><button>Send</button></p></form><div id="raw-msg" aria-live="polite"></div></section>
 </main>
 <script src="/ui/app.js"></script>
@@ -77,19 +77,24 @@ const button = (label, out, act) => h("button", { class: "quiet", type: "button"
 
 async function showWaiting() {
   const rows = Object.values(await ask("waiting"));
+  // Taking payments into a run is offered only when there is something to take.
+  $("take").hidden = !has("maker") || !rows.length;
   put($("waiting"), rows.length ? table(["", "Payment", "What", "Payee", "Amount", "Policy"], rows.map((w) => [
     has("maker") ? h("input", { type: "checkbox", name: "take", value: w.payment }) : "", w.payment, w.source, w.payee || "(the maker names one)", money(w.amount_minor), w.policy || ""]))
     : h("p", { class: "muted" }, "Nothing is waiting."));
 }
 $("take").addEventListener("submit", run($("w-msg"), async () => {
   const payments = [...document.querySelectorAll('input[name="take"]:checked')].map((i) => i.value);
+  if (!payments.length) throw new Error("Tick the payments to take first.");
   await send({ type: "take_waiting", run: $("t-run").value.trim(), payments, payees: {} });
   await showWaiting();
   return `Taken into ${$("t-run").value.trim()}.`;
 }));
 $("prep").addEventListener("submit", run($("r-msg"), async () => {
   await send({ type: "prepare_run", run: $("r-id").value.trim(), run_type: $("r-type").value, fund: $("r-fund").value.trim(), currency: "NZD", value_date: $("r-date").value, urgent: $("r-urgent").value === "true" });
-  $("run-id").value = $("r-id").value.trim();
+  const id = $("r-id").value.trim();
+  $("run-id").value = $("t-run").value = id; $("r-id").value = portal.reference("RUN");
+  await Promise.all([showRuns(), showRun()]);
   return "Prepared. Add items, then check it.";
 }));
 
@@ -113,14 +118,19 @@ async function showRun() {
 $("run-form").addEventListener("submit", run($("run-msg"), showRun));
 // A hold that is the customer's own (SVC-022) reads as such; an unconfirmed one clears when the run is checked again.
 const holdWords = { customer_hold: "the customer's own hold on money going out", hold_unconfirmed: "the customer's hold not yet confirmed: check the run again" };
+let openRuns = [];
 async function showRuns() {
-  const runs = await ask("open_runs");
+  const runs = openRuns = await ask("open_runs");
   put($("runs"), runs.length ? table(["Run", "Type", "Value date", "Status", "Items", "Held", "Total", "Prepared by", ""], runs.map((r) => [r.run, words(r.run_type), r.value_date, status(r.status), r.items, r.held, money(r.total_minor),
     (r.makers || []).join(", "), button("Open", $("runs-msg"), async () => { $("run-id").value = r.run; await showRun(); return ""; })])) : h("p", { class: "muted" }, "No run is open."));
 }
+let openExceptions = [];
 async function showExceptions() {
-  const open = await ask("open_exceptions");
-  put($("exceptions"), open.length ? table(["Exception", "Account", "Kind", "Amount", "Reference", "Owner", "Opened"], open.map((e) => [e.exception, e.account, words(e.kind), money(e.amount_minor), e.reference || "", e.owner || "", e.opened_on]))
+  const open = openExceptions = await ask("open_exceptions");
+  // An exception is worked where it is listed: its account's reconciliation, or the money applied by hand.
+  put($("exceptions"), open.length ? table(["Exception", "Account", "Kind", "Amount", "Reference", "Owner", "Opened", ""], open.map((e) => [e.exception, e.account, words(e.kind), money(e.amount_minor), e.reference || "", e.owner || "", e.opened_on,
+    h("span", {}, button("Its account", $("exc-msg"), async () => { $("rec-account").value = e.account; await showRec(); return ""; }),
+      has("reconciler") ? button("Apply", $("exc-msg"), async () => { $("mm-exception").value = e.exception; $("mm-parts").focus(); return `Say which policies ${e.exception} belongs to below.`; }) : null)]))
     : h("p", { class: "muted" }, "None."));
 }
 $("party-form").addEventListener("submit", run($("party-msg"), async () => {
@@ -128,7 +138,8 @@ $("party-form").addEventListener("submit", run($("party-msg"), async () => {
   const hold = p.customer_hold;
   // Whether to offer support, never why: the reason stays with the people who hold it.
   put($("party"), p.support_prompt ? h("div", { class: "banner info" }, "Offer this person support on this contact, and take extra care with what they ask for.") : null, h("p", {}, hold && hold.held ? `They have a hold on their own money going out (checked ${hold.checked_at}).` : "No hold of their own is recorded."),
-    table(["Payee", "Kind", "Blocked", "Cooling off until"], (p.payees || []).map((x) => [x.payee, words(x.kind), x.blocked ? (holdWords[x.blocked] || words(x.blocked)) : "", x.cooling_off_until || ""])),
+    table(["Payee", "Kind", "Blocked", "Cooling off until", ""], (p.payees || []).map((x) => [x.payee, words(x.kind), x.blocked ? (holdWords[x.blocked] || words(x.blocked)) : "", x.cooling_off_until || "",
+      button("Open", $("party-msg"), async () => { $("payee-id").value = x.payee; await showPayee(); return ""; })])),
     table(["Authority", "Policy", "Life", "Status", "Dishonours", "Hardship", "Sole name"], (p.authorities || []).map((a) => [a.authority, a.policy, a.life || "", status(a.status), a.dishonours, a.hardship ? "yes" : "", a.sole_name ? "yes" : ""])));
 }));
 
@@ -186,7 +197,7 @@ async function showRec() {
 $("rec-form").addEventListener("submit", run($("rec-msg"), showRec));
 async function showPayerCases() {
   const cases = await ask("payer_cases");
-  put($("aml"), cases.length ? table(["Case", "Detail"], cases.map((c) => [c.case, portal.details(c.detail)])) : h("p", { class: "muted" }, "No open cases."));
+  put($("aml"), cases.length ? table(["Case", "Detail", ""], cases.map((c) => [c.case, portal.details(c.detail), button("Clear", $("aml-msg"), async () => { $("aml-case").value = c.case; $("aml-note").focus(); return `Say why ${c.case} is explained, then press Clear.`; })])) : h("p", { class: "muted" }, "No open cases."));
 }
 $("aml-form").addEventListener("submit", run($("aml-msg"), async () => {
   const relationship = $("aml-rel").value.trim();
@@ -196,6 +207,13 @@ $("aml-form").addEventListener("submit", run($("aml-msg"), async () => {
 }));
 $("raw-form").addEventListener("submit", run($("raw-msg"), async () => { await send(JSON.parse($("raw-cmd").value)); return "Done."; }));
 
+// Runs, exceptions and accounts are picked from what is open, never typed from memory.
+const runItems = () => openRuns.map((r) => ({ value: r.run, hint: [words(r.run_type), r.value_date, status(r.status), `${r.items} item(s)`].join(" · ") }));
+portal.picker($("t-run"), async () => runItems(), { min: 0, empty: "No run is open. Prepare one below." });
+portal.picker($("run-id"), async () => runItems(), { min: 0, empty: "No run is open." });
+portal.picker($("mm-exception"), async () => openExceptions.map((e) => ({ value: e.exception, hint: [words(e.kind), money(e.amount_minor), e.reference || "no reference"].join(" · ") })), { min: 0, empty: "No exception is open." });
+portal.picker($("rec-account"), async () => [...new Set(openExceptions.map((e) => e.account))].map((a) => ({ value: a })), { min: 0, empty: "No account has an open exception. Type the account's name." });
+$("r-id").value = portal.reference("RUN"); $("r-date").value = portal.today();
 signIn(R).then(async () => {
   me = await ask("me");
   $("me").textContent = `You are ${me.staff}: ${(me.roles || []).map(words).join(", ") || "view only"}.`;
@@ -204,6 +222,9 @@ signIn(R).then(async () => {
   document.querySelectorAll(".compliance").forEach((e) => { e.hidden = !has("compliance"); });
   if (has("compliance")) await showPayerCases();
   await Promise.all([showWaiting(), showRuns(), showExceptions(), showMatches()]);
+  // The run most likely meant: the only one being prepared.
+  const preparing = openRuns.filter((r) => /prepar/i.test(status(r.status)));
+  if (preparing.length === 1) $("t-run").value = preparing[0].run;
   $("mm-send").disabled = !has("reconciler");
   const conv = await ask("awaiting_conversation");
   const held = Object.entries(conv || {});

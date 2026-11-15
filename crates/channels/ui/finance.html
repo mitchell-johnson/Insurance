@@ -130,8 +130,10 @@ async function work() {
       h("button", { class: "quiet", type: "button", on: { click: run($("close-msg"), async () => { $("p-id").value = period = c.period; await dashboard(); }) } }, "Open its close")])) : portal.empty("No period is waiting to be closed."));
 }
 let closingPeriods = [], agedKinds = [];
-// The period a person most likely means: the oldest still closing, else last month.
-const likely = () => closingPeriods[0] || portal.month(1);
+// The period a person most likely means: the oldest still closing, else the month before the one the books have reached.
+let booksDate = null;
+const before = (date) => { const [y, m] = date.split("-").map(Number); return new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7); };
+const likely = () => closingPeriods[0] || (booksDate ? before(booksDate) : portal.month(1));
 $("period").addEventListener("submit", run($("close-msg"), async () => { period = $("p-id").value; await dashboard(); }));
 const closing = (label, command, done) => run($("close-msg"), async () => { await send(command()); await dashboard(); await work(); return done; });
 $("sign-lead").addEventListener("click", closing("lead", () => ({ sign_off: { period, capacity: "finance_lead" } }), "Signed off."));
@@ -239,7 +241,7 @@ checks = portal.picker($("w-check"), [], { empty: "Show a period's close first; 
 portal.picker($("w-owner"), () => portal.colleagues(), { min: 0 });
 portal.picker($("d-owner"), () => portal.colleagues(), { min: 0 });
 portal.picker($("d-kind"), () => agedKinds.map((k) => ({ value: k, label: words(k) })), { min: 0, empty: "No aged item kind is waiting to be explained." });
-portal.picker($("p-id"), () => [...new Set([...closingPeriods, portal.month(1), portal.month(0)])].map((p) => ({ value: p, hint: closingPeriods.includes(p) ? "waiting to close" : "" })), { min: 0 });
+portal.picker($("p-id"), () => [...new Set([...closingPeriods, likely(), portal.month(1), portal.month(0)])].map((p) => ({ value: p, hint: closingPeriods.includes(p) ? "waiting to close" : "" })), { min: 0 });
 $("j-id").value = portal.reference("JNL"); $("ye-id").value = portal.reference("YE"); $("rf-id").value = portal.reference("RET");
 for (const id of ["j-date", "ag-date", "dr-date"]) $(id).value = today();
 $("w-due").value = portal.days(14);
@@ -255,6 +257,7 @@ signIn(R).then(async () => {
   $("roles").textContent = roles.length ? roles.map(words).join(", ") : "View only.";
   for (const [id, role] of [["sign-lead", "finance_lead"], ["sign-actuary", "appointed_actuary"], ["close-period", "finance_lead"], ["j-approve", "finance_approver"], ["j-sign", "appointed_actuary"]]) $(id).disabled = !can(role);
   const s = await ask("status");
+  booksDate = typeof s.last_date === "string" ? s.last_date : null;
   const stalled = s.partitions.filter((p) => p.stalled), operator = can("finance_operator") || can("finance_lead");
   put($("status"), h("p", {}, `Chart version ${cell(s.chart) || "none"}, close configuration ${cell(s.close_config) || "none"}, ${s.entries} entries, books fed to ${cell(s.last_date) || "no date yet"}.`),
     stalled.map((p) => h("div", { class: "banner bad", role: "status" }, h("span", {}, `The feed from policy store ${p.partition} has stalled: ${p.stalled}. `),

@@ -16,7 +16,7 @@
 <form id="suspend"><div class="row"><div><label for="sfund">Fund</label><select id="sfund" required></select></div><div><label for="sdo">Action</label><select id="sdo"><option value="suspend_fund">Suspend pricing</option><option value="resume_fund">Resume pricing</option></select></div><div><label for="sfrom">From pricing date</label><input id="sfrom" type="date" required></div><div><label for="sreason">Reason</label><input id="sreason" required></div><button>Send</button></div><p class="muted">A suspended fund takes no approvals from that date until it is resumed.</p></form><div id="fund-msg" aria-live="polite"></div></section>
 
 <section data-view="Price errors"><h2>Price errors</h2><div id="errors"></div>
-<form id="raise"><div class="row"><div><label for="eprices">Wrong prices (IDs, comma separated)</label><input id="eprices" required></div><div><label for="ecause">Cause</label><input id="ecause" required></div><div><label for="edate">Detected on</label><input id="edate" type="date" required></div><button>Raise a price error</button></div><p class="muted">Each wrong price is then prepared and approved again as a correction. No new date of the fund can be approved until every one is corrected.</p></form><div id="error-msg" aria-live="polite"></div></section>
+<form id="raise"><div class="row"><div><label for="eprices">Wrong prices (pick, or press "It is wrong" on a price)</label><input id="eprices" required></div><div><label for="ecause">Cause</label><input id="ecause" required></div><div><label for="edate">Detected on</label><input id="edate" type="date" required></div><button>Raise a price error</button></div><p class="muted">Each wrong price is then prepared and approved again as a correction. No new date of the fund can be approved until every one is corrected.</p></form><div id="error-msg" aria-live="polite"></div></section>
 </main>
 <script src="/ui/app.js"></script>
 <script>
@@ -29,7 +29,12 @@ const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
 const send = (command) => api(R, "POST", BASE + "commands", command);
 const can = (role) => roles.includes("unit_pricing_" + role);
-const today = () => new Date().toLocaleDateString("en-CA");
+const today = portal.today;
+// Every price the page has shown, offered when a price error is raised.
+const seen = new Map();
+const saw = (id, fund, date, version) => { if (id) seen.set(id, { value: id, label: `${fund} ${date}${version ? " v" + version : ""}`, hint: id }); };
+let wrong = null;
+const isWrong = (id) => h("button", { class: "quiet", type: "button", on: { click: () => { wrong.add(id); portal.view("price-errors"); $("ecause").focus(); } } }, "It is wrong");
 const failed = (p) => p.struck.checks.filter((c) => !c.passed);
 const button = (label, out, fn) => h("button", { class: "quiet", on: { click: run(out, fn) } }, label);
 
@@ -50,7 +55,7 @@ async function reject(p) {
   return "Rejected.";
 }
 async function detail(id) {
-  const p = await ask("price", { id }); shown = p;
+  const p = await ask("price", { id }); shown = p; saw(p.id, p.fund, p.pricing_date, p.version);
   $("detail").hidden = false; $("detail-title").textContent = `${p.id}: ${words(p.status)}`;
   put($("detail-checks"), table(["Check", "Result", "Detail", "Accepted because"], p.struck.checks.map((c) => [words(c.kind), c.passed ? "passed" : "failed", c.detail, (p.accepted || {})[c.kind] || ""])));
   const deliveries = Object.entries(p.deliveries || {});
@@ -63,7 +68,9 @@ $("republish").addEventListener("click", run($("lookup-msg"), async () => { awai
 
 async function load() {
   const [work, funds, errors, late] = await Promise.all([ask("work"), ask("funds"), ask("errors"), ask("late", { as_at: today() })]);
-  put($("work"), table(["Price", "Fund", "Pricing date", "Mid", "Buy", "Sell", "Status", "Failed checks", "Prepared by", ""], work.prices.map((p) => [p.id, p.fund, p.pricing_date, p.struck.mid, p.struck.buy, p.struck.sell, words(p.status),
+  for (const p of work.prices) saw(p.id, p.fund, p.pricing_date, p.version);
+  put($("work"), work.prices.length ? null : portal.empty("No price is waiting for a person."));
+  if (work.prices.length) put($("work"), table(["Price", "Fund", "Pricing date", "Mid", "Buy", "Sell", "Status", "Failed checks", "Prepared by", ""], work.prices.map((p) => [p.id, p.fund, p.pricing_date, p.struck.mid, p.struck.buy, p.struck.sell, words(p.status),
     failed(p).map((c) => `${words(c.kind)}: ${c.detail}`).join("; "), p.prepared_by,
     h("span", {}, button("Details", $("work-msg"), () => detail(p.id)), " ",
       can("approver") && p.status !== "blocked" ? button(p.status === "held" ? "Accept checks and approve" : "Approve", $("work-msg"), () => approve(p)) : null, " ",
@@ -91,18 +98,25 @@ $("show-val").addEventListener("click", run($("prepare-msg"), async () => {
 }));
 $("lookup").addEventListener("submit", run($("lookup-msg"), async () => {
   const rows = await ask("prices", { fund: $("lfund").value, from: $("lfrom").value, to: $("lto").value });
-  put($("prices"), table(["Price", "Pricing date", "Version", "Mid", "Buy", "Sell", ""], rows.map((p) => [p.price, p.pricing_date, p.version, p.mid, p.buy, p.sell, button("Details", $("lookup-msg"), () => detail(p.price))])));
+  for (const p of rows) saw(p.price, $("lfund").value, p.pricing_date, p.version);
+  put($("prices"), rows.length ? table(["Price", "Pricing date", "Version", "Mid", "Buy", "Sell", ""], rows.map((p) => [p.price, p.pricing_date, p.version, p.mid, p.buy, p.sell,
+    h("span", {}, button("Details", $("lookup-msg"), () => detail(p.price)), " ", can("lead") ? isWrong(p.price) : null)])) : portal.empty("No price is in force for the fund between those dates."));
 }));
 $("suspend").addEventListener("submit", run($("fund-msg"), async () => {
   await send({ [$("sdo").value]: { fund: $("sfund").value, from: $("sfrom").value, reason: $("sreason").value } }); await load();
   return $("sdo").value === "suspend_fund" ? "Suspended." : "Resumed.";
 }));
 $("raise").addEventListener("submit", run($("error-msg"), async () => {
-  const prices = $("eprices").value.split(",").map((s) => s.trim()).filter(Boolean);
+  const prices = wrong.values();
+  if (!prices.length) throw new Error("Pick the wrong prices first: look them up under Prices and press It is wrong.");
   await send({ raise_price_error: { error: "err-" + crypto.randomUUID(), prices, cause: $("ecause").value, detected_on: $("edate").value } }); await load();
+  wrong.clear(); $("ecause").value = "";
   return "Raised. Prepare and approve the correction for each wrong price.";
 }));
 
+wrong = portal.pickMany($("eprices"), async () => [...seen.values()], { min: 0, label: true, empty: "Look up the fund's prices under Prices first; each one shown is offered here." });
+$("eprices").required = false;
+$("pdate").value = $("lto").value = $("edate").value = $("sfrom").value = today(); $("lfrom").value = portal.days(-30);
 signIn(R).then(async () => {
   const me = await ask("me"); roles = me.roles;
   $("roles").textContent = roles.length ? roles.map((r) => words(r.replace("unit_pricing_", ""))).join(", ") : "View only.";

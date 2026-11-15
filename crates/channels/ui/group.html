@@ -26,7 +26,7 @@
 <section data-view="Members" class="admin" hidden><h2>Decide a possible match</h2><p class="muted">The member joined unlinked because the customer master found people they might be. Say who they are.</p>
 <form id="rm-form"><div class="row"><div><label for="rm-scheme">Scheme</label><input id="rm-scheme" required></div><div><label for="rm-emp">Employee ID</label><input id="rm-emp" required></div>
 <div><label for="rm-decision">Decision</label><select id="rm-decision"><option value="same_person">The same person as</option><option value="different_person">A different person, created as</option></select></div>
-<div><label for="rm-party">Party</label><input id="rm-party" required></div><button type="button" class="quiet" id="rm-find">Show who they might be</button><button>Record</button></div></form><div id="rm-msg" aria-live="polite"></div><div id="rm-found"></div></section>
+<div><label for="rm-party">Who they are (pick from the people shown)</label><input id="rm-party" required></div><button type="button" class="quiet" id="rm-find">Show who they might be</button><button>Record</button></div></form><div id="rm-msg" aria-live="polite"></div><div id="rm-found"></div></section>
 
 <section data-view="Members" class="admin" hidden><h2>Put back members removed in error</h2><p class="muted">From the day they were removed, with no gap in cover.</p>
 <form id="ri-form"><div class="row"><div><label for="ri-scheme">Scheme</label><input id="ri-scheme" required></div><div><label for="ri-emps">Employee IDs, separated by commas</label><input id="ri-emps" required></div>
@@ -44,7 +44,7 @@
 <div id="mp-msg" aria-live="polite"></div><div id="mp"></div></section>
 
 <section data-view="Schemes" class="admin" hidden><h2>Name a scheme's first administrator</h2><p class="muted">The employer's first administrator is set up here, once, when the scheme is registered. After that the scheme's own administrators add and remove each other from the employer portal.</p>
-<form id="fa-form"><div class="row"><div><label for="fa-policy">Scheme's policy</label><input id="fa-policy" required></div><div><label for="fa-party">The administrator, as a party in the customer master</label><input id="fa-party" required></div><button>Name them</button></div></form><div id="fa-msg" aria-live="polite"></div></section>
+<form id="fa-form"><div class="row"><div><label for="fa-policy">Scheme's policy</label><input id="fa-policy" required></div><div><label for="fa-party">The administrator (name and birth date)</label><input id="fa-party" required></div><button>Name them</button></div></form><div id="fa-msg" aria-live="polite"></div></section>
 <section data-view="Schemes" class="admin" hidden><h2>End a scheme</h2><p class="muted">Every member is removed on the date, each with a continuation option, and the policy is cancelled. This cannot be undone.</p>
 <form id="tm-form"><div class="row"><div><label for="tm-scheme">Scheme</label><input id="tm-scheme" required></div><div><label for="tm-date">Effective</label><input id="tm-date" type="date" required></div>
 <div><label for="tm-reason">Reason</label><input id="tm-reason" required></div><div><label for="tm-sure"><input type="checkbox" id="tm-sure" required> I am sure</label></div><button>End the scheme</button></div></form><div id="tm-msg" aria-live="polite"></div></section>
@@ -69,8 +69,26 @@ const pairs = (o) => table(["", ""], Object.entries(o || {}).map(([k, v]) => [wo
 async function showExceptions() {
   const scheme = val("ex-scheme");
   const { exceptions } = await ask("exceptions", scheme ? { scheme } : undefined);
-  put($("ex"), exceptions.length ? table(["", "Scheme", "What", "About", "Raised"], exceptions.map((e) => [e.id, e.scheme, words(e.kind), e.subject, e.raised]))
+  known(exceptions.map((e) => e.scheme));
+  put($("ex"), exceptions.length ? table(["", "Scheme", "What", "About", "Raised", ""], exceptions.map((e) => [e.id, e.scheme, words(e.kind), e.subject, e.raised, opener(e)]))
     : h("p", { class: "muted" }, "Nothing is waiting."));
+}
+// Every scheme the page has seen, offered wherever a scheme is asked for.
+const schemes = new Set();
+const known = (list) => { for (const s of list) if (s) schemes.add(s); };
+const FILE_KINDS = new Set(["file_held", "file_stale", "row_refused"]);
+// Each item of work opens where it is worked, with the scheme and the file or member filled in.
+function opener(e) {
+  const go = async () => {
+    for (const id of ["sc-id", "fi-scheme", "mb-scheme", "rm-scheme", "ri-scheme", "ux-scheme", "mp-scheme", "tm-scheme"]) $(id).value = e.scheme;
+    if (e.kind === "possible_match" && me.admin) {
+      $("rm-emp").value = $("mb-emp").value = e.subject; portal.view("members");
+      $("rm-find").click(); $("rm-party").focus(); return "";
+    }
+    if (FILE_KINDS.has(e.kind) && e.kind !== "row_refused") { $("fi-id").value = e.subject; portal.view("files"); await showFile(); return ""; }
+    portal.view("schemes"); await showScheme(); return "";
+  };
+  return h("button", { class: "quiet", type: "button", on: { click: run($("ex-msg"), go) } }, e.kind === "possible_match" ? "Decide" : "Open");
 }
 $("ex-form").addEventListener("submit", run($("ex-msg"), showExceptions));
 
@@ -85,6 +103,7 @@ async function showScheme() {
   const s = await ask("scheme", { scheme });
   const { terms, ...rest } = s;
   rest.outstanding_minor = money(rest.outstanding_minor);
+  known([scheme]);
   put($("sc"), pairs(rest), h("details", {}, h("summary", {}, "Terms"), portal.details(terms)));
   for (const id of ["fi-scheme", "mb-scheme", "rm-scheme", "ri-scheme", "ux-scheme", "mp-scheme", "tm-scheme"]) $(id).value = scheme;
 }
@@ -118,7 +137,7 @@ $("mb-form").addEventListener("submit", run($("mb-msg"), async () => {
 }));
 
 $("fa-form").addEventListener("submit", run($("fa-msg"), async () => {
-  await api(R, "PUT", BASE + "schemes/" + encodeURIComponent(val("fa-policy")) + "/first-admin", { party: val("fa-party") });
+  await api(R, "PUT", BASE + "schemes/" + encodeURIComponent(val("fa-policy")) + "/first-admin", { party: $("fa-party").dataset.party || val("fa-party") });
   return "Named. They can now sign in to the employer portal and manage the scheme's administrators.";
 }));
 // The people the customer master found the member might be: pick one, or say they are someone new.
@@ -126,10 +145,11 @@ $("rm-find").addEventListener("click", run($("rm-msg"), async () => {
   const found = await ask("possible_match", { scheme: val("rm-scheme"), employee: val("rm-emp") });
   const list = Array.isArray(found) ? found : (found && found.candidates) || [];
   put($("rm-found"), list.length ? table(["Might be", "", ""], list.map((c) => { const party = typeof c === "string" ? c : c.party; return [party, typeof c === "string" ? "" : portal.text(Object.fromEntries(Object.entries(c).filter(([k]) => k !== "party"))),
-    h("button", { class: "quiet", type: "button", on: { click: () => { $("rm-party").value = party; $("rm-decision").value = "same_person"; } } }, "It is this person")]; })) : portal.empty("No candidates are held for this member."));
+    h("button", { class: "quiet", type: "button", on: { click: () => { $("rm-party").value = party; $("rm-decision").value = "same_person"; say($("rm-msg"), "ok", `Press Record to link them to ${party}.`); } } }, "It is this person")]; })) : portal.empty("No candidates are held for this member."));
 }));
 $("rm-form").addEventListener("submit", run($("rm-msg"), async () => {
-  await send({ resolve_match: { scheme: val("rm-scheme"), employee_id: val("rm-emp"), decision: { decision: $("rm-decision").value, party: val("rm-party") } } });
+  await send({ resolve_match: { scheme: val("rm-scheme"), employee_id: val("rm-emp"), decision: { decision: $("rm-decision").value, party: $("rm-party").dataset.party || val("rm-party") } } });
+  await showExceptions();
   return "Recorded.";
 }));
 $("ri-form").addEventListener("submit", run($("ri-msg"), async () => {
@@ -171,6 +191,11 @@ $("tm-form").addEventListener("submit", run($("tm-msg"), async () => {
 }));
 $("raw-form").addEventListener("submit", run($("raw-msg"), async () => { await send(JSON.parse($("raw-cmd").value)); return "Done."; }));
 
+for (const id of ["ex-scheme", "sc-id", "fi-scheme", "mb-scheme", "rm-scheme", "ri-scheme", "ux-scheme", "mp-scheme", "tm-scheme"])
+  portal.picker($(id), async () => [...schemes].sort().map((s) => ({ value: s })), { min: 0, empty: "Type the scheme's name; schemes with work waiting are offered here." });
+// The administrator is found by name and birth date in the customer master, never typed as a reference.
+portal.picker($("fa-party"), portal.people, { label: true, onPick: (item) => { $("fa-party").dataset.party = item.value; } });
+$("fa-party").addEventListener("input", () => { delete $("fa-party").dataset.party; });
 signIn(R).then(async () => {
   me = await ask("me");
   $("me").textContent = `You are ${me.staff}: ${me.admin ? "group administration" : "view only"}.`;

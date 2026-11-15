@@ -90,6 +90,8 @@ $("sweep").addEventListener("submit", run($("s-msg"), async () => {
   const check = await ask("sweep_check", { period_end: $("s-date").value });
   put($("s-out"), h("div", { class: check.green ? "banner ok" : "banner warn" }, check.green ? "Nothing stops the close." : "Stopping the close:"), check.green ? null : table(["Item"], (check.items || []).map((i) => [cell(i)])));
 }));
+// The month-end most likely meant: the last day of last month.
+$("s-date").value = portal.days(-1, portal.month(0) + "-01");
 signIn(R).then(async () => {
   await refresh();
   $("me").textContent = `You are ${me.staff}: ${[me.operate ? "you act on exceptions" : null, me.approve ? "you sign abandonments" : null].filter(Boolean).join(", ") || "view only"}. Commands are made on ${me.today || "today's date"}.`;

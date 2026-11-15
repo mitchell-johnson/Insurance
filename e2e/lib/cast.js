@@ -51,7 +51,7 @@ const templates = [
   ["payments-reader", ["payments.view"], [F]],
   ["payments-compliance", ["payments.compliance", "payments.view"], [F]],
   ["payments-reconciler", ["payments.reconciler", "payments.view"], [F]],
-  ["group-admin", ["group.view", "group.admin"], [O]],
+  ["group-admin", ["group.view", "group.admin", "customers.find"], [O, P]],
   ["group-reader", ["group.view"], [O]],
   ["product-owner", ["staff.configure"], [O]],
 ].map(([id, actions, classes, profile]) => ({ id, actions, classes, default_profile: profile || "standard", ceilings: {}, break_glass: false }));
