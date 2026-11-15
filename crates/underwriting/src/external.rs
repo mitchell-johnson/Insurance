@@ -190,6 +190,20 @@ pub(crate) fn policy_issued(p: &mut Proposal, cx: &mut Cx, layers: &[crate::comm
         });
     }
     record_replacements(p, cx);
+    if let crate::model::Entry::Facility {
+        facility: crate::model::Facility::BusinessContinuity,
+        from_policy,
+        from_group,
+        ..
+    } = &p.entry
+    {
+        cx.effect(Effect::EndConverted {
+            key: format!("{}/end-converted", p.id),
+            proposal: p.id.clone(),
+            group: from_group.clone(),
+            policy: from_policy.clone(),
+        });
+    }
     crate::advice::advise(p, cx);
     flow::end_interim(p, cx);
     cx.effect(Effect::Notify {

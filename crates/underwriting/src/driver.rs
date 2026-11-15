@@ -95,6 +95,10 @@ pub trait Core: Send + Sync {
     fn lapsed_for_underwriting(&self) -> impl Future<Output = Result<Vec<ic_core::policy::Policy>, DriverError>> + Send {
         async { Ok(vec![]) }
     }
+
+    /// A policy as the core holds it now, found from its group's home
+    /// partition; `None` when the core holds no such policy.
+    fn policy(&self, group: &GroupId, policy: &PolicyId) -> impl Future<Output = Result<Option<ic_core::policy::Policy>, DriverError>> + Send;
 }
 
 /// The group administration module.
@@ -621,8 +625,25 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                 proposal,
                 expected_product_hash,
                 command,
+                facility,
                 ..
             } => {
+                let mut command = command.clone();
+                // A policy under a conversion facility is checked against the policy the
+                // facility belongs to, as the core holds it today, and refused for a
+                // person when that does not allow it.
+                if let Some(entry) = facility.as_deref() {
+                    let Entry::Facility { from_policy, from_group, .. } = entry else {
+                        return Ok(Step::Park("a facility issue that names no facility".to_string()));
+                    };
+                    let checked = match self.core.policy(from_group, from_policy).await? {
+                        None => Err("facility_policy_not_found".to_string()),
+                        Some(source) => crate::facility::verify(entry, &source, &mut command, (self.clock)().date_naive()),
+                    };
+                    if let Err(code) = checked {
+                        return self.issue_answer(key, proposal, Err(code)).await;
+                    }
+                }
                 let issue = ic_core::Command::IssueQuoted {
                     expected_product_hash: expected_product_hash.clone(),
                     issue: command.clone(),
@@ -746,6 +767,23 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                         "interim cover is in force but the module refused to record it: {}: {}",
                         e.code, e.message
                     )),
+                }
+            }
+            Effect::EndConverted { key, group, policy, .. } => {
+                let answer = self
+                    .core
+                    .send(
+                        home_partition(group),
+                        key,
+                        "underwriting",
+                        ic_core::Command::CancelPolicy { policy: policy.clone() },
+                    )
+                    .await?;
+                match answer.refused {
+                    None => Step::Delivered,
+                    // Ended already, by the customer or by us on an earlier try.
+                    Some(r) if r.code == "not_in_force" => Step::Stale,
+                    Some(r) => Step::Park(format!("the core refused to end the converted policy: {}: {}", r.code, r.message)),
                 }
             }
             Effect::EndInterim { key, proposal, policy } => {

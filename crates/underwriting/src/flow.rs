@@ -514,7 +514,7 @@ pub(crate) fn make_effective(cfg: &Config, p: &mut Proposal, life: &LifeId, cx: 
     } else if d.all_standard()
         || matches!(
             d.source,
-            DecisionSource::Migrated { .. } | DecisionSource::Continuation { .. } | DecisionSource::InsurabilityOption { .. }
+            DecisionSource::Migrated { .. } | DecisionSource::Continuation { .. } | DecisionSource::InsurabilityOption { .. } | DecisionSource::Facility { .. }
         )
     {
         // Terms the person already accepted, under the old system or the
@@ -635,8 +635,10 @@ pub(crate) fn issue(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
         proposal: p.id.clone(),
         policy: p.policy.clone(),
     });
+    let facility = matches!(p.entry, Entry::Facility { .. }).then(|| Box::new(p.entry.clone()));
     cx.effect(match &p.entry {
-        Entry::NewBusiness => Effect::IssuePolicy {
+        Entry::NewBusiness | Entry::Facility { .. } => Effect::IssuePolicy {
+            facility,
             key,
             proposal: p.id.clone(),
             expected_product_hash: p.quote.product_hash.clone(),

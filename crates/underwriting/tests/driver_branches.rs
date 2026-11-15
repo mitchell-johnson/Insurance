@@ -34,6 +34,8 @@ struct Script {
     /// Refusals by the key of the command refused, for every receiver.
     refuse: BTreeMap<String, (String, String)>,
     capacity: Option<Outcome>,
+    /// The policy the core holds, when asked for one.
+    held: Option<ic_core::policy::Policy>,
     told: Vec<(String, String, Command)>,
     parked: Vec<(u64, String)>,
     acknowledged: Vec<u64>,
@@ -111,6 +113,9 @@ impl Core for Scripted {
             refused: self.refusal(key).map(|(code, message)| Refusal::new(&code, message)),
             events: vec![],
         })
+    }
+    async fn policy(&self, _group: &ic_core::GroupId, _policy: &PolicyId) -> Result<Option<ic_core::policy::Policy>, DriverError> {
+        Ok(self.with(|s| s.held.clone()))
     }
 }
 
@@ -223,6 +228,7 @@ fn issue() -> Effect {
         expected_product_hash: "h".into(),
         migrated: false,
         command: issue_command(),
+        facility: None,
     }
 }
 
@@ -1085,4 +1091,94 @@ async fn progress_is_published_and_each_version_let_go_once_it_is_answered() {
     });
     assert!(matches!(driver(&down).deliver().await, Err(DriverError::Unavailable(_))));
     assert!(down.with(|s| s.told.is_empty()));
+}
+
+fn moved_issue() -> Effect {
+    let Effect::IssuePolicy {
+        key,
+        proposal,
+        expected_product_hash,
+        migrated,
+        command,
+        ..
+    } = issue()
+    else {
+        unreachable!()
+    };
+    Effect::IssuePolicy {
+        key,
+        proposal,
+        expected_product_hash,
+        migrated,
+        command,
+        facility: Some(Box::new(ic_underwriting::model::Entry::Facility {
+            facility: ic_underwriting::model::Facility::BusinessContinuity,
+            from_policy: "POL-START-UP".into(),
+            from_group: "grp-start-up".into(),
+            from_life: "L1".into(),
+            from_cover: "start-up-income".into(),
+            trigger_date: NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
+            evidence: "vault://accounts".into(),
+        })),
+    }
+}
+
+/// Purpose: a policy under a conversion facility is not issued when the policy it comes from
+/// is not in the core: the module is told the issue was refused (`facility_policy_not_found`)
+/// and nothing is sent to the core; a facility issue that names no facility is parked. Once
+/// the new policy is in force, ending the Start-Up policy is sent as `cancel_policy` from
+/// underwriting under the effect's key: taken, it is delivered; already ended, it is stale; any
+/// other refusal parks it with the core's code.
+/// Why it matters: a conversion written against a policy the core does not hold is cover with
+/// no evidence and nothing behind it. A Start-Up policy the core will not end needs a person,
+/// or the business pays and is covered twice.
+#[tokio::test]
+async fn a_facility_issue_needs_its_policy_and_ends_the_one_it_moved_from() {
+    let (pass, script) = carry(moved_issue(), None, a_proposal(), &[]).await;
+    assert_eq!(pass.delivered, 1);
+    assert!(script.with(|s| s.core.is_empty()), "nothing is issued");
+    let told = script.with(|s| s.told.clone());
+    assert!(
+        matches!(&told[..], [(key, _, Command::IssueRejected { code, .. })] if key == "P1/issue/1/rejected" && code == "facility_policy_not_found"),
+        "{told:?}"
+    );
+
+    let Effect::IssuePolicy {
+        key,
+        proposal,
+        expected_product_hash,
+        migrated,
+        command,
+        ..
+    } = issue()
+    else {
+        unreachable!()
+    };
+    let nameless = Effect::IssuePolicy {
+        key,
+        proposal,
+        expected_product_hash,
+        migrated,
+        command,
+        facility: Some(Box::new(ic_underwriting::model::Entry::NewBusiness)),
+    };
+    let (pass, _) = carry(nameless, None, a_proposal(), &[]).await;
+    assert!(pass.parked.iter().any(|(_, why)| why.contains("names no facility")), "{pass:?}");
+
+    let end = Effect::EndConverted {
+        key: "P1/end-converted".into(),
+        proposal: "P1".into(),
+        group: GroupId::from("grp-start-up"),
+        policy: PolicyId::from("POL-START-UP"),
+    };
+    let (pass, script) = carry(end.clone(), None, a_proposal(), &[]).await;
+    assert_eq!(pass.delivered, 1);
+    assert!(
+        matches!(&script.with(|s| s.core.clone())[..], [(key, caller, ic_core::Command::CancelPolicy { policy })]
+            if key == "P1/end-converted" && caller == "underwriting" && policy.0 == "POL-START-UP")
+    );
+    let (pass, _) = carry(end.clone(), None, a_proposal(), &[("P1/end-converted", "not_in_force")]).await;
+    assert_eq!((pass.stale, pass.parked.len()), (1, 0));
+    let (pass, _) = carry(end, None, a_proposal(), &[("P1/end-converted", "interest_restricted")]).await;
+    assert!(pass.parked.iter().any(|(_, why)| why.contains("interest_restricted")), "{pass:?}");
 }

@@ -103,12 +103,45 @@ pub enum Entry {
         /// documents).
         evidence: String,
     },
+    /// A new policy written with no health questions under a conversion
+    /// facility of a policy already in force (`facility.rs`): the child of a
+    /// life with Critical Conditions cover taking their own, or Start-Up
+    /// Income moving to Business Continuity. A person checks what the
+    /// facility asks; the driver checks the policy it comes from in the core.
+    Facility {
+        facility: Facility,
+        /// The policy the facility belongs to, and the group it is held in.
+        from_policy: PolicyId,
+        from_group: GroupId,
+        /// The life and cover on it the facility belongs to.
+        from_life: LifeId,
+        from_cover: String,
+        /// For a child: the policy anniversary after the child turned 21.
+        /// For a business: the day it started trading.
+        trigger_date: NaiveDate,
+        /// Where what the person checks is kept (the claims search, the
+        /// accounts showing three years of trading).
+        evidence: String,
+    },
+}
+
+/// A conversion facility that writes a new policy with no health questions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Facility {
+    /// AIA Living Critical Conditions (1105 AL-CC s6): the child takes
+    /// standalone Critical Conditions, or accelerated Critical Conditions
+    /// with an equal amount of Life Cover, on a policy of their own.
+    ChildrensTraumaConversion,
+    /// AIA Start-Up Income Protection: after three years of trading the
+    /// cover moves to AIA Living Business Business Continuity.
+    BusinessContinuity,
 }
 
 impl Entry {
     pub fn policy(&self) -> Option<&PolicyId> {
         match self {
-            Entry::NewBusiness => None,
+            Entry::NewBusiness | Entry::Facility { .. } => None,
             Entry::Increase { policy }
             | Entry::Alteration { policy }
             | Entry::Reinstatement { policy }
@@ -328,6 +361,12 @@ pub enum DecisionSource {
     /// accepted the proof of the life event. Nothing is underwritten.
     InsurabilityOption {
         event: String,
+        checked_by: String,
+    },
+    /// A new policy under a conversion facility, once a person accepted
+    /// what the facility asks. Nothing is underwritten.
+    Facility {
+        facility: Facility,
         checked_by: String,
     },
     /// Terms that arrived as data from a legacy system.

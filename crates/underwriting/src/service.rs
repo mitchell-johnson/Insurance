@@ -218,6 +218,23 @@ impl Core for Cluster {
         })
     }
 
+    async fn policy(&self, group: &ic_core::GroupId, policy: &PolicyId) -> Result<Option<ic_core::policy::Policy>, DriverError> {
+        // The group's home partition first, then each of the others.
+        let home = ic_core::home_partition(group) % self.partitions;
+        for p in std::iter::once(home).chain((0..self.partitions).filter(|p| *p != home)) {
+            let Some(entry) = self.client.locate(p, policy).await.map_err(|e| DriverError::Unavailable(e.to_string()))? else {
+                continue;
+            };
+            let view = self
+                .client
+                .policy_by_number(entry.partition, &entry.number)
+                .await
+                .map_err(|e| DriverError::Unavailable(e.to_string()))?;
+            return Ok(view.map(|v| v.policy));
+        }
+        Ok(None)
+    }
+
     async fn lapsed_for_underwriting(&self) -> Result<Vec<ic_core::policy::Policy>, DriverError> {
         let listed = self
             .ask_module("collections", &serde_json::json!({"q": "reinstatements_for_underwriting"}))
