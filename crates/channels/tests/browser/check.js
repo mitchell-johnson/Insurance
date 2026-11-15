@@ -189,9 +189,12 @@ const sees = async (page, text) => {
     await p.click("#hold-on");
     await sees(p, "A hold is on");
     await tab(p, "Your policies");
-    await p.fill("#nc-date", "2027-11-10");
+    await say(p, "She tells us about a claim: which cover, what happened and when");
+    await p.selectOption("#nc-type", "death");
+    await p.fill("#nc-date", "2027-02-20");
     await p.click("#notify button");
     await sees(p, "The claims team will be in touch");
+    await p.locator("#claims").getByText(/^app-/).waitFor();
   } });
   await visit(browser, "/adviser", { subject: "sub-adv" }, { expectStatus: [404], run: async (p) => {
     await say(p, "Her commission by provider, and what is held back");

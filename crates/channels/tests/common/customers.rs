@@ -66,6 +66,23 @@ impl MasterDouble {
     }
 }
 
+/// A record as the master answers a read: each released fact with its
+/// dates, nothing masked or withheld in the double.
+fn answer(party: &str, version: u64, record: &Value) -> Value {
+    let facts: serde_json::Map<String, Value> = record
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                json!({ "value": v, "valid_from": "2020-01-01", "recorded_at": "2020-01-01T00:00:00Z" }),
+            )
+        })
+        .collect();
+    json!({ "party": party, "kind": "person", "lifecycle": "active", "version": version, "facts": facts, "masked": {}, "withheld": [], "consents": {} })
+}
+
 fn missing() -> Answered {
     (404, json!({ "title": "unknown_party" }))
 }
@@ -81,9 +98,7 @@ impl Master for MasterDouble {
                 key: None,
                 body: None,
             })?;
-            Ok(self
-                .found(&party)
-                .map_or_else(missing, |(v, r)| (200, json!({ "version": v.to_string(), "record": r }))))
+            Ok(self.found(&party).map_or_else(missing, |(v, r)| (200, answer(&party.0, v, &r))))
         })
     }
 
@@ -122,9 +137,9 @@ impl Master for MasterDouble {
                 _ => {}
             }
             drop(holds);
-            if let Some(fields) = body.get("fields").and_then(Value::as_object) {
-                for (name, value) in fields {
-                    record[name] = value.clone();
+            for fact in body["facts"].as_array().into_iter().flatten() {
+                if let Some(name) = fact["field"].as_str() {
+                    record[name] = fact["value"].clone();
                 }
             }
             *current += 1;

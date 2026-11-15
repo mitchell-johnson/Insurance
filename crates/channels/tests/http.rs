@@ -32,6 +32,7 @@ const KIRI: &str = "party-00000001";
 
 struct Portal {
     app: Router,
+    state: Arc<AppState>,
     local: Arc<Local>,
     regions: Arc<Fixed>,
     clock: Arc<AtomicI64>,
@@ -429,7 +430,7 @@ fn portal_signed_in_by(
     let local = Arc::new(Local::new(w.ch));
     let regions = Arc::new(Fixed(Mutex::new(healthy())));
     let tick = clock.clone();
-    let app = router(Arc::new(AppState {
+    let state = Arc::new(AppState {
         wordings: shipped_wordings(),
         public_url: None,
         returns: Arc::new(ic_channels::finance::Returns::load(ic_channels::finance::SHIPPED_RETURNS).unwrap()),
@@ -451,9 +452,10 @@ fn portal_signed_in_by(
         intake: Some(intake.clone()),
         documents: Some(documents.clone()),
         group: Some(group_service(group.clone())),
-    }));
+    });
     Portal {
-        app,
+        app: router(state.clone()),
+        state,
         local,
         regions,
         clock,
@@ -1373,7 +1375,7 @@ async fn other_modules_act_under_their_own_role() {
         5
     );
 
-    let request = json!({ "id": "r1", "policy": portal.retail, "kind": "notify_claim", "module": "claims" });
+    let request = json!({ "id": "r1", "policy": portal.retail, "kind": "claim_evidence", "module": "claims" });
     portal.write("POST", "sub-kiri", "/app/v1/requests", request).await;
     let (status, pending) = portal.send("GET", "/internal/v1/pending", &as_module("claims", Some("claims")), None).await;
     assert_eq!((status, &pending[0]["id"]), (StatusCode::OK, &json!("r1")));
@@ -2574,6 +2576,8 @@ async fn serve_for_a_browser() {
     let marker = json!({ "kind": "bereavement", "review_on": "2027-11-01", "adjustments": ["more_time", "plain_language"] });
     portal.master.markers.lock().unwrap().insert(KIRI.to_string(), marker);
     // Kiri appoints the adviser, so the adviser's book has a policy in it.
+    // Her life cover is on a claims partition, so a claim she tells us about is registered.
+    portal.claims.cover(0, &portal.retail.to_string());
     let appoint = format!("/app/v1/policies/{}/advisers", portal.retail);
     let (status, _) = portal
         .write("POST", "sub-kiri", &appoint, json!({ "adviser": "adv-1", "engagement": "e1" }))
@@ -2633,13 +2637,13 @@ async fn serve_for_a_browser() {
 async fn a_person_keeps_their_own_customer_record() {
     let portal = &portal();
     let (status, record) = portal.get("sub-kiri", "/app/v1/profile").await;
-    assert_eq!((status, &record["record"]["given_name"]), (StatusCode::OK, &json!("Kiri")));
+    assert_eq!((status, &record["facts"]["given_name"]["value"]), (StatusCode::OK, &json!("Kiri")));
     // The adviser signed in reads their own party, never Kiri's.
     assert_eq!(portal.get("sub-adv", "/app/v1/profile").await.0, StatusCode::NOT_FOUND);
     assert_ne!(portal.master.calls.lock().unwrap()[1].party, KIRI);
 
     // A change needs the device, not just a token.
-    let change = json!({ "command": "record", "fields": { "email": "kiri@new.nz" } });
+    let change = json!({ "command": "record", "facts": [{ "field": "email", "value": "kiri@new.nz" }] });
     let (status, problem) = portal.write("POST", "sub-kiri", "/app/v1/profile/commands", change.clone()).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("device_required")));
     let send = |body: Value, version: Option<&str>| {
@@ -2665,7 +2669,7 @@ async fn a_person_keeps_their_own_customer_record() {
         (call.what, call.party.as_str(), call.version.as_deref(), call.key),
         ("command", KIRI, Some("1"), Some(format!("{KIRI}:{key}")))
     );
-    assert_eq!(portal.get("sub-kiri", "/app/v1/profile").await.1["record"]["email"], "kiri@new.nz");
+    assert_eq!(portal.get("sub-kiri", "/app/v1/profile").await.1["facts"]["email"]["value"], "kiri@new.nz");
     // A change made against a version the person no longer sees is the master's refusal, passed through.
     let ((status, problem), _) = send(json!({ "command": "set_consent", "consent": "marketing", "given": false }), Some("1")).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::PRECONDITION_FAILED, Some("version_mismatch")));
@@ -5561,4 +5565,80 @@ async fn operations_work_in_the_customer_master() {
     assert_eq!(portal.get("sub-cd1", "/ops/v1/customers/index").await.0, StatusCode::FORBIDDEN);
     // Operations work has no staff action, so the staff desk refuses it outright.
     assert_eq!(ic_channels::customers::Desk::Index.action(), None);
+}
+
+/// Purpose: a customer's "Tell us about a claim" is carried to claims as soon as it is filed and closed with the claim's reference;
+/// one claims refuses (a health claim, which is made with the invoice) is closed with claims' own reason; one filed while no
+/// partition answers stays pending and is carried by the next sweep, and sweeping again changes nothing.
+/// Why it matters: the customer is told "the claims team will be in touch"; a notice that is lost, carried twice or left pending
+/// after a restart would leave a death or illness unanswered, so the portal must carry each once, by its own ID, from any start.
+#[tokio::test]
+async fn a_customers_claim_notice_reaches_claims_once() {
+    let portal = &portal();
+    portal.claims.cover(0, &portal.retail.to_string());
+    let notice = |id: &str, claim_type: &str| {
+        json!({ "id": id, "policy": portal.retail, "kind": "notify_claim", "module": "claims",
+            "payload": { "cover": "life", "life": "life-1", "event_date": "2027-02-20", "claim_type": claim_type } })
+    };
+    let mine = |id: &'static str| async move {
+        let (_, all) = portal.get("sub-kiri", "/app/v1/requests").await;
+        all.as_array().unwrap().iter().find(|r| r["id"] == id).cloned().unwrap()
+    };
+    assert_eq!(
+        portal.write("POST", "sub-kiri", "/app/v1/requests", notice("n-1", "death")).await.0,
+        StatusCode::ACCEPTED
+    );
+    let carried = mine("n-1").await;
+    assert_eq!((&carried["status"], &carried["reference"]), (&json!("applied"), &json!("app-n-1")), "{carried}");
+    let path = format!("/app/v1/policies/{}/claims", portal.retail);
+    assert_eq!(portal.get("sub-kiri", &path).await.1["rows"][0]["claim"], "app-n-1");
+
+    assert_eq!(
+        portal.write("POST", "sub-kiri", "/app/v1/requests", notice("n-2", "health")).await.0,
+        StatusCode::ACCEPTED
+    );
+    let refused = mine("n-2").await;
+    assert_eq!(
+        (&refused["status"], &refused["code"]),
+        (&json!("rejected"), &json!("health_by_invoice")),
+        "{refused}"
+    );
+    // Claims' own refusal, for a cover the policy does not have, closes it too.
+    let mut trauma = notice("n-5", "trauma");
+    trauma["payload"]["cover"] = json!("trauma");
+    portal.write("POST", "sub-kiri", "/app/v1/requests", trauma).await;
+    assert_eq!(mine("n-5").await["status"], "rejected");
+
+    // No partition answers: the notice waits.
+    let mut down = (*portal.state).clone();
+    down.claims = Arc::new(common::claims::Down);
+    let down = router(Arc::new(down));
+    let down = &down;
+    let filed = Request::builder()
+        .method("POST")
+        .uri("/app/v1/requests")
+        .header("x-dev-subject", "sub-kiri")
+        .header("idempotency-key", "n-3")
+        .body(Body::from(notice("n-3", "death").to_string()))
+        .unwrap();
+    assert_eq!(down.clone().oneshot(filed).await.unwrap().status(), StatusCode::ACCEPTED);
+    assert_eq!(mine("n-3").await["status"], "pending");
+    assert_eq!(portal.state.carry_claim_notices().await, Ok(1));
+    assert_eq!(mine("n-3").await["reference"], "app-n-3");
+    assert_eq!(portal.state.carry_claim_notices().await, Ok(0));
+    assert_eq!(portal.get("sub-kiri", &path).await.1["rows"].as_array().unwrap().len(), 2);
+
+    // Every partition answers and none holds the policy: the customer is told, not left waiting.
+    let filed = Request::builder()
+        .method("POST")
+        .uri("/app/v1/requests")
+        .header("x-dev-subject", "sub-kiri")
+        .header("idempotency-key", "n-4")
+        .body(Body::from(notice("n-4", "death").to_string()))
+        .unwrap();
+    assert_eq!(down.clone().oneshot(filed).await.unwrap().status(), StatusCode::ACCEPTED);
+    let mut elsewhere = (*portal.state).clone();
+    elsewhere.claims = Arc::new(common::claims::seeded());
+    assert_eq!(elsewhere.carry_claim_notices().await, Ok(1));
+    assert_eq!(mine("n-4").await["code"], "policy_not_found");
 }

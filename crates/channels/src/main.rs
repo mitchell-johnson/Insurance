@@ -156,6 +156,7 @@ async fn main() -> Result<(), String> {
         Arc::new(wall_clock),
         settings.currency.clone(),
     ));
+    let notices = tokio::spawn(ic_channels::http::carry_claim_notices(state.clone(), settings.forward));
     let listener = tokio::net::TcpListener::bind(settings.listen)
         .await
         .map_err(|e| format!("bind {}: {e}", settings.listen))?;
@@ -163,5 +164,6 @@ async fn main() -> Result<(), String> {
     let served = axum::serve(listener, router(state)).with_graceful_shutdown(shutdown()).await;
     beat.abort();
     carry.abort();
+    notices.abort();
     served.map_err(|e| e.to_string())
 }
