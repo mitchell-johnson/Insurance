@@ -178,3 +178,36 @@ impl Group for Beside {
         self.staff.member_command(key, actor, command)
     }
 }
+
+/// The group module, answering one loading in the employer's total.
+pub struct Listing(pub std::sync::Arc<GroupModule>);
+
+impl ic_channels::group::Group for Listing {
+    fn upload(&self, scheme: &str, file: &str, actor: &str, bytes: Vec<u8>) -> Asked<'_> {
+        self.0.upload(scheme, file, actor, bytes)
+    }
+
+    fn command(&self, key: &str, actor: &str, command: Value) -> Asked<'_> {
+        self.0.command(key, actor, command)
+    }
+
+    fn ask(&self, question: Value) -> Asked<'_> {
+        if question["ask"] == "loadings_in_total" {
+            let listed = json!({ "cases": [{ "case": 7, "employee": "E005", "cover": "life", "proposal": "grp-uw:harbour:3" }] });
+            return Box::pin(async move { Ok((200, listed)) });
+        }
+        self.0.ask(question)
+    }
+
+    fn staff_command(&self, key: &str, actor: &str, command: Value) -> Asked<'_> {
+        self.0.staff_command(key, actor, command)
+    }
+
+    fn try_mapping(&self, scheme: &str, trial: Value) -> Asked<'_> {
+        self.0.try_mapping(scheme, trial)
+    }
+
+    fn member_command(&self, key: &str, actor: &str, command: Value) -> Asked<'_> {
+        self.0.member_command(key, actor, command)
+    }
+}

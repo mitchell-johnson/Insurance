@@ -5407,6 +5407,13 @@ async fn a_loading_is_reoffered_to_the_member_from_the_group_console() {
     );
     assert!(ic_channels::group::reoffer(&listed, 8, "why").is_err());
     assert!(ic_channels::group::reoffer(&listed, 7, " ").is_err());
+
+    // A case the group module lists goes to underwriting as the staff caller; a proposal it does not know is its refusal.
+    let listing = Arc::new(common::group_module::Listing(module.clone()));
+    let portal = portal_with(|_| listing.clone());
+    let body = json!({ "scheme": "harbour", "case": 7, "reason": "one holder left in the total" });
+    let (status, refused) = portal.write("POST", "sub-grp1", "/staff/v1/group/reoffer", body).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
 }
 
 /// Purpose: a refusal of the portal itself by the group service (its token lacks the `group-admin` role) is the portal's
