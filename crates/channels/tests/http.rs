@@ -2258,6 +2258,25 @@ async fn the_reinsurance_exceptions_console() {
         assert_eq!(tell("sub-ri1", bad.clone()).await.0, StatusCode::BAD_REQUEST, "{bad}");
     }
 
+    // Facultative terms, a decline, an evidence release and a claim fact reach the module from one person; it decides.
+    for sent in [
+        json!({ "decline_facultative": { "reservation_id": "none", "reference": "FAC-1" } }),
+        json!({ "claim": { "admitted": { "claim": "none", "admitted_minor": 100 } } }),
+    ] {
+        let (status, answer) = tell("sub-ri1", sent.clone()).await;
+        assert_ne!(status, StatusCode::BAD_REQUEST, "{sent}: {answer}");
+        assert_ne!(status, StatusCode::FORBIDDEN, "{sent}: {answer}");
+    }
+    assert_eq!(
+        tell(
+            "sub-riview",
+            json!({ "decline_facultative": { "reservation_id": "none", "reference": "FAC-1" } })
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+
     // One person prepares an abandonment; it waits, and its preparer cannot sign it.
     let (status, prepared) = tell("sub-ri1", abandon).await;
     assert_eq!(status, StatusCode::OK, "{prepared}");

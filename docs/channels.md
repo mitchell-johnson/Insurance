@@ -284,6 +284,7 @@ Commands go under the caller `reinsurance-ops` on the latest business date any p
 | `POST /staff/v1/reinsurance/commands` | One of the commands above, in that module's own JSON, with an `Idempotency-Key`. An abandonment answers `{prepared}`. |
 | `POST /staff/v1/reinsurance/sign/{id}`, `.../withdraw/{id}` | Sign and send, or take back, a prepared abandonment. |
 
+The "Facultative and claims" view (operators only) sends `record_facultative_terms` (a reinsurer's offer on a capacity reservation; the rate is typed per thousand and sent in millionths), `decline_facultative`, `log_evidence_release` and a claim fact entered by hand (`claim`, admitted or reserve changed), each as `reinsurance-ops` from the person signed in.
 
 ## The payments console
 

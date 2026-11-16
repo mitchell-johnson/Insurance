@@ -34,7 +34,7 @@ pub mod actions {
 }
 
 /// Commands one person sends.
-pub const DIRECT: [&str; 14] = [
+pub const DIRECT: [&str; 18] = [
     "retry_notice",
     "record_settlement",
     "facultative_reinsurer_told",
@@ -53,6 +53,13 @@ pub const DIRECT: [&str; 14] = [
     "settlement_returned",
     // What a reinsurer said when its consent was needed before admission.
     "reinsurer_consent",
+    // A facultative offer: the reinsurer's terms, or its decline, and a
+    // controlled release of evidence to a reinsurer.
+    "record_facultative_terms",
+    "decline_facultative",
+    "log_evidence_release",
+    // A claim fact entered by hand, where the core's events did not carry it.
+    "claim",
 ];
 /// Commands that need a second person: they leave the books apart, or a
 /// reinsurer untold.

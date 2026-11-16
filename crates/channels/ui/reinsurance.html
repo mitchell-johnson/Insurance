@@ -14,6 +14,7 @@
 <section data-view="Treaty changes"><h2>Change a treaty's cover in force</h2><p class="muted">Take cover back from a treaty, or move it to another version of the treaty, from a date. Either takes a second person.</p>
 <form id="tc"><div class="row"><div><label for="tc-what">Change</label><select id="tc-what"><option value="recapture">Recapture from the treaty</option><option value="move_treaty_version">Move to another version</option></select></div><div><label for="tc-treaty">Treaty</label><input id="tc-treaty" required></div><div><label for="tc-version">To version (moving only)</label><input id="tc-version" type="number" min="1"></div><div><label for="tc-from">From</label><input id="tc-from" type="date" required></div></div>
 <div><label for="tc-keys">Covers, one per line, as policy/cover/layer/life</label><textarea id="tc-keys" rows="4" required></textarea></div><div><label for="tc-reason">Why (for the person who signs)</label><input id="tc-reason" required size="40"></div><p><button>Prepare</button></p></form><div id="tc-msg" aria-live="polite"></div></section>
+<section data-view="Facultative and claims" class="operate" hidden><h2>Facultative offers, evidence and claim facts</h2><p class="muted">What a reinsurer offered or declined for a risk beyond the treaty, a record of evidence released to a reinsurer, and a claim fact the core's events did not carry. You are recorded as the person who sent each.</p><div id="acts"></div></section>
 <section data-view="Month-end check"><h2>Month-end check</h2><form id="sweep"><div class="row"><div><label for="s-date">Period ending</label><input id="s-date" type="date" required></div><button>Check</button></div></form><div id="s-msg" aria-live="polite"></div><div id="s-out"></div></section>
 </main>
 <script src="/ui/app.js"></script>
@@ -154,9 +155,20 @@ $("sweep").addEventListener("submit", run($("s-msg"), async () => {
 }));
 // The month-end most likely meant: the last day of last month.
 $("s-date").value = portal.days(-1, portal.month(0) + "-01");
+const FAC = {
+  record_facultative_terms: { label: "Record a reinsurer's facultative terms", fields: [["reservation", "Capacity reservation", "text"], ["reference", "Reinsurer's reference", "text"], ["reinsurer", "Reinsurer", "text"],
+    ["amount_minor", "Amount reinsured", "money"], ["rate", "Annual rate per thousand", "text"], ["terms_ref", "Where the terms are filed", "text"], ["loading", "Loading code (optional)", "optional"], ["exclusions", "Exclusion codes, separated by commas", "list"]],
+    build: (v) => ({ record_facultative_terms: { target: { reservation: v.reservation }, reference: v.reference, reinsurer: v.reinsurer, amount_minor: v.amount_minor, rate: Math.round(Number(v.rate) * 1e6), terms_ref: v.terms_ref, loading: v.loading || null, exclusions: v.exclusions } }) },
+  decline_facultative: { label: "Record a reinsurer's decline", fields: [["reservation_id", "Capacity reservation", "text"], ["reference", "Reinsurer's reference", "text"]], build: (v) => ({ decline_facultative: v }) },
+  log_evidence_release: { label: "Record evidence released to a reinsurer", note: "The documents are named, never copied here.", fields: [["subject", "Whose evidence (claim or proposal)", "text"], ["treaty", "Treaty", "text"], ["reinsurer", "Reinsurer", "text"], ["purpose", "Why", "text"], ["documents", "Document references, separated by commas", "list"]], build: (v) => ({ log_evidence_release: v }) },
+  claim: { label: "Enter a claim fact by hand", note: "Only for a fact the core's events did not carry. The module keeps each claim's facts in order.", fields: [["fact", "Fact", "select", ["admitted", "reserve_changed"]], ["claim", "Claim", "text"], ["amount", "Amount", "money"]],
+    build: (v) => ({ claim: v.fact === "admitted" ? { admitted: { claim: v.claim, admitted_minor: v.amount } } : { reserve_changed: { claim: v.claim, gross_reserve_minor: v.amount } } }) },
+};
 signIn(R).then(async () => {
   await refresh();
   if (!me.operate) for (const f of ["cut", "pc", "tc"]) $(f).hidden = true;
+  document.querySelectorAll(".operate").forEach((e) => { e.hidden = !me.operate; });
+  if (me.operate) portal.actions($("acts"), FAC, { id: "fa", send, after: () => refresh() });
   $("me").textContent = `You are ${me.staff}: ${[me.operate ? "you act on exceptions" : null, me.approve ? "you sign abandonments" : null].filter(Boolean).join(", ") || "view only"}. Commands are made on ${me.today || "today's date"}.`;
 }).catch(portal.refuse);
 </script></body></html>
