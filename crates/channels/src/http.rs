@@ -650,6 +650,79 @@ async fn offer_answer(
         .await
 }
 
+/// The new price for a proposal whose product changed before it was issued:
+/// the policy it would issue as, priced by the core today on the product and
+/// rate tables in use. Only a life on the proposal may ask.
+async fn requote_price(s: &Shared, session: &Session, proposal: &str, life: &str) -> Result<(Value, Value), Problem> {
+    s.signer(session, proposal, life).await?;
+    let held = s
+        .ask(Question::Requote {
+            party: session.party.clone(),
+            proposal: proposal.to_string(),
+            life: life.to_string(),
+        })
+        .await?;
+    if held.is_null() {
+        return Err(Problem::not_found());
+    }
+    let today = crate::correspondence::today(session.at);
+    let mut application: ic_core::command::IssuePolicy = serde_json::from_value(held["application"].clone())
+        .map_err(|e| Problem::new(StatusCode::BAD_GATEWAY, "requote", format!("the proposal was not understood: {e}")))?;
+    application.inception = today;
+    let (product, group) = (application.product_code.clone(), application.group.0.clone());
+    let partition = crate::claims::partition_of(&application.group, s.claims.count());
+    let premium = match s.claims.quote(partition, application).await.map_err(core_down)? {
+        None => return Err(Problem::new(StatusCode::SERVICE_UNAVAILABLE, "not_ready", "the business date is not open")),
+        Some(Ok(premium)) => premium,
+        Some(Err((code, message))) => return Err(module_refusal(&code, &message)),
+    };
+    let register = s.claims.register(partition).await.map_err(core_down)?;
+    let binding =
+        crate::disclosures::requote_binding(&premium, &register, &product, &group, today).map_err(|e| Problem::new(StatusCode::BAD_GATEWAY, "requote", e))?;
+    Ok((held, binding))
+}
+
+/// What the applicant reads and signs before accepting a new price: the
+/// premium they accepted, the new one, and the exact bytes to sign.
+async fn requote_offer(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path((proposal, life)): Path<(String, String)>) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    let (held, binding) = requote_price(&s, &session, &proposal, &life).await?;
+    let (hash, premium) = (
+        binding["product_hash"].as_str().unwrap_or_default(),
+        binding["premium_minor"].as_i64().unwrap_or_default(),
+    );
+    let message = base64::engine::general_purpose::STANDARD.encode(crate::disclosures::requote_message(&proposal, hash, premium));
+    ok(json!({ "was_minor": held["quoted_minor"], "premium_minor": premium, "product_hash": hash, "message": message }))
+}
+
+/// The applicant accepts the new price, signed on a device they enrolled.
+/// The price is worked out again here, so what is bound is what the core
+/// prices now; the underwriting module checks the signature again and
+/// sends the issue.
+async fn requote_accept(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path((proposal, life)): Path<(String, String)>,
+    body: Bytes,
+) -> Answer {
+    let session = s.customer(&headers, &method, &uri, &body).await?;
+    let Some(device) = session.device.clone() else {
+        return Err(device_required("accepting a new price"));
+    };
+    let idempotency = key(&headers, &session.party.0)?;
+    let public_key = s
+        .signer(&session, &proposal, &life)
+        .await?
+        .ok_or_else(|| device_required("accepting a new price"))?;
+    let (_, binding) = requote_price(&s, &session, &proposal, &life).await?;
+    let command = crate::disclosures::requote(&proposal, &binding, &parse(&body)?, &device, &public_key)
+        .map_err(|e| Problem::new(StatusCode::CONFLICT, "price_changed", e))?;
+    s.to_underwriting(crate::underwriting::app_envelope(&format!("app:{idempotency}"), session.at, command))
+        .await
+}
+
 /// What the life reads before signing the replacement disclosure: the cover
 /// they keep, the cover added, what is lost, and the premium before and
 /// after. Only the life may read it, and only for a proposal that replaces.
@@ -4209,6 +4282,7 @@ pub fn router(state: Shared) -> Router {
         .route("/app/v1/proposals/{proposal}/lives/{life}/consents/{kind}/to-sign", get(consent_to_sign))
         .route("/app/v1/proposals", get(my_proposals))
         .route("/app/v1/proposals/{proposal}/lives/{life}/offers/{offer}", post(offer_answer))
+        .route("/app/v1/proposals/{proposal}/lives/{life}/requote", get(requote_offer).post(requote_accept))
         .route(
             "/app/v1/proposals/{proposal}/lives/{life}/offers/{offer}/{response}/to-sign",
             get(offer_to_sign),

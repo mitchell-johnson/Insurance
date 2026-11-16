@@ -594,7 +594,9 @@ pub(crate) fn loading(percent: u32) -> Result<DecStr, Reject> {
 }
 
 /// Send what was accepted to the core.
-pub(crate) fn issue(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
+/// The lives and covers a proposal issues with: each accepted life, and
+/// each of its covers on the terms decided.
+fn accepted(p: &Proposal) -> Result<(Vec<LifeSpec>, Vec<CoverSpec>), Reject> {
     let mut lives = Vec::new();
     let mut covers = Vec::new();
     for f in p.lives.values().filter(|f| f.stage == Stage::Accepted) {
@@ -622,6 +624,30 @@ pub(crate) fn issue(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
             }
         }
     }
+    Ok((lives, covers))
+}
+
+/// The policy a new business proposal issues as, on `inception`: what a
+/// requote is priced on when the product changed before the issue.
+pub(crate) fn application(p: &Proposal, inception: chrono::NaiveDate) -> Result<IssuePolicy, Reject> {
+    let (lives, covers) = accepted(p)?;
+    Ok(IssuePolicy {
+        continuation_of: None,
+        policy: p.policy.clone(),
+        number: p.policy_number.clone(),
+        group: p.group.clone(),
+        policyholder: p.policyholder.clone(),
+        product_code: p.product_code.clone(),
+        inception,
+        frequency: p.frequency,
+        lives,
+        covers,
+        migrated: false,
+    })
+}
+
+pub(crate) fn issue(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
+    let (lives, covers) = accepted(p)?;
     let employer_may_see_loading = matches!(p.entry, Entry::GroupExcess { .. })
         && !lives.is_empty()
         && p.lives

@@ -69,3 +69,47 @@ async fn the_intake_is_called_as_the_portal() {
     };
     assert!(gone.to_sign(busy).await.is_err());
 }
+
+/// Purpose: a requote's binding is the core's whole first-period bill (covers, fee, tax and levies) on the product version in
+/// use today and the rate tables in use for the group; a quote that is not a bill, or a product with no version in use, is
+/// refused rather than bound; and an acceptance for any other price than the one bound is refused before its signature is read.
+/// Why it matters: the applicant signs a price; binding a different product version, another group's rate table, a premium
+/// without its tax, or a price the page never showed would issue cover on terms nobody agreed.
+#[test]
+fn a_requote_binds_the_price_charged_today() {
+    use ic_channels::disclosures::{requote, requote_binding};
+    let today = chrono::NaiveDate::from_ymd_opt(2027, 11, 20).unwrap();
+    let money = |minor: i64| json!({ "minor": minor, "currency": "NZD" });
+    let bill = json!({ "by_cover": { "life": money(1000), "tpd": money(500) }, "policy_fee": money(100), "gst": { "tpd": money(75) }, "levies": { "fsl": money(25) } });
+    let row = |kind: &str, id: &str, hash: &str, in_use: bool, scope: Value| json!({ "kind": kind, "id": id, "content_hash": hash, "version": 1, "in_use": in_use, "scope": scope });
+    let register = [
+        row("product", "term-life", "old", false, Value::Null),
+        row("product", "term-life", "new", true, Value::Null),
+        row("product", "other", "x", true, Value::Null),
+        row("rate_table", "global", "g", true, Value::Null),
+        row("rate_table", "ours", "o", true, json!(["grp-1"])),
+        row("rate_table", "theirs", "t", true, json!(["grp-2"])),
+        row("rate_table", "retired", "r", false, Value::Null),
+    ];
+    let bound = requote_binding(&bill, &register, "term-life", "grp-1", today).unwrap();
+    assert_eq!((bound["product_hash"].as_str(), bound["premium_minor"].as_i64()), (Some("new"), Some(1700)));
+    let tables: Vec<&str> = bound["rate_tables"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
+    assert_eq!(tables, ["global", "ours"]);
+    assert_eq!(bound["quoted_on"], "2027-11-20");
+    assert!(requote_binding(&json!({ "total_minor": 1 }), &register, "term-life", "grp-1", today)
+        .unwrap_err()
+        .contains("not understood"));
+    assert!(requote_binding(&bill, &register, "withdrawn", "grp-1", today)
+        .unwrap_err()
+        .contains("no version of withdrawn"));
+
+    let body = |hash: &str, premium: i64| json!({ "product_hash": hash, "premium_minor": premium, "signature": "c2ln" });
+    assert!(requote("P1", &bound, &body("old", 1700), "dev", "key").unwrap_err().contains("changed again"));
+    assert!(requote("P1", &bound, &body("new", 1600), "dev", "key").unwrap_err().contains("changed again"));
+    assert!(requote("P1", &bound, &json!({ "product_hash": "new", "premium_minor": 1700 }), "dev", "key")
+        .unwrap_err()
+        .contains("signature"));
+    assert!(requote("P1", &bound, &body("new", 1700), "dev", "key")
+        .unwrap_err()
+        .contains("not this device's"));
+}

@@ -238,9 +238,25 @@ impl Partitions for ClaimsCore {
         let answer = match application.product_code.as_str() {
             "later" => None,
             "none" => Some(Err(("unknown_product".to_string(), "there is no product none".to_string()))),
-            _ => Some(Ok(json!({ "total_minor": 1234, "product": application.product_code, "partition": partition }))),
+            // As the core's first-period bill (`ModalPremium`), with the total beside it.
+            _ => Some(Ok(json!({ "total_minor": 1234, "product": application.product_code, "partition": partition,
+                "by_cover": { "life": { "minor": 1100, "currency": "NZD" } }, "policy_fee": { "minor": 100, "currency": "NZD" },
+                "gst": {}, "levies": { "fsl": { "minor": 34, "currency": "NZD" } } }))),
         };
         Box::pin(async move { Ok(answer) })
+    }
+
+    /// Each product the quote prices, at version 2 in use today (`hash-2-<code>`) beside a version 1 no
+    /// longer chosen, a global rate table and one scoped to another group.
+    fn register(&self, _partition: PartitionId) -> Asked<'_, Vec<Value>> {
+        let row = |kind: &str, id: &str, version: u32, in_use: bool, scope: Option<Vec<&str>>| json!({ "kind": kind, "id": id, "version": version, "effective_from": "2027-01-01", "content_hash": format!("hash-{version}-{id}"), "scope": scope, "in_use": in_use });
+        let rows = vec![
+            row("product", "term-life", 1, false, None),
+            row("product", "term-life", 2, true, None),
+            row("rate_table", "term-rates", 3, true, None),
+            row("rate_table", "scheme-rates", 1, true, Some(vec!["some-other-group"])),
+        ];
+        Box::pin(async move { Ok(rows) })
     }
 
     /// `pol-c0` on partition 0 and `pol-c1` on 1, as the read side has them.
@@ -342,6 +358,10 @@ impl Partitions for Down {
     }
 
     fn propose(&self, _partition: PartitionId, _envelope: Envelope) -> Asked<'_, Proposed> {
+        Box::pin(async { Err("no leader".to_string()) })
+    }
+
+    fn register(&self, _partition: PartitionId) -> Asked<'_, Vec<Value>> {
         Box::pin(async { Err("no leader".to_string()) })
     }
 }

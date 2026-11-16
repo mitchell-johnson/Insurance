@@ -2973,7 +2973,11 @@ async fn serve_for_a_browser() {
         use ic_log::StateMachine;
         let rows = json!({ "publish_rows": { "rows": [{ "key": format!("{retail}/underwriting/prop-1"), "policy": retail, "kind": "proposal", "subject": null,
             "sensitive": false, "body": { "proposal": "prop-1", "policy_number": "KTL00000001", "entry": "adviser", "status": "open",
-            "waiting_on": "applicant", "received_on": "2027-11-10", "expires_on": "2028-02-08" } }], "remove": [] } });
+            "waiting_on": "applicant", "received_on": "2027-11-10", "expires_on": "2028-02-08" } },
+            // The product changed before the issue: Kiri is asked to accept a new price.
+            { "key": format!("{retail}/underwriting/prop-1/L1"), "policy": retail, "kind": "proposal_life", "subject": KIRI, "sensitive": true,
+              "body": { "proposal": "prop-1", "life": "L1", "stage": "accepted", "waiting_on": null,
+                "requote": { "code": "product_changed", "quoted_minor": 1100, "application": application(78, "term-life") } } }], "remove": [] } });
         // And the documents module issued the policy schedule.
         let document = json!({ "publish_rows": { "rows": [{ "key": format!("{retail}/documents/doc-1"), "policy": retail, "kind": "document", "subject": null,
             "sensitive": false, "body": { "document": "doc-1", "title": "Policy schedule", "kind": "schedule", "issued_on": "2027-11-01" } }], "remove": [] } });
@@ -4860,6 +4864,125 @@ async fn the_life_answers_an_offer_of_terms() {
     let sent = portal.underwriting.log().last().cloned().unwrap();
     assert_eq!(sent.caller, "customer-app");
     assert!(matches!(&sent.command, ic_underwriting::command::Command::RespondToOffer { offer, .. } if offer == "O-1"));
+}
+
+/// Purpose: when the core refused to issue a proposal because the product changed, the life sees on their application that a
+/// new price waits; the portal prices the policy the proposal would issue as, today, on the product version and rate tables in
+/// use (never a rate table scoped to another group), shows the price accepted and the new one with the exact bytes to sign, and
+/// sends the module the signed acceptance with that binding; a price the page did not show, a forged signature, someone who is
+/// not the life, or a proposal with no requote is refused before anything leaves.
+/// Why it matters: nothing put a changed product's new price in front of the applicant, so the proposal sat refused; and a
+/// new price must be the one the core charges today and the one the applicant signed, never one the page made up.
+#[tokio::test]
+async fn the_applicant_accepts_a_new_price_when_the_product_changed() {
+    use base64::Engine;
+    let portal = &portal();
+    let now = portal.now();
+    let retail = portal.retail.clone();
+    let priced = application(77, "term-life");
+    let group = priced["group"].as_str().unwrap().to_string();
+    portal.local.with(|state| {
+        use ic_log::StateMachine;
+        let rows = json!({ "publish_rows": { "rows": [{ "key": format!("{retail}/underwriting/P4/L1"), "policy": retail, "kind": "proposal_life",
+            "subject": KIRI, "sensitive": true, "body": { "proposal": "P4", "life": "L1", "stage": "accepted", "waiting_on": null,
+                "requote": { "code": "product_changed", "quoted_minor": 1100, "application": priced } } }], "remove": [] } });
+        let command: Command = serde_json::from_value(rows).unwrap();
+        let output = state.apply(
+            9_003,
+            ic_channels::Envelope {
+                key: "life-row-requote".into(),
+                at: now,
+                actor: module("underwriting"),
+                command,
+            },
+        );
+        assert!(output.result.is_ok(), "{:?}", output.result);
+    });
+    // Two more whose new price the core cannot give: a product it does not know, and a day not yet open.
+    for (n, product) in [(5u64, "none"), (6, "later")] {
+        portal.local.with(|state| {
+            use ic_log::StateMachine;
+            let rows = json!({ "publish_rows": { "rows": [{ "key": format!("{retail}/underwriting/P{n}/L1"), "policy": retail, "kind": "proposal_life",
+                "subject": KIRI, "sensitive": true, "body": { "proposal": format!("P{n}"), "life": "L1", "stage": "accepted",
+                    "requote": { "code": "product_changed", "quoted_minor": 1, "application": application(70 + n, product) } } }], "remove": [] } });
+            let command: Command = serde_json::from_value(rows).unwrap();
+            let output = state.apply(
+                9_003 + n,
+                ic_channels::Envelope {
+                    key: format!("life-row-requote-{n}"),
+                    at: now,
+                    actor: module("underwriting"),
+                    command,
+                },
+            );
+            assert!(output.result.is_ok(), "{:?}", output.result);
+        });
+    }
+    assert_eq!(
+        portal.get("sub-kiri", "/app/v1/proposals/P5/lives/L1/requote").await.1["title"],
+        "unknown_product"
+    );
+    assert_eq!(
+        portal.get("sub-kiri", "/app/v1/proposals/P6/lives/L1/requote").await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let mine = portal.get("sub-kiri", "/app/v1/proposals").await.1;
+    let mine: Vec<&Value> = mine.as_array().unwrap().iter().filter(|a| a["proposal"] == "P4").collect();
+    assert_eq!(
+        mine[0]["requote"],
+        json!({ "code": "product_changed", "quoted_minor": 1100 }),
+        "the life sees prices, not the application: {mine:?}"
+    );
+
+    let path = "/app/v1/proposals/P4/lives/L1/requote";
+    let (status, shown) = portal.get("sub-kiri", path).await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(
+        (shown["was_minor"].as_i64(), shown["premium_minor"].as_i64(), shown["product_hash"].as_str()),
+        (Some(1100), Some(1234), Some("hash-2-term-life"))
+    );
+    let message = base64::engine::general_purpose::STANDARD.decode(shown["message"].as_str().unwrap()).unwrap();
+    assert_eq!(message, ic_underwriting::signing::message("requote", &["P4", "hash-2-term-life", "1234"]));
+    assert_eq!(portal.get("sub-adv", path).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(portal.get("sub-kiri", "/app/v1/proposals/P3/lives/L1/requote").await.0, StatusCode::NOT_FOUND);
+
+    let send = |body: Value| {
+        let text = body.to_string();
+        let headers = portal.proof(&portal.phone, "POST", path, &text);
+        async move { portal.send("POST", path, &headers, Some(body)).await }
+    };
+    let before = portal.underwriting.log().len();
+    let signature = portal.phone.sign(&message);
+    let (status, problem) = send(json!({ "product_hash": "hash-2-term-life", "premium_minor": 999, "signature": signature })).await;
+    assert_eq!(
+        (status, problem["title"].as_str()),
+        (StatusCode::CONFLICT, Some("price_changed")),
+        "a price the page did not show"
+    );
+    let other = portal
+        .phone
+        .sign(&ic_underwriting::signing::message("requote", &["P4", "hash-2-term-life", "999"]));
+    assert_eq!(
+        send(json!({ "product_hash": "hash-2-term-life", "premium_minor": 1234, "signature": other }))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(portal.underwriting.log().len(), before, "nothing reached the module");
+
+    // Signed over the price shown: it reaches the module from the app with the binding the portal worked out.
+    send(json!({ "product_hash": "hash-2-term-life", "premium_minor": 1234, "signature": signature })).await;
+    let sent = portal.underwriting.log().last().cloned().unwrap();
+    assert_eq!(sent.caller, "customer-app");
+    let ic_underwriting::command::Command::Requote { proposal, quote, .. } = &sent.command else {
+        panic!("{:?}", sent.command)
+    };
+    assert_eq!(
+        (proposal.0.as_str(), quote.product_hash.as_str(), quote.premium_minor),
+        ("P4", "hash-2-term-life", 1234)
+    );
+    let tables: Vec<&str> = quote.rate_tables.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(tables, ["term-rates"], "not another group's table (group {group})");
 }
 
 /// Purpose: the life on a proposal gives and withdraws their own consents from the app: what to sign is the underwriting

@@ -162,8 +162,10 @@ const sees = async (page, text) => {
   await visit(browser, "/ops", { subject: "sub-ops", roles: "operations" }, { run: async (p) => { await sees(p, "auckland"); await sees(p, "sydney"); } });
   await visit(browser, "/ops", { subject: "sub-kiri" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   // The customer reads before she can sign: an approval fails until this browser is set up, then her phone approves the browser.
-  await visit(browser, "/customer", { subject: "sub-kiri" }, { run: async (p) => {
-    await sees(p, "2 changes are waiting for you to approve");
+  await visit(browser, "/customer", { subject: "sub-kiri" }, {
+  // The proposal is only a published row here, so the underwriting module itself says it does not know it (409): the signed acceptance reached it.
+  expectStatus: [409], run: async (p) => {
+    await sees(p, "3 changes are waiting for you to approve");
     await p.locator("#covers table").waitFor();
     await sees(p, "$500,000.00");
     await sees(p, "$61.84 is due");
@@ -192,6 +194,11 @@ const sees = async (page, text) => {
     await p.click("dialog button.danger");
     await sees(p, "Declined: decline indexation");
     await sees(p, "Nothing is waiting for you");
+    await say(p, "The product changed before her cover started: she sees the new price and accepts it, signed");
+    await p.click("#requote-prop-1-L1");
+    await sees(p, "12.34. Your cover starts once you accept");
+    await p.getByRole("button", { name: "Accept the new price" }).click();
+    await p.locator("#app-msg").getByText(/proposal|Accepted/).waitFor();
     await tab(p, "Your details");
     await sees(p, "kiri@example.nz");
     await p.click("#hold-on");
