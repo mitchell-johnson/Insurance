@@ -1352,7 +1352,11 @@ fn cover_is_not_converted_paid_up_bought_back_or_added_where_the_terms_do_not_al
     for p in [&id, &excluded] {
         let policy = &c.state(0).policies[p];
         assert_eq!(
-            (held(&c, p, "critical-conditions"), policy.conversions.len(), policy.covers.contains_key("tpd-any-occupation")),
+            (
+                held(&c, p, "critical-conditions"),
+                policy.conversions.len(),
+                policy.covers.contains_key("tpd-any-occupation")
+            ),
             (200_000_00, 0, false)
         );
     }
