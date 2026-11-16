@@ -2228,6 +2228,7 @@ dependencies = [
  "ic-sim",
  "ic-telemetry",
  "ic-underwriting",
+ "ic-wellness",
  "reqwest 0.12.28",
  "ring",
  "serde",

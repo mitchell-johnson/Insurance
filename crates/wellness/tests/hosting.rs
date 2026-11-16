@@ -145,7 +145,7 @@ fn the_module_reads_the_cores_events_it_follows() {
     .is_empty());
 }
 
-/// Purpose: the module answers its questions (a member, the outbox, the refusals, its state
+/// Purpose: the module answers its questions (a member, the members on a policy, the outbox, the refusals, its state
 /// hash) and refuses one it does not know; the host reads the outbox as postings routed by
 /// policy under the module's own key, and each kind of outcome becomes the command that records
 /// it.
@@ -171,6 +171,8 @@ fn the_host_reads_the_outbox_and_records_each_outcome() {
     assert_eq!(applied.postings.len(), 1);
 
     assert_eq!(answer(&s, json!({"q": "member", "member": "V1"})).unwrap()["discount"], 10);
+    assert_eq!(answer(&s, json!({"q": "policy", "policy": "P1"})).unwrap()[0]["member"], "V1");
+    assert_eq!(answer(&s, json!({"q": "policy", "policy": "P2"})).unwrap(), json!([]));
     assert_eq!(answer(&s, json!({"q": "state_hash"})).unwrap(), json!(s.state_hash()));
     assert!(answer(&s, json!({"q": "nonsense"})).is_err());
     let pending = (OUTBOX.pending)(10);

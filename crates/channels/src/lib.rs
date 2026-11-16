@@ -50,6 +50,7 @@ pub mod staff;
 pub mod state;
 pub mod ui;
 pub mod underwriting;
+pub mod vitality;
 pub mod wordings;
 pub mod workbench;
 

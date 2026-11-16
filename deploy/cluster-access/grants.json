@@ -55,7 +55,8 @@
         "collections"
       ],
       "read_modules": [
-        "group"
+        "group",
+        "wellness"
       ]
     },
     "ic-customers": {

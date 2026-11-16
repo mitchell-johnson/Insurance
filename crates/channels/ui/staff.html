@@ -9,7 +9,7 @@
 <div class="row"><div><label for="find-q">Name and birth date, email, phone, IRD or policy number</label><input id="find-q" type="search" size="40" placeholder="Kiri Ngata 7/3/1984" required></div><button>Search</button></div></form>
 <div id="find-msg" aria-live="polite"></div><div id="found" class="results"></div></section>
 <section><h2>Open a policy you have the number of</h2><form id="lookup"><div class="row"><div><label for="pol">Policy</label><input id="pol" required></div><div><label for="scope">Queue or team it reaches you through (optional)</label><input id="scope"></div><button>Open</button></div></form><div id="lookup-msg" aria-live="polite"></div></section>
-<section id="pol-view" hidden><h2 id="pol-title" tabindex="-1">Policy</h2><div id="approach"></div><div id="pol-next" class="next"></div><div id="withheld"></div><div id="pol-rows"></div><h2>Advisers</h2><div id="pol-advisers"></div>
+<section id="pol-view" hidden><h2 id="pol-title" tabindex="-1">Policy</h2><div id="approach"></div><div id="pol-next" class="next"></div><div id="withheld"></div><div id="pol-rows"></div><h2>Advisers</h2><div id="pol-advisers"></div><div id="vitality" hidden><h2>AIA Vitality</h2><p class="muted">Who on the policy is a member, the status they have earned, and the discount it gives on eligible cover. The programme tells us; nothing here changes it.</p><div id="vit-members"></div><details><summary>Discount changes the core refused</summary><div id="vit-refused"></div></details></div>
 <h2>Someone has phoned about this policy</h2><p class="muted">Check before you say anything, including whether a policy exists. Find the caller by the name and birth date they give you; leave it empty if they are not a customer or you cannot identify them. The contact is recorded either way.</p><form id="caller-form"><div class="row"><div><label for="caller-ref">Who is calling</label><input id="caller-ref" size="36"></div><button>Check the caller</button></div></form><div id="caller-msg" aria-live="polite"></div>
 <h2>Make a request for the customer</h2><form id="for-customer"><div class="row"><div><label for="ckind">Change</label><select id="ckind"><option value="change_frequency">Change payment frequency</option><option value="decline_indexation">Decline indexation</option><option value="cancel_policy">Cancel policy</option></select></div><div><label for="cfreq">New payment frequency (for a change of frequency)</label><select id="cfreq"><option value="monthly">Monthly</option><option value="fortnightly">Fortnightly</option><option value="quarterly">Quarterly</option><option value="half_yearly">Half-yearly</option><option value="yearly">Yearly</option></select></div><div><label for="cnote">Details</label><input id="cnote"></div><div><label for="creason">Why (recorded with your name and the case)</label><input id="creason" required></div><div><label for="ceffective">Effective from (optional)</label><input id="ceffective" type="date"></div><div><label for="camount">Amount it moves, in dollars (optional)</label><input id="camount" type="number" min="0" step="0.01"></div><button>Send to customer's app</button></div><p class="muted">The customer approves it in their app. You cannot approve it for them. A change above your limit, or dated in the past, goes to a second member of staff first.</p></form><div id="cust-msg" aria-live="polite"></div></section></div>
 <section data-view="Second approvals"><h2>Changes waiting for a second person</h2><p class="muted">A change a colleague entered for a customer that is above their limit, or dated in the past, needs someone else to agree it before it goes to the customer. Oldest first.</p><div id="waiting"></div>
@@ -50,7 +50,7 @@
 const { h, clear, put, money, table, say, signIn, signOut, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "workforce";
-let policy = null, party = null;
+let policy = null, party = null, vitality = false;
 const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 const amounts = (m) => Object.entries(m || {}).map(([c, v]) => money(v, c)).join(", ") || "none";
 const loaders = { "policies": async () => {}, "second-approvals": waiting, "held-balances": bench, "markers-to-review": care, "my-access": access, "access-administration": admin };
@@ -104,6 +104,19 @@ async function show(id) {
   put($("withheld"), view.withheld ? h("div", { class: "banner warn" }, `${view.withheld} item(s) are withheld because your role does not include that class of data.`) : null);
   put($("pol-rows"), table(["What", "About", "Details"], view.rows.map((r) => [r.kind + (r.sensitive ? " (sensitive)" : ""), r.subject || "", portal.details(r.body)])));
   put($("pol-advisers"), table(["Adviser", "Standing"], view.advisers.map((a) => [a.adviser, a.standing.state === "read_only" ? `Read-only since ${a.standing.since} (${words(a.standing.status)} licence of ${a.standing.licence_of})` : words(a.standing.state)])));
+  if (vitality) await showVitality(id);
+}
+// AIA Vitality: the members on the policy and the discount each holds, for those who may read it.
+async function showVitality(id) {
+  const q = (name, extra) => api(R, "GET", `/staff/v1/wellness/${name}?` + new URLSearchParams({ case: $("case").value.trim(), ...extra }));
+  const [members, refused] = await Promise.all([q("policy", { policy: id }), q("refused")]);
+  $("vitality").hidden = false;
+  put($("vit-members"), members.length ? table(["Member", "Life", "Joined", "Left", "Status earned", "Discount", "Last flexed"], members.map((m) => {
+    const last = (m.flexed || []).slice(-1)[0];
+    return [m.member, m.life, m.joined, m.left || "", words(m.earned), `${m.discount}%`, last ? `From ${last.anniversary}: ${last.baseline}% to ${last.discount}% on ${words(last.status)} (${last.read})` : "Not yet"];
+  })) : portal.empty("Nobody on this policy is an AIA Vitality member."));
+  const mine = (refused || []).filter((r) => r.posting && r.posting.policy === id);
+  put($("vit-refused"), mine.length ? table(["Change", "Why the core refused it"], mine.map((r) => [r.posting.id, `${words(r.code)}: ${r.message}`])) : portal.empty("None for this policy."));
 }
 portal.picker($("caller-ref"), (text) => { needCase(); return portal.people(text); }, { label: true, onPick: (item) => { $("caller-ref").dataset.party = item.value; } });
 $("caller-ref").addEventListener("input", () => { delete $("caller-ref").dataset.party; });
@@ -258,6 +271,7 @@ async function admin() {
 signIn(R).then(() => api(R, "GET", "/staff/v1/me")).then((me) => {
   $("me").textContent = [me.team, (me.templates || []).map(words).join(", ")].filter(Boolean).join(" · ");
   if ((me.actions || []).includes("servicing.carry_out")) forPerson();
+  vitality = (me.actions || []).includes("wellness.view");
   portal.picker($("scope"), (me.paths || []).map((p) => ({ value: p, label: words(p.replace(/^[a-z]+:/, "")), hint: p.split(":")[0] })), { empty: "No queues or teams reach records for you." });
   // Opened from another console: a policy to show, or a customer to find.
   const sent = portal.params();

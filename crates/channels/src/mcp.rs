@@ -367,6 +367,9 @@ pub fn catalogue() -> Vec<Tool> {
             .query("As the question needs: `id`, `version`, `request`, `part`, `policy`, `kind`, `from`, `to` (dates)."),
         tool("documents_command", "Act in documents", S, M::POST, "/staff/v1/documents/commands", "A command to the documents module as `{\"type\": name, ...}`: legal holds, notice defects, disabling, submitting, testing, approving and activating templates, parts, settings, retention, dismissing a trigger, retrying a delivery, cancelling a requested letter, shredding a party. The caller is named from your own actions.")
             .json(r#"{"type": "<command>", ...}"#),
+        tool("wellness_question", "Ask about AIA Vitality", S, M::GET, "/staff/v1/wellness/{question}", "A policy's AIA Vitality members and the discount each holds, with how it flexed; one member by programme number; discount changes the core refused; changes waiting to be sent.")
+            .choose("question", crate::vitality::question_names())
+            .query("`policy` or `member` as the question needs, and `case`."),
         tool("group_question", "Ask group administration", S, M::GET, "/staff/v1/group/{question}", "Exceptions, a scheme, its invoices and mapping, an uploaded file, a member, a possible match, or the scheme a policy belongs to.")
             .choose("question", vec!["me", "exceptions", "scheme", "invoices", "mapping", "file", "member", "possible_match", "scheme_of", "loadings_in_total"])
             .query("`scheme`, `file`, `employee`, `policy` as the question needs."),

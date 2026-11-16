@@ -316,6 +316,9 @@ const sees = async (page, text) => {
     await p.locator("#found").getByText("Kiri Parata").first().waitFor();
     await p.locator("#found").getByRole("button", { name: "Open" }).first().click();
     await p.locator("#pol-view:not([hidden])").waitFor();
+    await say(p, "The policy's AIA Vitality member and the discount their status gives");
+    await p.locator("#vit-members").getByText("V-1").waitFor();
+    await p.locator("#vit-members").getByText("10%").waitFor();
     await say(p, "Someone phones about the policy and cannot be identified: she is given words that confirm nothing");
     await p.locator("#caller-form button").click();
     await p.locator("#caller-msg").getByText("can't confirm whether we hold a policy").waitFor();

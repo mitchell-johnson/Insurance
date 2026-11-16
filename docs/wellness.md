@@ -20,7 +20,9 @@ Each change is one `SetEntitlement` (caller `wellness`) for entitlement `aia-vit
 
 ## Questions
 
-`member`, `outbox`, `refused` and `state_hash`.
+`member`, `policy` (the members on a policy, joined or left; added by the portal thread on 16 Nov 2026 for the staff console), `outbox`, `refused` and `state_hash`.
+
+Staff read `policy`, `member`, `refused` and `outbox` through the portal (`GET /staff/v1/wellness/{question}`, staff action `wellness.view`, `docs/channels.md`). The staff console shows a policy's members, their earned status, the discount and how it last flexed, and the discount changes the core refused for that policy. Nothing a person sends changes the module.
 
 ## Not built
 

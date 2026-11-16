@@ -17,6 +17,7 @@ pub mod payments;
 pub mod pricing;
 pub mod reinsurance;
 pub mod underwriting;
+pub mod wellness;
 
 use base64::Engine;
 use chrono::NaiveDate;

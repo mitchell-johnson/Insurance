@@ -157,6 +157,8 @@ pub struct AppState {
     pub collections: Arc<dyn crate::forward::Source>,
     /// The documents module on the nodes, for the documents console.
     pub correspondence: Arc<dyn crate::forward::Source>,
+    /// The wellness module (AIA Vitality), read by staff.
+    pub wellness: Arc<dyn crate::forward::Source>,
     /// The underwriting module, for the underwriting console.
     pub underwriting: Arc<dyn crate::forward::Source>,
     /// The customer master, for a person's own record. `None` where it is
@@ -2497,6 +2499,36 @@ async fn documents_question(
     ok(answer)
 }
 
+/// What the wellness module holds about AIA Vitality: a policy's members
+/// and their discount, one member, the discount changes the core refused,
+/// and those waiting to be sent. Read only, under `wellness.view`, and logged.
+async fn wellness_question(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(name): Path<String>,
+    Query(fields): Query<std::collections::BTreeMap<String, String>>,
+) -> Answer {
+    let session = s.staff(&headers, &method, &uri, b"").await?;
+    let (question, record) = crate::vitality::question(&name, &fields).map_err(Problem::bad_request)?;
+    let why = Why {
+        case: fields.get("case").cloned(),
+        scope: None,
+    };
+    s.may_act(&session, crate::vitality::actions::VIEW, DataClass::Ordinary, record, None, why)
+        .await?;
+    let answer = s
+        .wellness
+        .ask(question)
+        .await
+        .map_err(|e| module_problem("wellness", StatusCode::BAD_REQUEST, e))?;
+    if answer.is_null() {
+        return Err(Problem::not_found());
+    }
+    ok(answer)
+}
+
 /// A person's command to the documents module, sent as the caller their
 /// staff actions name and with the person signed in as its actor. That
 /// module decides, and keeps an author from approving their own template.
@@ -4249,6 +4281,7 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/collections/commands", post(collections_command))
         .route("/staff/v1/documents/commands", post(documents_command))
         .route("/staff/v1/documents/{question}", get(documents_question))
+        .route("/staff/v1/wellness/{question}", get(wellness_question))
         .route("/staff/v1/collections/{question}", get(collections_question))
         .route("/staff/v1/underwriting/commands", post(underwriting_command))
         .route("/staff/v1/underwriting/disclosures", post(underwriting_disclosures))

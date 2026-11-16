@@ -590,9 +590,21 @@ impl StateMachine for WellnessState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "q", rename_all = "snake_case")]
 pub enum Question {
-    Member { member: String },
-    Outbox { limit: usize },
-    Refused { limit: usize },
+    Member {
+        member: String,
+    },
+    /// The members on a policy, joined or left: what staff look up when a
+    /// policyholder asks about their discount, since they know the policy
+    /// and not the programme's member number.
+    Policy {
+        policy: PolicyId,
+    },
+    Outbox {
+        limit: usize,
+    },
+    Refused {
+        limit: usize,
+    },
     StateHash,
 }
 
@@ -604,6 +616,7 @@ pub fn answer(state: &WellnessState, question: Value) -> Result<Value, String> {
     let question: Question = serde_json::from_value(question).map_err(|e| format!("not a question of this module: {e}"))?;
     match question {
         Question::Member { member } => value(state.members.get(&member)),
+        Question::Policy { policy } => value(state.members.values().filter(|m| m.policy == policy).collect::<Vec<_>>()),
         Question::Outbox { limit } => value(state.outbox.values().take(limit.min(MAX_ANSWER)).collect::<Vec<_>>()),
         Question::Refused { limit } => value(state.refused.iter().rev().take(limit.min(MAX_ANSWER)).collect::<Vec<_>>()),
         Question::StateHash => value(state.state_hash()),

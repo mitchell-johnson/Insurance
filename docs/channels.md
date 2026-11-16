@@ -121,6 +121,8 @@ A refusal says which question failed, so the person knows what to ask for. Roles
 
 **Personal records.** Nobody opens their own policy in the staff console, or the policy of someone they have declared a personal connection with, whatever their role and path. Staff declare connections themselves; only a staff administrator can remove one. The attempt is refused, logged and flagged.
 
+**AIA Vitality.** For someone who holds `wellness.view`, an opened policy also shows its AIA Vitality members, the status each has earned, the discount and how it last flexed, and any discount change the core refused for it (`GET /staff/v1/wellness/{policy|member|refused|outbox}`, each read logged, `src/vitality.rs`, `docs/wellness.md`). The wellness module takes no command from a person, so this is read only.
+
 **Flagged attempts.** An attempt on a record the person has no path to, or on a personal record, is marked in the access log and raised as an `access_flagged` event for the people who watch for misuse.
 
 **The access log.** Every staff read of a policy or of the workbench is written to the access log before the data is returned, with the person, the record, the purpose and the decision. Refusals are logged too. If the log cannot be written the read fails. Staff see their own recent access at `GET /staff/v1/me`; nobody can write a line by hand.

@@ -135,6 +135,11 @@ async fn main() -> Result<(), String> {
             module: ic_channels::correspondence::MODULE,
             patience: settings.patience,
         }),
+        wellness: Arc::new(forward::Hosted {
+            client: settings.client(),
+            module: ic_channels::vitality::MODULE,
+            patience: settings.patience,
+        }),
         underwriting: Arc::new(forward::Hosted {
             client: settings.client(),
             module: ic_channels::underwriting::MODULE,

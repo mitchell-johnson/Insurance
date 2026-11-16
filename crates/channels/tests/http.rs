@@ -47,6 +47,7 @@ struct Portal {
     payments: Arc<common::payments::PaymentsModule>,
     collections: Arc<common::collections::CollectionsModule>,
     correspondence: Arc<common::correspondence::DocumentsModule>,
+    wellness: Arc<common::wellness::WellnessModule>,
     master: Arc<common::customers::MasterDouble>,
     commission: Arc<common::commission::CommissionModule>,
     intake: Arc<common::intake::IntakeDouble>,
@@ -219,7 +220,12 @@ fn portal_signed_in_by(
                 ),
                 template(
                     "service",
-                    &["policy.view", ic_channels::state::assisted::ENTER, staff_actions::FIND_CUSTOMER],
+                    &[
+                        "policy.view",
+                        ic_channels::state::assisted::ENTER,
+                        staff_actions::FIND_CUSTOMER,
+                        ic_channels::vitality::actions::VIEW,
+                    ],
                     &[DataClass::Ordinary, DataClass::Personal],
                 ),
                 template(
@@ -494,6 +500,7 @@ fn portal_signed_in_by(
     let payments = Arc::new(common::payments::seeded());
     let collections = Arc::new(common::collections::seeded());
     let correspondence = Arc::new(common::correspondence::seeded());
+    let wellness = Arc::new(common::wellness::seeded(&retail));
     let commission = Arc::new(common::commission::seeded());
     let intake = Arc::new(common::intake::IntakeDouble::default());
     let documents = Arc::new(common::documents::DocumentsDouble::default());
@@ -525,6 +532,7 @@ fn portal_signed_in_by(
         payments: payments.clone(),
         collections: collections.clone(),
         correspondence: correspondence.clone(),
+        wellness: wellness.clone(),
         underwriting: underwriting.clone(),
         master: Some(master.clone()),
         intake: Some(intake.clone()),
@@ -548,6 +556,7 @@ fn portal_signed_in_by(
         payments,
         collections,
         correspondence,
+        wellness,
         master,
         commission,
         intake,
@@ -1971,6 +1980,7 @@ async fn the_unit_pricing_console() {
         payments: Arc::new(common::pricing::Down),
         collections: Arc::new(common::pricing::Down),
         correspondence: Arc::new(common::pricing::Down),
+        wellness: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -2189,6 +2199,7 @@ async fn the_complaints_and_conduct_workbench() {
         payments: Arc::new(common::pricing::Down),
         collections: Arc::new(common::pricing::Down),
         correspondence: Arc::new(common::pricing::Down),
+        wellness: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -2312,6 +2323,7 @@ async fn the_reinsurance_exceptions_console() {
         payments: Arc::new(common::pricing::Down),
         collections: Arc::new(common::pricing::Down),
         correspondence: Arc::new(common::pricing::Down),
+        wellness: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -2646,6 +2658,7 @@ async fn the_claims_console() {
         payments: Arc::new(common::pricing::Down),
         collections: Arc::new(common::pricing::Down),
         correspondence: Arc::new(common::pricing::Down),
+        wellness: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -2890,6 +2903,7 @@ async fn the_finance_console() {
         payments: Arc::new(common::pricing::Down),
         collections: Arc::new(common::pricing::Down),
         correspondence: Arc::new(common::pricing::Down),
+        wellness: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -3098,6 +3112,7 @@ async fn a_person_keeps_their_own_customer_record() {
         payments: portal.payments.clone(),
         collections: portal.collections.clone(),
         correspondence: portal.correspondence.clone(),
+        wellness: portal.wellness.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -3161,6 +3176,7 @@ async fn the_conduct_officer_decides_disputed_replacements() {
         payments: portal.payments.clone(),
         collections: portal.collections.clone(),
         correspondence: portal.correspondence.clone(),
+        wellness: portal.wellness.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -3435,6 +3451,7 @@ async fn the_person_insured_signs_their_disclosure() {
         payments: portal.payments.clone(),
         collections: portal.collections.clone(),
         correspondence: portal.correspondence.clone(),
+        wellness: portal.wellness.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -3535,6 +3552,7 @@ async fn documents_are_downloaded_by_their_owner_or_by_staff_with_a_purpose() {
         payments: portal.payments.clone(),
         collections: portal.collections.clone(),
         correspondence: portal.correspondence.clone(),
+        wellness: portal.wellness.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -4211,6 +4229,7 @@ async fn an_employer_runs_the_scheme_membership() {
         payments: portal.payments.clone(),
         collections: portal.collections.clone(),
         correspondence: portal.correspondence.clone(),
+        wellness: portal.wellness.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -4521,6 +4540,7 @@ async fn the_underwriting_console() {
         payments: Arc::new(common::pricing::Down),
         collections: Arc::new(common::pricing::Down),
         correspondence: Arc::new(common::pricing::Down),
+        wellness: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -4718,6 +4738,7 @@ async fn the_payments_console() {
         payments: Arc::new(common::pricing::Down),
         collections: Arc::new(common::pricing::Down),
         correspondence: Arc::new(common::pricing::Down),
+        wellness: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -5729,6 +5750,7 @@ async fn the_mcp_endpoint_says_where_to_sign_in() {
         payments: portal.payments.clone(),
         collections: portal.collections.clone(),
         correspondence: portal.correspondence.clone(),
+        wellness: portal.wellness.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -6195,6 +6217,46 @@ async fn a_customers_claim_notice_reaches_claims_once() {
     elsewhere.claims = Arc::new(common::claims::seeded());
     assert_eq!(elsewhere.carry_claim_notices().await, Ok(1));
     assert_eq!(mine("n-4").await["code"], "policy_not_found");
+}
+
+/// Purpose: staff with `wellness.view` read a policy's AIA Vitality members and their discount, and the discount changes the
+/// core refused, from the wellness module; each read is logged; someone without the action, or a question the console does
+/// not ask, is refused before the module is asked.
+/// Why it matters: a policyholder who asks why their premium moved is asking about their Vitality discount. Staff had no way to
+/// see it, and the discounts the core refused were only on the nodes. The discount is the module's alone, so the console only reads.
+#[tokio::test]
+async fn staff_read_a_policys_vitality_discount() {
+    let portal = portal();
+    let policy = portal.retail.0.clone();
+    let (status, members) = portal.get("sub-sue", &format!("/staff/v1/wellness/policy?policy={policy}&case=c-1")).await;
+    assert_eq!(status, StatusCode::OK, "{members}");
+    assert_eq!((members[0]["member"].as_str(), members[0]["discount"].as_u64()), (Some("V-1"), Some(10)));
+    assert_eq!(portal.get("sub-sue", "/staff/v1/wellness/policy?policy=nobody&case=c-1").await.1, json!([]));
+    assert_eq!(
+        portal.get("sub-sue", "/staff/v1/wellness/member?member=V-1&case=c-1").await.1["policy"],
+        json!(policy)
+    );
+    assert_eq!(
+        portal.get("sub-sue", "/staff/v1/wellness/member?member=V-9&case=c-1").await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(portal.get("sub-sue", "/staff/v1/wellness/refused?case=c-1").await.1, json!([]));
+    assert!(portal.get("sub-sue", "/staff/v1/wellness/outbox").await.1.is_array());
+    assert_eq!(portal.get("sub-sue", "/staff/v1/wellness/policy").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(portal.get("sub-sue", "/staff/v1/wellness/state_hash").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        portal.get("sub-gl1", &format!("/staff/v1/wellness/policy?policy={policy}")).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let me = portal.get("sub-sue", "/staff/v1/me").await.1;
+    assert!(
+        me["recent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["action"] == "wellness.view" && r["record"] == format!("policy:{policy}")),
+        "{me}"
+    );
 }
 
 /// Purpose: staff reach the documents module from the documents console. Each list a person works from (templates, legal
