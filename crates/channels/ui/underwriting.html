@@ -26,8 +26,8 @@
 <section data-view="Proposals"><h2>A proposal</h2>
 <form id="p-form"><div class="row"><div><label for="p-id">Proposal</label><input id="p-id" required></div><button>Open</button>
 <button class="quiet" type="button" id="p-retry">Send the issue again</button></div></form>
-<form id="m-form"><div class="row"><div><label for="m-life">Life</label><input id="m-life" required></div>
-<div><label for="m-more">More time to answer</label><select id="m-more"><option value="true">Give the life more time</option><option value="false">No longer</option></select></div><button>Set</button></div></form>
+<form id="mt-form"><div class="row"><div><label for="mt-life">Life</label><input id="mt-life" required></div>
+<div><label for="mt-more">More time to answer</label><select id="mt-more"><option value="true">Give the life more time</option><option value="false">No longer</option></select></div><button>Set</button></div></form>
 <form id="g-form"><div class="row"><div><label for="g-life">Life</label><input id="g-life" required></div>
 <div><label for="g-purpose">Why you need the delegate's file</label><input id="g-purpose" required size="32"></div><button>Ask for the delegate's file</button></div></form>
 <div id="p-msg" aria-live="polite"></div><div id="proposal"></div>
@@ -160,7 +160,7 @@ function take(c) {
 }
 // Open a case: its proposal and life come with it, and the Cases tab is where it is worked.
 async function openCase(item) {
-  $("c-case").value = item.case; $("p-id").value = item.proposal; $("d-life").value = item.life; $("m-life").value = item.life; $("g-life").value = item.life;
+  $("c-case").value = item.case; $("p-id").value = item.proposal; $("d-life").value = item.life; $("mt-life").value = item.life; $("g-life").value = item.life;
   if (!$("d-purpose").value) $("d-purpose").value = `Assessing case ${item.case}`;
   put($("case-head"), h("p", { class: "working" }, h("strong", {}, item.case), ` ${words(item.case_type)} for life ${item.life} on proposal ${item.proposal}`, item.owner ? `, held by ${item.owner}` : ", not yet taken"));
   await openProposal(item.proposal).catch((e) => say($("p-msg"), "bad", e.message));
@@ -204,7 +204,7 @@ portal.picker($("n-review"), () => Promise.resolve(listed.concat(held).filter((i
 let drawn = [];
 portal.picker($("f-decision"), () => Promise.resolve(drawn.map((d) => ({ value: d, label: d, hint: "drawn for peer review" }))), { min: 0, empty: "Draw a sample first." });
 pickers(document);
-$("m-form").addEventListener("submit", run($("p-msg"), async () => done(await send({ set_more_time: { proposal: $("p-id").value.trim(), life: $("m-life").value.trim(), more_time: $("m-more").value === "true" } }))));
+$("mt-form").addEventListener("submit", run($("p-msg"), async () => done(await send({ set_more_time: { proposal: $("p-id").value.trim(), life: $("mt-life").value.trim(), more_time: $("mt-more").value === "true" } }))));
 $("g-form").addEventListener("submit", run($("p-msg"), async () => done(await send({ request_delegate_file: { proposal: $("p-id").value.trim(), life: $("g-life").value.trim(), purpose: $("g-purpose").value.trim() } }))));
 $("p-retry").addEventListener("click", run($("p-msg"), async () => done(await send({ retry_issue: { proposal: $("p-id").value.trim() } }))));
 $("d-form").addEventListener("submit", run($("d-msg"), async () => {
