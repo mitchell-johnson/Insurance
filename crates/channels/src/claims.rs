@@ -89,6 +89,9 @@ pub trait Partitions: Send + Sync {
     /// What the end-of-day run knows about one partition: its date, the
     /// last close, the policies still to visit and any reconciliation breaks.
     fn closing(&self, partition: PartitionId) -> Asked<'_, Value>;
+    /// Every product and rate table version on one partition and whether it
+    /// is in use today (`ic_core::catalog::RegisterRow`, as JSON).
+    fn register(&self, partition: PartitionId) -> Asked<'_, Vec<Value>>;
 }
 
 /// The partition an application's group lives on, as the core places it.
@@ -177,6 +180,13 @@ impl Partitions for Hosted {
         Box::pin(async move {
             let view = self.client.end_of_day_view(partition).await.map_err(|e| e.to_string())?;
             Ok(json!(view))
+        })
+    }
+
+    fn register(&self, partition: PartitionId) -> Asked<'_, Vec<Value>> {
+        Box::pin(async move {
+            let rows = self.client.register(partition).await.map_err(|e| e.to_string())?;
+            Ok(rows.iter().map(|r| json!(r)).collect())
         })
     }
 

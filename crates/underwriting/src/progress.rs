@@ -17,7 +17,7 @@ use ic_core::{PartyId, PolicyId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::model::{Proposal, ProposalId, ProposalStatus, Stage};
+use crate::model::{Entry, Proposal, ProposalId, ProposalStatus, Stage};
 
 /// The name the rows are published under, which the channel module checks
 /// against the key.
@@ -110,6 +110,17 @@ pub fn rows(p: &Proposal) -> Vec<ProgressRow> {
                 .or_else(|| p.open_reoffer().filter(|r| &r.life == life).map(|r| (r.id.clone(), r.expires_on)));
             if let Some((offer, expires_on)) = waiting {
                 body["offer"] = json!({ "offer": offer, "expires_on": expires_on });
+            }
+        }
+        // The product changed between the quote and the issue: the
+        // applicant is asked to accept a new price before anything is
+        // issued. The policy it would issue as goes with it, for the
+        // channel to price; the channel shows the life only the prices.
+        if let (ProposalStatus::IssueFailed { code }, Entry::NewBusiness) = (&p.status, &p.entry) {
+            if code == "product_changed" {
+                if let Ok(application) = crate::flow::application(p, p.received_on) {
+                    body["requote"] = json!({ "code": code, "quoted_minor": p.quote.premium_minor, "application": application });
+                }
             }
         }
         // A replacement shows the life what it gains, for the disclosure

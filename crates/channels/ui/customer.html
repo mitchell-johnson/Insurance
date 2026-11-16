@@ -25,7 +25,7 @@
 
 <section data-view="To approve"><h2>Waiting for you</h2><p class="muted">Changes your adviser or our staff prepared for you. Nothing happens until you approve. Approving is signed, so set up this browser under Signing first, or approve on your phone.</p>
   <div id="waiting"></div><div id="wait-msg" aria-live="polite"></div>
-  <h2>Your applications</h2><p class="muted">Cover you have applied for. When we offer terms, the offer letter is in your documents; accept it, decline it or ask us to look again here. Your answer is signed.</p>
+  <h2>Your applications</h2><p class="muted">Cover you have applied for. When we offer terms, the offer letter is in your documents; accept it, decline it or ask us to look again here. If the product changes before your cover starts, the new price is shown here for you to accept. Your answer is signed.</p>
   <div id="applications"></div><div id="app-msg" aria-live="polite"></div>
   <h2>Your requests</h2><div id="requests"></div></section>
 
@@ -188,10 +188,23 @@ async function applications() {
   const mine = await api(R, "GET", "/app/v1/proposals");
   const answer = (a, response, label, quiet) => h("button", { type: "button", class: quiet ? "quiet" : null, id: `offer-${response}-${a.proposal}-${a.life}`, on: { click: run($("app-msg"), () => respond(a, response, label)) } }, label);
   put($("applications"), mine.length ? table(["Application", "Stage", "Waiting on", "Offer", ""], mine.map((a) => [a.proposal, words(a.stage), words(a.waiting_on || "nobody"),
-    a.offer ? `Open until ${a.offer.expires_on}` : "",
-    a.offer ? h("div", { class: "actions" }, answer(a, "accept", "Accept"), answer(a, "counter", "Ask us to look again", true), answer(a, "decline", "Decline", true)) : ""]))
+    a.offer ? `Open until ${a.offer.expires_on}` : a.requote ? "The product changed before your cover started" : "",
+    a.offer ? h("div", { class: "actions" }, answer(a, "accept", "Accept"), answer(a, "counter", "Ask us to look again", true), answer(a, "decline", "Decline", true))
+      : a.requote ? h("button", { type: "button", id: `requote-${a.proposal}-${a.life}`, on: { click: run($("app-msg"), () => requote(a)) } }, "See the new price") : ""]))
     : h("p", { class: "muted" }, "You have no application open."));
-  return mine.filter((a) => a.offer).length;
+  return mine.filter((a) => a.offer || a.requote).length;
+}
+// The product changed between the quote and the issue: nothing goes ahead until the applicant accepts the new price, signed.
+async function requote(a) {
+  signature("Accepting a new price");
+  const path = `/app/v1/proposals/${encodeURIComponent(a.proposal)}/lives/${encodeURIComponent(a.life)}/requote`;
+  const q = await api(R, "GET", path);
+  const ok = await portal.ask({ title: "Accept the new price?", text: `The product changed after you were quoted, so the price has changed. Your first premium was ${money(q.was_minor)} and is now ${money(q.premium_minor)}. Your cover starts once you accept.`, confirm: "Accept the new price" });
+  if (!ok) return "Nothing has changed. Your application waits until you accept the new price.";
+  const sig = b64(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key.privateKey, fromB64(q.message)));
+  await api(R, "POST", path, { product_hash: q.product_hash, premium_minor: q.premium_minor, signature: sig });
+  await applications();
+  return "Accepted. We will let you know when your cover starts.";
 }
 async function respond(a, response, label) {
   signature("Answering an offer");

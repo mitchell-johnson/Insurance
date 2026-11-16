@@ -129,6 +129,68 @@ pub fn offer_answer(proposal: &str, life: &str, offer: &str, body: &Value, devic
     } }))
 }
 
+/// The exact bytes the applicant signs to accept a new price after the
+/// product changed, as the underwriting module checks them:
+/// `ic.underwriting.requote.v1`, the proposal, the product's content hash and
+/// the premium in cents, joined by zero bytes.
+pub fn requote_message(proposal: &str, product_hash: &str, premium_minor: i64) -> Vec<u8> {
+    let mut m = b"ic.underwriting.requote.v1".to_vec();
+    for part in [proposal, product_hash, &premium_minor.to_string()] {
+        m.push(0);
+        m.extend_from_slice(part.as_bytes());
+    }
+    m
+}
+
+/// The new quote a requote binds the proposal to, from the core's dry run
+/// of the policy it would issue as (an `ModalPremium`) and the partition's
+/// register on the day: the product version in use today, the rate tables
+/// in use for the proposal's group (global or scoped to it), and the first
+/// period's premium with tax and levies, in cents.
+pub fn requote_binding(premium: &Value, register: &[Value], product: &str, group: &str, today: chrono::NaiveDate) -> Result<Value, String> {
+    let premium: ic_product::rating::ModalPremium = serde_json::from_value(premium.clone()).map_err(|e| format!("the core's quote was not understood: {e}"))?;
+    let total = premium
+        .by_cover
+        .values()
+        .chain(premium.gst.values())
+        .chain(premium.levies.values())
+        .map(|m| m.minor)
+        .sum::<i64>()
+        + premium.policy_fee.minor;
+    let in_use = |kind: &'static str| register.iter().filter(move |r| r["kind"] == kind && r["in_use"] == true);
+    let product_hash = in_use("product")
+        .find(|r| r["id"] == product)
+        .and_then(|r| r["content_hash"].as_str())
+        .ok_or_else(|| format!("no version of {product} is in use today"))?;
+    let rate_tables: Vec<Value> = in_use("rate_table")
+        .filter(|r| r["scope"].as_array().is_none_or(|groups| groups.iter().any(|g| g == group)))
+        .map(|r| json!({ "id": r["id"], "version": r["version"], "content_hash": r["content_hash"] }))
+        .collect();
+    Ok(json!({ "product_hash": product_hash, "rate_tables": rate_tables, "premium_minor": total, "quoted_on": today }))
+}
+
+/// The `requote` command for the applicant's acceptance of `binding`, from
+/// the page's body (`{product_hash, premium_minor, signature}`): what the
+/// page shows must still be the price, and the enrolled device's signature
+/// over [`requote_message`] is checked here against its key.
+pub fn requote(proposal: &str, binding: &Value, body: &Value, device: &str, public_key: &str) -> Result<Value, String> {
+    let (hash, premium) = (
+        binding["product_hash"].as_str().unwrap_or_default(),
+        binding["premium_minor"].as_i64().unwrap_or_default(),
+    );
+    if body["product_hash"] != hash || body["premium_minor"] != premium {
+        return Err("the price has changed again since you looked: look again before accepting".to_string());
+    }
+    let signature = body["signature"].as_str().ok_or("send the device's signature")?;
+    if !crate::identity::verify(public_key, &requote_message(proposal, hash, premium), signature) {
+        return Err("the signature is not this device's over the new price".to_string());
+    }
+    Ok(json!({ "requote": {
+        "proposal": proposal, "quote": binding,
+        "signed": { "key_id": device, "public_key": public_key, "signature": signature, "alg": "ecdsa-p256" },
+    } }))
+}
+
 /// The `record_consent` command for a life's consent, from the page's body
 /// (`{granted, signature}`). Giving a consent that needs the life's signed
 /// step needs the enrolled device's signature over [`consent_message`],

@@ -262,6 +262,9 @@ pub fn catalogue() -> Vec<Tool> {
             .choose("response", crate::disclosures::OFFER_RESPONSES.to_vec()),
         tool("answer_offer", "Answer an offer of terms", C, M::POST, "/app/v1/proposals/{proposal}/lives/{life}/offers/{offer}", "Accept, decline or ask again about an offer of terms, signed by the enrolled device. The terms are in the offer letter in your documents.")
             .json(r#"{"response": "accept" | "decline" | "counter", "signature": "<the device key's, over offer_to_sign's bytes>"}"#),
+        tool("requote", "A new price to accept", C, M::GET, "/app/v1/proposals/{proposal}/lives/{life}/requote", "When the product changed before your policy was issued: the premium you accepted, the new one, and the exact bytes to sign to accept it."),
+        tool("accept_requote", "Accept a new price", C, M::POST, "/app/v1/proposals/{proposal}/lives/{life}/requote", "Accept the new price shown by requote, signed by the enrolled device; the policy is then issued.")
+            .json(r#"{"product_hash": "<from requote>", "premium_minor": <from requote>, "signature": "<the device key's, over requote's bytes>"}"#),
         tool("replacement_statement", "What a replacement changes", C, M::GET, "/app/v1/proposals/{proposal}/lives/{life}/consents/replacement_disclosure/statement", "Before signing the replacement disclosure: the policy being replaced, the cover that is kept, lost and gained."),
         tool("my_policy", "A policy", C, M::GET, "/app/v1/policies/{policy}", "A policy as you may see it: covers, billing, claims, documents and requests, limited by your relationship to it."),
         tool("represented_person", "Someone I act for", C, M::GET, "/app/v1/represented/{party}", "For an attorney, guardian or holder of a written authority: the policies of the person you act for, and your authority."),

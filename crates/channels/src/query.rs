@@ -77,6 +77,14 @@ pub enum Question {
     MyProposals {
         party: PartyId,
     },
+    /// What the life's progress row holds for a requote: the premium
+    /// accepted and the policy the proposal would issue as. For the portal
+    /// to price, never shown whole.
+    Requote {
+        party: PartyId,
+        proposal: String,
+        life: String,
+    },
     /// What a life is shown before they sign that they understand their new
     /// cover replaces cover they hold: what stays, what is added, what is
     /// lost and what it costs, from the proposal underwriting published and
@@ -564,9 +572,19 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             .filter(|(_, r)| r.kind == "proposal_life" && r.subject.as_ref() == Some(&party))
             .map(
                 |(policy, r)| json!({ "policy": policy, "proposal": r.body["proposal"], "life": r.body["life"], "stage": r.body["stage"],
-                "waiting_on": r.body["waiting_on"], "offer": r.body.get("offer") })
+                "waiting_on": r.body["waiting_on"], "offer": r.body.get("offer"),
+                "requote": r.body.get("requote").map(|q| json!({ "code": q["code"], "quoted_minor": q["quoted_minor"] })) })
             )
             .collect::<Vec<_>>()),
+        Question::Requote { party, proposal, life } => d
+            .published
+            .values()
+            .flat_map(|rows| rows.values())
+            .find(|r| {
+                r.kind == "proposal_life" && r.subject.as_ref() == Some(&party) && r.body["proposal"] == proposal.as_str() && r.body["life"] == life.as_str()
+            })
+            .and_then(|r| r.body.get("requote").cloned())
+            .unwrap_or(Value::Null),
         Question::ReplacementStatement { party, proposal, life } => {
             let found = d.published.iter().find_map(|(policy, rows)| {
                 rows.values()
