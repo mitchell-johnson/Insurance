@@ -140,7 +140,7 @@ Each benefit the products declare as a `facility` now has code behind it, or is 
 | Waiting Period Reduction | AIA Living income covers | a `waiting` conversion through `ConvertCover`: only from 26, 52 or 104 weeks to a shorter wait, with the evidence of the cancelled business cover named (`evidence_required`); underwriting checks the cancellation and the lesser amount | `a_long_income_waiting_period_is_shortened_when_the_business_cover_ends` |
 | Income and disablement benefits | AIA Living, Business | built by claims (docs/claims.md) | claims tests |
 
-Being built by the underwriting thread (asked 15 November), because each writes new cover without evidence after underwriting checks a trigger: Children's Trauma Conversion, Move to Business Continuity, and the underwriting door for Waiting Period Reduction.
+Built by the underwriting thread (15 and 16 November; docs/underwriting.md), because each writes cover without evidence after underwriting checks a trigger: Children's Trauma Conversion and Move to Business Continuity (a `facility` entry), and the Waiting Period Reduction request (`Entry::WaitingReduction`, which sends `ConvertCover` once an underwriter accepts the evidence; journey `aia_income_waiting_period_shortens_when_business_cover_is_cancelled`).
 
 ## Not built yet, and who owns it
 
