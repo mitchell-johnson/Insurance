@@ -810,6 +810,32 @@ impl DocumentsState {
 
     /// The version of a template to render with on a date: the active one
     /// with the latest effective date not after it.
+    /// Every template version, by reference from the last, summarised for a picker.
+    pub fn template_list(&self, limit: usize) -> Vec<serde_json::Value> {
+        self.templates
+            .iter()
+            .rev()
+            .take(limit)
+            .map(|(r, t)| {
+                serde_json::json!({
+                    "template": r,
+                    "kind": t.template.kind,
+                    "title": t.template.title,
+                    "status": t.status,
+                    "approvals": t.approvals,
+                    "author": t.template.author,
+                    "effective_from": t.effective_from,
+                    "disabled": t.disabled,
+                })
+            })
+            .collect()
+    }
+
+    /// The legal holds in place, each with the case it was placed for.
+    pub fn legal_holds(&self) -> Vec<(&HoldScope, &String)> {
+        self.holds.iter().collect()
+    }
+
     pub fn template_for(&self, id: &str, on: NaiveDate) -> Option<&TemplateRecord> {
         self.templates
             .values()

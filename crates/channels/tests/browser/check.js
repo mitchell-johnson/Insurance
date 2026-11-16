@@ -46,6 +46,9 @@ const personas = {
   "/collections sub-colof": "Collections officer | Today's queue and the call tasks",
   "/collections sub-colcfg": "Collections configuration | Sets a product's dunning sequence from the shipped best estimate",
   "/collections sub-gl1": "ST10 Finance operator | Refused the collections console",
+  "/documents sub-docof": "Documents officer | Templates and approvals, a legal hold, and what is waiting to be issued",
+  "/documents sub-docla": "Legal approver | Gives a template its legal approval",
+  "/documents sub-gl1": "ST10 Finance operator | Refused the documents console",
   "/reinsurance sub-ri1": "Reinsurance operations | Abandons a failed instruction, for a second signature",
   "/reinsurance sub-ri2": "Reinsurance lead | Signs and sends the abandonment",
   "/reinsurance sub-gl1": "ST10 Finance operator | Refused the reinsurance console",
@@ -713,6 +716,33 @@ const sees = async (page, text) => {
     await sees(p, "Set for term-life.");
   } });
   await visit(browser, "/collections", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
+  await visit(browser, "/documents", { subject: "sub-docof" }, { run: async (p) => {
+    await sees(p, "You are doc-of");
+    await p.locator("#triggers").getByText(/Nothing is waiting to be issued|Dismiss/).first().waitFor();
+    await tab(p, "Templates");
+    await say(p, "The officer gives a draft letter its product approval from its row");
+    await p.locator("#templates").getByText("letter v1").waitFor();
+    await p.locator("#templates tr", { hasText: "letter v1" }).getByRole("button", { name: "Approve" }).click();
+    await p.locator("#acts form button").click();
+    await sees(p, "Done: Approve a template.");
+    await tab(p, "Templates");
+    await p.locator("#templates").getByText("product: doc-of").waitFor();
+    await say(p, "A legal hold is placed on a policy, and shows under Defects and holds");
+    await tab(p, "Act");
+    await p.selectOption("#da-which", "place_legal_hold");
+    await p.selectOption("#da-f0", "policy"); await p.fill("#da-f1", "pol-9"); await p.fill("#da-f2", "LIT-1");
+    await p.locator("#acts form button").click();
+    await sees(p, "Done: Place a legal hold.");
+    await tab(p, "Defects and holds");
+    await p.locator("#holds").getByText("LIT-1").waitFor();
+  } });
+  await visit(browser, "/documents", { subject: "sub-docla" }, { run: async (p) => {
+    await tab(p, "Templates");
+    await p.locator("#templates tr", { hasText: "letter v1" }).getByRole("button", { name: "Approve" }).click();
+    await p.locator("#acts form button").click();
+    await sees(p, "Done: Approve a template.");
+  } });
+  await visit(browser, "/documents", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/finance", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await browser.close();
   if (failures.length) { console.error(failures.join("\n")); process.exit(1); }

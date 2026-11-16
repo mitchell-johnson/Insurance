@@ -26,7 +26,7 @@ const portal = (() => {
   const ICONS = {
     user: "M12 12a4 4 0 100-8 4 4 0 000 8zM4 20a8 8 0 0116 0", shield: "M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6zM9 12l2 2 4-4",
     clipboard: "M9 4h6v3H9zM7 5H5v16h14V5h-2M9 12h6M9 16h4", users: "M9 11a3.5 3.5 0 100-7 3.5 3.5 0 000 7zM2.5 20a6.5 6.5 0 0113 0M16 4.3a3.5 3.5 0 010 6.4M18 14.5a6.5 6.5 0 013.5 5.5",
-    message: "M4 5h16v11H9l-5 4z", card: "M3 6h18v12H3zM3 10h18M7 15h3", ledger: "M5 3h14v18H5zM9 8h6M9 12h6M9 16h3", chart: "M4 20V4M4 20h16M8 16l4-5 3 3 4-6",
+    message: "M4 5h16v11H9l-5 4z", file: "M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h6", card: "M3 6h18v12H3zM3 10h18M7 15h3", ledger: "M5 3h14v18H5zM9 8h6M9 12h6M9 16h3", chart: "M4 20V4M4 20h16M8 16l4-5 3 3 4-6",
     percent: "M19 5L5 19M7.5 9a2 2 0 100-4 2 2 0 000 4zM16.5 19a2 2 0 100-4 2 2 0 000 4z", swap: "M7 7h13l-3-3M17 17H4l3 3", layers: "M12 3l9 5-9 5-9-5zM3 13l9 5 9-5",
     server: "M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01", pulse: "M3 12h4l3-7 4 14 3-7h4", menu: "M4 6h16M4 12h16M4 18h16",
     sun: "M12 16a4 4 0 100-8 4 4 0 000 8zM12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5", moon: "M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z",
@@ -403,7 +403,7 @@ const portal = (() => {
   const NAV = [
     ["Customers", [["staff", "Staff console", "user", "Policies, customer requests, your access and the held balance workbench."], ["claims", "Claims console", "shield", "Work queues, a claim, and acting on it as yourself."],
       ["underwriting", "Underwriting", "clipboard", "Queues, cases and decisions, disclosures, non-disclosure remedies and peer review."], ["group", "Group schemes", "users", "The exception queue, schemes, files, members, possible matches and file layouts."],
-      ["complaints", "Complaints and conduct", "message", "The register, timers, referrals and conduct cases."]]],
+      ["complaints", "Complaints and conduct", "message", "The register, timers, referrals and conduct cases."], ["documents", "Documents", "file", "Documents waiting, requested letters, templates and approvals, notice defects and legal holds."]]],
     ["Money", [["payments", "Payments", "card", "Runs, payments waiting, payees, refunds and reconciliation."], ["collections", "Collections", "clipboard", "Policies in arrears, calls, arrangements, hardship and dunning sequences."], ["finance", "Finance console", "ledger", "The month-end close, checks, journals and sign-off."],
       ["pricing", "Unit pricing console", "chart", "Valuations, price checks, approval, publication and price errors."], ["commission", "Commission console", "percent", "Advisers, engagements, payees, rules, statements and cases."],
       ["replacements", "Replacement matches", "swap", "Cover rewritten soon after cover was given up, and disputed matches to decide."], ["reinsurance", "Reinsurance exceptions", "layers", "Cessions, notices and settlements that need a person."]]],
@@ -519,9 +519,13 @@ const portal = (() => {
             required: !["optional", "optdate", "optmoney", "list", "zint"].includes(kind) });
         if (kind === "reference") input.value = reference(options || "REF");
         if (opts.prefill && opts.prefill[key] != null) input.value = opts.prefill[key];
-        if (opts.pickers && opts.pickers[key] && input.tagName === "INPUT") picker(input, opts.pickers[key], { min: 0 });
         return h("div", {}, h("label", { for: id }, label), input);
       }));
+      // A picker wraps its field, so it is attached once the field is on the page.
+      a.fields.forEach(([key], n) => {
+        const input = document.getElementById(`${opts.id || "act"}-f${n}`);
+        if (opts.pickers && opts.pickers[key] && input && input.tagName === "INPUT") picker(input, opts.pickers[key], { min: 0 });
+      });
     };
     const form = h("form", { on: { submit: run(out, async (ev) => {
       if (ev && ev.preventDefault) ev.preventDefault();

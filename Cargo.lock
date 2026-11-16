@@ -2212,6 +2212,7 @@ dependencies = [
  "ic-complaints",
  "ic-core",
  "ic-distribution",
+ "ic-documents",
  "ic-entra",
  "ic-finance",
  "ic-group",

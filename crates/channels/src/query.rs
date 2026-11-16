@@ -242,6 +242,11 @@ pub enum Question {
         staff: PartyId,
         at: At,
     },
+    /// What a member of staff may do in the documents console.
+    CorrespondenceStaff {
+        staff: PartyId,
+        at: At,
+    },
     /// What a member of staff may do in the unit pricing console.
     PricingStaff {
         staff: PartyId,
@@ -733,6 +738,7 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
         Question::PricingStaff { staff, at } => crate::pricing::standing(&d.staff, &staff, at),
         Question::ServicingStaff { staff, at } => json!(d.staff.holds_action(&staff, crate::servicing::actions::CARRY_OUT, at)),
         Question::CollectionsStaff { staff, at } => crate::collections::standing(&d.staff, &staff, at),
+        Question::CorrespondenceStaff { staff, at } => crate::correspondence::standing(&d.staff, &staff, at),
         Question::CommissionStaff { staff, at, purpose } => {
             let mut standing = crate::commission::standing(&d.staff, &staff, at);
             standing["actor"] = commission_staff(state, &staff, at, &purpose);

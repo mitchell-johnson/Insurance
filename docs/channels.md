@@ -306,6 +306,29 @@ Only people's commands pass (`src/payments.rs`, `COMMANDS`); the banks' answers,
 
 Besides runs, exceptions and matches, the page has "Notices and cases" (each role's open notices with a Close button that asks what was done, misdirected money still open with a Write off for an approver who did not report it, and a lookup of an incident, tax remittance or misdirection) and "Act": a form for every person's command in `COMMANDS` that the run and exception views do not already have (authorities, hardship marks, conversations, payees in New Zealand and abroad, run items, routes, refunds, tax remittances, incidents, misdirected money, returning a credit, configuration), each shown only to the role that may send it. The forms are built by `portal.actions` (`docs/design-system.md`); amounts are typed in dollars and new references are generated.
 
+## The documents console
+
+`/documents` is how staff reach the documents module (`docs/documents.md`). That module decides a command by the service named as its caller and records the person named as its actor; it keeps an author from approving their own template and one person from giving two of a template's approvals. The console names the caller from the signed-in person's staff actions, never from the page, sets the actor to that person, and makes them the author of any template they submit (`src/correspondence.rs`).
+
+| Staff action | Sends as | What it allows |
+|---|---|---|
+| `documents.view` | (nothing) | Reads templates, legal holds, open defects, triggers, requested letters, sends in progress, settings, a document, defect, letter request or template, the template in force, a part's use, a template version's notices, a policy's documents, retention and the report. |
+| `documents.legal` | `legal` | Place and release legal holds. |
+| `documents.remediation` | `remediation` | Raise, fill, exclude from and close notice defects; disable a template version. |
+| `documents.privacy` | `privacy` | Shred a party's documents. |
+| `documents.triggers` | `documents` | Dismiss a document the core's events required. |
+| `documents.delivery` | `servicing` | Deliver a document again; cancel a requested letter. |
+| `documents.configuration` | `config` | Submit, test, activate and disable templates; register parts; settings and retention. |
+| `documents.approve_legal`, `.approve_product`, `.approve_compliance` | `config` | That one of a template's three approvals. |
+
+| Route | |
+|---|---|
+| `GET /staff/v1/documents/me` | Your callers and approvals there. |
+| `GET /staff/v1/documents/{question}` | `templates`, `legal_holds`, `open_defects`, `triggers`, `letters_requested`, `pending_sends`, `settings`, `document?id=`, `defect?id=`, `letter_request?request=`, `template?id=&version=`, `template_for?id=` (today in New Zealand), `part_usage?part=`, `notices_by_template?id=&version=&from=&to=`, `report?from=&to=`, `policy_documents?policy=`, `retention?kind=`. Lists are cut at 200; a null answer is 404. |
+| `POST /staff/v1/documents/commands` | `{"type": name, ...}` for one of the commands above, with an `Idempotency-Key`. A command people do not send (rendering, sending, the core's events, listing, deletion) is 400; one the person's actions do not cover is 403; the module's refusal is 409 with its code. |
+
+The page has six views: Work (triggers with Dismiss, requested letters with Cancel, sends in progress), Templates (every version with Approve, Activate or Disable on its row), Documents (a policy's documents with Deliver again for an undeliverable recipient, and lookups), Defects and holds, Report and settings, and Act (a form for every command, `portal.actions`). The documents module gained three questions for it: `Templates`, `LegalHolds` and `OpenDefects` (noted in `docs/documents.md`).
+
 ## The collections console
 
 `/collections` is how staff reach the collections module (`ic-collections`, described in `docs/architecture.md` under Collections). The module decides each command by the roles it is told the person holds; the console tells it the signed-in workforce ID and the roles their staff actions give, at UTC time, under the key `console:{key}` (`src/collections.rs`).

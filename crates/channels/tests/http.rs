@@ -46,6 +46,7 @@ struct Portal {
     underwriting: Arc<common::underwriting::UnderwritingModule>,
     payments: Arc<common::payments::PaymentsModule>,
     collections: Arc<common::collections::CollectionsModule>,
+    correspondence: Arc<common::correspondence::DocumentsModule>,
     master: Arc<common::customers::MasterDouble>,
     commission: Arc<common::commission::CommissionModule>,
     intake: Arc<common::intake::IntakeDouble>,
@@ -166,6 +167,9 @@ fn portal_signed_in_by(
         ("sub-colcfg", "col-cfg"),
         ("sub-colview", "col-view"),
         ("sub-svc", "svc-1"),
+        ("sub-docof", "doc-of"),
+        ("sub-docla", "doc-la"),
+        ("sub-docview", "doc-view"),
         ("sub-grp1", "grp-1"),
         ("sub-grpview", "grp-view"),
         ("sub-hcs", "hcs-1"),
@@ -322,6 +326,24 @@ fn portal_signed_in_by(
                 ),
                 template("collections-reader", &[ic_channels::collections::actions::VIEW], &[DataClass::Financial]),
                 template("servicing-person", &[ic_channels::servicing::actions::CARRY_OUT], &[DataClass::Ordinary]),
+                template(
+                    "documents-officer",
+                    &[
+                        ic_channels::correspondence::actions::LEGAL,
+                        ic_channels::correspondence::actions::REMEDIATION,
+                        ic_channels::correspondence::actions::TRIGGERS,
+                        ic_channels::correspondence::actions::DELIVERY,
+                        ic_channels::correspondence::actions::CONFIGURATION,
+                        ic_channels::correspondence::actions::APPROVE_PRODUCT,
+                    ],
+                    &[DataClass::Ordinary],
+                ),
+                template(
+                    "documents-legal-approver",
+                    &[ic_channels::correspondence::actions::APPROVE_LEGAL],
+                    &[DataClass::Ordinary],
+                ),
+                template("documents-reader", &[ic_channels::correspondence::actions::VIEW], &[DataClass::Ordinary]),
                 // Group administrators find a scheme's administrator by name, so they may search the customer master.
                 template(
                     "group-admin",
@@ -419,6 +441,9 @@ fn portal_signed_in_by(
         ("col-cfg", "collections-config"),
         ("col-view", "collections-reader"),
         ("svc-1", "servicing-person"),
+        ("doc-of", "documents-officer"),
+        ("doc-la", "documents-legal-approver"),
+        ("doc-view", "documents-reader"),
         ("grp-1", "group-admin"),
         ("grp-view", "group-reader"),
         ("hcs-1", "hardship"),
@@ -458,6 +483,8 @@ fn portal_signed_in_by(
         }),
     )
     .unwrap();
+    // The relay reports the stream current once setup is done, as it does while the portal runs.
+    w.send(module(ic_channels::state::EVENT_RELAY), Command::Heartbeat).unwrap();
     let pricing = Arc::new(common::pricing::seeded(w.at));
     let complaints = Arc::new(common::complaints::seeded(w.at));
     let finance = Arc::new(common::finance::seeded());
@@ -466,6 +493,7 @@ fn portal_signed_in_by(
     let underwriting = Arc::new(common::underwriting::seeded());
     let payments = Arc::new(common::payments::seeded());
     let collections = Arc::new(common::collections::seeded());
+    let correspondence = Arc::new(common::correspondence::seeded());
     let commission = Arc::new(common::commission::seeded());
     let intake = Arc::new(common::intake::IntakeDouble::default());
     let documents = Arc::new(common::documents::DocumentsDouble::default());
@@ -496,6 +524,7 @@ fn portal_signed_in_by(
         reinsurance: reinsurance.clone(),
         payments: payments.clone(),
         collections: collections.clone(),
+        correspondence: correspondence.clone(),
         underwriting: underwriting.clone(),
         master: Some(master.clone()),
         intake: Some(intake.clone()),
@@ -518,6 +547,7 @@ fn portal_signed_in_by(
         underwriting,
         payments,
         collections,
+        correspondence,
         master,
         commission,
         intake,
@@ -1194,7 +1224,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 48);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 51);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -1663,6 +1693,7 @@ async fn pages_are_served_locked_down() {
         "/underwriting",
         "/payments",
         "/collections",
+        "/documents",
         "/replacements",
         "/ops",
         "/status",
@@ -1938,6 +1969,7 @@ async fn the_unit_pricing_console() {
         reinsurance: Arc::new(common::pricing::Down),
         payments: Arc::new(common::pricing::Down),
         collections: Arc::new(common::pricing::Down),
+        correspondence: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -2155,6 +2187,7 @@ async fn the_complaints_and_conduct_workbench() {
         reinsurance: Arc::new(common::pricing::Down),
         payments: Arc::new(common::pricing::Down),
         collections: Arc::new(common::pricing::Down),
+        correspondence: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -2258,6 +2291,7 @@ async fn the_reinsurance_exceptions_console() {
         reinsurance: Arc::new(common::pricing::Down),
         payments: Arc::new(common::pricing::Down),
         collections: Arc::new(common::pricing::Down),
+        correspondence: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -2591,6 +2625,7 @@ async fn the_claims_console() {
         reinsurance: Arc::new(common::pricing::Down),
         payments: Arc::new(common::pricing::Down),
         collections: Arc::new(common::pricing::Down),
+        correspondence: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -2834,6 +2869,7 @@ async fn the_finance_console() {
         reinsurance: Arc::new(common::pricing::Down),
         payments: Arc::new(common::pricing::Down),
         collections: Arc::new(common::pricing::Down),
+        correspondence: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -3041,6 +3077,7 @@ async fn a_person_keeps_their_own_customer_record() {
         reinsurance: portal.reinsurance.clone(),
         payments: portal.payments.clone(),
         collections: portal.collections.clone(),
+        correspondence: portal.correspondence.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -3103,6 +3140,7 @@ async fn the_conduct_officer_decides_disputed_replacements() {
         reinsurance: portal.reinsurance.clone(),
         payments: portal.payments.clone(),
         collections: portal.collections.clone(),
+        correspondence: portal.correspondence.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -3376,6 +3414,7 @@ async fn the_person_insured_signs_their_disclosure() {
         reinsurance: portal.reinsurance.clone(),
         payments: portal.payments.clone(),
         collections: portal.collections.clone(),
+        correspondence: portal.correspondence.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -3475,6 +3514,7 @@ async fn documents_are_downloaded_by_their_owner_or_by_staff_with_a_purpose() {
         reinsurance: portal.reinsurance.clone(),
         payments: portal.payments.clone(),
         collections: portal.collections.clone(),
+        correspondence: portal.correspondence.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -4144,6 +4184,7 @@ async fn an_employer_runs_the_scheme_membership() {
         reinsurance: portal.reinsurance.clone(),
         payments: portal.payments.clone(),
         collections: portal.collections.clone(),
+        correspondence: portal.correspondence.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -4438,6 +4479,7 @@ async fn the_underwriting_console() {
         reinsurance: Arc::new(common::pricing::Down),
         payments: Arc::new(common::pricing::Down),
         collections: Arc::new(common::pricing::Down),
+        correspondence: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -4634,6 +4676,7 @@ async fn the_payments_console() {
         reinsurance: Arc::new(common::pricing::Down),
         payments: Arc::new(common::pricing::Down),
         collections: Arc::new(common::pricing::Down),
+        correspondence: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -5566,6 +5609,7 @@ async fn the_mcp_endpoint_says_where_to_sign_in() {
         reinsurance: portal.reinsurance.clone(),
         payments: portal.payments.clone(),
         collections: portal.collections.clone(),
+        correspondence: portal.correspondence.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -6019,6 +6063,122 @@ async fn a_customers_claim_notice_reaches_claims_once() {
     elsewhere.claims = Arc::new(common::claims::seeded());
     assert_eq!(elsewhere.carry_claim_notices().await, Ok(1));
     assert_eq!(mine("n-4").await["code"], "policy_not_found");
+}
+
+/// Purpose: staff reach the documents module from the documents console. Each list a person works from (templates, legal
+/// holds, open defects, triggers, requested letters, sends in progress) and each lookup reaches the module; a command goes as
+/// the caller the person's own staff actions name, with the person signed in as its actor and as the author of a template they
+/// submit; an approval needs that approval's own action; a reader may read but not act; someone with no documents action is
+/// kept out; and a driver's command is refused before it reaches the module.
+/// Why it matters: the documents module had no screen: legal holds, notice defects, template approvals and dismissed triggers
+/// could only be sent by hand to the nodes. The module trusts the caller and actor it is told, so the console must be the one
+/// to decide them from who signed in.
+#[tokio::test]
+async fn the_documents_console() {
+    let portal = portal();
+    let ask = |who: &'static str, rest: &str| {
+        let path = format!("/staff/v1/documents/{rest}");
+        let portal = &portal;
+        async move { portal.get(who, &path).await }
+    };
+    let tell = |who: &'static str, command: Value| {
+        let portal = &portal;
+        async move { portal.write("POST", who, "/staff/v1/documents/commands", command).await }
+    };
+
+    // Who gets in, and what they may send.
+    assert_eq!(ask("sub-gl1", "me").await.0, StatusCode::FORBIDDEN);
+    let (status, me) = ask("sub-docview", "me").await;
+    assert_eq!((status, &me["callers"], &me["view"]), (StatusCode::OK, &json!([]), &json!(true)), "{me}");
+    let me = ask("sub-docof", "me").await.1;
+    assert_eq!(me["callers"], json!(["legal", "remediation", "documents", "servicing", "config"]));
+    assert_eq!(me["approvals"], json!(["product"]));
+
+    // The lists and lookups.
+    let (status, templates) = ask("sub-docview", "templates").await;
+    assert_eq!(status, StatusCode::OK, "{templates}");
+    let letter = templates.as_array().unwrap().iter().find(|t| t["template"]["id"] == "letter").unwrap().clone();
+    assert_eq!((&letter["status"], &letter["author"]), (&json!("draft"), &json!("author")));
+    for question in ["legal_holds", "open_defects", "triggers", "letters_requested", "pending_sends", "settings"] {
+        let (status, answer) = ask("sub-docview", question).await;
+        assert_eq!(status, StatusCode::OK, "{question}: {answer}");
+    }
+    assert_eq!(ask("sub-docview", "template?id=letter&version=1").await.1["status"], "draft");
+    assert_eq!(ask("sub-docview", "template?id=letter&version=one").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(ask("sub-docview", "template?id=letter").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(ask("sub-docview", "template_for?id=renewal").await.1["template"]["id"], "renewal");
+    assert_eq!(ask("sub-docview", "document?id=none").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(ask("sub-docview", "defect?id=none").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(ask("sub-docview", "letter_request?request=none").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(ask("sub-docview", "policy_documents?policy=pol-1").await.0, StatusCode::OK);
+    assert_eq!(ask("sub-docview", "part_usage?part=none").await.0, StatusCode::OK);
+    assert_eq!(ask("sub-docview", "retention?kind=renewal_notice").await.0, StatusCode::OK);
+    assert_eq!(ask("sub-docview", "report?from=2027-11-01&to=2027-11-30").await.0, StatusCode::OK);
+    assert_eq!(
+        ask("sub-docview", "notices_by_template?id=renewal&version=1&from=2027-11-01&to=2027-11-30").await,
+        (StatusCode::OK, json!([]))
+    );
+    assert_eq!(ask("sub-docview", "everything").await.0, StatusCode::BAD_REQUEST);
+
+    // A reader acts on nothing; a legal hold goes as legal, by the person signed in.
+    let hold = json!({ "type": "place_legal_hold", "scope": { "policy": "pol-9" }, "case": "LIT-1" });
+    assert_eq!(tell("sub-docview", hold.clone()).await.0, StatusCode::FORBIDDEN);
+    let (status, done) = tell("sub-docof", hold).await;
+    assert_eq!((status, &done["accepted"]), (StatusCode::OK, &json!(true)), "{done}");
+    let sent = portal.correspondence.received().last().unwrap().clone();
+    assert_eq!((sent.caller.as_str(), sent.actor.as_str()), ("legal", "doc-of"));
+    assert_eq!(ask("sub-docview", "legal_holds").await.1, json!([[{ "policy": "pol-9" }, "LIT-1"]]));
+
+    // Approvals: each by the action for it, and the module keeps one person to one approval.
+    let approve = |role: &str| json!({ "type": "approve_template", "template": { "id": "letter", "version": 1 }, "role": role });
+    assert_eq!(
+        tell("sub-docof", approve("legal")).await.0,
+        StatusCode::FORBIDDEN,
+        "doc-of gives no legal approval"
+    );
+    assert_eq!(tell("sub-docof", approve("product")).await.0, StatusCode::OK);
+    assert_eq!(tell("sub-docla", approve("legal")).await.0, StatusCode::OK);
+    assert_eq!(portal.correspondence.received().last().unwrap().caller, "config");
+    let approvals = ask("sub-docview", "template?id=letter&version=1").await.1["approvals"].clone();
+    assert_eq!(approvals, json!({ "legal": "doc-la", "product": "doc-of" }));
+
+    // A template submitted from the console is the signed-in person's, whatever the page said.
+    let mut draft = serde_json::to_value(common::correspondence::kit::template(
+        "notice",
+        ic_documents::DocumentKind::GeneralCorrespondence,
+        "Kia ora {{name}}.",
+    ))
+    .unwrap();
+    draft["author"] = json!("someone-else");
+    draft["type"] = json!("submit_template");
+    let (status, done) = tell("sub-docof", draft).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    match &portal.correspondence.received().last().unwrap().command {
+        ic_documents::command::Command::SubmitTemplate(t) => assert_eq!(t.author, "doc-of"),
+        other => panic!("not a submission: {other:?}"),
+    }
+
+    // A defect goes as remediation; disabling, which config and remediation both may send, goes as the first held.
+    let defect = json!({ "type": "raise_notice_defect", "defect": "d1", "case": "REM-1", "description": "wrong rate", "cause": "wrong_rate", "from": "2027-11-01", "to": "2027-11-14" });
+    assert_eq!(tell("sub-docof", defect).await.0, StatusCode::OK);
+    assert_eq!(ask("sub-docview", "open_defects").await.1[0]["id"], "d1");
+    let disable = json!({ "type": "disable_template", "template": { "id": "lapse", "version": 1 }, "reason": "wrong", "case": "REM-1" });
+    let (status, done) = tell("sub-docof", disable).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(portal.correspondence.received().last().unwrap().caller, "remediation");
+
+    // The module's own refusals come back; what is not a person's to send, or not theirs, never reaches it.
+    let (status, problem) = tell("sub-docof", json!({ "type": "dismiss_trigger", "trigger": "none", "reason": "not needed" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    let sent = portal.correspondence.received().len();
+    assert_eq!(
+        tell("sub-docof", json!({ "type": "shred_party", "party": "p1" })).await.0,
+        StatusCode::FORBIDDEN,
+        "no privacy action"
+    );
+    assert_eq!(tell("sub-docof", json!({ "type": "tick" })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(tell("sub-docof", json!("place_legal_hold")).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(portal.correspondence.received().len(), sent);
 }
 
 /// Purpose: staff work collections from the collections console. An officer reads the day's queue as an officer and records

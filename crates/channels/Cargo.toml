@@ -55,6 +55,7 @@ ic-reinsurance = { path = "../reinsurance" }
 ic-underwriting = { path = "../underwriting" }
 ic-payments = { path = "../payments" }
 ic-group = { path = "../group" }
+ic-documents = { path = "../documents" }
 ic-entra = { workspace = true, features = ["testing"] }
 ic-sim.workspace = true
 http-body-util.workspace = true

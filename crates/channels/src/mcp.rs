@@ -194,7 +194,7 @@ fn with_me(mut names: Vec<&'static str>) -> Vec<&'static str> {
 }
 
 /// Routes deliberately not offered as tools, and why.
-pub const EXCLUDED: [(&str, &str, &str); 27] = [
+pub const EXCLUDED: [(&str, &str, &str); 28] = [
     ("GET", "/healthz", "a probe for the platform, not a function"),
     ("GET", "/readyz", "a probe for the platform, not a function"),
     ("GET", "/app/v1/sync", "the device protocol: only an enrolled device, proving its key, syncs"),
@@ -223,6 +223,7 @@ pub const EXCLUDED: [(&str, &str, &str); 27] = [
     ("GET", "/reinsurance", "a web page"),
     ("GET", "/payments", "a web page"),
     ("GET", "/collections", "a web page"),
+    ("GET", "/documents", "a web page"),
     ("GET", "/group", "a web page"),
     ("GET", "/underwriting", "a web page"),
     ("GET", "/pricing", "a web page"),
@@ -354,6 +355,11 @@ pub fn catalogue() -> Vec<Tool> {
             .choose("question", with_me(crate::collections::question_names()))
             .query("As the question needs: `policy`, `team` (collections, hardship or team_lead), `case`, `product`."),
         tool("collections_command", "Act in collections", S, M::POST, "/staff/v1/collections/commands", "A command to the collections module in its own JSON: record an outcome, propose or end an arrangement, apply for, decide or end hardship, ask for reinstatement, set a product's sequence.")
+            .json(r#"{"type": "<command>", ...}"#),
+        tool("documents_question", "Ask documents", S, M::GET, "/staff/v1/documents/{question}", "Templates and where each stands, legal holds, open notice defects, documents the core's events require, letters other modules asked for, sends in progress, settings, one document, defect, letter request or template, the template in force, where a part is used, the notices a template version issued, the report, a policy's documents and a kind's retention.")
+            .choose("question", with_me(crate::correspondence::question_names()))
+            .query("As the question needs: `id`, `version`, `request`, `part`, `policy`, `kind`, `from`, `to` (dates)."),
+        tool("documents_command", "Act in documents", S, M::POST, "/staff/v1/documents/commands", "A command to the documents module as `{\"type\": name, ...}`: legal holds, notice defects, disabling, submitting, testing, approving and activating templates, parts, settings, retention, dismissing a trigger, retrying a delivery, cancelling a requested letter, shredding a party. The caller is named from your own actions.")
             .json(r#"{"type": "<command>", ...}"#),
         tool("group_question", "Ask group administration", S, M::GET, "/staff/v1/group/{question}", "Exceptions, a scheme, its invoices and mapping, an uploaded file, a member, a possible match, or the scheme a policy belongs to.")
             .choose("question", vec!["me", "exceptions", "scheme", "invoices", "mapping", "file", "member", "possible_match", "scheme_of", "loadings_in_total"])

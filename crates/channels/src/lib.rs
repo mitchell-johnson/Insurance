@@ -23,6 +23,7 @@ pub mod classes;
 pub mod collections;
 pub mod commission;
 pub mod complaints;
+pub mod correspondence;
 pub mod countersign;
 pub mod customers;
 pub mod directory;
