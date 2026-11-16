@@ -1403,3 +1403,242 @@ async fn a_replacing_policy_tells_the_core_what_it_replaces() {
         .collect();
     assert_eq!(advised, vec![("uw-nb:R1".to_string(), true, BTreeMap::from([("life".to_string(), 1020_00)]))]);
 }
+
+impl<F: Forward> Bench<F> {
+    /// A policy written straight into the ledger for party `PTY-L1`, one cover on L1 with the
+    /// named choices (the first on every other axis), its first premium paid.
+    fn in_ledger(&self, id: &str, product: &str, cover: &str, option: &str, sum: i64) -> PolicyId {
+        let policy = PolicyId::from(format!("POL-{id}").as_str());
+        let mut cluster = self.ledger.cluster.lock().unwrap();
+        let definition = cluster.state(0).catalog.product_on(product, start()).unwrap().clone();
+        let spec = definition.cover(cover).unwrap();
+        let parts: Vec<(&str, &str)> = spec
+            .option_axes
+            .iter()
+            .map(|a| {
+                let named = option.split(',').filter_map(|p| p.split_once('=')).find(|(x, _)| *x == a.code).map(|(_, c)| c);
+                (a.code.as_str(), named.unwrap_or(a.choices[0].code.as_str()))
+            })
+            .collect();
+        let issue = ic_core::command::IssuePolicy {
+            continuation_of: None,
+            policy: policy.clone(),
+            number: format!("N-{id}"),
+            group: ic_core::GroupId::from(format!("grp-{id}").as_str()),
+            policyholder: "PTY-L1".into(),
+            product_code: product.into(),
+            inception: start(),
+            frequency: ic_product::Frequency::Monthly,
+            lives: vec![ic_core::command::LifeSpec {
+                id: "L1".into(),
+                kind: ic_core::policy::LifeKind::Named { party: "PTY-L1".into() },
+                factors: ic_core::LifeFactors {
+                    date_of_birth: Some(d(1986, 5, 1)),
+                    sex: Some(ic_product::Sex::Female),
+                    smoker: Some(false),
+                    occupation_class: Some("1".into()),
+                    ..Default::default()
+                },
+            }],
+            covers: vec![ic_core::command::CoverSpec {
+                excess_option: Some(ic_product::option_code(&parts)),
+                code: cover.into(),
+                life: Some("L1".into()),
+                sum_insured_minor: sum,
+                loadings: vec![],
+                exclusions: vec![],
+            }],
+            migrated: false,
+        };
+        let applied = cluster.submit_keyed(0, &format!("issue-{id}"), "new-business", ic_core::Command::IssuePolicy(Box::new(issue)));
+        assert!(applied.result.is_ok(), "{id}: {:?}", applied.result);
+        let owing = cluster.state(0).policies[&policy].outstanding_minor();
+        if owing > 0 {
+            let pay = ic_core::Command::ApplyReceipt {
+                policy: policy.clone(),
+                receipt: format!("{id}-first"),
+                amount: ic_money::Money::new(owing, ic_money::Currency::NZD),
+            };
+            cluster.submit(0, "cash-matching", pay).unwrap();
+        }
+        policy
+    }
+}
+
+/// A waiting period reduction carried from start to issue on this bench: an income cover at
+/// 26 weeks and a Business Continuity cover at 13 weeks, the business cover cancelled after a
+/// day, the reduction accepted by an underwriter. Returns the income policy.
+async fn reduce_waiting<F: Forward>(b: &Bench<F>) -> PolicyId {
+    let income = b.in_ledger("LIV", "aia-living", "income-agreed-value", "waiting=26w,period=to-65", 2_000_00);
+    let business = b.in_ledger("BUS", "aia-living-business", "business-continuity-agreed-value", "waiting=13w", 2_500_00);
+    {
+        let mut cluster = b.ledger.cluster.lock().unwrap();
+        cluster.end_of_day().unwrap();
+        cluster
+            .submit(0, "policy-servicing", ic_core::Command::CancelPolicy { policy: business.clone() })
+            .unwrap();
+    }
+    b.module.with(|w| {
+        let mut open = w.open_command("WPR", &["L1"], &[("L1", "income-agreed-value", "income_protection", 2_000_00)], false);
+        open.product_code = "aia-living".into();
+        open.policy = income.clone();
+        open.group = ic_core::GroupId::from("grp-LIV");
+        open.entry = Entry::WaitingReduction {
+            policy: income.clone(),
+            cancelled_policy: business,
+            cancelled_group: "grp-BUS".into(),
+            cancelled_life: "L1".into(),
+            cancelled_cover: "business-continuity-agreed-value".into(),
+            why: ic_underwriting::model::CancelledBecause::Sold,
+            evidence: "vault://sale-agreement".into(),
+        };
+        w.ok("new-business", Command::OpenProposal(Box::new(open)));
+        let case = w.take("WPR", "L1", "amy");
+        w.ok(
+            "underwriting-console",
+            Command::CheckOptionEvidence {
+                case,
+                underwriter: "amy".into(),
+                accepted: true,
+                note: String::new(),
+            },
+        );
+    });
+    for _ in 0..4 {
+        b.pass().await;
+    }
+    income
+}
+
+/// Purpose: a waiting period reduction reaches the core and is written whatever carries the
+/// notices around it: with nothing connected for correspondence, and with a receiver that
+/// refuses every notice, the reduction is still issued and the income cover's open layer is
+/// at the business cover's 13 week wait.
+/// Why it matters: the conversion is the customer's cover; the letters about it are not. A
+/// reduction held back because a letter could not be sent would leave the person waiting
+/// half a year for a benefit they were promised in weeks.
+#[tokio::test]
+async fn a_waiting_reduction_is_written_whatever_happens_to_its_notices() {
+    async fn check<F: Forward + Clone>(forward: F) {
+        let b = bench(forward);
+        let income = reduce_waiting(&b).await;
+        assert!(matches!(b.status("WPR"), ProposalStatus::Issued { .. }), "{:?}", b.status("WPR"));
+        let cluster = b.ledger.cluster.lock().unwrap();
+        let open: Vec<_> = cluster.state(0).policies[&income].covers["income-agreed-value"]
+            .layers
+            .iter()
+            .filter(|l| l.end.is_none())
+            .map(|l| l.excess_option.clone().unwrap_or_default())
+            .collect();
+        assert!(open.iter().any(|o| o.contains("waiting=13w")), "{open:?}");
+    }
+    check(NothingConnected).await;
+    check(RefusesAll).await;
+}
+
+/// Purpose: with the driver alone carrying between the modules and the core, a waiting period
+/// reduction reads the income policy and the cancelled Business Continuity policy and converts
+/// the lesser benefit to the shorter wait; and a move from Start-Up Income reads the Start-Up
+/// policy, issues Business Continuity on the quoted product version, and cancels the Start-Up
+/// policy. Nothing is parked.
+/// Why it matters: both read policies the core holds before anything is written; this is the
+/// driver every effect goes through in production, so each read and command has to reach the
+/// core as it expects.
+#[tokio::test]
+async fn facilities_read_the_policies_they_come_from_and_act_in_the_core() {
+    let b = bench(TakesAll::default());
+    let income = b.in_ledger("LIV", "aia-living", "income-agreed-value", "waiting=26w,period=to-65", 2_000_00);
+    let business = b.in_ledger("BUS", "aia-living-business", "business-continuity-agreed-value", "waiting=13w", 2_500_00);
+    let start_up = b.in_ledger("SUI", "aia-start-up-income", "start-up-income", "", 3_000_00);
+    {
+        // A day in force before the business cover ends, so it had a benefit to compare.
+        let mut cluster = b.ledger.cluster.lock().unwrap();
+        cluster.end_of_day().unwrap();
+        let owing = cluster.state(0).policies[&income].outstanding_minor();
+        if owing > 0 {
+            let pay = ic_core::Command::ApplyReceipt {
+                policy: income.clone(),
+                receipt: "LIV-second".into(),
+                amount: ic_money::Money::new(owing, ic_money::Currency::NZD),
+            };
+            cluster.submit(0, "cash-matching", pay).unwrap();
+        }
+        cluster
+            .submit(0, "policy-servicing", ic_core::Command::CancelPolicy { policy: business.clone() })
+            .unwrap();
+    }
+
+    let business_hash = b
+        .ledger
+        .cluster
+        .lock()
+        .unwrap()
+        .state(0)
+        .catalog
+        .product_on("aia-living-business", start())
+        .unwrap()
+        .content_hash
+        .clone();
+    b.module.with(|w| {
+        let mut open = w.open_command("WPR", &["L1"], &[("L1", "income-agreed-value", "income_protection", 2_000_00)], false);
+        open.product_code = "aia-living".into();
+        open.policy = income.clone();
+        open.group = ic_core::GroupId::from("grp-LIV");
+        open.entry = Entry::WaitingReduction {
+            policy: income.clone(),
+            cancelled_policy: business.clone(),
+            cancelled_group: "grp-BUS".into(),
+            cancelled_life: "L1".into(),
+            cancelled_cover: "business-continuity-agreed-value".into(),
+            why: ic_underwriting::model::CancelledBecause::LeftBusiness,
+            evidence: "vault://resignation".into(),
+        };
+        w.ok("new-business", Command::OpenProposal(Box::new(open)));
+
+        let mut open = w.open_command("BCM", &["L1"], &[("L1", "business-continuity-indemnity", "income_protection", 3_000_00)], false);
+        open.product_code = "aia-living-business".into();
+        open.group = ic_core::GroupId::from("grp-BCM");
+        open.quote.product_hash = business_hash.clone();
+        open.lives[0].factors.occupation_class = Some("1".into());
+        open.covers[0].option = Some("waiting=4w,period=6m,waiver=no,partial-disablement=no".into());
+        open.entry = Entry::Facility {
+            facility: ic_underwriting::model::Facility::BusinessContinuity,
+            from_policy: start_up.clone(),
+            from_group: "grp-SUI".into(),
+            from_life: "L1".into(),
+            from_cover: "start-up-income".into(),
+            trigger_date: d(2023, 1, 1),
+            evidence: "vault://accounts".into(),
+        };
+        w.ok("new-business", Command::OpenProposal(Box::new(open)));
+        for id in ["WPR", "BCM"] {
+            let case = w.take(id, "L1", "amy");
+            w.ok(
+                "underwriting-console",
+                Command::CheckOptionEvidence {
+                    case,
+                    underwriter: "amy".into(),
+                    accepted: true,
+                    note: String::new(),
+                },
+            );
+        }
+    });
+    for _ in 0..4 {
+        let pass = b.pass().await;
+        assert!(pass.parked.is_empty(), "{pass:?}");
+    }
+    assert!(matches!(b.status("WPR"), ProposalStatus::Issued { .. }), "{:?}", b.status("WPR"));
+    assert!(matches!(b.status("BCM"), ProposalStatus::Issued { .. }), "{:?}", b.status("BCM"));
+    let cluster = b.ledger.cluster.lock().unwrap();
+    let policies = &cluster.state(0).policies;
+    let waits: Vec<_> = policies[&income].covers["income-agreed-value"]
+        .layers
+        .iter()
+        .filter(|l| l.end.is_none())
+        .map(|l| (l.excess_option.clone().unwrap_or_default().contains("waiting=13w"), l.sum_insured_minor))
+        .collect();
+    assert_eq!(waits, vec![(true, 2_000_00)], "the whole income benefit, the lesser of the two");
+    assert_eq!(policies[&start_up].status, PolicyStatus::Cancelled);
+    assert_eq!(policies[&PolicyId::from("POL-BCM")].status, PolicyStatus::InForce);
+}

@@ -36,6 +36,8 @@ struct Script {
     capacity: Option<Outcome>,
     /// The policy the core holds, when asked for one.
     held: Option<ic_core::policy::Policy>,
+    /// Policies the core holds by ID, read before `held`.
+    policies: BTreeMap<PolicyId, ic_core::policy::Policy>,
     told: Vec<(String, String, Command)>,
     parked: Vec<(u64, String)>,
     acknowledged: Vec<u64>,
@@ -114,8 +116,8 @@ impl Core for Scripted {
             events: vec![],
         })
     }
-    async fn policy(&self, _group: &ic_core::GroupId, _policy: &PolicyId) -> Result<Option<ic_core::policy::Policy>, DriverError> {
-        Ok(self.with(|s| s.held.clone()))
+    async fn policy(&self, _group: &ic_core::GroupId, policy: &PolicyId) -> Result<Option<ic_core::policy::Policy>, DriverError> {
+        Ok(self.with(|s| s.policies.get(policy).cloned().or_else(|| s.held.clone())))
     }
 }
 
@@ -1125,7 +1127,7 @@ fn moved_issue() -> Effect {
 
 /// Purpose: a policy under a conversion facility is not issued when the policy it comes from
 /// is not in the core: the module is told the issue was refused (`facility_policy_not_found`)
-/// and nothing is sent to the core; a facility issue that names no facility is parked. Once
+/// and nothing is sent to the core; an issue whose entry is no facility goes as it is. Once
 /// the new policy is in force, ending the Start-Up policy is sent as `cancel_policy` from
 /// underwriting under the effect's key: taken, it is delivered; already ended, it is stale; any
 /// other refusal parks it with the core's code.
@@ -1162,8 +1164,8 @@ async fn a_facility_issue_needs_its_policy_and_ends_the_one_it_moved_from() {
         command,
         facility: Some(Box::new(ic_underwriting::model::Entry::NewBusiness)),
     };
-    let (pass, _) = carry(nameless, None, a_proposal(), &[]).await;
-    assert!(pass.parked.iter().any(|(_, why)| why.contains("names no facility")), "{pass:?}");
+    let (_, script) = carry(nameless, None, a_proposal(), &[]).await;
+    assert_eq!(script.with(|s| s.core.len()), 1, "an entry that is no facility is issued as it is");
 
     let end = Effect::EndConverted {
         key: "P1/end-converted".into(),
@@ -1181,4 +1183,191 @@ async fn a_facility_issue_needs_its_policy_and_ends_the_one_it_moved_from() {
     assert_eq!((pass.stale, pass.parked.len()), (1, 0));
     let (pass, _) = carry(end, None, a_proposal(), &[("P1/end-converted", "interest_restricted")]).await;
     assert!(pass.parked.iter().any(|(_, why)| why.contains("interest_restricted")), "{pass:?}");
+}
+
+/// A term life policy in force in a ledger, as the core would answer for one.
+fn a_policy() -> ic_core::policy::Policy {
+    let mut cluster = ic_sim::Cluster::in_memory(1, 7);
+    cluster.open(d(2027, 2, 1)).unwrap();
+    for activation in ic_sim::config::shipped_activations().unwrap() {
+        cluster.activate_everywhere(activation).unwrap();
+    }
+    let mut issue = issue_command();
+    issue.lives = vec![ic_core::command::LifeSpec {
+        id: "L1".into(),
+        kind: ic_core::policy::LifeKind::Named { party: "party-1".into() },
+        factors: ic_core::LifeFactors {
+            date_of_birth: Some(d(1985, 1, 1)),
+            sex: Some(ic_product::Sex::Female),
+            smoker: Some(false),
+            ..Default::default()
+        },
+    }];
+    issue.covers = vec![CoverSpec {
+        loadings: vec![],
+        exclusions: vec![],
+        ..cover(100_000_00)
+    }];
+    let applied = cluster.submit_keyed(0, "issue", "new-business", ic_core::Command::IssuePolicy(issue));
+    assert!(applied.result.is_ok(), "{:?}", applied.result);
+    cluster.state(0).policies[&PolicyId::from("POL-1")].clone()
+}
+
+/// Purpose: a waiting period reduction whose policies the core does not hold is refused back
+/// to the module (`waiting_policy_not_found`) with nothing sent to the core; one the policies
+/// do not allow (here the business cover named is not on the policy) is refused with the
+/// reason worked out from them; and terms that are not one cover of one life are refused too.
+/// Why it matters: the core is the record of what was cancelled and what is held. A
+/// conversion sent without reading it could shorten a wait on cover that is not there, and
+/// a reduction that silently stopped would leave the customer on the long wait they asked to
+/// leave.
+#[tokio::test]
+async fn a_waiting_reduction_reads_both_policies_before_the_core_is_asked() {
+    let reduction = Entry::WaitingReduction {
+        policy: "POL-1".into(),
+        cancelled_policy: "POL-BUS".into(),
+        cancelled_group: "grp-bus".into(),
+        cancelled_life: "L1".into(),
+        cancelled_cover: "business-continuity-agreed-value".into(),
+        why: ic_underwriting::model::CancelledBecause::Sold,
+        evidence: "vault://sale".into(),
+    };
+    let one = terms("P1", reduction.clone(), vec![cover(1)]);
+    let (_, script) = carry(one.clone(), None, a_proposal(), &[]).await;
+    assert!(script.with(|s| s.core.is_empty()));
+    let told = script.with(|s| s.told.clone());
+    assert!(
+        matches!(&told[..], [(_, _, Command::IssueRejected { code, .. })] if code == "waiting_policy_not_found"),
+        "{told:?}"
+    );
+
+    let script = Scripted::default();
+    script.with(|s| {
+        s.outbox.insert(7, one);
+        s.proposal = a_proposal();
+        s.held = Some(a_policy());
+    });
+    driver(&script).deliver().await.unwrap();
+    assert!(script.with(|s| s.core.is_empty()));
+    let told = script.with(|s| s.told.clone());
+    assert!(
+        matches!(&told[..], [(_, _, Command::IssueRejected { code, .. })] if code == "waiting_cover_not_held"),
+        "{told:?}"
+    );
+
+    let script = Scripted::default();
+    script.with(|s| {
+        s.outbox.insert(7, terms("P1", reduction, vec![cover(1), cover(2)]));
+        s.proposal = a_proposal();
+        s.held = Some(a_policy());
+    });
+    driver(&script).deliver().await.unwrap();
+    let told = script.with(|s| s.told.clone());
+    assert!(
+        matches!(&told[..], [(_, _, Command::IssueRejected { code, .. })] if code == "waiting_not_one_cover"),
+        "{told:?}"
+    );
+}
+
+/// Purpose: a waiting period reduction the two policies allow goes to the core as one
+/// conversion, under the proposal's own key and as underwriting, and the module is told the
+/// reduction was issued; when the core refuses that conversion, the module is told the core's
+/// reason and nothing is said to have been issued.
+/// Why it matters: the conversion is what shortens the customer's wait. Sent under another
+/// key it could be written twice on a retry, and a refusal reported as an issue would tell
+/// the customer their wait was shortened when the core still holds the long one.
+#[tokio::test]
+async fn a_waiting_reduction_the_policies_allow_is_sent_once_and_its_answer_told() {
+    let mut cluster = ledger(&[
+        ("POL-1", "aia-living", "income-agreed-value", "waiting=26w", 2_000_00, "party-1"),
+        (
+            "POL-BUS",
+            "aia-living-business",
+            "business-continuity-agreed-value",
+            "waiting=13w",
+            2_500_00,
+            "party-1",
+        ),
+    ]);
+    cluster.end_of_day().unwrap();
+    cluster
+        .submit(0, "policy-servicing", ic_core::Command::CancelPolicy { policy: "POL-BUS".into() })
+        .unwrap();
+    let policies: BTreeMap<PolicyId, ic_core::policy::Policy> = ["POL-1", "POL-BUS"]
+        .iter()
+        .map(|id| (PolicyId::from(*id), cluster.state(0).policies[&PolicyId::from(*id)].clone()))
+        .collect();
+    let reduction = Entry::WaitingReduction {
+        policy: "POL-1".into(),
+        cancelled_policy: "POL-BUS".into(),
+        cancelled_group: "grp-POL-BUS".into(),
+        cancelled_life: "L1".into(),
+        cancelled_cover: "business-continuity-agreed-value".into(),
+        why: ic_underwriting::model::CancelledBecause::LeftBusiness,
+        evidence: "vault://resignation".into(),
+    };
+    let income = CoverSpec {
+        excess_option: None,
+        code: "income-agreed-value".into(),
+        life: Some("L1".into()),
+        sum_insured_minor: 2_000_00,
+        loadings: vec![],
+        exclusions: vec![],
+    };
+    for refused in [None, Some("premium_owing")] {
+        let script = Scripted::default();
+        script.with(|s| {
+            s.outbox.insert(7, terms("P1", reduction.clone(), vec![income.clone()]));
+            s.proposal = a_proposal();
+            s.policies = policies.clone();
+            if let Some(code) = refused {
+                s.refuse.insert("P1/waiting".into(), (code.into(), "said the core".into()));
+            }
+        });
+        driver(&script).deliver().await.unwrap();
+        let sent = script.with(|s| s.core.clone());
+        assert!(
+            matches!(&sent[..], [(key, caller, ic_core::Command::ConvertCover(c))]
+                if key == "P1/waiting" && caller == "underwriting" && c.excess_option.contains("waiting=13w")),
+            "{sent:?}"
+        );
+        let told = script.with(|s| s.told.clone());
+        match refused {
+            None => assert!(!told.iter().any(|(_, _, c)| matches!(c, Command::IssueRejected { .. })), "{told:?}"),
+            Some(code) => assert!(matches!(&told[..], [(_, _, Command::IssueRejected { code: c, .. })] if c == code), "{told:?}"),
+        }
+    }
+}
+
+/// Purpose: a replacement the module records goes to the core as underwriting on the new
+/// policy's home partition and is delivered; one the core refuses is parked with the core's
+/// reason, not dropped.
+/// Why it matters: the core's record of which policy replaced which is what stops a claim
+/// being paid on both. A refusal that vanished would leave that link unrecorded with nobody
+/// told.
+#[tokio::test]
+async fn a_replacement_is_recorded_in_the_core_or_parked_with_its_refusal() {
+    let effect = Effect::RecordReplacement {
+        key: "P1/replacement".into(),
+        proposal: "P1".into(),
+        group: "grp-1".into(),
+        command: Box::new(ic_core::command::Replacement {
+            policy: "POL-1".into(),
+            replaced_policy: "POL-OLD".into(),
+            life: "L1".into(),
+            replaced_life: "L1".into(),
+            cover: "life".into(),
+            replaced_cover: "life".into(),
+            replaced_sum_insured_minor: 100_000_00,
+            evidence: "vault://replacement-form".into(),
+        }),
+    };
+    let (pass, script) = carry(effect.clone(), None, a_proposal(), &[]).await;
+    assert_eq!((pass.delivered, pass.parked.len()), (1, 0), "{pass:?}");
+    assert!(script.with(|s| matches!(&s.core[..], [(_, caller, ic_core::Command::RecordReplacement(_))] if caller == "underwriting")));
+    let (pass, _) = carry(effect, None, a_proposal(), &[("P1/replacement", "unknown_policy")]).await;
+    assert!(
+        matches!(&pass.parked[..], [(7, reason)] if reason.contains("refused the replacement: unknown_policy")),
+        "{pass:?}"
+    );
 }

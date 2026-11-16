@@ -63,6 +63,7 @@ REASONS = reason_library(
         reason("RC-0977", "source", True, "More cover under your policy's option to increase it after a life event, with no health questions."),
         reason("RC-0978", "closure", True, "We could not accept the proof of the life event for your option to increase your cover."),
         reason("RC-0979", "source", True, "Cover under a conversion facility of an existing policy, with no health questions."),
+        reason("RC-0982", "source", True, "A shorter waiting period on your income cover, now your business cover has been cancelled, with no health questions."),
         reason("RC-0981", "closure", True, "We could not accept the request to use the conversion facility of your existing policy."),
         reason("RC-0975", "source", True, "Cover your previous insurer accepted, carried over under your scheme's takeover terms."),
         reason("RC-0980", "routing", False, ""),

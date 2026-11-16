@@ -93,6 +93,14 @@ pub(crate) fn check(
             reason::FACILITY,
             reason::FACILITY_REFUSED,
         ),
+        Entry::WaitingReduction { .. } => (
+            DecisionSource::Facility {
+                facility: crate::model::Facility::WaitingPeriodReduction,
+                checked_by: underwriter.to_string(),
+            },
+            reason::WAITING_REDUCTION,
+            reason::FACILITY_REFUSED,
+        ),
         _ => return reject("entry", "only an insurability option or a conversion facility has proof to check"),
     };
     if p.status != ProposalStatus::Open {

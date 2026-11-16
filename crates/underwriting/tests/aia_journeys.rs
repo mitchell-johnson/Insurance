@@ -799,6 +799,106 @@ async fn aia_start_up_income_moves_to_business_continuity_after_three_years() {
     assert_eq!((pass.delivered, pass.parked.len()), (0, 0));
 }
 
+/// Purpose: an AIA Living income cover with a 52 week wait is shortened, with no health
+/// questions, to the 4 week wait of the same person's Business Continuity cover once that is
+/// cancelled because the business was sold: the request opens a case, a person accepts the
+/// proof, and the driver sends the core `ConvertCover` from underwriting for the lesser of
+/// the two benefits ($3,000 of the $4,000), so $1,000 keeps the 52 week wait. Asked again, it
+/// changes nothing more.
+/// Why it matters: this is the Waiting Period Reduction Benefit working through the real
+/// core and products. Converting the whole $4,000 would give a short wait on more benefit
+/// than the business cover had, which the wording does not allow.
+#[tokio::test]
+async fn aia_income_waiting_period_shortens_when_business_cover_is_cancelled() {
+    let b = bench();
+    let income = b
+        .apply(
+            "LIV",
+            "aia-living",
+            &[("income-agreed-value", "income_protection", 4_000_00, Some("waiting=52w,period=to-65"))],
+            40,
+            Some("1"),
+        )
+        .await;
+    let business = b
+        .apply(
+            "BUS",
+            "aia-living-business",
+            &[("business-continuity-agreed-value", "income_protection", 3_000_00, Some("waiting=4w"))],
+            40,
+            Some("1"),
+        )
+        .await;
+    b.until(start() + chrono::Duration::days(1), &income.policy);
+    b.with_cluster(|c| {
+        c.submit(
+            0,
+            "policy-servicing",
+            CoreCommand::CancelPolicy {
+                policy: business.policy.clone(),
+            },
+        )
+        .unwrap();
+    });
+    let mut open = b
+        .module
+        .with(|w| w.open_command("WPR", &["L1"], &[("L1", "income-agreed-value", "income_protection", 4_000_00)], false));
+    open.product_code = "aia-living".into();
+    open.policy = income.policy.clone();
+    open.group = GroupId::from("grp-LIV");
+    open.entry = ic_underwriting::model::Entry::WaitingReduction {
+        policy: income.policy.clone(),
+        cancelled_policy: business.policy.clone(),
+        cancelled_group: GroupId::from("grp-BUS"),
+        cancelled_life: "L1".into(),
+        cancelled_cover: "business-continuity-agreed-value".into(),
+        why: ic_underwriting::model::CancelledBecause::Sold,
+        evidence: "vault://sale-agreement/bus".into(),
+    };
+    b.module.with(|w| w.ok("new-business", Command::OpenProposal(Box::new(open))));
+    let case = b.module.with(|w| w.take("WPR", "L1", "amy"));
+    b.module.with(|w| {
+        w.ok(
+            "underwriting-console",
+            Command::CheckOptionEvidence {
+                case: case.clone(),
+                underwriter: "amy".into(),
+                accepted: true,
+                note: String::new(),
+            },
+        )
+    });
+    for _ in 0..3 {
+        let pass: Pass = b.driver.deliver().await.unwrap();
+        assert!(pass.parked.is_empty(), "{pass:?}");
+    }
+    let status = b.module.with(|w| w.p("WPR").status.clone());
+    assert!(matches!(status, ProposalStatus::Issued { .. }), "{status:?}");
+    b.with_cluster(|c| {
+        let held = &c.state(0).policies[&income.policy];
+        let today = c.business_date().unwrap();
+        let mut by_wait: Vec<(String, i64)> = held.covers["income-agreed-value"]
+            .layers
+            .iter()
+            .filter(|l| l.in_force_on(today))
+            .map(|l| {
+                let wait = l
+                    .excess_option
+                    .as_deref()
+                    .unwrap_or_default()
+                    .split(',')
+                    .find(|p| p.starts_with("waiting="))
+                    .unwrap_or_default();
+                (wait.to_string(), l.sum_insured_minor)
+            })
+            .collect();
+        by_wait.sort();
+        assert_eq!(by_wait, vec![("waiting=4w".to_string(), 3_000_00), ("waiting=52w".to_string(), 1_000_00)]);
+    });
+    let pass: Pass = b.driver.deliver().await.unwrap();
+    assert_eq!((pass.delivered, pass.parked.len()), (0, 0));
+}
+
 /// Purpose: Cover for Life, whole of life cover with no minimum amount, is quoted, underwritten,
 /// issued, billed as quoted, and a death claim is paid and ends the policy.
 /// Why it matters: Cover for Life has its own premium basis (paid to an age); this shows its

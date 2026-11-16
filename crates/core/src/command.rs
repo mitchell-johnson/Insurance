@@ -764,10 +764,12 @@ impl Command {
             Command::ChangeExcess(_)
             | Command::MakePaidUp(_)
             | Command::BuyBack(_)
-            | Command::ConvertCover(_)
             | Command::SuspendCover(_)
             | Command::ResumeCover { .. }
             | Command::ChangeBilling(_) => &["policy-servicing"],
+            // Underwriting converts cover a person has checked the trigger of, such as an
+            // income cover's waiting period shortened when business cover is cancelled.
+            Command::ConvertCover(_) => &["policy-servicing", "underwriting"],
             Command::RecordReplacement(_) => &["underwriting", "new-business"],
             Command::SetPeakSeason(_) => &["new-business", "underwriting", "policy-servicing"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],

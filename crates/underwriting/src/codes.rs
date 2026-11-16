@@ -341,6 +341,7 @@ pub mod reason {
     pub const OPTION_EVIDENCE_REFUSED: &str = "RC-0978";
     pub const FACILITY: &str = "RC-0979";
     pub const FACILITY_REFUSED: &str = "RC-0981";
+    pub const WAITING_REDUCTION: &str = "RC-0982";
     pub const DELEGATED_REJECTED: &str = "RC-0971";
     pub const NON_DISCLOSURE_REVIEW: &str = "RC-0980";
     pub const QUOTE_SUPERSEDED: &str = "RC-0990";
@@ -369,6 +370,7 @@ pub mod reason {
         OPTION_EVIDENCE_REFUSED,
         FACILITY,
         FACILITY_REFUSED,
+        WAITING_REDUCTION,
         DELEGATED_REJECTED,
         NON_DISCLOSURE_REVIEW,
         QUOTE_SUPERSEDED,

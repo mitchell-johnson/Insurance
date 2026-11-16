@@ -90,6 +90,7 @@ impl UnderwritingState {
         }
         crate::option::door(&open, cx)?;
         crate::facility::door(&open, cx)?;
+        crate::waiting::door(&open)?;
         let commission_option = open.commission_option.as_deref().unwrap_or("upfront");
         if !COMMISSION_OPTIONS.contains(&commission_option) || (open.commission_option.is_some() && open.adviser.is_none()) {
             return reject("commission_option", "an adviser's commission option is upfront, hybrid or level");
@@ -186,6 +187,7 @@ impl UnderwritingState {
         }
         crate::option::start(&mut p, cx)?;
         crate::facility::start(&mut p, cx)?;
+        crate::waiting::start(&mut p, cx)?;
         self.store(p);
         Ok(())
     }

@@ -72,7 +72,8 @@ fn at(w: &mut World, day: NaiveDate) {
 /// parent's Critical Conditions, for standalone Critical Conditions or accelerated Critical
 /// Conditions with an equal amount of Life Cover, for no more than $50,000, on the policy
 /// anniversary after the child turns 21 and within 60 days of it, for one life, with where
-/// the claims search is kept. Each other request is refused at the door as `facility`.
+/// the claims search is kept. Each other request, and a waiting period reduction made as a
+/// facility, is refused at the door as `facility`.
 /// Why it matters: the conversion is cover with no health questions. Each limit is the
 /// wording's, and a request outside one would be cover the insurer never offered without
 /// evidence: a 30-year-old taking it, or $100,000 of it, or Life Cover larger than the trauma.
@@ -132,6 +133,11 @@ fn a_childs_conversion_opens_only_inside_the_facilitys_limits() {
         *evidence = " ".into();
     }
     assert_eq!(refused(&mut w, blank), "facility");
+    let mut shorter = child(&w, "C0", &standalone);
+    if let Entry::Facility { facility, .. } = &mut shorter.entry {
+        *facility = Facility::WaitingPeriodReduction;
+    }
+    assert_eq!(refused(&mut w, shorter), "facility", "a shorter wait has its own entry");
     let mut same = child(&w, "C0", &standalone);
     same.policy = PolicyId::from("POL-PARENT");
     assert_eq!(refused(&mut w, same), "facility", "the child's policy is a new one");
@@ -432,6 +438,12 @@ fn a_childs_conversion_is_checked_against_the_parents_policy_in_the_core() {
         Err("facility_policy_not_in_force".into())
     );
     assert_eq!(verify(&Entry::NewBusiness, &ended, &mut new_policy("life", 1), today), Ok(()), "not a facility");
+    let shorter = facility(Facility::WaitingPeriodReduction, "critical-conditions", "L1", d(2028, 2, 1));
+    assert_eq!(
+        verify(&shorter, &parent, &mut new_policy("critical-conditions", 1), today),
+        Err("facility_not_a_new_policy".into()),
+        "a shorter wait writes no new policy"
+    );
 }
 
 /// Purpose: Business Continuity is issued for no more monthly benefit than the Start-Up cover

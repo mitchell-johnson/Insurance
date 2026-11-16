@@ -333,7 +333,7 @@ pub(crate) fn after_signed(cfg: &Config, p: &mut Proposal, life: &LifeId, cx: &m
     let proposal = p.id.clone();
     let (product, expires, commencement) = (p.product_code.clone(), p.expires_on, cx.today);
     let covers: Vec<_> = p.covers_on(life).cloned().collect();
-    let alteration = matches!(p.entry, Entry::Alteration { .. } | Entry::Reinstatement { .. });
+    let alteration = matches!(p.entry, Entry::Alteration { .. } | Entry::Reinstatement { .. } | Entry::WaitingReduction { .. });
     let excess_reference = match &p.entry {
         Entry::GroupExcess { reinsurance_reference, .. } => reinsurance_reference.clone(),
         _ => None,

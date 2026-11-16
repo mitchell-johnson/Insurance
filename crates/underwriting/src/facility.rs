@@ -91,6 +91,9 @@ pub(crate) fn door(open: &OpenProposal, cx: &Cx) -> Result<(), Reject> {
     let mut codes: Vec<(&str, i64)> = open.covers.iter().map(|c| (c.code.as_str(), c.sum_insured_minor)).collect();
     codes.sort();
     match facility {
+        Facility::WaitingPeriodReduction => {
+            return refuse("a waiting period is shortened on the policy it is on, with the waiting_reduction entry");
+        }
         Facility::ChildrensTraumaConversion => {
             if open.product_code != CHILD_PRODUCT || !CHILD_SOURCES.contains(&from_cover.as_str()) {
                 return refuse("a child's conversion is from a parent's Critical Conditions cover to AIA Living");
@@ -153,6 +156,23 @@ pub fn is_anniversary(inception: NaiveDate, day: NaiveDate) -> bool {
     years_after(inception, years) == Some(day)
 }
 
+/// A facility entry with the group and policy it comes from, for the
+/// driver to read.
+pub fn source(entry: &Entry) -> Option<(&Entry, &ic_core::GroupId, &ic_core::PolicyId)> {
+    match entry {
+        Entry::Facility { from_group, from_policy, .. } => Some((entry, from_group, from_policy)),
+        _ => None,
+    }
+}
+
+/// As [`verify`], for a policy the core may not hold.
+pub fn verify_read(entry: &Entry, source: Option<&Policy>, issue: &mut IssuePolicy, today: NaiveDate) -> Result<(), String> {
+    match source {
+        None => Err("facility_policy_not_found".into()),
+        Some(source) => verify(entry, source, issue, today),
+    }
+}
+
 /// The policy the facility belongs to, read from the core, allows the new
 /// policy: in force, holding the cover on the life, within the amount, and
 /// for a child the window opened on one of its anniversaries. Business
@@ -181,6 +201,7 @@ pub fn verify(entry: &Entry, source: &Policy, issue: &mut IssuePolicy, today: Na
         return Err("facility_cover_not_held".into());
     }
     match facility {
+        Facility::WaitingPeriodReduction => return Err("facility_not_a_new_policy".into()),
         Facility::ChildrensTraumaConversion => {
             if !is_anniversary(source.inception, *trigger_date) {
                 return Err("facility_not_an_anniversary".into());

@@ -214,6 +214,14 @@ fn issued_layers(events: &[CoreEvent]) -> Vec<IssuedLayer> {
 }
 
 /// The layers added to a policy in force, from the core's reply.
+/// The layers the core wrote, or the code it refused with.
+fn written(answer: CoreAnswer) -> Result<Vec<IssuedLayer>, String> {
+    match answer.refused {
+        None => Ok(added_layers(&answer.events).collect()),
+        Some(r) => Err(r.code),
+    }
+}
+
 fn added_layers(events: &[CoreEvent]) -> impl Iterator<Item = IssuedLayer> + '_ {
     events.iter().filter_map(|e| match e {
         CoreEvent::LayerAdded { layer, .. } => Some(IssuedLayer {
@@ -632,15 +640,9 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                 // A policy under a conversion facility is checked against the policy the
                 // facility belongs to, as the core holds it today, and refused for a
                 // person when that does not allow it.
-                if let Some(entry) = facility.as_deref() {
-                    let Entry::Facility { from_policy, from_group, .. } = entry else {
-                        return Ok(Step::Park("a facility issue that names no facility".to_string()));
-                    };
-                    let checked = match self.core.policy(from_group, from_policy).await? {
-                        None => Err("facility_policy_not_found".to_string()),
-                        Some(source) => crate::facility::verify(entry, &source, &mut command, (self.clock)().date_naive()),
-                    };
-                    if let Err(code) = checked {
+                if let Some((entry, from_group, from_policy)) = facility.as_deref().and_then(crate::facility::source) {
+                    let source = self.core.policy(from_group, from_policy).await?;
+                    if let Err(code) = crate::facility::verify_read(entry, source.as_ref(), &mut command, (self.clock)().date_naive()) {
                         return self.issue_answer(key, proposal, Err(code)).await;
                     }
                 }
@@ -652,6 +654,38 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                 let outcome = match answer.refused {
                     None => Ok(issued_layers(&answer.events)),
                     Some(r) => Err(r.code),
+                };
+                self.issue_answer(key, proposal, outcome).await?
+            }
+            Effect::ApplyTerms {
+                key,
+                proposal,
+                entry:
+                    entry @ Entry::WaitingReduction {
+                        policy,
+                        cancelled_policy,
+                        cancelled_group,
+                        ..
+                    },
+                covers,
+                ..
+            } => {
+                let Some(group) = self.group_of(proposal).await? else {
+                    return Ok(Step::Park(format!("proposal {proposal} is not known to the module")));
+                };
+                let held = self.core.policy(&group, policy).await?;
+                let cancelled = self.core.policy(cancelled_group, cancelled_policy).await?;
+                let today = (self.clock)().date_naive();
+                let outcome = match crate::waiting::conversion_for(entry, held.as_ref(), cancelled.as_ref(), covers, key, today) {
+                    Err(code) => Err(code),
+                    Ok(c) => {
+                        let convert = ic_core::Command::ConvertCover(Box::new(c));
+                        written(
+                            self.core
+                                .send(home_partition(&group), &format!("{proposal}/waiting"), "underwriting", convert)
+                                .await?,
+                        )
+                    }
                 };
                 self.issue_answer(key, proposal, outcome).await?
             }

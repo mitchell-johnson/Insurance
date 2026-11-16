@@ -393,3 +393,57 @@ impl World {
         )
     }
 }
+
+/// A ledger with one policy per (id, product, cover, option, sum, party), each on L1.
+pub fn ledger(policies: &[(&str, &str, &str, &str, i64, &str)]) -> ic_sim::Cluster {
+    let mut cluster = ic_sim::Cluster::in_memory(1, 7);
+    cluster.open(d(2027, 2, 1)).unwrap();
+    for activation in ic_sim::config::shipped_activations().unwrap() {
+        cluster.activate_everywhere(activation).unwrap();
+    }
+    for (id, product, cover, option, sum, party) in policies {
+        let definition = cluster.state(0).catalog.product_on(product, d(2027, 2, 1)).unwrap().clone();
+        let spec = definition.cover(cover).unwrap();
+        let parts: Vec<(&str, &str)> = spec
+            .option_axes
+            .iter()
+            .map(|a| {
+                let named = option.split(',').filter_map(|p| p.split_once('=')).find(|(x, _)| *x == a.code).map(|(_, c)| c);
+                (a.code.as_str(), named.unwrap_or(a.choices[0].code.as_str()))
+            })
+            .collect();
+        let issue = ic_core::command::IssuePolicy {
+            continuation_of: None,
+            policy: ic_core::PolicyId::from(*id),
+            number: format!("N-{id}"),
+            group: ic_core::GroupId::from(format!("grp-{id}").as_str()),
+            policyholder: (*party).into(),
+            product_code: (*product).into(),
+            inception: d(2027, 2, 1),
+            frequency: ic_product::Frequency::Monthly,
+            lives: vec![ic_core::command::LifeSpec {
+                id: "L1".into(),
+                kind: ic_core::policy::LifeKind::Named { party: (*party).into() },
+                factors: ic_core::LifeFactors {
+                    date_of_birth: Some(d(1985, 1, 1)),
+                    sex: Some(ic_product::Sex::Male),
+                    smoker: Some(false),
+                    occupation_class: Some("1".into()),
+                    ..Default::default()
+                },
+            }],
+            covers: vec![ic_core::command::CoverSpec {
+                excess_option: Some(ic_product::option_code(&parts)),
+                code: (*cover).into(),
+                life: Some("L1".into()),
+                sum_insured_minor: *sum,
+                loadings: vec![],
+                exclusions: vec![],
+            }],
+            migrated: false,
+        };
+        let applied = cluster.submit_keyed(0, &format!("issue-{id}"), "new-business", ic_core::Command::IssuePolicy(Box::new(issue)));
+        assert!(applied.result.is_ok(), "{id}: {:?}", applied.result);
+    }
+    cluster
+}

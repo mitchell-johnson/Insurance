@@ -108,6 +108,22 @@ pub enum Entry {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from_cover: Option<String>,
     },
+    /// An AIA Living income cover's long waiting period shortened to that of
+    /// business cover the life held and has had cancelled (1108 AL-IP s22,
+    /// `waiting.rs`). A person checks why it was cancelled; the driver reads
+    /// the cancelled cover in the core and converts the income cover there.
+    WaitingReduction {
+        /// The policy holding the income cover.
+        policy: PolicyId,
+        /// The policy, life and cover that was cancelled.
+        cancelled_policy: PolicyId,
+        cancelled_group: GroupId,
+        cancelled_life: LifeId,
+        cancelled_cover: String,
+        why: CancelledBecause,
+        /// Where the proof of why is kept.
+        evidence: String,
+    },
     /// A new policy written with no health questions under a conversion
     /// facility of a policy already in force (`facility.rs`): the child of a
     /// life with Critical Conditions cover taking their own, or Start-Up
@@ -130,6 +146,17 @@ pub enum Entry {
     },
 }
 
+/// Why business cover was cancelled, as the Waiting Period Reduction
+/// Benefit allows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CancelledBecause {
+    /// The life is no longer actively engaged in the business.
+    LeftBusiness,
+    Sold,
+    StoppedTrading,
+}
+
 /// A conversion facility that writes a new policy with no health questions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -141,12 +168,16 @@ pub enum Facility {
     /// AIA Start-Up Income Protection: after three years of trading the
     /// cover moves to AIA Living Business Business Continuity.
     BusinessContinuity,
+    /// AIA Living income cover (1108 AL-IP s22): a 26, 52 or 104 week
+    /// waiting period shortened when business cover is cancelled.
+    WaitingPeriodReduction,
 }
 
 impl Entry {
     pub fn policy(&self) -> Option<&PolicyId> {
         match self {
             Entry::NewBusiness | Entry::Facility { .. } => None,
+            Entry::WaitingReduction { policy, .. } => Some(policy),
             Entry::Increase { policy }
             | Entry::Alteration { policy }
             | Entry::Reinstatement { policy }

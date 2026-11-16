@@ -35,6 +35,7 @@ pub mod service;
 pub mod shipped;
 pub mod signing;
 pub mod special;
+pub mod waiting;
 
 mod casework;
 mod continuation;
