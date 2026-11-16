@@ -96,6 +96,39 @@ pub fn consent_message(proposal: &str, life: &str, kind: &str) -> Vec<u8> {
     m
 }
 
+/// The answers a life gives to an offer of terms, as the underwriting module names them.
+pub const OFFER_RESPONSES: [&str; 3] = ["accept", "decline", "counter"];
+
+/// The exact bytes a life signs to answer an offer of terms, as the
+/// underwriting module checks them: `ic.underwriting.offer.v1`, the
+/// proposal, the life, the offer and the answer, joined by zero bytes.
+pub fn offer_message(proposal: &str, life: &str, offer: &str, response: &str) -> Vec<u8> {
+    let mut m = b"ic.underwriting.offer.v1".to_vec();
+    for part in [proposal, life, offer, response] {
+        m.push(0);
+        m.extend_from_slice(part.as_bytes());
+    }
+    m
+}
+
+/// The `respond_to_offer` command for a life's answer, from the page's body
+/// (`{response, signature}`), with the enrolled device's signature over
+/// [`offer_message`] checked here against its key.
+pub fn offer_answer(proposal: &str, life: &str, offer: &str, body: &Value, device: &str, public_key: &str) -> Result<Value, String> {
+    let response = body["response"]
+        .as_str()
+        .filter(|r| OFFER_RESPONSES.contains(r))
+        .ok_or("answer accept, decline or counter")?;
+    let signature = body["signature"].as_str().ok_or("send the device's signature")?;
+    if !crate::identity::verify(public_key, &offer_message(proposal, life, offer, response), signature) {
+        return Err("the signature is not this device's over the answer".to_string());
+    }
+    Ok(json!({ "respond_to_offer": {
+        "proposal": proposal, "life": life, "offer": offer, "response": response,
+        "signed": { "key_id": device, "public_key": public_key, "signature": signature, "alg": "ecdsa-p256" },
+    } }))
+}
+
 /// The `record_consent` command for a life's consent, from the page's body
 /// (`{granted, signature}`). Giving a consent that needs the life's signed
 /// step needs the enrolled device's signature over [`consent_message`],

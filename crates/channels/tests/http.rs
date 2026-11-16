@@ -4728,6 +4728,78 @@ async fn compliance_works_third_party_payer_cases() {
     assert_eq!(sent.actor.id.as_str(), "pay-cmp");
 }
 
+/// Purpose: the life on a proposal answers an offer of terms from the app: what to sign is the underwriting module's exact
+/// message for that offer and answer, the answer goes only with the enrolled device's signature over it, from the caller
+/// `customer-app`, and the module (its real state machine) checks it again and refuses an offer that is not open; someone who
+/// is not the life, an unknown answer, a forged signature or a token without a proven device is refused before anything leaves.
+/// Why it matters: nothing sent a life's answer to an offer of terms, so loaded or excluded terms could never be accepted;
+/// accepting terms binds the life to them, so it must be their own act on a device bound to them.
+#[tokio::test]
+async fn the_life_answers_an_offer_of_terms() {
+    use base64::Engine;
+    let portal = &portal();
+    let now = portal.now();
+    let retail = portal.retail.clone();
+    portal.local.with(|state| {
+        use ic_log::StateMachine;
+        let rows = json!({ "publish_rows": { "rows": [{ "key": format!("{retail}/underwriting/P3/L1"), "policy": retail, "kind": "proposal_life",
+            "subject": KIRI, "sensitive": true, "body": { "proposal": "P3", "life": "L1", "stage": "offer_open", "waiting_on": "applicant",
+                "offer": { "offer": "O-1", "expires_on": "2027-12-15" } } }], "remove": [] } });
+        let command: Command = serde_json::from_value(rows).unwrap();
+        let output = state.apply(
+            9_002,
+            ic_channels::Envelope {
+                key: "life-row-offer".into(),
+                at: now,
+                actor: module("underwriting"),
+                command,
+            },
+        );
+        assert!(output.result.is_ok(), "{:?}", output.result);
+    });
+    // The life sees the offer waiting on their application; nobody else does.
+    let (status, mine) = portal.get("sub-kiri", "/app/v1/proposals").await;
+    assert_eq!(status, StatusCode::OK, "{mine}");
+    assert_eq!((&mine[0]["proposal"], &mine[0]["offer"]["offer"]), (&json!("P3"), &json!("O-1")), "{mine}");
+    assert_eq!(portal.get("sub-adv", "/app/v1/proposals").await.1, json!([]));
+    let path = "/app/v1/proposals/P3/lives/L1/offers/O-1";
+    let send = |body: Value| {
+        let text = body.to_string();
+        let headers = portal.proof(&portal.phone, "POST", path, &text);
+        async move { portal.send("POST", path, &headers, Some(body)).await }
+    };
+
+    let (status, to_sign) = portal.get("sub-kiri", &format!("{path}/accept/to-sign")).await;
+    assert_eq!(status, StatusCode::OK, "{to_sign}");
+    let message = base64::engine::general_purpose::STANDARD.decode(to_sign["message"].as_str().unwrap()).unwrap();
+    assert_eq!(message, ic_underwriting::signing::message("offer", &["P3", "L1", "O-1", "accept"]));
+    assert_eq!(portal.get("sub-adv", &format!("{path}/accept/to-sign")).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(portal.get("sub-kiri", &format!("{path}/maybe/to-sign")).await.0, StatusCode::NOT_FOUND);
+
+    let before = portal.underwriting.log().len();
+    let (status, problem) = portal.write("POST", "sub-kiri", path, json!({ "response": "accept" })).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("device_required")));
+    assert_eq!(send(json!({ "response": "accept" })).await.1["title"], "bad_answer", "unsigned");
+    assert_eq!(
+        send(json!({ "response": "maybe", "signature": portal.phone.sign(&message) })).await.1["title"],
+        "bad_answer"
+    );
+    let decline = ic_underwriting::signing::message("offer", &["P3", "L1", "O-1", "decline"]);
+    assert_eq!(
+        send(json!({ "response": "accept", "signature": portal.phone.sign(&decline) })).await.1["title"],
+        "bad_answer",
+        "signed for another answer"
+    );
+    assert_eq!(portal.underwriting.log().len(), before, "nothing reached the module");
+
+    // Signed: it reaches the module from the app, which refuses an offer that is not open on its proposal.
+    let (status, problem) = send(json!({ "response": "accept", "signature": portal.phone.sign(&message) })).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("no_offer")), "{problem}");
+    let sent = portal.underwriting.log().last().cloned().unwrap();
+    assert_eq!(sent.caller, "customer-app");
+    assert!(matches!(&sent.command, ic_underwriting::command::Command::RespondToOffer { offer, .. } if offer == "O-1"));
+}
+
 /// Purpose: the life on a proposal gives and withdraws their own consents from the app: what to sign is the underwriting
 /// module's exact message, a consent that needs the life's signed step goes only with the enrolled device's signature over it,
 /// the module (its real state machine) records it from the caller `customer-app` and checks the signature again, and anyone

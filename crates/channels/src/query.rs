@@ -72,6 +72,11 @@ pub enum Question {
         proposal: String,
         life: String,
     },
+    /// The proposals this party is a life on, as underwriting published them:
+    /// where each stands and any offer of terms waiting for their answer.
+    MyProposals {
+        party: PartyId,
+    },
     /// What a life is shown before they sign that they understand their new
     /// cover replaces cover they hold: what stays, what is added, what is
     /// lost and what it costs, from the proposal underwriting published and
@@ -552,6 +557,16 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 .map(|v| v.public_key.clone());
             json!({ "life": is_life, "public_key": key })
         }
+        Question::MyProposals { party } => json!(d
+            .published
+            .iter()
+            .flat_map(|(policy, rows)| rows.values().map(move |r| (policy, r)))
+            .filter(|(_, r)| r.kind == "proposal_life" && r.subject.as_ref() == Some(&party))
+            .map(
+                |(policy, r)| json!({ "policy": policy, "proposal": r.body["proposal"], "life": r.body["life"], "stage": r.body["stage"],
+                "waiting_on": r.body["waiting_on"], "offer": r.body.get("offer") })
+            )
+            .collect::<Vec<_>>()),
         Question::ReplacementStatement { party, proposal, life } => {
             let found = d.published.iter().find_map(|(policy, rows)| {
                 rows.values()

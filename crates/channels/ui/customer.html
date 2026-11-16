@@ -25,6 +25,8 @@
 
 <section data-view="To approve"><h2>Waiting for you</h2><p class="muted">Changes your adviser or our staff prepared for you. Nothing happens until you approve. Approving is signed, so set up this browser under Signing first, or approve on your phone.</p>
   <div id="waiting"></div><div id="wait-msg" aria-live="polite"></div>
+  <h2>Your applications</h2><p class="muted">Cover you have applied for. When we offer terms, the offer letter is in your documents; accept it, decline it or ask us to look again here. Your answer is signed.</p>
+  <div id="applications"></div><div id="app-msg" aria-live="polite"></div>
   <h2>Your requests</h2><div id="requests"></div></section>
 
 <section data-view="Your details"><h2>Your details</h2><div id="record"></div>
@@ -180,6 +182,27 @@ async function waiting() {
   put($("requests"), table(["Request", "Policy", "Change", "State"], mine.map((r) => [r.id.slice(0, 8), (me.policies.find((p) => p.policy === r.policy) || {}).number || r.policy || "", words(r.kind), state(r)])));
   return open.length;
 }
+// ---- Applications, and an answer to an offer of terms, signed over underwriting's own message.
+const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+async function applications() {
+  const mine = await api(R, "GET", "/app/v1/proposals");
+  const answer = (a, response, label, quiet) => h("button", { type: "button", class: quiet ? "quiet" : null, id: `offer-${response}-${a.proposal}-${a.life}`, on: { click: run($("app-msg"), () => respond(a, response, label)) } }, label);
+  put($("applications"), mine.length ? table(["Application", "Stage", "Waiting on", "Offer", ""], mine.map((a) => [a.proposal, words(a.stage), words(a.waiting_on || "nobody"),
+    a.offer ? `Open until ${a.offer.expires_on}` : "",
+    a.offer ? h("div", { class: "actions" }, answer(a, "accept", "Accept"), answer(a, "counter", "Ask us to look again", true), answer(a, "decline", "Decline", true)) : ""]))
+    : h("p", { class: "muted" }, "You have no application open."));
+  return mine.filter((a) => a.offer).length;
+}
+async function respond(a, response, label) {
+  signature("Answering an offer");
+  if (response !== "accept" && !(await portal.ask({ title: `${label}?`, text: response === "decline" ? "The cover offered will not go ahead." : "An underwriter looks at the terms again and contacts you.", confirm: label, danger: response === "decline" }))) return;
+  const base = `/app/v1/proposals/${encodeURIComponent(a.proposal)}/lives/${encodeURIComponent(a.life)}/offers/${encodeURIComponent(a.offer.offer)}`;
+  const { message } = await api(R, "GET", `${base}/${response}/to-sign`);
+  const sig = b64(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key.privateKey, fromB64(message)));
+  await api(R, "POST", base, { response, signature: sig });
+  await applications();
+  return response === "accept" ? "Accepted. We will let you know when your cover starts." : response === "decline" ? "Declined." : "Sent. An underwriter will be in touch.";
+}
 async function approve(r) {
   // An approval is always signed: it is the customer's own say-so, whoever prepared the change.
   if (!enrolled) throw new Error("Approving needs your signature. Set up this browser under Signing, or approve it on your phone.");
@@ -252,7 +275,7 @@ async function load() {
   put($("policies"), table(["Policy", "Product", "Status", "You are", ""], me.policies.map((p) => [p.number, words(p.product), words(p.status), p.relationships.map(words).join(", "),
     h("button", { type: "button", class: "quiet", id: "open-" + p.number, on: { click: run($("msg"), () => open(p)) } }, "Open")])));
   if (me.policies.length === 1) await open(me.policies[0]);
-  const count = await waiting();
+  const count = (await waiting()) + (await applications().catch(() => 0));
   if (count) say($("msg"), "warn", `${count} change${count > 1 ? "s are" : " is"} waiting for you to approve.`);
   await details();
 }

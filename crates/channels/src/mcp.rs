@@ -256,6 +256,11 @@ pub fn catalogue() -> Vec<Tool> {
         tool("give_consent", "Give or withdraw a consent", C, M::POST, "/app/v1/proposals/{proposal}/lives/{life}/consents/{kind}", "Give or withdraw a consent for the life on a proposal. Adviser access, the employer seeing a loading and the replacement disclosure need the enrolled device's signature.")
             .choose("kind", crate::disclosures::CONSENTS.to_vec())
             .json(r#"{"granted": true | false, "signature"?: "<the device key's, over consent_to_sign's bytes>"}"#),
+        tool("my_proposals", "My applications", C, M::GET, "/app/v1/proposals", "The applications you are a life on: where each stands, and any offer of terms waiting for your answer."),
+        tool("offer_to_sign", "Offer answer to sign", C, M::GET, "/app/v1/proposals/{proposal}/lives/{life}/offers/{offer}/{response}/to-sign", "For the life on a proposal: the exact bytes to sign to accept, decline or ask again about an offer of terms. The offer is named on the life's proposal row.")
+            .choose("response", crate::disclosures::OFFER_RESPONSES.to_vec()),
+        tool("answer_offer", "Answer an offer of terms", C, M::POST, "/app/v1/proposals/{proposal}/lives/{life}/offers/{offer}", "Accept, decline or ask again about an offer of terms, signed by the enrolled device. The terms are in the offer letter in your documents.")
+            .json(r#"{"response": "accept" | "decline" | "counter", "signature": "<the device key's, over offer_to_sign's bytes>"}"#),
         tool("replacement_statement", "What a replacement changes", C, M::GET, "/app/v1/proposals/{proposal}/lives/{life}/consents/replacement_disclosure/statement", "Before signing the replacement disclosure: the policy being replaced, the cover that is kept, lost and gained."),
         tool("my_policy", "A policy", C, M::GET, "/app/v1/policies/{policy}", "A policy as you may see it: covers, billing, claims, documents and requests, limited by your relationship to it."),
         tool("represented_person", "Someone I act for", C, M::GET, "/app/v1/represented/{party}", "For an attorney, guardian or holder of a written authority: the policies of the person you act for, and your authority."),

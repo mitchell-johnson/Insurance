@@ -597,6 +597,57 @@ async fn consent_to_sign(
     ok(json!({ "message": message, "signed": crate::disclosures::SIGNED_CONSENTS.contains(&kind.as_str()) }))
 }
 
+/// The proposals you are a life on: where each stands and any offer of
+/// terms waiting for your answer.
+async fn my_proposals(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    ok(s.ask(Question::MyProposals { party: session.party }).await?)
+}
+
+/// What the life signs to answer an offer of terms: the exact bytes, base64.
+/// Only the life on the proposal may ask.
+async fn offer_to_sign(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path((proposal, life, offer, response)): Path<(String, String, String, String)>,
+) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    s.signer(&session, &proposal, &life).await?;
+    if !crate::disclosures::OFFER_RESPONSES.contains(&response.as_str()) {
+        return Err(Problem::not_found());
+    }
+    let message = base64::engine::general_purpose::STANDARD.encode(crate::disclosures::offer_message(&proposal, &life, &offer, &response));
+    ok(json!({ "message": message }))
+}
+
+/// The life accepts, declines or asks again about an offer of terms, signed
+/// on a device they enrolled. The underwriting module checks the signature
+/// again and that the offer is still open.
+async fn offer_answer(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path((proposal, life, offer)): Path<(String, String, String)>,
+    body: Bytes,
+) -> Answer {
+    let session = s.customer(&headers, &method, &uri, &body).await?;
+    let Some(device) = session.device.clone() else {
+        return Err(device_required("answering an offer of terms"));
+    };
+    let idempotency = key(&headers, &session.party.0)?;
+    let public_key = s
+        .signer(&session, &proposal, &life)
+        .await?
+        .ok_or_else(|| device_required("answering an offer of terms"))?;
+    let command = crate::disclosures::offer_answer(&proposal, &life, &offer, &parse(&body)?, &device, &public_key)
+        .map_err(|e| Problem::new(StatusCode::BAD_REQUEST, "bad_answer", e))?;
+    s.to_underwriting(crate::underwriting::app_envelope(&format!("app:{idempotency}"), session.at, command))
+        .await
+}
+
 /// What the life reads before signing the replacement disclosure: the cover
 /// they keep, the cover added, what is lost, and the premium before and
 /// after. Only the life may read it, and only for a proposal that replaces.
@@ -4116,6 +4167,12 @@ pub fn router(state: Shared) -> Router {
         .route("/app/v1/proposals/{proposal}/lives/{life}/disclosures", post(disclosure_submit))
         .route("/app/v1/proposals/{proposal}/lives/{life}/consents/{kind}", post(consent_record))
         .route("/app/v1/proposals/{proposal}/lives/{life}/consents/{kind}/to-sign", get(consent_to_sign))
+        .route("/app/v1/proposals", get(my_proposals))
+        .route("/app/v1/proposals/{proposal}/lives/{life}/offers/{offer}", post(offer_answer))
+        .route(
+            "/app/v1/proposals/{proposal}/lives/{life}/offers/{offer}/{response}/to-sign",
+            get(offer_to_sign),
+        )
         .route(
             "/app/v1/proposals/{proposal}/lives/{life}/consents/replacement_disclosure/statement",
             get(replacement_statement),

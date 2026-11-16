@@ -612,7 +612,10 @@ impl Command {
             // portal checks the signed-in person is the life, and a consent
             // that needs the life's signed step is checked here either way.
             RecordConsent { .. } => &["new-business", "customer-app"],
-            PrefillExistingCover { .. } | RespondToOffer { .. } | Chaser { .. } | Requote { .. } | ConfirmInterview(_) => &["new-business"],
+            // The life answers an offer from new business's own channel or
+            // from the app, signed on their device either way.
+            RespondToOffer { .. } | Requote { .. } => &["new-business", "customer-app"],
+            PrefillExistingCover { .. } | Chaser { .. } | ConfirmInterview(_) => &["new-business"],
             AdviserLookup { .. } => &["adviser-portal"],
             EvidenceAcknowledged { .. } | EvidenceReceived { .. } | EvidenceUnobtainable { .. } => &["evidence", "migration"],
             ScheduleInterview { .. } => &["new-business", "underwriting-console"],

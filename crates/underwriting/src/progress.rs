@@ -100,6 +100,18 @@ pub fn rows(p: &Proposal) -> Vec<ProgressRow> {
             "stage": f.stage.key(),
             "waiting_on": if open { waiting_on(f.stage) } else { None },
         });
+        // Terms offered and waiting for the life's answer: the offer letter
+        // holds the terms; this says which offer to answer and by when.
+        // A group member's offer to take over their own loading is one too.
+        if open {
+            let waiting = f
+                .open_offer()
+                .map(|o| (o.id.clone(), o.expires_on))
+                .or_else(|| p.open_reoffer().filter(|r| &r.life == life).map(|r| (r.id.clone(), r.expires_on)));
+            if let Some((offer, expires_on)) = waiting {
+                body["offer"] = json!({ "offer": offer, "expires_on": expires_on });
+            }
+        }
         // A replacement shows the life what it gains, for the disclosure
         // statement they sign: the added cover and the premium quoted.
         // A new policy names the policy it replaces; a top-up replaces on its own.
