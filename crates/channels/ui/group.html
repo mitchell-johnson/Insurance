@@ -49,6 +49,7 @@
 <form id="tm-form"><div class="row"><div><label for="tm-scheme">Scheme</label><input id="tm-scheme" required></div><div><label for="tm-date">Effective</label><input id="tm-date" type="date" required></div>
 <div><label for="tm-reason">Reason</label><input id="tm-reason" required></div><div><label for="tm-sure"><input type="checkbox" id="tm-sure" required> I am sure</label></div><button>End the scheme</button></div></form><div id="tm-msg" aria-live="polite"></div></section>
 
+<section data-view="Act" class="admin" hidden><h2>Act on a scheme</h2><p class="muted">Every action group administration takes from a person. Terms are the scheme's terms as JSON, as shown under Schemes.</p><div id="acts"></div></section>
 <section data-view="Schemes" class="admin" hidden><h2>Another command</h2><p class="muted">Registering a scheme, amending its terms and agreeing a renewal take the scheme's terms as JSON.</p>
 <form id="raw-form"><div><label for="raw-cmd">Command (JSON)</label><textarea id="raw-cmd" rows="6" required></textarea></div><button>Send</button></form><div id="raw-msg" aria-live="polite"></div></section>
 </main>
@@ -214,10 +215,23 @@ $("fa-party").addEventListener("input", () => { delete $("fa-party").dataset.par
 // The search for the administrator is recorded against the scheme they are named for.
 const naming = () => { if (val("fa-policy")) portal.workOn(`Naming the first administrator of scheme ${val("fa-policy")}`); };
 $("fa-policy").addEventListener("change", naming); $("fa-party").addEventListener("focus", naming);
+const schemeItems = async () => [...schemes].map((value) => ({ value }));
+const ACTIONS = {
+  split_scheme: { label: "Split members into a new scheme", note: "For a sale or demerger: the members named move to a new scheme policy with its own employer and terms.", fields: [["scheme", "Scheme they leave", "text"], ["into", "New scheme reference", "reference", "SCH"],
+    ["new_policy", "New scheme policy", "text"], ["new_number", "New policy number", "text"], ["employer", "New employer (party)", "text"], ["effective", "Effective", "date"], ["employee_ids", "Employee IDs, separated by commas", "list"], ["terms", "The new scheme's terms (JSON)", "json"]] },
+  declare_pool: { label: "Declare an unnamed pool", fields: [["scheme", "Scheme", "text"], ["pool", "Pool", "text"], ["category", "Category", "text"], ["effective", "Effective", "date"], ["headcount", "Headcount", "int"], ["total_salary_minor", "Total salary", "money"]] },
+  choose_health_plan: { label: "Record a member's health plan", note: "As the member chose it. The whole list of dependants each time.", fields: [["scheme", "Scheme", "text"], ["employee_id", "Employee ID", "text"], ["plan", "Plan", "text"], ["tier", "Who it covers", "select", ["single", "couple", "family"]],
+    ["effective", "From", "date"], ["dependants", "Dependants (JSON list of {key, date_of_birth})", "json"]], build: (v) => ({ choose_health_plan: { ...v, dependants: v.dependants || [] } }) },
+  amend_terms: { label: "Amend a scheme's terms", fields: [["scheme", "Scheme", "text"], ["terms", "Terms (JSON)", "json"]] },
+  agree_renewal: { label: "Agree a renewal", fields: [["scheme", "Scheme", "text"], ["terms", "Terms for the new year (JSON)", "json"], ["rate_table", "Rate table version agreed", "text"]] },
+  register_scheme: { label: "Register a scheme", fields: [["scheme", "The registration (JSON)", "json"]], build: (v) => ({ register_scheme: v.scheme }) },
+};
+for (const a of Object.values(ACTIONS)) if (!a.build) a.build = (v, name) => ({ [name]: v });
 signIn(R).then(async () => {
   me = await ask("me");
   $("me").textContent = `You are ${me.staff}: ${me.admin ? "group administration" : "view only"}.`;
   document.querySelectorAll(".admin").forEach((e) => { e.hidden = !me.admin; });
   await showExceptions();
+  portal.actions($("acts"), ACTIONS, { id: "ga", send, after: () => showExceptions(), pickers: { scheme: schemeItems } });
 }).catch(portal.refuse);
 </script></body></html>

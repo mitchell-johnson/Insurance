@@ -103,7 +103,7 @@ pub fn employer_member(answer: &Value) -> Value {
 /// The commands an administrator may send. Every other command is staff's
 /// or another module's, and the group service would refuse it anyway; the
 /// portal does not pass it on.
-pub const EMPLOYER_COMMANDS: [&str; 3] = ["approve_file", "withdraw_file", "declare_pool"];
+pub const EMPLOYER_COMMANDS: [&str; 4] = ["approve_file", "withdraw_file", "declare_pool", "choose_health_plan"];
 
 /// Which scheme is on a policy.
 pub fn scheme_of(policy: &str) -> Value {
@@ -157,7 +157,7 @@ pub fn command(scheme: &str, sent: &Value) -> Result<Value, String> {
 /// The commands staff send from the console. The driver's, the member's
 /// and other modules' are never sent from here, and a file is received
 /// only by uploading it.
-pub const STAFF_COMMANDS: [&str; 16] = [
+pub const STAFF_COMMANDS: [&str; 18] = [
     "register_scheme",
     "amend_terms",
     "set_mapping",
@@ -174,6 +174,8 @@ pub const STAFF_COMMANDS: [&str; 16] = [
     "resolve_match",
     "agree_renewal",
     "terminate",
+    "split_scheme",
+    "choose_health_plan",
 ];
 
 /// Underwriting's command to offer a member the loading the employer has

@@ -4129,6 +4129,12 @@ async fn an_employer_runs_the_scheme_membership() {
     );
     let pool = json!({ "declare_pool": { "pool": "seed", "category": "staff", "effective": "2027-12-01", "headcount": 10, "total_salary_minor": 1 } });
     assert_eq!(portal.write("POST", "sub-hr", &at("commands"), pool).await.0, StatusCode::OK);
+    let plan = json!({ "choose_health_plan": { "employee_id": "E001", "plan": "core", "tier": "single", "effective": "2027-12-01" } });
+    assert_ne!(
+        portal.write("POST", "sub-hr", &at("commands"), plan).await.0,
+        StatusCode::BAD_REQUEST,
+        "an employer records a member's plan"
+    );
     // The group service's refusal is passed on as it gave it.
     let missing = json!({ "withdraw_file": { "file": "dec.csv" } });
     assert_eq!(
@@ -5048,6 +5054,12 @@ async fn the_group_console() {
     let (status, problem) = tell("sub-grp1", decide).await;
     assert_eq!(status, StatusCode::CONFLICT, "{problem}");
     assert!(problem["title"].as_str().is_some_and(|c| !c.is_empty()), "{problem}");
+
+    // A member's health plan and a scheme split are staff's to send; the module decides (this scheme has no health menu).
+    let plan = json!({ "choose_health_plan": { "scheme": "harbour", "employee_id": "E001", "plan": "core", "tier": "single", "effective": "2027-12-01" } });
+    let (status, problem) = tell("sub-grp1", plan).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert!(ic_channels::group::staff_command(&json!({ "split_scheme": {} })).is_ok());
 
     // Freeze and unfreeze.
     assert_eq!(tell("sub-grp1", freeze).await.0, StatusCode::OK);

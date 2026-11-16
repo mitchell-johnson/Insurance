@@ -20,6 +20,15 @@
   <h2>A member's record</h2><p class="muted">Category, salary and cover. Health, underwriting and claim details are never shown here.</p>
   <form id="lookup"><div class="row"><div><label for="employee">Employee ID</label><input id="employee" required maxlength="64"></div><button>Show</button></div></form>
   <div id="lookup-msg" aria-live="polite"></div><div id="member-view"></div>
+  <h2>A member's health plan</h2><p class="muted">Record the plan a member chose from the scheme's health menu, and who it covers.</p>
+  <form id="plan"><div class="row"><div><label for="pl-emp">Employee ID</label><input id="pl-emp" required maxlength="64"></div><div><label for="pl-plan">Plan</label><input id="pl-plan" required></div>
+  <div><label for="pl-tier">Who it covers</label><select id="pl-tier"><option value="single">The member</option><option value="couple">The member and a partner</option><option value="family">The member and family</option></select></div>
+  <div><label for="pl-from">From</label><input id="pl-from" type="date" required></div><div><label for="pl-deps">Others covered, one per line: name, birth date</label><textarea id="pl-deps" rows="2" placeholder="Aroha, 2015-03-01"></textarea></div><button>Record</button></div></form>
+  <div id="plan-msg" aria-live="polite"></div>
+  <h2>Declare an unnamed pool</h2><p class="muted">For a scheme that covers a category by headcount and total salary rather than by name.</p>
+  <form id="pool"><div class="row"><div><label for="po-pool">Pool</label><input id="po-pool" required></div><div><label for="po-cat">Category</label><input id="po-cat" required></div><div><label for="po-from">Effective</label><input id="po-from" type="date" required></div>
+  <div><label for="po-count">Headcount</label><input id="po-count" type="number" min="0" required></div><div><label for="po-salary">Total salary ($)</label><input id="po-salary" type="number" step="0.01" min="0" required></div><button>Declare</button></div></form>
+  <div id="pool-msg" aria-live="polite"></div>
   <h2>Invoices</h2><div id="invoices"></div></section>
 <section data-view="Changes and administrators"><h2>Your requests</h2><div id="requests"></div></section></main>
 <script src="/ui/app.js"></script>
@@ -104,6 +113,16 @@ $("lookup").addEventListener("submit", run($("lookup-msg"), async () => {
     table(["Cover", "Formula", "Automatic"], m.covers.map((c) => [c.cover, money(c.formula_minor), money(c.automatic_minor)])),
     m.above_automatic.length ? table(["Above automatic", "Asked", "State", "In place"], m.above_automatic.map((a) => [a.cover, money(a.asked_minor), String(a.state).replace(/_/g, " "), a.in_place_minor ? money(a.in_place_minor) : ""])) : null));
 }));
+$("plan").addEventListener("submit", run($("plan-msg"), async () => {
+  const dependants = $("pl-deps").value.split("\n").map((l) => l.split(",").map((x) => x.trim())).filter((x) => x[0]).map(([key, date_of_birth]) => ({ key, date_of_birth }));
+  await api(R, "POST", G("commands"), { choose_health_plan: { employee_id: $("pl-emp").value.trim(), plan: $("pl-plan").value.trim(), tier: $("pl-tier").value, effective: $("pl-from").value, dependants } });
+  return "Recorded.";
+}));
+$("pool").addEventListener("submit", run($("pool-msg"), async () => {
+  await api(R, "POST", G("commands"), { declare_pool: { pool: $("po-pool").value.trim(), category: $("po-cat").value.trim(), effective: $("po-from").value, headcount: Number($("po-count").value), total_salary_minor: Math.round(Number($("po-salary").value) * 100) } });
+  return "Declared.";
+}));
+$("pl-from").value = $("po-from").value = portal.today();
 $("effective").value = portal.today();
 signIn(R).then(load).catch(portal.refuse);
 </script></body></html>
