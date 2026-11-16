@@ -534,7 +534,10 @@ impl Bench {
     fn lump_sum(&self, claim: &str, policy: &PolicyId, cover: &str, life: &str, claim_type: ClaimType, sum: i64) {
         let today = self.today();
         let died = claim_type == ClaimType::Death;
-        self.notify(claim, policy, cover, life, claim_type, today);
+        // A living benefit is paid once the life has survived the cover's survival period, so
+        // the event is a month back; a death is notified on the day.
+        let event = if died { today } else { today - chrono::Days::new(30) };
+        self.notify(claim, policy, cover, life, claim_type, event);
         assert_eq!(self.claim(claim).cover_check.unwrap().facts.sum_insured_minor, sum, "{claim}");
         self.admit(claim, None, None, died);
         assert_eq!(self.claim(claim).payable_minor, sum, "{claim}: admitted at the sum insured");
