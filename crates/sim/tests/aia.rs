@@ -1261,6 +1261,103 @@ fn standalone_trauma_converts_to_accelerated_trauma_with_life_cover() {
     );
 }
 
+/// Purpose: a conversion, a paid-up request, a buy-back or an added cover is refused on a policy
+/// no longer in force, and an option on a cover the product does not have is refused; a conversion of nothing, for a life not on the policy, of cover on special
+/// terms where the facility takes standard terms only, or to an option the new cover does not
+/// offer, is refused too; and none of them writes anything.
+/// Why it matters: each of these writes cover without evidence or changes what is billed. On a
+/// cancelled policy it would be cover no one pays for; on an excluded condition it would carry
+/// the risk the underwriter excluded into a cover that does not exclude it.
+#[test]
+fn cover_is_not_converted_paid_up_bought_back_or_added_where_the_terms_do_not_allow() {
+    let mut c = cluster();
+    let living = product("aia_living.star");
+    let life = pick(&living, "life", &[]);
+    let cc = pick(&living, "critical-conditions", &[]);
+    let cca = pick(&living, "critical-conditions-accelerated", &[]);
+    let covers = |l: &String, t: &String| vec![("life", 500_000_00, Some(l.clone())), ("critical-conditions", 200_000_00, Some(t.clone()))];
+    let id = issue(&mut c, policy(1, "aia-living", d(1987, 6, 1), &covers(&life, &cc))).unwrap();
+    let mut excluded = policy(2, "aia-living", d(1987, 6, 1), &covers(&life, &cc));
+    excluded.covers[1].exclusions = vec!["EX-BACK".into()];
+    let excluded = issue(&mut c, excluded).unwrap();
+    let cancelled = issue(&mut c, policy(3, "aia-living", d(1987, 6, 1), &covers(&life, &cc))).unwrap();
+    let code = |r: Result<(), Reject>| r.unwrap_err().code;
+    next_day(&mut c);
+    c.submit(0, "policy-servicing", Command::CancelPolicy { policy: cancelled.clone() }).unwrap();
+
+    let to_cca = |c: &mut Cluster, id: &PolicyId, option: &str, amount: i64| {
+        convert(c, id, "critical-conditions", "critical-conditions-accelerated", option, amount, "sc-1")
+    };
+    assert_eq!(code(to_cca(&mut c, &id, &cca, 0)), "invalid_request");
+    assert_eq!(code(to_cca(&mut c, &cancelled, &cca, 1_00)), "not_in_force");
+    assert_eq!(code(to_cca(&mut c, &excluded, &cca, 1_00)), "special_terms");
+    assert_eq!(code(to_cca(&mut c, &id, "no-such-option", 1_00)), "excess_option");
+    let stranger = ic_core::conversion::ConvertCover {
+        policy: id.clone(),
+        cover: "critical-conditions".into(),
+        life: ic_core::LifeId("life-9".into()),
+        sum_insured_minor: 1_00,
+        to_cover: "critical-conditions-accelerated".into(),
+        excess_option: cca.clone(),
+        reference: "sc-1".into(),
+        evidence: None,
+    };
+    assert_eq!(code(c.submit(0, "policy-servicing", Command::ConvertCover(Box::new(stranger)))), "unknown_life");
+
+    let paid_up = ic_core::paid_up::MakePaidUp {
+        policy: cancelled.clone(),
+        cover: "life".into(),
+        life: ic_core::LifeId("life-1".into()),
+        reference: "pu-1".into(),
+    };
+    assert_eq!(code(c.submit(0, "policy-servicing", Command::MakePaidUp(Box::new(paid_up)))), "not_in_force");
+    let buy_back = ic_core::buyback::BuyBack {
+        policy: cancelled.clone(),
+        claim: "clm-1".into(),
+        restores: "life".into(),
+        life: ic_core::LifeId("life-1".into()),
+        after_days: 365,
+        reference: "bb-1".into(),
+    };
+    assert_eq!(code(c.submit(0, "policy-servicing", Command::BuyBack(Box::new(buy_back)))), "not_in_force");
+    let add = |policy: &PolicyId, sum_insured_minor: i64| {
+        Command::AddCover(Box::new(ic_core::command::AddedCover {
+            policy: policy.clone(),
+            cover: "tpd-any-occupation".into(),
+            life: ic_core::LifeId("life-1".into()),
+            sum_insured_minor,
+            loadings: vec![],
+            exclusions: vec![],
+            excess_option: None,
+            reference: "add-1".into(),
+        }))
+    };
+    assert_eq!(code(c.submit(0, "underwriting", add(&cancelled, 100_000_00))), "not_in_force");
+    assert_eq!(code(c.submit(0, "underwriting", add(&id, -1))), "invalid_cover");
+    let today = c.state(0).business_date.unwrap();
+    let option = ic_core::command::OptionExercise {
+        policy: id.clone(),
+        cover: "no-such-cover".into(),
+        life: ic_core::LifeId("life-1".into()),
+        event: "marriage".into(),
+        event_date: today,
+        sum_insured_minor: 1_00,
+        evidence: "vault/evidence-1".into(),
+        reference: "opt-1".into(),
+        from_cover: None,
+        excess_option: None,
+    };
+    assert_eq!(code(c.submit(0, "policy-servicing", Command::ExerciseOption(Box::new(option)))), "no_option");
+
+    for p in [&id, &excluded] {
+        let policy = &c.state(0).policies[p];
+        assert_eq!(
+            (held(&c, p, "critical-conditions"), policy.conversions.len(), policy.covers.contains_key("tpd-any-occupation")),
+            (200_000_00, 0, false)
+        );
+    }
+}
+
 /// Purpose: AIA Living Family Protection grows its monthly benefit on a special event by the
 /// lower of half the original benefit and $500 a month, once in any 12 months, to the lower of
 /// half the original and $1,500 a month in all, and not for a life over 50.
