@@ -155,6 +155,8 @@ pub struct AppState {
     pub payments: Arc<dyn crate::forward::Source>,
     /// The collections module, for the collections console.
     pub collections: Arc<dyn crate::forward::Source>,
+    /// The documents module on the nodes, for the documents console.
+    pub correspondence: Arc<dyn crate::forward::Source>,
     /// The underwriting module, for the underwriting console.
     pub underwriting: Arc<dyn crate::forward::Source>,
     /// The customer master, for a person's own record. `None` where it is
@@ -2398,6 +2400,83 @@ async fn collections_command(State(s): State<Shared>, headers: HeaderMap, method
 }
 
 impl AppState {
+    /// Whether this person may open the documents console, and what they may
+    /// send there. Nobody without a documents action gets as far as that module.
+    async fn documents_standing(&self, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<(Session, Value), Problem> {
+        let session = self.staff(headers, method, uri, body).await?;
+        let standing = self
+            .ask(Question::CorrespondenceStaff {
+                staff: session.party.clone(),
+                at: session.at,
+            })
+            .await?;
+        if standing["view"] != true {
+            return Err(Problem::forbidden("your roles do not include documents"));
+        }
+        Ok((session, standing))
+    }
+}
+
+/// One of the console's questions to the documents module. `me` answers from here.
+async fn documents_question(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(name): Path<String>,
+    Query(fields): Query<std::collections::BTreeMap<String, String>>,
+) -> Answer {
+    let (session, standing) = s.documents_standing(&headers, &method, &uri, b"").await?;
+    if name == "me" {
+        return ok(standing);
+    }
+    let question = crate::correspondence::question(&name, &fields, session.at).map_err(Problem::bad_request)?;
+    let answer = s
+        .correspondence
+        .ask(question)
+        .await
+        .map_err(|e| module_problem("documents", StatusCode::BAD_REQUEST, e))?;
+    if answer.is_null() {
+        return Err(Problem::not_found());
+    }
+    ok(answer)
+}
+
+/// A person's command to the documents module, sent as the caller their
+/// staff actions name and with the person signed in as its actor. That
+/// module decides, and keeps an author from approving their own template.
+async fn documents_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let (session, standing) = s.documents_standing(&headers, &method, &uri, &body).await?;
+    let held = |field: &str| -> Vec<String> {
+        standing[field]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect()
+    };
+    let key = key(&headers, &session.party.0)?;
+    let page: Value = parse(&body)?;
+    let (command, caller) = crate::correspondence::command(&page, &session.party, &held("callers"), &held("approvals")).map_err(|refused| match refused {
+        crate::correspondence::Refused::NotACommand(why) => Problem::bad_request(why),
+        crate::correspondence::Refused::NotYours(why) => Problem::forbidden(why),
+    })?;
+    let envelope = crate::correspondence::envelope(&key, &session.party, caller, session.at, command);
+    let applied = s
+        .correspondence
+        .tell(envelope)
+        .await
+        .map_err(|e| module_problem("documents", StatusCode::BAD_REQUEST, e))?;
+    if let Some(refused) = applied["result"].get("Err") {
+        return Err(module_refusal(
+            refused["code"].as_str().unwrap_or("refused"),
+            refused["message"].as_str().unwrap_or("the documents module refused it"),
+        ));
+    }
+    ok(json!({ "accepted": true, "events": applied["events"], "duplicate": applied["duplicate"] }))
+}
+
+impl AppState {
     /// A member of staff who may carry out or decline a customer's request
     /// the customer master sent to a person first.
     async fn servicing_person(&self, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<Session, Problem> {
@@ -4103,6 +4182,8 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/servicing/{id}/carry-out", post(servicing_carry_out))
         .route("/staff/v1/servicing/{id}/decline", post(servicing_decline))
         .route("/staff/v1/collections/commands", post(collections_command))
+        .route("/staff/v1/documents/commands", post(documents_command))
+        .route("/staff/v1/documents/{question}", get(documents_question))
         .route("/staff/v1/collections/{question}", get(collections_question))
         .route("/staff/v1/underwriting/commands", post(underwriting_command))
         .route("/staff/v1/underwriting/disclosures", post(underwriting_disclosures))
@@ -4161,6 +4242,7 @@ pub fn router(state: Shared) -> Router {
         .route("/reinsurance", get(|State(s): State<Shared>| async move { page(&s, crate::ui::REINSURANCE) }))
         .route("/payments", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PAYMENTS) }))
         .route("/collections", get(|State(s): State<Shared>| async move { page(&s, crate::ui::COLLECTIONS) }))
+        .route("/documents", get(|State(s): State<Shared>| async move { page(&s, crate::ui::DOCUMENTS) }))
         .route("/group", get(|State(s): State<Shared>| async move { page(&s, crate::ui::GROUP) }))
         .route("/underwriting", get(|State(s): State<Shared>| async move { page(&s, crate::ui::UNDERWRITING) }))
         .route("/pricing", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PRICING) }))

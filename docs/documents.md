@@ -168,6 +168,10 @@ A clinical letter goes to the person alone (`clinical_to_adviser` otherwise). Ot
 
 **Issuing twice.** `Driver::issue` keys the command on the document id and a digest of the request. The same request again changes nothing; a request that was refused and then put right is judged afresh.
 
+## The staff console
+
+Staff reach this module from the portal's documents console (`/documents`, described in `docs/channels.md` "The documents console"), which sends each person's command as the caller their staff actions name and with them as actor. For its lists the module answers three questions added by the portal thread on 15 Nov 2026: `Templates { limit }` (every version, with status, approvals, author and date in force), `LegalHolds` (each scope and its case) and `OpenDefects { limit }`.
+
 ## Not built, or waiting on others
 
 - **Audio and braille.** The requested format is recorded on the document and passed to the print house, which produces audio and braille.

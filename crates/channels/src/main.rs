@@ -130,6 +130,11 @@ async fn main() -> Result<(), String> {
             module: ic_channels::collections::MODULE,
             patience: settings.patience,
         }),
+        correspondence: Arc::new(forward::Hosted {
+            client: settings.client(),
+            module: ic_channels::correspondence::MODULE,
+            patience: settings.patience,
+        }),
         underwriting: Arc::new(forward::Hosted {
             client: settings.client(),
             module: ic_channels::underwriting::MODULE,

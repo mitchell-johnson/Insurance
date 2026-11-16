@@ -131,6 +131,14 @@ fn every_question_is_answered_from_the_state() {
             records: vec![grace(1, today)],
         },
     );
+    kit.ok(
+        "legal",
+        "counsel",
+        Command::PlaceLegalHold {
+            scope: ic_documents::command::HoldScope::Policy(policy("pol-9")),
+            case: "LIT-1".into(),
+        },
+    );
     let hosted = hosted_from(&kit);
     let h = hosted.as_ref();
 
@@ -192,6 +200,19 @@ fn every_question_is_answered_from_the_state() {
         json!(["n1"])
     );
     assert_eq!(ask(h, Query::Report { from: today, to: today })["issued_by_kind"]["renewal_notice"], json!(1));
+    // The lists staff pick from: templates, legal holds and open defects.
+    let templates = ask(h, Query::Templates { limit: 50 });
+    assert!(
+        templates
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["template"] == json!({"id": "renewal", "version": 1}) && t["status"] == json!("active")),
+        "{templates}"
+    );
+    assert_eq!(ask(h, Query::Templates { limit: 1 }).as_array().unwrap().len(), 1);
+    assert_eq!(ask(h, Query::LegalHolds), json!([[{"policy": "pol-9"}, "LIT-1"]]));
+    assert_eq!(ask(h, Query::OpenDefects { limit: 10 })[0]["id"], json!("d1"));
     assert_eq!(ask(h, Query::Settings)["post_deemed_days"], json!(kit.state.settings.post_deemed_days));
     assert_eq!(ask(h, Query::StateHash), json!(kit.state.state_hash()));
 

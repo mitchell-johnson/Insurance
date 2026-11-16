@@ -131,6 +131,17 @@ pub enum Query {
         from: NaiveDate,
         to: NaiveDate,
     },
+    /// Every template version, by reference from the last, with where it stands: for
+    /// staff to pick one rather than type its reference.
+    Templates {
+        limit: usize,
+    },
+    /// The legal holds in place, and the case each was placed for.
+    LegalHolds,
+    /// Notice defects still open, oldest first.
+    OpenDefects {
+        limit: usize,
+    },
     Settings,
     StateHash,
 }
@@ -172,6 +183,9 @@ pub fn answer(state: &DocumentsState, question: Value) -> Result<Value, String> 
         Query::Defect { id } => json(state.defects.get(&id)),
         Query::NoticesByTemplate { template, from, to } => json(state.notices_by_template(&template, from, to)),
         Query::Report { from, to } => json(state.report(from, to)),
+        Query::Templates { limit } => json(state.template_list(cap(limit))),
+        Query::LegalHolds => json(state.legal_holds()),
+        Query::OpenDefects { limit } => json(state.defects.values().filter(|d| d.closed.is_none()).take(cap(limit)).collect::<Vec<_>>()),
         Query::Settings => json(&state.settings),
         Query::StateHash => json(state.state_hash()),
     }

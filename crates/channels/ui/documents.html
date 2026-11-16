@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Documents · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
+<body data-shell="workforce" data-page="documents" data-realm="workforce">
+<main><header class="page"><div><h1>Documents and correspondence</h1><p>Documents waiting to be issued, letters other teams asked for, templates and their approvals, notice defects and legal holds.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
+
+<section data-view="Work"><h2>Documents the core's events require</h2><p class="muted">Each waits for the documents service to issue it. Dismiss one only when it is not to be sent, and say why.</p><div id="tr-msg" aria-live="polite"></div><div id="triggers"></div></section>
+<section data-view="Work"><h2>Letters other teams asked for</h2><p class="muted">Underwriting, claims, group and reinsurance letters still to issue, oldest first.</p><div id="lr-msg" aria-live="polite"></div><div id="letters"></div></section>
+<section data-view="Work"><h2>Sends in progress</h2><div id="sends"></div></section>
+
+<section data-view="Templates"><h2>Templates</h2><p class="muted">Every version and where it stands. A draft needs its legal, product and compliance approvals from three people other than its author, and a passing rendering test, before it is activated.</p><div id="tp-msg" aria-live="polite"></div><div id="templates"></div></section>
+<section data-view="Templates"><h2>A template</h2><form id="t-form"><div class="row"><div><label for="t-id">Template</label><input id="t-id" required></div><div><label for="t-ver">Version</label><input id="t-ver" type="number" min="1" value="1" required></div><button>Show</button></div></form><div id="t-msg" aria-live="polite"></div><div id="tpl"></div></section>
+
+<section data-view="Documents"><h2>A policy's documents</h2><form id="p-form"><div class="row"><div><label for="p-id">Policy</label><input id="p-id" required></div><button>Show</button></div></form><div id="p-msg" aria-live="polite"></div><div id="pdocs"></div></section>
+<section data-view="Documents"><h2>Look something up</h2><form id="lk-form"><div class="row"><div><label for="lk-what">What</label><select id="lk-what"><option value="document">A document</option><option value="defect">A notice defect</option><option value="letter_request">A requested letter</option><option value="template_for">The template in force for an id today</option><option value="part_usage">Where a shared part is used</option><option value="retention">How long a kind of document is kept</option></select></div><div><label for="lk-id">Reference</label><input id="lk-id" required></div><button>Show</button></div></form><div id="lk-msg" aria-live="polite"></div><div id="lk"></div></section>
+
+<section data-view="Defects and holds"><h2>Open notice defects</h2><p class="muted">Notices that were wrong, the population being corrected, and the control that closes each.</p><div id="df-msg" aria-live="polite"></div><div id="defects"></div></section>
+<section data-view="Defects and holds"><h2>Legal holds</h2><p class="muted">Nothing under a hold is destroyed when its retention period ends.</p><div id="lh-msg" aria-live="polite"></div><div id="holds"></div></section>
+
+<section data-view="Report"><h2>The documents report</h2><form id="rp-form"><div class="row"><div><label for="rp-from">From</label><input id="rp-from" type="date" required></div><div><label for="rp-to">To</label><input id="rp-to" type="date" required></div><button>Show</button></div></form><div id="rp-msg" aria-live="polite"></div><div id="report"></div></section>
+<section data-view="Report"><h2>Settings in force</h2><div id="settings"></div></section>
+
+<section data-view="Act"><h2>Act</h2><p class="muted">Every action the documents module takes from a person, for the roles you hold. You are recorded as the person who did it.</p><div id="acts"></div></section>
+</main>
+<script src="/ui/app.js"></script>
+<script>
+"use strict";
+const { h, put, table, signIn, api, run } = portal;
+const $ = (id) => document.getElementById(id);
+const R = "workforce", BASE = "/staff/v1/documents/";
+let me = {}, acts = { choose: () => {} }, templates = [], defects = [], triggers = [], letters = [];
+const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
+const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
+const send = (command) => api(R, "POST", BASE + "commands", command);
+const calls = (caller) => (me.callers || []).includes(caller);
+const button = (label, out, act) => h("button", { class: "quiet", type: "button", on: { click: run(out, act) } }, label);
+const ref = (t) => t ? `${t.id} v${t.version}` : "";
+const scopeWords = (scope) => Object.entries(scope).map(([k, v]) => `${words(k)} ${v}`).join("");
+// Open one action on the Act tab, filled in from the row pressed.
+const open = (name, prefill) => { portal.view("act"); acts.choose(name, prefill); return ""; };
+
+const template = (v) => ({ id: v.id, version: v.version });
+const ACTIONS = {
+  dismiss_trigger: { label: "Dismiss a document the core required", can: () => calls("documents"), fields: [["trigger", "Trigger", "text"], ["reason", "Why it is not to be sent", "text"]] },
+  cancel_letter_request: { label: "Cancel a requested letter", can: () => calls("servicing"), fields: [["request", "Request", "text"], ["reason", "Why", "text"]] },
+  retry_delivery: { label: "Deliver a document again", can: () => calls("servicing"), note: "Once the customer's contact details are corrected.", fields: [["document", "Document", "text"], ["party", "Recipient", "text"], ["channels", "Channels, in order (in_app, email, sms, post)", "list"]] },
+  place_legal_hold: { label: "Place a legal hold", can: () => calls("legal"), fields: [["on", "Hold", "select", ["policy", "party", "document"]], ["what", "Policy, party or document", "text"], ["case", "Legal case", "text"]],
+    build: (v) => ({ type: "place_legal_hold", scope: { [v.on]: v.what }, case: v.case }) },
+  release_legal_hold: { label: "Release a legal hold", can: () => calls("legal"), fields: [["on", "Hold", "select", ["policy", "party", "document"]], ["what", "Policy, party or document", "text"]],
+    build: (v) => ({ type: "release_legal_hold", scope: { [v.on]: v.what } }) },
+  raise_notice_defect: { label: "Raise a notice defect", can: () => calls("remediation"), fields: [["defect", "Defect reference", "reference", "DEF"], ["case", "Remediation case", "text"], ["description", "What was wrong", "text"],
+    ["cause", "Cause", "select", ["template_error", "wrong_rate", "wrong_discount", "wrong_fee", "other"]], ["from", "Notices issued from", "date"], ["to", "To", "date"], ["grace_days", "Days a choice stays reopenable (blank for the setting)", "optional"]],
+    build: (v) => ({ type: "raise_notice_defect", ...v, grace_days: v.grace_days ? Number(v.grace_days) : null }) },
+  attach_defect_notices: { label: "Add notices to a defect", can: () => calls("remediation"), note: "The notices of a template version in the period are listed under Look something up.", fields: [["defect", "Defect", "text"], ["notices", "Notices, separated by commas", "list"]] },
+  exclude_from_defect: { label: "Take a notice out of a defect", can: () => calls("remediation"), fields: [["defect", "Defect", "text"], ["notice", "Notice", "text"], ["reason", "Why", "text"]] },
+  close_notice_defect: { label: "Close a notice defect", can: () => calls("remediation"), fields: [["defect", "Defect", "text"], ["control", "The control that now catches it", "text"]] },
+  disable_template: { label: "Disable a template version", can: () => calls("remediation") || calls("config"), note: "Nothing more is issued from it.", fields: [["id", "Template", "text"], ["version", "Version", "int"], ["reason", "What is wrong", "text"], ["case", "Case", "text"]],
+    build: (v) => ({ type: "disable_template", template: template(v), reason: v.reason, case: v.case }) },
+  approve_template: { label: "Approve a template", can: () => (me.approvals || []).length > 0, note: "Not one you wrote, and one approval per person.", fields: [["id", "Template", "text"], ["version", "Version", "int"], ["role", "Your approval", "select", []]],
+    build: (v) => ({ type: "approve_template", template: template(v), role: v.role }) },
+  activate_template: { label: "Activate a template", can: () => calls("config"), fields: [["id", "Template", "text"], ["version", "Version", "int"], ["effective_from", "In force from", "date"]],
+    build: (v) => ({ type: "activate_template", template: template(v), effective_from: v.effective_from }) },
+  run_rendering_tests: { label: "Run a template's rendering tests", can: () => calls("config"), fields: [["id", "Template", "text"], ["version", "Version", "int"], ["cases", "Cases (JSON list)", "json"]],
+    build: (v) => ({ type: "run_rendering_tests", template: template(v), cases: v.cases }) },
+  submit_template: { label: "Submit a template", can: () => calls("config"), note: "You are recorded as its author.", fields: [["template", "The template (JSON)", "json"]], build: (v) => ({ type: "submit_template", ...v.template }) },
+  register_part: { label: "Register a shared part", can: () => calls("config"), fields: [["part", "The part (JSON)", "json"]], build: (v) => ({ type: "register_part", ...v.part }) },
+  activate_settings: { label: "Activate settings", can: () => calls("config"), note: "The next version, with every setting.", fields: [["settings", "Settings (JSON)", "json"]], build: (v) => ({ type: "activate_settings", ...v.settings }) },
+  activate_retention: { label: "Activate retention rules", can: () => calls("config"), fields: [["version", "Version", "int"], ["rules", "Rules by kind (JSON)", "json"]] },
+  shred_party: { label: "Shred a party's documents", can: () => calls("privacy"), note: "Destroys what may be destroyed now, and the rest as each retention period ends. It cannot be undone.", fields: [["party", "Party", "text"]] },
+};
+
+async function showWork() {
+  const [tr, lr, ps] = await Promise.all([ask("triggers"), ask("letters_requested"), ask("pending_sends")]);
+  triggers = tr || []; letters = lr || [];
+  put($("triggers"), triggers.length ? table(["Policy", "Document", "For", "Business date", ""], triggers.map((t) => [t.policy, words(t.kind), words(t.purpose || ""), t.business_date,
+    calls("documents") ? button("Dismiss", $("tr-msg"), async () => open("dismiss_trigger", { trigger: t.id })) : ""])) : portal.empty("Nothing is waiting to be issued."));
+  put($("letters"), letters.length ? table(["Request", "Letter", "Asked by", "Received", "About", "Status", ""], letters.map((l) => [l.request.request, words(l.request.kind), words(l.caller), l.received, l.request.subject, words(typeof l.status === "string" ? l.status : Object.keys(l.status || {})[0]),
+    calls("servicing") ? button("Cancel", $("lr-msg"), async () => open("cancel_letter_request", { request: l.request.request })) : ""])) : portal.empty("No letter is waiting."));
+  put($("sends"), (ps || []).length ? table(["Document", "To", "By", "Kind"], ps.map((s) => [s.document, s.party, words(s.channel), words(s.kind)])) : portal.empty("Nothing is being sent."));
+}
+
+async function showTemplates() {
+  templates = await ask("templates") || [];
+  const mine = me.approvals || [];
+  put($("templates"), templates.length ? table(["Template", "Kind", "Title", "Status", "Approved by", "In force from", ""], templates.map((t) => {
+    const r = t.template, owed = mine.filter((role) => !(t.approvals || {})[role]);
+    return [ref(r), words(t.kind), t.title, words(t.status), Object.entries(t.approvals || {}).map(([role, by]) => `${role}: ${by}`).join(", ") || "none", t.effective_from || "",
+      h("span", {},
+        t.status === "draft" && owed.length && t.author !== me.staff ? button("Approve", $("tp-msg"), async () => open("approve_template", { id: r.id, version: r.version, role: owed[0] })) : null,
+        t.status === "draft" && calls("config") ? button("Activate", $("tp-msg"), async () => open("activate_template", { id: r.id, version: r.version, effective_from: portal.today() })) : null,
+        t.status === "active" && (calls("remediation") || calls("config")) ? button("Disable", $("tp-msg"), async () => open("disable_template", { id: r.id, version: r.version })) : null,
+        button("Show", $("tp-msg"), async () => { $("t-id").value = r.id; $("t-ver").value = r.version; await showTemplate(); return ""; }))];
+  })) : portal.empty("No template is loaded."));
+}
+async function showTemplate() {
+  const t = await ask("template", { id: $("t-id").value.trim(), version: $("t-ver").value });
+  put($("tpl"), portal.details({ title: t.template.title, kind: t.template.kind, status: t.status, author: t.template.author, approvals: t.approvals, effective_from: t.effective_from, review_by: t.template.review_by,
+    required_fields: [...(t.required_fields || [])].join(", "), last_rendering_test: t.last_run, disabled: t.disabled ? t.disabled.join(": ") : null }));
+}
+
+async function showPolicy() {
+  const docs = await ask("policy_documents", { policy: $("p-id").value.trim() }) || [];
+  put($("pdocs"), docs.length ? table(["Document", "Kind", "Issued", "Recipient", "Delivery", ""], docs.flatMap((d) => (d.deliveries.length ? d.deliveries : [null]).map((v) => {
+    const status = !v ? "" : typeof v.status === "string" ? v.status : Object.keys(v.status)[0];
+    return [d.id, words(d.kind), d.issued_on, v ? v.recipient.party : "", words(status),
+      v && status === "undeliverable" && calls("servicing") ? button("Deliver again", $("p-msg"), async () => open("retry_delivery", { document: d.id, party: v.recipient.party, channels: v.chain.join(", ") })) : ""];
+  }))) : portal.empty("No document for this policy."));
+}
+
+async function showDefects() {
+  const [df, lh] = await Promise.all([ask("open_defects"), ask("legal_holds")]);
+  defects = df || [];
+  put($("defects"), defects.length ? table(["Defect", "Case", "What was wrong", "Cause", "Notices", "Raised by", ""], defects.map((d) => [d.id, d.case, d.description, words(d.cause), Object.keys(d.notices || {}).length, d.raised_by,
+    calls("remediation") ? h("span", {}, button("Add notices", $("df-msg"), async () => open("attach_defect_notices", { defect: d.id })), button("Close", $("df-msg"), async () => open("close_notice_defect", { defect: d.id }))) : ""])) : portal.empty("No defect is open."));
+  put($("holds"), (lh || []).length ? table(["On", "Case", ""], lh.map(([scope, kase]) => {
+    const [on, what] = Object.entries(scope)[0];
+    return [scopeWords(scope), kase, calls("legal") ? button("Release", $("lh-msg"), async () => open("release_legal_hold", { on, what })) : ""];
+  })) : portal.empty("No legal hold is in place."));
+}
+
+$("t-form").addEventListener("submit", run($("t-msg"), showTemplate));
+$("p-form").addEventListener("submit", run($("p-msg"), showPolicy));
+$("lk-form").addEventListener("submit", run($("lk-msg"), async () => {
+  const what = $("lk-what").value, key = { document: "id", defect: "id", letter_request: "request", template_for: "id", part_usage: "part", retention: "kind" }[what];
+  put($("lk"), portal.details(await ask(what, { [key]: $("lk-id").value.trim() })));
+}));
+$("rp-form").addEventListener("submit", run($("rp-msg"), async () => { put($("report"), portal.details(await ask("report", { from: $("rp-from").value, to: $("rp-to").value }))); }));
+portal.picker($("t-id"), async () => [...new Map(templates.map((t) => [t.template.id, { value: t.template.id, hint: `${t.title} · ${words(t.status)}` }])).values()], { min: 0, empty: "No template is loaded." });
+// The policies the page already knows of: those with a document waiting or a letter asked for.
+portal.picker($("p-id"), async () => [...new Set([...triggers.map((t) => t.policy), ...letters.map((l) => l.request.policy).filter(Boolean)])].map((value) => ({ value })), { min: 0, empty: "Type the policy." });
+$("rp-from").value = portal.month(0) + "-01"; $("rp-to").value = portal.today();
+signIn(R).then(async () => {
+  me = await ask("me");
+  const roles = [...(me.callers || []), ...(me.approvals || []).map((a) => `${a} approver`)];
+  $("me").textContent = `You are ${me.staff}: ${roles.map(words).join(", ") || "view only"}.`;
+  ACTIONS.approve_template.fields[2][3] = me.approvals || [];
+  await Promise.all([showWork(), showTemplates(), showDefects(), ask("settings").then((s) => put($("settings"), portal.details(s)))]);
+  const ids = () => [...new Set(templates.map((t) => t.template.id))].map((value) => ({ value }));
+  acts = portal.actions($("acts"), ACTIONS, { id: "da", send, after: () => Promise.all([showWork(), showTemplates(), showDefects()]),
+    pickers: { id: async () => ids(), defect: async () => defects.map((d) => ({ value: d.id, hint: d.description })), trigger: async () => triggers.map((t) => ({ value: t.id, hint: `${t.policy} · ${words(t.kind)}` })),
+      request: async () => letters.map((l) => ({ value: l.request.request, hint: words(l.request.kind) })) } });
+}).catch(portal.refuse);
+</script></body></html>
