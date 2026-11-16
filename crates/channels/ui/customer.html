@@ -27,7 +27,10 @@
   <div id="waiting"></div><div id="wait-msg" aria-live="polite"></div>
   <h2>Your applications</h2><p class="muted">Cover you have applied for. When we offer terms, the offer letter is in your documents; accept it, decline it or ask us to look again here. If the product changes before your cover starts, the new price is shown here for you to accept. Your answer is signed.</p>
   <div id="applications"></div><div id="app-msg" aria-live="polite"></div>
-  <h2>Your requests</h2><div id="requests"></div></section>
+  <h2>Your requests</h2><div id="requests"></div>
+  <h2>Cover from your workplace</h2><p class="muted">If your employer's scheme covers you, link it to you with the scheme code and employee ID from your employer. When you leave the scheme you may keep your cover as a policy of your own, with no health questions, until the date shown.</p>
+  <form id="claim"><div class="row"><div><label for="cl-scheme">Scheme code</label><input id="cl-scheme" required></div><div><label for="cl-employee">Your employee ID</label><input id="cl-employee" required></div><button>Link it to me</button></div></form><div id="cl-msg" aria-live="polite"></div>
+  <div id="continuations"></div><div id="cn-out" aria-live="polite"></div></section>
 
 <section data-view="Your details"><h2>Your details</h2><div id="record"></div>
   <form id="contact"><div class="row"><div><label for="ct-email">Email</label><input id="ct-email" type="email" maxlength="200" autocomplete="email"></div>
@@ -206,6 +209,33 @@ async function requote(a) {
   await applications();
   return "Accepted. We will let you know when your cover starts.";
 }
+// ---- Workplace cover: claim a membership, and keep cover on leaving.
+const FREQUENCIES = [["monthly", "Monthly"], ["fortnightly", "Fortnightly"], ["quarterly", "Quarterly"], ["half_yearly", "Half-yearly"], ["yearly", "Yearly"]];
+async function continuations() {
+  const open = await api(R, "GET", "/app/v1/memberships/continuations");
+  put($("continuations"), open.map((o, n) => h("form", { id: `cn-${n}`, class: "card", on: { submit: run($("cn-out"), () => keep(o, n)) } },
+    h("h3", {}, `Keep your cover from scheme ${o.scheme}`),
+    h("p", { class: "muted" }, `You left on ${o.left}. You may keep up to ${money(o.max_sum_insured_minor)} until ${o.expires}.`),
+    h("div", { class: "row" },
+      h("div", {}, h("label", { for: `cn-${n}-product` }, "Product"), h("select", { id: `cn-${n}-product` }, o.products.map((p) => h("option", { value: p }, words(p))))),
+      h("div", {}, h("label", { for: `cn-${n}-cover` }, "Cover"), h("select", { id: `cn-${n}-cover` }, o.covers.map((c) => h("option", { value: c }, words(c))))),
+      h("div", {}, h("label", { for: `cn-${n}-freq` }, "Pay"), h("select", { id: `cn-${n}-freq` }, FREQUENCIES.map(([v, l]) => h("option", { value: v }, l)))),
+      h("div", {}, h("label", { for: `cn-${n}-sum` }, "Cover amount, in dollars"), h("input", { id: `cn-${n}-sum`, type: "number", min: "1", step: "1", value: String(o.max_sum_insured_minor / 100), required: true })),
+      h("button", {}, "Keep this cover")))));
+}
+async function keep(o, n) {
+  signature("Keeping your cover");
+  const body = { product_code: $(`cn-${n}-product`).value, cover: $(`cn-${n}-cover`).value, frequency: $(`cn-${n}-freq`).value, sum_insured_minor: Math.round(Number($(`cn-${n}-sum`).value) * 100) };
+  await api(R, "POST", `/app/v1/memberships/continuations/${encodeURIComponent(o.scheme)}/${o.offer}`, body);
+  await continuations();
+  return "Sent. Your policy starts the day your scheme cover ended; we will send you its schedule.";
+}
+$("claim").addEventListener("submit", run($("cl-msg"), async () => {
+  signature("Linking a workplace scheme");
+  const r = await api(R, "POST", "/app/v1/memberships", { scheme: $("cl-scheme").value.trim(), employee_id: $("cl-employee").value.trim() });
+  await continuations();
+  return r.already ? "This membership is already linked to you." : "Linked. Your workplace cover now shows with your policies.";
+}));
 async function respond(a, response, label) {
   signature("Answering an offer");
   if (response !== "accept" && !(await portal.ask({ title: `${label}?`, text: response === "decline" ? "The cover offered will not go ahead." : "An underwriter looks at the terms again and contacts you.", confirm: label, danger: response === "decline" }))) return;
@@ -289,6 +319,7 @@ async function load() {
     h("button", { type: "button", class: "quiet", id: "open-" + p.number, on: { click: run($("msg"), () => open(p)) } }, "Open")])));
   if (me.policies.length === 1) await open(me.policies[0]);
   const count = (await waiting()) + (await applications().catch(() => 0));
+  await continuations().catch(() => put($("continuations"), null));
   if (count) say($("msg"), "warn", `${count} change${count > 1 ? "s are" : " is"} waiting for you to approve.`);
   await details();
 }

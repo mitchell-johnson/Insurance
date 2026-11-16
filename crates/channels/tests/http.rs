@@ -5144,6 +5144,101 @@ async fn the_life_gives_their_own_consents() {
     assert!(matches!(&sent.command, Uw::SetMoreTime { proposal, life, more_time: true } if proposal.to_string() == "P3" && life.to_string() == "L1"));
 }
 
+/// Purpose: a scheme member links their membership to themselves from the customer page, by the employee ID their employer
+/// gave and the birth date the customer master holds for them, on a proven device; a wrong birth date reads the same as no
+/// such member, a membership linked to them is said to be theirs, and the command reaches the group module as `member-portal`.
+/// Once they leave, they see the continuation offered and take it up: only a product and cover the offer lists, an amount up
+/// to it, and only an offer open to them.
+/// Why it matters: the group module took both commands from the member's app, and nothing sent them, so a leaver could not
+/// use the continuation option the scheme gives them. A membership claimed on an employee ID alone would let anyone who
+/// learned a colleague's ID act on their cover.
+#[tokio::test]
+async fn a_member_claims_their_membership_and_keeps_cover_on_leaving() {
+    use common::group_module::harness::{attrs, change, row};
+    use ic_group::command::Resolution;
+    use ic_group::mapping::FileKind;
+    use ic_group::record::RowChange;
+    let module = Arc::new(common::group_module::seeded());
+    let born = chrono::NaiveDate::from_ymd_opt(1988, 4, 12).unwrap();
+    let mut kiri = attrs("staff", 80_000_00, "akl");
+    kiri.date_of_birth = Some(born);
+    // A retail policy is rated on sex and smoking, which the employer's file gives.
+    kiri.sex = Some(ic_product::Sex::Female);
+    kiri.smoker = Some(false);
+    {
+        let mut h = module.0.lock().unwrap();
+        let today = h.today();
+        h.upload("f-kiri", FileKind::Changes, vec![change(1, "E009", RowChange::Join, today, kiri.clone())])
+            .unwrap();
+        h.approve("f-kiri").unwrap();
+        // The customer master could not be sure who E009 is, so nobody is linked yet.
+        h.resolve("f-kiri", |_| Some(Resolution::Possible { candidates: vec![] }));
+        h.settle();
+    }
+    let _ = row;
+    let portal = portal_with(|employer| {
+        Arc::new(common::group_module::Beside {
+            employer,
+            staff: module.clone(),
+        })
+    });
+    let signed = |path: &'static str, body: Value| {
+        let text = body.to_string();
+        let headers = portal.proof(&portal.phone, "POST", path, &text);
+        let portal = &portal;
+        async move { portal.send("POST", path, &headers, Some(body)).await }
+    };
+    let claim = |employee: &str| json!({ "scheme": "harbour", "employee_id": employee });
+    let (status, problem) = portal.write("POST", "sub-kiri", "/app/v1/memberships", claim("E009")).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("device_required")));
+    // E001's birth date is not Kiri's: the same answer as an ID nobody has.
+    let (status, wrong) = signed("/app/v1/memberships", claim("E001")).await;
+    assert_eq!((status, wrong["title"].as_str()), (StatusCode::NOT_FOUND, Some("no_such_member")));
+    assert_eq!(signed("/app/v1/memberships", claim("E404")).await.1["title"], "no_such_member");
+    let (status, claimed) = signed("/app/v1/memberships", claim("E009")).await;
+    assert_eq!((status, &claimed), (StatusCode::OK, &json!({ "claimed": true, "already": false })), "{claimed}");
+    module.0.lock().unwrap().settle();
+    assert_eq!(
+        signed("/app/v1/memberships", claim("E009")).await.1,
+        json!({ "claimed": true, "already": true })
+    );
+    let linked = module.0.lock().unwrap().scheme().membership.active("E009").and_then(|m| m.party.clone());
+    assert_eq!(linked.map(|p| p.0), Some(KIRI.to_string()));
+
+    // Nothing to continue while still a member; once Kiri leaves, the offer is hers alone.
+    assert_eq!(portal.get("sub-kiri", "/app/v1/memberships/continuations").await.1, json!([]));
+    {
+        let mut h = module.0.lock().unwrap();
+        h.days(3);
+        let today = h.today();
+        h.apply("f-left", FileKind::Changes, vec![change(1, "E009", RowChange::Leave, today, kiri)]);
+    }
+    let (status, open) = portal.get("sub-kiri", "/app/v1/memberships/continuations").await;
+    assert_eq!(status, StatusCode::OK, "{open}");
+    let offer = open[0].clone();
+    assert_eq!(offer["scheme"], "harbour", "{open}");
+    assert_eq!(portal.get("sub-adv", "/app/v1/memberships/continuations").await.1, json!([]));
+    let path: &'static str = Box::leak(format!("/app/v1/memberships/continuations/harbour/{}", offer["offer"]).into_boxed_str());
+    let product = offer["products"][0].clone();
+    let cover = offer["covers"][0].clone();
+    let choose =
+        |product: &Value, cover: &Value, sum: i64| json!({ "product_code": product, "cover": cover, "frequency": "monthly", "sum_insured_minor": sum });
+    let max = offer["max_sum_insured_minor"].as_i64().unwrap();
+    assert_eq!(signed(path, choose(&json!("health-plan"), &cover, max)).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(signed(path, choose(&product, &json!("trauma-x"), max)).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(signed(path, choose(&product, &cover, max + 1)).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        signed("/app/v1/memberships/continuations/harbour/999", choose(&product, &cover, max)).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let (status, taken) = signed(path, choose(&product, &cover, max)).await;
+    assert_eq!(status, StatusCode::OK, "{taken}");
+    module.0.lock().unwrap().settle();
+    let h = module.0.lock().unwrap();
+    let o = h.scheme().offers.values().find(|o| o.employee_id == "E009").unwrap();
+    assert!(matches!(o.status, ic_group::state::OfferStatus::TakenUp { .. }), "{:?}", o.status);
+}
+
 /// Purpose: group administration staff work a scheme from the group console against the group module's own state machine:
 /// they see the queue of exceptions, decide a possible match so it leaves the queue, freeze and unfreeze a scheme, try a
 /// mapping against a sample without storing it, and every command reaches the module under the caller `group-admin` as the

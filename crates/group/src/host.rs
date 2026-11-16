@@ -114,6 +114,20 @@ pub enum Question {
     /// member to take over once too few members hold such cover. Never
     /// served to the employer: it says who has a loading.
     LoadingsInTotal { scheme: String },
+    /// Whether a signed-in person may claim a membership: the employee ID
+    /// is an active member whose birth date the employer gave is the
+    /// person's, and whether it is already linked to them or to someone
+    /// else. Nothing else about the member is said, and a wrong birth date
+    /// reads the same as no such member.
+    MemberClaim {
+        scheme: String,
+        employee: String,
+        date_of_birth: chrono::NaiveDate,
+        party: ic_core::PartyId,
+    },
+    /// The continuation offers open to a person, across schemes: for the
+    /// member's own app. Each with what may be taken up.
+    MemberOffers { party: ic_core::PartyId },
 }
 
 /// A file the driver has work to do on.
@@ -212,6 +226,42 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
             let today = state.today();
             let compared = compare(s, today, kind, today, &rows, rejected);
             json!({ "summary": compared.summary, "rejected": compared.rejected, "ambiguities": compared.ambiguities, "would_be_held": compared.held })
+        }
+        Question::MemberClaim {
+            scheme: id,
+            employee,
+            date_of_birth,
+            party,
+        } => {
+            let found = state
+                .schemes
+                .get(&id)
+                .and_then(|s| s.membership.active(&employee))
+                .filter(|m| m.attrs.date_of_birth == Some(date_of_birth));
+            match found {
+                None => json!({ "matches": false }),
+                Some(m) => json!({ "matches": true, "linked": m.party.as_ref().map(|p| if *p == party { "you" } else { "someone_else" }) }),
+            }
+        }
+        Question::MemberOffers { party } => {
+            let today = state.today();
+            let open: Vec<Value> = state
+                .schemes
+                .values()
+                .flat_map(|s| s.offers.values().map(move |o| (s, o)))
+                .filter(|(s, o)| {
+                    o.status == crate::state::OfferStatus::Open
+                        && today <= o.expires
+                        && s.membership.by_life(&o.life).and_then(|m| m.party.as_ref()) == Some(&party)
+                })
+                .map(|(s, o)| {
+                    let mut covers: Vec<String> = s.product.covers.iter().map(|c| c.cover_type.trim_start_matches("group_").to_string()).collect();
+                    covers.dedup();
+                    json!({ "scheme": s.id, "offer": o.id, "left": o.left, "expires": o.expires, "max_sum_insured_minor": o.max_sum_insured_minor,
+                        "products": s.terms.continuation.products, "covers": covers })
+                })
+                .collect();
+            json!(open)
         }
         Question::LoadingsInTotal { scheme: id } => {
             let s = scheme(&id)?;

@@ -1690,6 +1690,115 @@ async fn group_reoffer(State(s): State<Shared>, headers: HeaderMap, method: Meth
     s.to_underwriting(envelope).await
 }
 
+/// The continuation offers open to the signed-in person as a scheme member
+/// who has left: what they may take up, and by when.
+async fn my_continuations(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    grouped(s.group()?.ask(crate::group::member_offers(&session.party.0)).await)
+}
+
+#[derive(Deserialize)]
+struct Claim {
+    scheme: String,
+    employee_id: String,
+}
+
+/// A member claims their scheme membership: the employee ID their employer
+/// gave, checked against the birth date the customer master holds for the
+/// signed-in person. A wrong ID or birth date reads the same as no such
+/// member; a membership linked to someone else is refused. On a proven
+/// device only, since the link lets the person act on the membership.
+async fn claim_membership(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let session = s.customer(&headers, &method, &uri, &body).await?;
+    if session.device.is_none() {
+        return Err(device_required("claiming a scheme membership"));
+    }
+    let key = key(&headers, &session.party.0)?;
+    let claim: Claim = parse(&body)?;
+    let master = s.master.as_ref().ok_or_else(|| {
+        Problem::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "customer_master_unavailable",
+            "your record cannot be read just now",
+        )
+    })?;
+    let born = match master.record(&session.party).await {
+        Ok((200, record)) => record["facts"]["date_of_birth"]["value"].as_str().map(str::to_string),
+        _ => None,
+    }
+    .ok_or_else(|| {
+        Problem::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "customer_master_unavailable",
+            "your birth date cannot be read just now",
+        )
+    })?;
+    let (status, answer) = s
+        .group()?
+        .ask(crate::group::member_claim(&claim.scheme, &claim.employee_id, &born, &session.party.0))
+        .await
+        .map_err(group_down)?;
+    if status != 200 {
+        return grouped(Ok((status, answer)));
+    }
+    match (answer["matches"].as_bool(), answer["linked"].as_str()) {
+        (Some(true), Some("you")) => ok(json!({ "claimed": true, "already": true })),
+        (Some(true), Some(_)) => Err(Problem::new(
+            StatusCode::CONFLICT,
+            "already_identified",
+            "this membership is linked to someone else; ask your employer",
+        )),
+        (Some(true), None) => {
+            let command = json!({ "self_register": { "scheme": claim.scheme, "employee_id": claim.employee_id, "party": session.party } });
+            let sent = s.group()?.member_command(&key, &session.party.0, command).await;
+            grouped(sent.map(|(status, body)| {
+                if status == 200 {
+                    (200, json!({ "claimed": true, "already": false }))
+                } else {
+                    (status, body)
+                }
+            }))
+        }
+        _ => Err(Problem::new(
+            StatusCode::NOT_FOUND,
+            "no_such_member",
+            "no member of that scheme has that employee ID and your birth date",
+        )),
+    }
+}
+
+/// A member who has left takes up the continuation offered: a product the
+/// scheme allows, a cover it held, a frequency and an amount up to the
+/// offer. Only an offer open to the signed-in person, on a proven device.
+async fn take_up_continuation(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path((scheme, offer)): Path<(String, u64)>,
+    body: Bytes,
+) -> Answer {
+    let session = s.customer(&headers, &method, &uri, &body).await?;
+    if session.device.is_none() {
+        return Err(device_required("taking up continuation cover"));
+    }
+    let key = key(&headers, &session.party.0)?;
+    let choice: Value = parse(&body)?;
+    let (status, open) = s.group()?.ask(crate::group::member_offers(&session.party.0)).await.map_err(group_down)?;
+    if status != 200 {
+        return grouped(Ok((status, open)));
+    }
+    let listed = open
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|o| o["scheme"] == scheme.as_str() && o["offer"] == offer)
+        .ok_or_else(Problem::not_found)?;
+    let command = crate::group::take_up(listed, &choice).map_err(Problem::bad_request)?;
+    tracing::info!(scheme = %scheme, offer, "a leaver takes up continuation cover");
+    grouped(s.group()?.member_command(&key, &session.party.0, command).await)
+}
+
 #[derive(Deserialize)]
 struct FirstAdmin {
     party: PartyId,
@@ -4283,6 +4392,9 @@ pub fn router(state: Shared) -> Router {
         .route("/app/v1/proposals", get(my_proposals))
         .route("/app/v1/proposals/{proposal}/lives/{life}/offers/{offer}", post(offer_answer))
         .route("/app/v1/proposals/{proposal}/lives/{life}/requote", get(requote_offer).post(requote_accept))
+        .route("/app/v1/memberships", post(claim_membership))
+        .route("/app/v1/memberships/continuations", get(my_continuations))
+        .route("/app/v1/memberships/continuations/{scheme}/{offer}", post(take_up_continuation))
         .route(
             "/app/v1/proposals/{proposal}/lives/{life}/offers/{offer}/{response}/to-sign",
             get(offer_to_sign),

@@ -106,6 +106,11 @@ impl Group for GroupModule {
         Box::pin(async move { Ok(got) })
     }
 
+    fn member_command(&self, key: &str, actor: &str, command: Value) -> Asked<'_> {
+        let got = self.apply(caller::MEMBER, key, actor, command);
+        Box::pin(async move { Ok(got) })
+    }
+
     /// As the service's driver tries a mapping: sealed, read with the
     /// module's own CSV reader and mapping, and previewed.
     fn try_mapping(&self, scheme: &str, trial: Value) -> Asked<'_> {
@@ -151,7 +156,10 @@ impl Group for Beside {
     }
 
     fn ask(&self, question: Value) -> Asked<'_> {
-        if matches!(question["ask"].as_str(), Some("exceptions" | "mapping" | "possible_match")) {
+        if matches!(
+            question["ask"].as_str(),
+            Some("exceptions" | "mapping" | "possible_match" | "member_claim" | "member_offers")
+        ) {
             self.staff.ask(question)
         } else {
             self.employer.ask(question)
@@ -164,5 +172,9 @@ impl Group for Beside {
 
     fn try_mapping(&self, scheme: &str, trial: Value) -> Asked<'_> {
         self.staff.try_mapping(scheme, trial)
+    }
+
+    fn member_command(&self, key: &str, actor: &str, command: Value) -> Asked<'_> {
+        self.staff.member_command(key, actor, command)
     }
 }

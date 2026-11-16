@@ -26,6 +26,10 @@ pub const CALLER: &str = "employer-portal";
 /// role the portal's token carries on the group app.
 pub const STAFF_CALLER: &str = "group-admin";
 
+/// The caller name for a scheme member acting for themselves, and the
+/// third app role the portal's token carries on the group app.
+pub const MEMBER_CALLER: &str = "member-portal";
+
 /// Staff actions that open the group console.
 pub mod actions {
     /// Read schemes, files, members, mappings and the exception queue.
@@ -54,6 +58,57 @@ pub trait Group: Send + Sync {
     fn staff_command(&self, key: &str, actor: &str, command: Value) -> Asked<'_>;
     /// Try a mapping against a sample file, as staff. Nothing is stored.
     fn try_mapping(&self, scheme: &str, trial: Value) -> Asked<'_>;
+    /// Send a command as a scheme member, for themselves.
+    fn member_command(&self, key: &str, actor: &str, command: Value) -> Asked<'_>;
+}
+
+/// The question whether a signed-in person may claim a membership: the
+/// employee ID they give, the birth date the customer master holds for
+/// them, and who they are.
+pub fn member_claim(scheme: &str, employee: &str, date_of_birth: &str, party: &str) -> Value {
+    json!({ "ask": "member_claim", "scheme": scheme, "employee": employee, "date_of_birth": date_of_birth, "party": party })
+}
+
+/// The question for the continuation offers open to a person.
+pub fn member_offers(party: &str) -> Value {
+    json!({ "ask": "member_offers", "party": party })
+}
+
+/// The frequencies a continued policy may be paid at.
+pub const FREQUENCIES: [&str; 5] = ["monthly", "fortnightly", "quarterly", "half_yearly", "yearly"];
+
+/// The `take_up_continuation` command for a member's choice on one of their
+/// open offers (as `member_offers` lists it): a product the scheme lets
+/// leavers continue onto, a cover the scheme held, a frequency, and an
+/// amount no more than the offer. The new policy's references come from the
+/// scheme and offer, so a retry names the same policy.
+pub fn take_up(offer: &Value, choice: &Value) -> Result<Value, String> {
+    let (scheme, id) = (offer["scheme"].as_str().unwrap_or_default(), offer["offer"].as_u64().unwrap_or_default());
+    let listed = |field: &str, value: &Value| offer[field].as_array().is_some_and(|a| a.contains(value));
+    let product = &choice["product_code"];
+    if !listed("products", product) {
+        return Err("choose one of the products the scheme lets you continue onto".to_string());
+    }
+    let cover = &choice["cover"];
+    if !listed("covers", cover) {
+        return Err("choose a cover the scheme gave you".to_string());
+    }
+    let frequency = choice["frequency"]
+        .as_str()
+        .filter(|f| FREQUENCIES.contains(f))
+        .ok_or("choose how often to pay")?;
+    let sum = choice["sum_insured_minor"]
+        .as_i64()
+        .filter(|s| *s > 0)
+        .ok_or("say how much cover to continue")?;
+    if sum > offer["max_sum_insured_minor"].as_i64().unwrap_or_default() {
+        return Err("that is more than the cover you held when you left".to_string());
+    }
+    Ok(json!({ "take_up_continuation": {
+        "scheme": scheme, "offer": id,
+        "policy": format!("{scheme}-cont-{id}"), "number": format!("CON-{scheme}-{id}"), "group": format!("cont-{scheme}-{id}"),
+        "product_code": product, "cover": cover, "frequency": frequency, "sum_insured_minor": sum,
+    } }))
 }
 
 /// The fields of a member an employer sees, as the group service names
@@ -307,6 +362,12 @@ impl Group for Hosted {
 
     fn try_mapping(&self, scheme: &str, trial: Value) -> Asked<'_> {
         let request = self.http.post(self.url(&format!("/v1/schemes/{scheme}/mappings/try"))).json(&trial);
+        Box::pin(self.send(request))
+    }
+
+    fn member_command(&self, key: &str, actor: &str, command: Value) -> Asked<'_> {
+        let body = json!({ "key": key, "caller": MEMBER_CALLER, "actor": actor, "command": command });
+        let request = self.http.post(self.url("/v1/commands")).json(&body);
         Box::pin(self.send(request))
     }
 }

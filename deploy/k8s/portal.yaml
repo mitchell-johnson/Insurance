@@ -71,9 +71,11 @@ data:
   # documents app's roles "portal" and "staff".
   IC_DOCUMENTS_URL: http://ic-documents
   IC_DOCUMENTS_SCOPE: api://REPLACE-documents-application-id/.default
-  # The group service, for employers' membership files and invoices and for
-  # staff's group console. The portal's identity needs two of its app roles,
-  # employer-portal and group-admin (deploy/entra/group-app.sh, docs/group.md).
+  # The group service, for employers' membership files and invoices, staff's
+  # group console and members claiming their membership and taking up
+  # continuation. The portal's identity needs three of its app roles,
+  # employer-portal, group-admin and member-portal (deploy/entra/group-app.sh,
+  # docs/group.md).
   IC_GROUP_URL: http://ic-group
   IC_GROUP_SCOPE: api://REPLACE-group-application-id/.default
   # Which ledger voter is in which region, and the two regions that share the

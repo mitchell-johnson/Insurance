@@ -140,6 +140,16 @@ impl Group for GroupDouble {
     }
 
     /// As the service answers a portal whose token carries only `employer-portal`.
+    /// As the service answers a portal whose token carries only `employer-portal`.
+    fn member_command(&self, _: &str, _: &str, _: Value) -> Asked<'_> {
+        Box::pin(async {
+            Ok((
+                403,
+                json!({ "error": { "code": "role_not_held", "message": "the token does not carry the role member-portal" } }),
+            ))
+        })
+    }
+
     fn staff_command(&self, _: &str, _: &str, _: Value) -> Asked<'_> {
         Box::pin(async {
             Ok((
