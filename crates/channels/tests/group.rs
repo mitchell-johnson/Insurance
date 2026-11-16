@@ -36,13 +36,14 @@ async fn answer(State(seen): State<Seen>, request: Request) -> Response {
 }
 
 /// Purpose: an upload carries the bytes with the employer portal's caller name and the administrator as actor, a command and a question
-/// go as the group service's JSON with the portal's token, a 503 or an unreachable service is an error to retry, and a body that is not
+/// go as the group service's JSON with the portal's token, staff's and a member's commands go under their own caller names, a 503 or an unreachable service is an error to retry, and a body that is not
 /// JSON is answered as null.
 /// Why it matters: the group service decides who may act by these names; a missing actor would be refused, and a wrong caller name would
 /// either be refused or let the portal act under staff's role.
 #[tokio::test]
 async fn the_group_service_is_called_as_the_employer_portal() {
     let seen = Seen::default();
+    let log = seen.clone();
     let app = Router::new().fallback(answer).with_state(seen.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}/", listener.local_addr().unwrap());
@@ -77,6 +78,20 @@ async fn the_group_service_is_called_as_the_employer_portal() {
         serde_json::from_slice::<Value>(&seen[2].2).unwrap(),
         json!({ "ask": "scheme_of", "policy": "pol-1" })
     );
+
+    // Staff's commands go as group-admin and the member's as member-portal; a trial of a mapping goes to its own path.
+    let freeze = json!({ "freeze": { "scheme": "harbour" } });
+    assert_eq!(group.staff_command("st-1:k", "st-1", freeze.clone()).await.unwrap().0, 200);
+    let claim = json!({ "self_register": { "scheme": "harbour", "employee_id": "E9", "party": "kiri" } });
+    assert_eq!(group.member_command("kiri:k", "kiri", claim.clone()).await.unwrap().0, 200);
+    assert_eq!(group.try_mapping("harbour", json!({ "sample": "" })).await.unwrap().0, 404);
+    let later: Vec<Value> = log.lock().unwrap()[5..]
+        .iter()
+        .map(|(_, _, body)| serde_json::from_slice(body).unwrap())
+        .collect();
+    assert_eq!(log.lock().unwrap()[7].0, "/v1/schemes/harbour/mappings/try");
+    assert_eq!(later[0]["caller"], "group-admin");
+    assert_eq!((&later[1]["caller"], &later[1]["command"]), (&json!("member-portal"), &claim));
 
     let gone = Hosted {
         base: "http://127.0.0.1:9".into(),

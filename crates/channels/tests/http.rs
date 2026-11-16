@@ -4953,6 +4953,15 @@ async fn the_applicant_accepts_a_new_price_when_the_product_changed() {
     };
     let before = portal.underwriting.log().len();
     let signature = portal.phone.sign(&message);
+    let unproven = portal
+        .write(
+            "POST",
+            "sub-kiri",
+            path,
+            json!({ "product_hash": "hash-2-term-life", "premium_minor": 1234, "signature": signature }),
+        )
+        .await;
+    assert_eq!((unproven.0, unproven.1["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("device_required")));
     let (status, problem) = send(json!({ "product_hash": "hash-2-term-life", "premium_minor": 999, "signature": signature })).await;
     assert_eq!(
         (status, problem["title"].as_str()),
@@ -5154,7 +5163,7 @@ async fn the_life_gives_their_own_consents() {
 /// learned a colleague's ID act on their cover.
 #[tokio::test]
 async fn a_member_claims_their_membership_and_keeps_cover_on_leaving() {
-    use common::group_module::harness::{attrs, change, row};
+    use common::group_module::harness::{attrs, change};
     use ic_group::command::Resolution;
     use ic_group::mapping::FileKind;
     use ic_group::record::RowChange;
@@ -5174,8 +5183,17 @@ async fn a_member_claims_their_membership_and_keeps_cover_on_leaving() {
         // The customer master could not be sure who E009 is, so nobody is linked yet.
         h.resolve("f-kiri", |_| Some(Resolution::Possible { candidates: vec![] }));
         h.settle();
+        // E010 shares Kiri's birth date but is already someone else.
+        h.upload("f-twin", FileKind::Changes, vec![change(1, "E010", RowChange::Join, today, kiri.clone())])
+            .unwrap();
+        h.approve("f-twin").unwrap();
+        h.resolve("f-twin", |_| {
+            Some(Resolution::Linked {
+                party: ic_core::PartyId("someone-else".into()),
+            })
+        });
+        h.settle();
     }
-    let _ = row;
     let portal = portal_with(|employer| {
         Arc::new(common::group_module::Beside {
             employer,
@@ -5195,6 +5213,11 @@ async fn a_member_claims_their_membership_and_keeps_cover_on_leaving() {
     let (status, wrong) = signed("/app/v1/memberships", claim("E001")).await;
     assert_eq!((status, wrong["title"].as_str()), (StatusCode::NOT_FOUND, Some("no_such_member")));
     assert_eq!(signed("/app/v1/memberships", claim("E404")).await.1["title"], "no_such_member");
+    let (status, taken) = signed("/app/v1/memberships", claim("E010")).await;
+    assert_eq!((status, taken["title"].as_str()), (StatusCode::CONFLICT, Some("already_identified")));
+    // A scheme the group module does not know is its own answer, passed on.
+    let unknown = json!({ "scheme": "nope", "employee_id": "E009" });
+    assert_eq!(signed("/app/v1/memberships", unknown).await.0, StatusCode::NOT_FOUND);
     let (status, claimed) = signed("/app/v1/memberships", claim("E009")).await;
     assert_eq!((status, &claimed), (StatusCode::OK, &json!({ "claimed": true, "already": false })), "{claimed}");
     module.0.lock().unwrap().settle();
@@ -5224,6 +5247,8 @@ async fn a_member_claims_their_membership_and_keeps_cover_on_leaving() {
     let choose =
         |product: &Value, cover: &Value, sum: i64| json!({ "product_code": product, "cover": cover, "frequency": "monthly", "sum_insured_minor": sum });
     let max = offer["max_sum_insured_minor"].as_i64().unwrap();
+    let unproven = portal.write("POST", "sub-kiri", path, choose(&product, &cover, max)).await;
+    assert_eq!((unproven.0, unproven.1["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("device_required")));
     assert_eq!(signed(path, choose(&json!("health-plan"), &cover, max)).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(signed(path, choose(&product, &json!("trauma-x"), max)).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(signed(path, choose(&product, &cover, max + 1)).await.0, StatusCode::BAD_REQUEST);

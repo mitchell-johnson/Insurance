@@ -246,6 +246,10 @@ async fn the_portal_service_on_real_nodes() {
         let closing = claims.closing(0).await.unwrap();
         assert_eq!(closing["partition"], 0);
         assert!(ic_channels::claims::reconciliation(&[closing]).unwrap()["business_date"].is_string());
+        // The products and rate tables a requote binds to, and the loadings the group console reads.
+        let register = claims.register(0).await.unwrap();
+        assert!(!register.is_empty(), "the seeded product is in the register");
+        claims.loadings(0, None, open()).await.unwrap();
         let unreachable = ic_channels::claims::Hosted {
             client: ClusterClient::new(vec![format!("127.0.0.1:{}", free_port())]).with_attempt_timeout(Duration::from_millis(200)),
             partitions: 1,
@@ -258,6 +262,8 @@ async fn the_portal_service_on_real_nodes() {
         assert!(unreachable.quote(0, application).await.is_err());
         assert!(unreachable.policy(0, "KTL00000001".into()).await.is_err());
         assert!(unreachable.closing(0).await.is_err());
+        assert!(unreachable.register(0).await.is_err());
+        assert!(unreachable.loadings(0, None, open()).await.is_err());
     }
 
     // The consoles' reach into another module on the nodes: a module these nodes do not host refuses, and nodes that
