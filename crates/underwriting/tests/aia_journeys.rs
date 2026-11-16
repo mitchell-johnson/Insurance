@@ -537,13 +537,11 @@ impl Bench {
     fn lump_sum(&self, claim: &str, policy: &PolicyId, cover: &str, life: &str, claim_type: ClaimType, sum: i64) {
         let today = self.today();
         let died = claim_type == ClaimType::Death;
-        self.notify(claim, policy, cover, life, claim_type, today);
-        let facts = self.claim(claim).cover_check.unwrap().facts;
-        assert_eq!(facts.sum_insured_minor, sum, "{claim}");
-        // A benefit with a survival period is decided once the life has survived it.
-        if !died && facts.survival_days > 0 {
-            self.until(today + chrono::Days::new(u64::from(facts.survival_days) + 1), policy);
-        }
+        // A living benefit is paid once the life has survived the cover's survival period, so
+        // the event is a month back; a death is notified on the day.
+        let event = if died { today } else { today - chrono::Days::new(30) };
+        self.notify(claim, policy, cover, life, claim_type, event);
+        assert_eq!(self.claim(claim).cover_check.unwrap().facts.sum_insured_minor, sum, "{claim}");
         self.admit(claim, None, None, died);
         assert_eq!(self.claim(claim).payable_minor, sum, "{claim}: admitted at the sum insured");
         self.claims(claims::Command::Pay {
@@ -989,7 +987,8 @@ async fn aia_living_cover_is_bought_back_a_year_after_an_accelerated_trauma_clai
         )
         .await;
     let policy = issued.policy.clone();
-    b.months(1, &policy);
+    // The claim's event is a month back, so the cover has run two months.
+    b.months(2, &policy);
     b.lump_sum("clm-bbk", &policy, "critical-conditions-accelerated", "L1", ClaimType::Trauma, 200_000_00);
     let held = |b: &Bench, cover: &str| {
         b.with_cluster(|c| {
