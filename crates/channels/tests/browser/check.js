@@ -49,6 +49,8 @@ const personas = {
   "/documents sub-docof": "Documents officer | Templates and approvals, a legal hold, and what is waiting to be issued",
   "/documents sub-docla": "Legal approver | Gives a template its legal approval",
   "/documents sub-gl1": "ST10 Finance operator | Refused the documents console",
+  "/records sub-cd1": "Customer desk | Finds a caller, records their new email, and adds someone new",
+  "/records sub-gl1": "ST10 Finance operator | Refused customer records",
   "/reinsurance sub-ri1": "Reinsurance operations | Abandons a failed instruction, for a second signature",
   "/reinsurance sub-ri2": "Reinsurance lead | Signs and sends the abandonment",
   "/reinsurance sub-gl1": "ST10 Finance operator | Refused the reinsurance console",
@@ -744,6 +746,29 @@ const sees = async (page, text) => {
   } });
   await visit(browser, "/documents", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/finance", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
+  await visit(browser, "/records", { subject: "sub-cd1" }, { expectStatus: [409], run: async (p) => {
+    await say(p, "A customer rings: the desk finds them by name and birth date and opens their record");
+    await p.locator("#new-call").click();
+    await p.fill("#who", "Kiri Parata 12/4/1988");
+    await p.getByRole("option").filter({ hasText: "Kiri Parata" }).first().click();
+    await p.locator("#find button:not([type])").click();
+    await p.locator("#rec:not([hidden])").waitFor();
+    await p.locator("#rec-facts").getByText("kiri@example.nz").waitFor();
+    await say(p, "Their new email is recorded, with the call as the reason");
+    await tab(p, "Change the record");
+    await sees(p, "Changing the record of Kiri Parata");
+    await p.selectOption("#ca-f0", "email"); await p.fill("#ca-f1", "kiri@new.example.nz");
+    await p.locator("#acts form button").click();
+    await sees(p, "Done: Record or correct a fact.");
+    await say(p, "Someone new is added; the master says they may already be known");
+    await tab(p, "Add a person");
+    await p.fill("#np-f0", "Aroha"); await p.fill("#np-f1", "Twin"); await p.fill("#np-f2", "1990-02-03");
+    await p.locator("#create form button").click();
+    await sees(p, "may already be on file");
+    await tab(p, "Duplicates");
+    await sees(p, "No likely duplicates are waiting");
+  } });
+  await visit(browser, "/records", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await browser.close();
   if (failures.length) { console.error(failures.join("\n")); process.exit(1); }
   console.log("all pages check out");

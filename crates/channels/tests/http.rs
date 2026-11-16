@@ -1694,6 +1694,7 @@ async fn pages_are_served_locked_down() {
         "/payments",
         "/collections",
         "/documents",
+        "/records",
         "/replacements",
         "/ops",
         "/status",
@@ -5988,6 +5989,19 @@ async fn staff_work_in_the_customer_master() {
         .await
         .1;
     assert_eq!(created["path"], "/v1/parties");
+    // The master's own reason for refusing reaches the person, not a stock phrase.
+    let (status, twin) = portal
+        .write(
+            "POST",
+            "sub-cd1",
+            "/staff/v1/customers?case=c-1",
+            json!({ "kind": "person", "facts": [{ "field": "family_name", "value": "Twin" }] }),
+        )
+        .await;
+    assert_eq!(
+        (status, twin["title"].as_str(), twin["detail"].as_str()),
+        (StatusCode::CONFLICT, Some("possible_duplicate"), Some("this person may already be known"))
+    );
     let merged = portal
         .write(
             "POST",

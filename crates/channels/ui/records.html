@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Customer records · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
+<body data-shell="workforce" data-page="records" data-realm="workforce">
+<main><header class="page"><div><h1>Customer records</h1><p>Find a person, read and correct their record, their relationships and consents, add someone new, and settle likely duplicates.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
+
+<section data-view="Record"><h2>Find the person</h2><p class="muted">Every look-up and change is recorded against the case, call or task you are working on.</p>
+<form id="find"><div class="row"><div><label for="case">Case, call or task you are working on</label><input id="case" required></div><button type="button" class="quiet" id="new-call">A customer is on the phone</button></div>
+<div class="row"><div><label for="who">Name and birth date, email, phone or IRD number</label><input id="who" size="40" placeholder="Kiri Ngata 7/3/1984" required></div><div><label for="as-of">As it stood on (optional)</label><input id="as-of" type="date"></div><button>Open the record</button></div></form>
+<div id="find-msg" aria-live="polite"></div></section>
+<section data-view="Record" id="rec" hidden><h2 id="rec-title" tabindex="-1">Record</h2><div id="rec-summary"></div><h3>Facts</h3><div id="rec-facts"></div><h3>Consents</h3><div id="rec-consents"></div>
+<p id="rec-more"></p><div id="more-msg" aria-live="polite"></div><div id="more"></div></section>
+
+<section data-view="Change the record"><h2>Change the record</h2><p class="muted">For the person open under Record. You are recorded as the person who made the change, with the case. A vulnerability marker is set on the staff console by people trained to do it.</p><p id="change-who" class="muted"></p><div id="acts"></div></section>
+
+<section data-view="Duplicates"><h2>Likely duplicates</h2><p class="muted">People the customer master thinks may be one person. Merge them into the record that stays, or say they are not the same person.</p><div id="dup-msg" aria-live="polite"></div><div id="dups"></div></section>
+<section data-view="Duplicates"><h2>Merge or undo a merge</h2><div id="merges"></div></section>
+
+<section data-view="Add a person"><h2>Add a person</h2><p class="muted">Search under Record first. If the master finds someone who may be the same person it says so, and you can add them anyway once you are sure they are not.</p><div id="create"></div></section>
+</main>
+<script src="/ui/app.js"></script>
+<script>
+"use strict";
+const { h, put, table, signIn, api, run } = portal;
+const $ = (id) => document.getElementById(id);
+const R = "workforce", BASE = "/staff/v1/customers";
+let held = [], party = null, record = null, relationships = [], acts = { choose: () => {} }, mergeActs = { choose: () => {} };
+const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
+const may = (action) => held.includes("customers." + action);
+const show = (v) => v == null ? "" : typeof v === "object" ? Object.values(v).filter((x) => x != null && x !== "").join(", ") : String(v);
+
+// ---- The case in hand: said once, kept for this sign-in, sent with every call.
+$("case").value = portal.working();
+$("case").addEventListener("change", () => portal.workOn($("case").value.trim()));
+$("new-call").addEventListener("click", () => { $("case").value = portal.reference("CALL"); portal.workOn($("case").value); $("who").focus(); });
+const kase = () => {
+  const c = $("case").value.trim() || portal.working();
+  if (!c) { if (!$("case").closest("[hidden]")) $("case").focus(); throw new Error("Say what you are working on first: the case or task, or press \"A customer is on the phone\" for a call reference."); }
+  portal.workOn(c);
+  return "case=" + encodeURIComponent(c);
+};
+const get = (path, extra) => api(R, "GET", BASE + path + "?" + kase() + (extra || ""));
+const post = (path, body) => api(R, "POST", BASE + path + "?" + kase(), body);
+const at = (p) => "/" + encodeURIComponent(p);
+
+// ---- Find and read: the person is chosen from a search, never typed as a reference.
+portal.picker($("who"), (text) => portal.people(text), { label: true, onPick: (item) => { $("who").dataset.party = item.value; } });
+$("who").addEventListener("input", () => { delete $("who").dataset.party; });
+$("find").addEventListener("submit", run($("find-msg"), async () => {
+  kase();
+  const chosen = $("who").dataset.party;
+  if (!chosen) {
+    const found = await portal.people($("who").value);
+    const open = found.filter((p) => p.label !== "Closed to you");
+    if (open.length !== 1) throw new Error(open.length ? `${open.length} people match. Choose one from the list as you type.` : "Nobody you may open matches that.");
+    $("who").dataset.party = open[0].value;
+  }
+  await openRecord($("who").dataset.party);
+  return "";
+}));
+async function openRecord(p) {
+  party = p;
+  const asOf = $("as-of").value;
+  record = await get(at(p), asOf ? "&as_of=" + asOf : "");
+  const facts = record.facts || {}, f = (k) => facts[k] ? show(facts[k].value) : "";
+  const name = record.kind === "organisation" ? f("organisation_name") : [f("given_name"), f("family_name")].filter(Boolean).join(" ");
+  $("rec-title").textContent = name || "Record";
+  put($("rec-summary"), portal.details({ kind: record.kind, lifecycle: record.lifecycle, version: record.version, as_of: asOf || "today",
+    masked: Object.keys(record.masked || {}).map(words).join(", ") || null, withheld: (record.withheld || []).map(words).join(", ") || null }));
+  const rows = Object.entries(facts).map(([k, x]) => [words(k), show(x && x.value), (x && x.valid_from) || "", x && x.recorded_at ? new Date(x.recorded_at).toLocaleString() : ""]);
+  put($("rec-facts"), rows.length ? table(["Fact", "Value", "True from", "Recorded"], rows) : portal.empty("Nothing your role may read."));
+  const consents = Object.entries(record.consents || {});
+  put($("rec-consents"), consents.length ? table(["Purpose", "Given"], consents.map(([k, v]) => [words(k), typeof v === "object" ? (v.granted ? "yes" : "no") : String(v)])) : portal.empty("None recorded."));
+  const more = (label, fn) => h("button", { class: "quiet", type: "button", on: { click: run($("more-msg"), fn) } }, label);
+  put($("rec-more"), [
+    more("History", async () => { put($("more"), [h("h3", {}, "History"), portal.details(await get(at(party) + "/history"))]); }),
+    more("Relationships", async () => { await loadRelationships(); put($("more"), [h("h3", {}, "Relationships"), relationships.length ? table(["Relationship", "Kind", "To", "From", "To date", ""], relationships.map((r) => [r.id, words(r.kind), show(r.target), r.valid_from || "", r.valid_to || "",
+      may("change") && !r.valid_to ? h("button", { class: "quiet", type: "button", on: { click: () => { portal.view("change-the-record"); acts.choose("end_relationship", { id: r.id, valid_to: portal.today() }); } } }, "End it") : ""])) : portal.empty("No relationships.")]); }),
+    more("Due diligence", async () => { put($("more"), [h("h3", {}, "Due diligence"), portal.details(await get(at(party) + "/due-diligence"))]); }),
+    may("audit") ? more("Who read or changed it", async () => { put($("more"), [h("h3", {}, "Who read or changed it"), portal.details(await get(at(party) + "/audit"))]); }) : null,
+    may("export") ? more("Save everything held (Privacy Act request)", async () => {
+      const all = await get(at(party) + "/export");
+      const a = h("a", { href: URL.createObjectURL(new Blob([JSON.stringify(all, null, 2)], { type: "application/json" })), download: `${party}-held.json` });
+      document.body.append(a); a.click(); a.remove();
+      return "Saved. Send it to the person through the secure channel the request came in on.";
+    }) : null]);
+  put($("more"), null);
+  $("rec").hidden = false; $("rec-title").focus();
+  $("change-who").textContent = `Changing the record of ${name || party}.`;
+}
+async function loadRelationships() {
+  const r = await get(at(party) + "/relationships");
+  relationships = Array.isArray(r) ? r : r.relationships || [];
+}
+
+// ---- Change: the record commands staff may send. Each goes for the person open under Record.
+const FIELDS = ["given_name", "middle_names", "family_name", "preferred_name", "date_of_birth", "gender", "residency_status", "email", "mobile_phone", "postal_address", "residential_address",
+  "preferred_language", "presentation_format", "notice_channel", "ird_number", "tax_residency", "prescribed_investor_rate", "resident_withholding_rate", "organisation_name", "registration_number"];
+const KINDS = ["owner", "life_insured", "beneficiary", "dependant", "payer", "interested_party", "assignee", "claimant", "adviser", "employer_administrator", "scheme_member", "broker",
+  "director", "trustee", "signatory", "beneficial_owner", "employee", "attorney", "guardian", "authorised_representative", "executor", "partner", "parent", "staff", "premium_payer"];
+const change = () => may("change");
+const ACTIONS = {
+  record: { label: "Record or correct a fact", can: change, note: "A correction is a fact for a date already stated, with a reason. Leave the value empty to say the fact no longer holds.",
+    fields: [["field", "Fact", "select", FIELDS], ["value", "Value", "optional"], ["valid_from", "True from (blank for today)", "optdate"], ["reason", "Why (needed for a correction)", "optional"]],
+    build: (v) => ({ command: "record", facts: [{ field: v.field, value: v.value == null ? null : v.value, valid_from: v.valid_from }], reason: v.reason }) },
+  decline_correction: { label: "Decline a correction the person asked for", can: change, note: "Their statement of correction is kept with the record.", fields: [["field", "Fact", "select", FIELDS], ["statement", "Their statement", "text"]] },
+  add_relationship: { label: "Add a relationship", can: change, note: "To a policy, a scheme, or another person (an attorney, a guardian, an employer).",
+    fields: [["id", "Relationship reference", "reference", "REL"], ["kind", "Relationship", "select", KINDS], ["target_kind", "To a", "select", ["policy", "scheme", "party"]], ["target", "Policy, scheme or person", "text"], ["valid_from", "From", "date"], ["valid_to", "Until (optional)", "optdate"]],
+    build: (v) => ({ command: "add_relationship", id: v.id, kind: v.kind, target: { kind: v.target_kind, id: v.target }, valid_from: v.valid_from, valid_to: v.valid_to }) },
+  end_relationship: { label: "End a relationship", can: change, note: "The date is the first day it no longer holds.", fields: [["id", "Relationship", "text"], ["valid_to", "No longer holds from", "date"]] },
+  set_consent: { label: "Record a consent given or withdrawn", can: change, fields: [["purpose", "What for", "text"], ["granted", "Given", "bool"], ["valid_from", "From (blank for today)", "optdate"]] },
+  activate: { label: "Make a prospect a customer", can: change, fields: [] },
+  mark_deceased: { label: "Record a death", can: change, note: "Claims and servicing are told. Record it only on a death certificate or a notice you have checked.", fields: [["date_of_death", "Date of death", "date"]] },
+  retract_death: { label: "Withdraw a death recorded in error", can: change, fields: [["reason", "Why", "text"]] },
+  exit: { label: "Close the record", can: change, note: "The person has no cover or money with us and none is coming.", fields: [] },
+  assign_group: { label: "Put the person in a group", can: change, fields: [["group", "Group", "text"]] },
+  record_concern: { label: "Record a concern someone raised", can: change, note: "A trained person considers a marker. Nothing about the person is told to whoever raised it.",
+    fields: [["from", "Raised by", "select", ["family", "friend", "carer", "professional", "staff", "other"]], ["about", "About", "select", ["financial_abuse", "capacity", "wellbeing", "bereavement", "coercion", "other"]]] },
+  place_spending_hold: { label: "Hold money going out, as the person asked", can: change, note: "Only when the person asks you by phone. Only they can ask for it to end, in their app; you cannot remove it.", fields: [] },
+  question_capacity: { label: "Question whether the person can decide for themselves", can: change, note: "Anything a representative asks goes to a person until legal settles it. Cover and claims go on.", fields: [] },
+};
+const sendChange = async (command) => {
+  if (!party) { portal.view("record"); throw new Error("Open the person's record under Record first."); }
+  if (!command.command) { const { type, ...rest } = command; command = { command: type, ...rest }; }
+  return post(at(party) + "/commands", command);
+};
+
+// ---- Duplicates: the master's open duplicate reviews, merged or dismissed by a person.
+async function showDuplicates() {
+  if (!may("merge")) return;
+  if (!$("case").value.trim() && !portal.working()) { put($("dups"), portal.empty("Say what you are working on under Record, and the likely duplicates show here.")); return; }
+  const r = await get("/reviews");
+  const open = (r.reviews || []).filter((x) => x.kind === "duplicate" && x.status !== "dismissed");
+  put($("dups"), open.length ? table(["Review", "Person", "May be the same as", "Raised", ""], open.map((x) => {
+    const other = (x.candidates || []).map((c) => c.party || c)[0] || "";
+    return [x.id, x.party, (x.candidates || []).map((c) => c.party || c).join(", "), x.created_at ? new Date(x.created_at).toLocaleDateString() : "",
+      h("span", {}, h("button", { class: "quiet", type: "button", on: { click: () => mergeActs.choose("merge", { survivor: x.party, absorbed: other, review: x.id }) } }, "Merge"),
+        h("button", { class: "quiet", type: "button", on: { click: run($("dup-msg"), async () => { await post("/reviews/" + encodeURIComponent(x.id) + "/dismiss", {}); await showDuplicates(); return "Recorded as not the same person."; }) } }, "Not the same person"))];
+  })) : portal.empty("No likely duplicates are waiting."));
+}
+const MERGES = {
+  merge: { label: "Merge two records", note: "The record that stays keeps both histories; the other points to it.", fields: [["survivor", "Record that stays", "text"], ["absorbed", "Record merged into it", "text"], ["review", "Duplicate review it settles (optional)", "optional"]] },
+  unmerge: { label: "Undo a merge", note: "Each record is restored as it was, and what was recorded since stays with the record that stayed.", fields: [["survivor", "Record that stayed", "text"], ["absorbed", "Record that was merged into it", "text"]] },
+};
+
+// ---- Add a person.
+const CREATE = {
+  person: { label: "A person", fields: [["given_name", "Given name", "text"], ["family_name", "Family name", "text"], ["date_of_birth", "Date of birth", "date"], ["email", "Email (optional)", "optional"], ["mobile_phone", "Mobile (optional)", "optional"], ["allow_duplicate", "Add even if they may already be known", "nobool"]] },
+  organisation: { label: "An organisation", fields: [["organisation_name", "Name", "text"], ["registration_number", "Company or charity number (optional)", "optional"], ["email", "Email (optional)", "optional"], ["allow_duplicate", "Add even if it may already be known", "nobool"]] },
+};
+const buildNew = (v, kind) => {
+  const { allow_duplicate, ...facts } = v;
+  return { kind, allow_duplicate, facts: Object.entries(facts).filter(([, x]) => x !== "" && x != null).map(([field, value]) => ({ field, value })) };
+};
+async function addPerson(body) {
+  try { return await post("", body); } catch (e) {
+    if (e.status === 409) throw new Error("This person may already be on file. Search for them under Record; if they are someone else, choose \"Add even if they may already be known\".");
+    throw e;
+  }
+}
+
+signIn(R).then(async () => {
+  const me = await api(R, "GET", "/staff/v1/me");
+  held = (me.actions || []).filter((a) => a.startsWith("customers."));
+  if (!held.length) { const e = new Error("You do not work on customer records."); e.status = 403; throw e; }
+  $("me").textContent = `You may ${held.map((a) => words(a.slice(10))).join(", ")}.`;
+  acts = portal.actions($("acts"), ACTIONS, { id: "ca", send: sendChange, after: async () => { if (party) await openRecord(party); },
+    pickers: { id: async () => { if (party) await loadRelationships(); return relationships.map((r) => ({ value: r.id, hint: `${words(r.kind)} · ${show(r.target)}` })); } } });
+  if (!may("change")) put($("acts"), portal.empty("Your roles let you read records, not change them."));
+  if (may("merge")) {
+    mergeActs = portal.actions($("merges"), MERGES, { id: "mg", send: ({ type, ...body }) => post(type === "merge" ? "/merges" : "/unmerges", body), after: showDuplicates,
+      pickers: { survivor: portal.people, absorbed: portal.people } });
+    portal.onView((key) => { if (key === "duplicates") run($("dup-msg"), showDuplicates)(); });
+  } else {
+    put($("dups"), portal.empty("Settling duplicates is for people who merge records."));
+  }
+  if (may("create")) portal.actions($("create"), CREATE, { id: "np", send: ({ type, ...v }) => addPerson(buildNew(v, type)), after: async (_, made) => { if (made && made.party) { $("who").dataset.party = made.party; await openRecord(made.party); portal.view("record"); } } });
+  else put($("create"), portal.empty("Your roles do not let you add people."));
+}).catch(portal.refuse);
+</script></body></html>

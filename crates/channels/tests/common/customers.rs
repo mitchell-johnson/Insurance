@@ -88,6 +88,9 @@ fn answer(party: &str, version: u64, record: &Value) -> Value {
     json!({ "party": party, "kind": "person", "lifecycle": "active", "version": version, "facts": facts, "masked": {}, "withheld": [], "consents": {} })
 }
 
+/// The party a possible duplicate is said to match.
+pub const KIRI_TWIN: &str = "kiri";
+
 fn missing() -> Answered {
     (404, json!({ "title": "unknown_party" }))
 }
@@ -268,6 +271,15 @@ impl Master for MasterDouble {
                         })
                         .collect();
                     echo["results"] = json!(results);
+                }
+                // As the master does when it may already know the person: its own error shape, and the candidates.
+                Desk::Create { body, .. }
+                    if body["allow_duplicate"] != true && body["facts"].as_array().into_iter().flatten().any(|f| f["value"] == "Twin") =>
+                {
+                    return Ok((
+                        409,
+                        json!({ "error": { "code": "possible_duplicate", "message": "this person may already be known" }, "candidates": [{ "party": KIRI_TWIN }] }),
+                    ));
                 }
                 Desk::Read { party, .. } => {
                     if let Some((version, record)) = self.found(party) {

@@ -194,7 +194,7 @@ fn with_me(mut names: Vec<&'static str>) -> Vec<&'static str> {
 }
 
 /// Routes deliberately not offered as tools, and why.
-pub const EXCLUDED: [(&str, &str, &str); 28] = [
+pub const EXCLUDED: [(&str, &str, &str); 29] = [
     ("GET", "/healthz", "a probe for the platform, not a function"),
     ("GET", "/readyz", "a probe for the platform, not a function"),
     ("GET", "/app/v1/sync", "the device protocol: only an enrolled device, proving its key, syncs"),
@@ -224,6 +224,7 @@ pub const EXCLUDED: [(&str, &str, &str); 28] = [
     ("GET", "/payments", "a web page"),
     ("GET", "/collections", "a web page"),
     ("GET", "/documents", "a web page"),
+    ("GET", "/records", "a web page"),
     ("GET", "/group", "a web page"),
     ("GET", "/underwriting", "a web page"),
     ("GET", "/pricing", "a web page"),

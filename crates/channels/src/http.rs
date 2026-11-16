@@ -1688,8 +1688,12 @@ fn cared(answer: Result<crate::customers::Answered, String>) -> Result<Value, Pr
                 .ok()
                 .filter(|s| s.is_client_error() && *s != StatusCode::FORBIDDEN)
                 .unwrap_or(StatusCode::BAD_GATEWAY),
-            body["title"].as_str().unwrap_or("customer_master"),
-            body["detail"].as_str().unwrap_or("the customer master did not take it"),
+            // The master says why as `{"error": {code, message}}`; a problem document is taken too.
+            body["error"]["code"].as_str().or(body["title"].as_str()).unwrap_or("customer_master"),
+            body["error"]["message"]
+                .as_str()
+                .or(body["detail"].as_str())
+                .unwrap_or("the customer master did not take it"),
         )),
         Err(e) => Err(Problem::new(StatusCode::SERVICE_UNAVAILABLE, "customer_master_unavailable", e)),
     }
@@ -3564,8 +3568,12 @@ fn desked(answer: Result<crate::customers::Answered, String>) -> Answer {
                 .ok()
                 .filter(StatusCode::is_client_error)
                 .unwrap_or(StatusCode::BAD_GATEWAY),
-            body["title"].as_str().unwrap_or("customer_master"),
-            body["detail"].as_str().unwrap_or("the customer master did not take it"),
+            // The master says why as `{"error": {code, message}}`; a problem document is taken too.
+            body["error"]["code"].as_str().or(body["title"].as_str()).unwrap_or("customer_master"),
+            body["error"]["message"]
+                .as_str()
+                .or(body["detail"].as_str())
+                .unwrap_or("the customer master did not take it"),
         )),
         Err(e) => Err(Problem::new(StatusCode::SERVICE_UNAVAILABLE, "customer_master_unavailable", e)),
     }
@@ -4300,6 +4308,7 @@ pub fn router(state: Shared) -> Router {
         .route("/payments", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PAYMENTS) }))
         .route("/collections", get(|State(s): State<Shared>| async move { page(&s, crate::ui::COLLECTIONS) }))
         .route("/documents", get(|State(s): State<Shared>| async move { page(&s, crate::ui::DOCUMENTS) }))
+        .route("/records", get(|State(s): State<Shared>| async move { page(&s, crate::ui::RECORDS) }))
         .route("/group", get(|State(s): State<Shared>| async move { page(&s, crate::ui::GROUP) }))
         .route("/underwriting", get(|State(s): State<Shared>| async move { page(&s, crate::ui::UNDERWRITING) }))
         .route("/pricing", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PRICING) }))
