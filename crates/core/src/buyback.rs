@@ -57,7 +57,10 @@ pub(crate) fn buy_back(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Poli
         return if done.claim == spec.claim && done.restores == spec.restores && done.life == spec.life {
             Ok(())
         } else {
-            Err(Reject::new("duplicate_request", format!("reference {} bought back other cover", spec.reference)))
+            Err(Reject::new(
+                "duplicate_request",
+                format!("reference {} bought back other cover", spec.reference),
+            ))
         };
     }
     if policy.status != PolicyStatus::InForce {
@@ -97,10 +100,19 @@ pub(crate) fn buy_back(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Poli
             format!("the cover for life {} was taken without {}", spec.life, option.requires_feature),
         ));
     }
-    if policy.buybacks.values().any(|b| b.life == spec.life && b.restores == spec.restores && b.cover == claimed) {
+    if policy
+        .buybacks
+        .values()
+        .any(|b| b.life == spec.life && b.restores == spec.restores && b.cover == claimed)
+    {
         return Err(Reject::new("buyback_used", "the cover is bought back only once"));
     }
-    let cuts: Vec<_> = record.cuts.iter().filter(|c| c.cover == spec.restores && c.life == spec.life).cloned().collect();
+    let cuts: Vec<_> = record
+        .cuts
+        .iter()
+        .filter(|c| c.cover == spec.restores && c.life == spec.life)
+        .cloned()
+        .collect();
     let taken: i64 = cuts.iter().map(|c| c.amount_minor).sum();
     let Some(off) = cuts.iter().map(|c| c.on).min() else {
         return Err(Reject::new(
@@ -109,7 +121,10 @@ pub(crate) fn buy_back(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Poli
         ));
     };
     if !option.after_days.contains(&spec.after_days) {
-        return Err(Reject::new("buyback_window", format!("the survival period is one of {:?} days", option.after_days)));
+        return Err(Reject::new(
+            "buyback_window",
+            format!("the survival period is one of {:?} days", option.after_days),
+        ));
     }
     let from = off + chrono::Days::new(u64::from(spec.after_days));
     if ctx.date < from || (ctx.date - from).num_days() > i64::from(option.within_days) {
@@ -121,7 +136,13 @@ pub(crate) fn buy_back(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Poli
     let held: i64 = policy
         .covers
         .get(&spec.restores)
-        .map(|c| c.layers.iter().filter(|l| l.life == spec.life && l.in_force_on(ctx.date)).map(|l| l.sum_insured_minor).sum())
+        .map(|c| {
+            c.layers
+                .iter()
+                .filter(|l| l.life == spec.life && l.in_force_on(ctx.date))
+                .map(|l| l.sum_insured_minor)
+                .sum()
+        })
         .unwrap_or(0);
     if option.only_after_nil && held > 0 {
         return Err(Reject::new("not_nil", "this buy-back follows only a claim that took the whole cover"));
@@ -150,11 +171,7 @@ pub(crate) fn buy_back(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Poli
             start: None,
         },
     )?;
-    let layer = policy
-        .covers
-        .get(&spec.restores)
-        .and_then(|c| c.layers.iter().map(|l| l.id).max())
-        .unwrap_or(0);
+    let layer = policy.covers.get(&spec.restores).and_then(|c| c.layers.iter().map(|l| l.id).max()).unwrap_or(0);
     ctx.emit(Event::CoverBoughtBack {
         policy: policy.id.clone(),
         claim: spec.claim.clone(),

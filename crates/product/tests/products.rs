@@ -173,7 +173,11 @@ fn bad_products_are_rejected() {
 #[test]
 fn each_product_rule_refuses_the_file_that_breaks_it() {
     let cases: [(&str, &str, &str); 18] = [
-        ("max_uses = 3,", "max_uses = 0,", "an insurability option is on a lump sum or monthly benefit cover"),
+        (
+            "max_uses = 3,",
+            "max_uses = 0,",
+            "an insurability option is on a lump sum or monthly benefit cover",
+        ),
         (
             "events = [\"marriage\", \"birth_or_adoption\", \"mortgage\"]",
             "events = [\"marriage\", \"marriage\"]",

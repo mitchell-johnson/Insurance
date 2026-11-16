@@ -373,7 +373,7 @@ The page has five views: the queue (days to lapse, then annual premium), tasks b
 | `POST /staff/v1/underwriting/sign/{id}`, `.../withdraw/{id}` | Sign and send, or take back, a prepared remedy. |
 | `POST /staff/v1/underwriting/disclosures` | `{proposal, life, purpose}`: the intake's answer as it gave it. |
 
-Not sent from here: configuration, the driver's own commands (sweep, acknowledgements, parking), and anything from new business, evidence providers, reinsurance, the issuer or claims.
+Not sent from here: configuration, the driver's own commands (sweep, acknowledgements, parking), and anything from new business, evidence providers, reinsurance, the issuer or claims. The case form also books and records tele-interviews and checks the proof for an insurability option or conversion (`check_option_evidence`); a proposal can mark a life as needing more time (`set_more_time`) and ask for a delegate's file.
 
 ## The finance console
 

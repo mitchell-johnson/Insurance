@@ -42,7 +42,7 @@ pub mod actions {
 
 /// The commands a person sends alone, and the field in each that names
 /// the person acting.
-const DIRECT: [(&str, &str); 17] = [
+const DIRECT: [(&str, &str); 19] = [
     ("declare_conflict", "underwriter"),
     ("take_case", "underwriter"),
     ("hand_over", "by"),
@@ -60,6 +60,8 @@ const DIRECT: [(&str, &str); 17] = [
     ("record_peer_finding", "reviewer"),
     ("schedule_interview", "booked_by"),
     ("requeue_effect", "by"),
+    ("check_option_evidence", "underwriter"),
+    ("set_more_time", ""),
 ];
 
 /// Commands that wait for a second senior.

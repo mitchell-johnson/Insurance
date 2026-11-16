@@ -18,6 +18,7 @@
 <option value="propose">Propose a decision</option><option value="evidence">Ask for evidence</option><option value="opinion">Ask another underwriter's opinion</option>
 <option value="record_opinion">Record your opinion</option><option value="countersign">Countersign a decision</option><option value="hand_over">Hand the case over</option>
 <option value="move">Move the case to another queue</option><option value="release">Release documents to the reinsurer</option>
+<option value="schedule">Book a tele-interview</option><option value="interview">Record a tele-interview</option><option value="option">Check the proof for an option or conversion</option>
 </select></div></div>
 <form id="c-form"><div class="row" id="c-fields"></div><p><button>Send</button></p></form>
 <div id="c-msg" aria-live="polite"></div></section>
@@ -25,6 +26,10 @@
 <section data-view="Proposals"><h2>A proposal</h2>
 <form id="p-form"><div class="row"><div><label for="p-id">Proposal</label><input id="p-id" required></div><button>Open</button>
 <button class="quiet" type="button" id="p-retry">Send the issue again</button></div></form>
+<form id="m-form"><div class="row"><div><label for="m-life">Life</label><input id="m-life" required></div>
+<div><label for="m-more">More time to answer</label><select id="m-more"><option value="true">Give the life more time</option><option value="false">No longer</option></select></div><button>Set</button></div></form>
+<form id="g-form"><div class="row"><div><label for="g-life">Life</label><input id="g-life" required></div>
+<div><label for="g-purpose">Why you need the delegate's file</label><input id="g-purpose" required size="32"></div><button>Ask for the delegate's file</button></div></form>
 <div id="p-msg" aria-live="polite"></div><div id="proposal"></div>
 <h3>Read a life's disclosures</h3>
 <p class="muted">Each reading is recorded with its purpose before anything is opened.</p>
@@ -97,6 +102,11 @@ const ACTIONS = {
   hand_over: [[["to", "Hand to", "text"]], (f, c) => ({ hand_over: { case: c, to: f.to } })],
   move: [[["queue", "Queue", "select", QUEUES], ["case_type", "Case type", "select", TYPES], ["reasons", "Why", "text"]],
     (f, c) => ({ move_case: { case: c, queue: f.queue, case_type: f.case_type, reasons: codes(f.reasons) } })],
+  schedule: [[["when", "When", "datetime-local"]], (f, c) => ({ schedule_interview: { proposal: $("p-id").value.trim(), life: $("d-life").value.trim(), scheduled_for: new Date(f.when).toISOString() } })],
+  interview: [[["notes_ref", "Where the notes are filed", "text"], ["notes_hash", "The notes' fingerprint (SHA-256)", "text"], ["recording_ref", "Recording, if any", "text"], ["present", "Who was on the call", "text"], ["adviser_present", "The adviser was on the call", "select", ["false", "true"]]],
+    (f, c) => ({ record_interview: { case: c, notes_ref: f.notes_ref, notes_hash: f.notes_hash, recording_ref: f.recording_ref || null, present: codes(f.present), adviser_present: f.adviser_present === "true" } })],
+  option: [[["accepted", "The proof", "select", ["true", "false"]], ["note", "What it rests on", "text"]],
+    (f, c) => ({ check_option_evidence: { case: c, accepted: f.accepted === "true", note: f.note } })],
   release: [[["treaty", "Treaty", "text"], ["documents", "Document references", "text"]], (f, c) => ({ release_to_reinsurer: { case: c, treaty: f.treaty, documents: codes(f.documents) } })],
 };
 function field([key, label, kind, options]) {
@@ -150,7 +160,7 @@ function take(c) {
 }
 // Open a case: its proposal and life come with it, and the Cases tab is where it is worked.
 async function openCase(item) {
-  $("c-case").value = item.case; $("p-id").value = item.proposal; $("d-life").value = item.life;
+  $("c-case").value = item.case; $("p-id").value = item.proposal; $("d-life").value = item.life; $("m-life").value = item.life; $("g-life").value = item.life;
   if (!$("d-purpose").value) $("d-purpose").value = `Assessing case ${item.case}`;
   put($("case-head"), h("p", { class: "working" }, h("strong", {}, item.case), ` ${words(item.case_type)} for life ${item.life} on proposal ${item.proposal}`, item.owner ? `, held by ${item.owner}` : ", not yet taken"));
   await openProposal(item.proposal).catch((e) => say($("p-msg"), "bad", e.message));
@@ -194,6 +204,8 @@ portal.picker($("n-review"), () => Promise.resolve(listed.concat(held).filter((i
 let drawn = [];
 portal.picker($("f-decision"), () => Promise.resolve(drawn.map((d) => ({ value: d, label: d, hint: "drawn for peer review" }))), { min: 0, empty: "Draw a sample first." });
 pickers(document);
+$("m-form").addEventListener("submit", run($("p-msg"), async () => done(await send({ set_more_time: { proposal: $("p-id").value.trim(), life: $("m-life").value.trim(), more_time: $("m-more").value === "true" } }))));
+$("g-form").addEventListener("submit", run($("p-msg"), async () => done(await send({ request_delegate_file: { proposal: $("p-id").value.trim(), life: $("g-life").value.trim(), purpose: $("g-purpose").value.trim() } }))));
 $("p-retry").addEventListener("click", run($("p-msg"), async () => done(await send({ retry_issue: { proposal: $("p-id").value.trim() } }))));
 $("d-form").addEventListener("submit", run($("d-msg"), async () => {
   const records = await api(R, "POST", BASE + "disclosures", { proposal: $("p-id").value.trim(), life: $("d-life").value.trim(), purpose: $("d-purpose").value.trim() });

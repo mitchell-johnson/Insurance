@@ -140,7 +140,10 @@ pub(crate) fn convert(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Polic
         ));
     };
     if rule.requires_evidence && spec.evidence.as_deref().is_none_or(|e| e.trim().is_empty()) {
-        return Err(Reject::new("evidence_required", "this conversion names where the evidence of its trigger is kept"));
+        return Err(Reject::new(
+            "evidence_required",
+            "this conversion names where the evidence of its trigger is kept",
+        ));
     }
     let today = ctx.date.max(policy.inception);
     let Some(life) = policy.lives.get(&spec.life).filter(|l| l.in_force_on(today)) else {
@@ -170,7 +173,10 @@ pub(crate) fn convert(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Polic
         .cover(&spec.to_cover)
         .ok_or_else(|| Reject::new("unknown_cover", format!("the product has no cover {}", spec.to_cover)))?;
     if to_def.option(&spec.excess_option).is_err() {
-        return Err(Reject::new("excess_option", format!("cover {} does not offer {}", spec.to_cover, spec.excess_option)));
+        return Err(Reject::new(
+            "excess_option",
+            format!("cover {} does not offer {}", spec.to_cover, spec.excess_option),
+        ));
     }
     if let Some(axis) = &rule.axis {
         // Only the axis changes, to a choice the product allows from the one held.
@@ -180,15 +186,19 @@ pub(crate) fn convert(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Polic
         let from_at = choice_on(&from, axis).and_then(|c| rule.choices.iter().position(|x| x == c));
         let to_at = rule.choices.iter().position(|x| x == to);
         let from_listed = rule.from_choices.is_empty() || choice_on(&from, axis).is_some_and(|c| rule.from_choices.iter().any(|x| x == c));
-        let allowed = from_listed && match (from_at, to_at) {
-            (_, None) => false,
-            (None, Some(_)) => true,
-            (Some(f), Some(t)) => t >= f,
-        };
+        let allowed = from_listed
+            && match (from_at, to_at) {
+                (_, None) => false,
+                (None, Some(_)) => true,
+                (Some(f), Some(t)) => t >= f,
+            };
         if others(&from) != others(&spec.excess_option) || !allowed || spec.excess_option == from {
             return Err(Reject::new(
                 "excess_option",
-                format!("cover {} converts only its {axis} to one of {:?}, no longer than the one held", spec.cover, rule.choices),
+                format!(
+                    "cover {} converts only its {axis} to one of {:?}, no longer than the one held",
+                    spec.cover, rule.choices
+                ),
             ));
         }
         // The newest layers are converted first: only as much as is held at the same choices.
@@ -202,7 +212,10 @@ pub(crate) fn convert(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Polic
         if spec.sum_insured_minor > alike {
             return Err(Reject::new(
                 "life_not_covered",
-                format!("life {} holds {alike} of cover {} at {from}; convert each part on its own", spec.life, spec.cover),
+                format!(
+                    "life {} holds {alike} of cover {} at {from}; convert each part on its own",
+                    spec.life, spec.cover
+                ),
             ));
         }
     } else {
@@ -235,7 +248,9 @@ pub(crate) fn convert(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Polic
                 return Err(Reject::new("life_not_covered", format!("life {} holds no {w} to add to", spec.life)));
             };
             let w_total: i64 = layers.iter().map(|l| l.sum_insured_minor).sum();
-            let w_def = product.cover(w).ok_or_else(|| Reject::new("unknown_cover", format!("the product has no cover {w}")))?;
+            let w_def = product
+                .cover(w)
+                .ok_or_else(|| Reject::new("unknown_cover", format!("the product has no cover {w}")))?;
             ic_product::rating::check_sum_insured(w_def, w_total + spec.sum_insured_minor)
                 .map_err(|e| Reject::new("sum_insured", format!("cover {w}: {e}")))?;
             Some((w.clone(), newest))

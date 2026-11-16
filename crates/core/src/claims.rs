@@ -401,7 +401,10 @@ pub fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&s
         // Waiver of premium on disability is the cover's own, or an option
         // (the built-in `waiver-of-premium`): where the cover offers it as an
         // option, only a life that chose it has it.
-        let offered = def.built_in.iter().find(|b| b.code == DISABILITY_WAIVER && b.kind == ic_product::BuiltInKind::PremiumWaiver);
+        let offered = def
+            .built_in
+            .iter()
+            .find(|b| b.code == DISABILITY_WAIVER && b.kind == ic_product::BuiltInKind::PremiumWaiver);
         if let Some(waiver) = offered {
             facts.premium_waiver = Some(def.premium_waiver == Some(true) || waiver.applies(chosen.as_ref()));
         }

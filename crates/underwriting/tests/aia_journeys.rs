@@ -993,7 +993,12 @@ async fn aia_living_cover_is_bought_back_a_year_after_an_accelerated_trauma_clai
     let held = |b: &Bench, cover: &str| {
         b.with_cluster(|c| {
             let on = c.business_date().unwrap();
-            c.state(0).policies[&policy].covers[cover].layers.iter().filter(|l| l.in_force_on(on)).map(|l| l.sum_insured_minor).sum::<i64>()
+            c.state(0).policies[&policy].covers[cover]
+                .layers
+                .iter()
+                .filter(|l| l.in_force_on(on))
+                .map(|l| l.sum_insured_minor)
+                .sum::<i64>()
         })
     };
     assert_eq!((held(&b, "life"), held(&b, "critical-conditions-accelerated")), (300_000_00, 0));
@@ -1053,7 +1058,13 @@ async fn aia_living_cover_is_bought_back_a_year_after_an_accelerated_trauma_clai
 async fn aia_living_cover_is_not_increased_or_converted_while_a_claim_is_open() {
     let b = bench();
     let issued = b
-        .apply("OPN", "aia-living", &[("life", "life", 500_000_00, None), ("critical-conditions", "trauma", 200_000_00, None)], 40, Some("2"))
+        .apply(
+            "OPN",
+            "aia-living",
+            &[("life", "life", 500_000_00, None), ("critical-conditions", "trauma", 200_000_00, None)],
+            40,
+            Some("2"),
+        )
         .await;
     let policy = issued.policy.clone();
     b.months(1, &policy);
@@ -1075,7 +1086,10 @@ async fn aia_living_cover_is_not_increased_or_converted_while_a_claim_is_open() 
     }));
     assert_eq!(send(increase).unwrap_err().code, "claim_open");
     let option = b.with_cluster(|c| {
-        c.state(0).policies[&policy].covers["critical-conditions"].layers[0].excess_option.clone().unwrap_or_default()
+        c.state(0).policies[&policy].covers["critical-conditions"].layers[0]
+            .excess_option
+            .clone()
+            .unwrap_or_default()
     });
     let convert = CoreCommand::ConvertCover(Box::new(ic_core::conversion::ConvertCover {
         policy: policy.clone(),

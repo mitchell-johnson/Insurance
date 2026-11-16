@@ -8,8 +8,10 @@
 
 pub mod accounts;
 pub mod bitemporal;
+pub mod buyback;
 pub mod catalog;
 pub mod command;
+pub mod conversion;
 pub mod counterparty;
 pub mod discount_override;
 pub mod entitlement;
@@ -23,8 +25,6 @@ pub mod machine;
 pub mod migration;
 pub mod nomination;
 pub mod owner_hold;
-pub mod buyback;
-pub mod conversion;
 pub mod paid_up;
 pub mod payee_debt;
 pub mod payments;

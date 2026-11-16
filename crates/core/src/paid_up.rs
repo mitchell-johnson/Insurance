@@ -135,10 +135,7 @@ fn plan_for(catalog: &Catalog, policy: &Policy, code: &str, life: &LifeId, today
         .filter(|&i| &cover.layers[i].life == life && cover.layers[i].in_force_on(today) && !cover.layers[i].paid_up)
         .collect();
     if held.is_empty() {
-        return Err(Reject::new(
-            "life_not_covered",
-            format!("{life} holds no cover {code} still paying premium"),
-        ));
+        return Err(Reject::new("life_not_covered", format!("{life} holds no cover {code} still paying premium")));
     }
     // Every layer must qualify, or none is touched.
     let mut plan = Vec::new();

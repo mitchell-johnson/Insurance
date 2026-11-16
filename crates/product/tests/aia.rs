@@ -711,12 +711,23 @@ fn the_loader_refuses_unsound_option_totals_and_anniversary_options() {
     let life = living.cover("life").unwrap();
     let events = life.insurability_option.as_ref().unwrap();
     assert_eq!(
-        (events.max_total_increase_minor, events.once_in_days, events.max_total_percent_of_original.as_ref().map(|p| p.get())),
+        (
+            events.max_total_increase_minor,
+            events.once_in_days,
+            events.max_total_percent_of_original.as_ref().map(|p| p.get())
+        ),
         (Some(750_000_00), Some(365), Some(Dec::from(100i64)))
     );
     let anniversary = life.anniversary_option.as_ref().unwrap();
     assert_eq!(
-        (anniversary.every_years, anniversary.at_least_minor, anniversary.max_total_increase_minor, anniversary.within_days, anniversary.to_age, anniversary.lesser),
+        (
+            anniversary.every_years,
+            anniversary.at_least_minor,
+            anniversary.max_total_increase_minor,
+            anniversary.within_days,
+            anniversary.to_age,
+            anniversary.lesser
+        ),
         (3, 100_000_00, 1_000_000_00, 60, 60, false)
     );
     assert_eq!(anniversary.requires_feature.as_deref(), Some("future-insurability"));
@@ -726,16 +737,30 @@ fn the_loader_refuses_unsound_option_totals_and_anniversary_options() {
     for code in ["critical-conditions", "progressive-care-accelerated", "severe-trauma", "tpd-own-occupation"] {
         let c = living.cover(code).unwrap();
         let fi = c.anniversary_option.as_ref().unwrap();
-        assert_eq!((fi.lesser, fi.at_least_minor, fi.max_total_increase_minor, fi.days_before), (true, 200_000_00, 500_000_00, Some(60)), "{code}");
+        assert_eq!(
+            (fi.lesser, fi.at_least_minor, fi.max_total_increase_minor, fi.days_before),
+            (true, 200_000_00, 500_000_00, Some(60)),
+            "{code}"
+        );
         let se = c.insurability_option.as_ref().unwrap();
         assert_eq!((se.within_days, se.days_before, se.to_age), (60, Some(60), 55), "{code}");
     }
     let business = read("aia_living_business.star");
-    for (code, cap) in [("life", 10_000_000_00), ("tpd-any-occupation", 5_000_000_00), ("critical-conditions-accelerated", 2_000_000_00), ("severe-trauma", 2_000_000_00)] {
+    for (code, cap) in [
+        ("life", 10_000_000_00),
+        ("tpd-any-occupation", 5_000_000_00),
+        ("critical-conditions-accelerated", 2_000_000_00),
+        ("severe-trauma", 2_000_000_00),
+    ] {
         let c = business.cover(code).unwrap();
         let safeguard = c.insurability_option.as_ref().unwrap();
         assert_eq!(
-            (safeguard.max_cover_after_minor, safeguard.uses_in_window, safeguard.not_before_days, safeguard.requires_feature.as_deref()),
+            (
+                safeguard.max_cover_after_minor,
+                safeguard.uses_in_window,
+                safeguard.not_before_days,
+                safeguard.requires_feature.as_deref()
+            ),
             (Some(cap), Some(2), Some(183), Some("business-safeguard")),
             "{code}"
         );
@@ -749,7 +774,9 @@ fn the_loader_refuses_unsound_option_totals_and_anniversary_options() {
               option_axes = [option_axis("expiry", "Expiry", [choice("to-65", "To 65", expiry_age = 65)])]),"#;
     let adding = |covers: &str, extra: &str| format!(r#"[], adds_cover = adds_cover_option(["marriage"], {covers}, "50", 100, 1, 60, 55{extra})"#);
     let good = [
-        event(r#", max_total_percent_of_original = "100", max_total_increase = 200, once_in_days = 365, uses_in_window = 2, days_before = 60, from_age = 16, requires = "x", not_before_days = 183, max_cover_after = 1000"#),
+        event(
+            r#", max_total_percent_of_original = "100", max_total_increase = 200, once_in_days = 365, uses_in_window = 2, days_before = 60, from_age = 16, requires = "x", not_before_days = 183, max_cover_after = 1000"#,
+        ),
         yearly(r#", lesser = True, days_before = 60, from_age = 16, once_in_days = 365, requires = "x""#),
         adding(r#"{"trauma": {"expiry": "to-65"}}"#, ", days_before = 60, from_age = 16, once_in_days = 365"),
     ];
@@ -770,12 +797,30 @@ fn the_loader_refuses_unsound_option_totals_and_anniversary_options() {
         (event(r#", requires = """#), events_wrong),
         (event(", not_before_days = 0"), events_wrong),
         (event(", max_cover_after = 0"), events_wrong),
-        (r#"[], insurability_option = insurability_option(["anniversary"], "50", 100, 2, 60, 55)"#.to_string(), events_wrong),
-        (r#"[], anniversary_option = anniversary_option(0, "20", 100, "40", 200, 60, 60)"#.to_string(), anniversary_wrong),
-        (r#"[], anniversary_option = anniversary_option(3, "20", 0, "40", 200, 60, 60)"#.to_string(), anniversary_wrong),
-        (r#"[], anniversary_option = anniversary_option(3, "20", 100, "10", 200, 60, 60)"#.to_string(), anniversary_wrong),
-        (r#"[], anniversary_option = anniversary_option(3, "20", 100, "40", 99, 60, 60)"#.to_string(), anniversary_wrong),
-        (r#"[], anniversary_option = anniversary_option(3, "20", 100, "40", 200, 0, 60)"#.to_string(), anniversary_wrong),
+        (
+            r#"[], insurability_option = insurability_option(["anniversary"], "50", 100, 2, 60, 55)"#.to_string(),
+            events_wrong,
+        ),
+        (
+            r#"[], anniversary_option = anniversary_option(0, "20", 100, "40", 200, 60, 60)"#.to_string(),
+            anniversary_wrong,
+        ),
+        (
+            r#"[], anniversary_option = anniversary_option(3, "20", 0, "40", 200, 60, 60)"#.to_string(),
+            anniversary_wrong,
+        ),
+        (
+            r#"[], anniversary_option = anniversary_option(3, "20", 100, "10", 200, 60, 60)"#.to_string(),
+            anniversary_wrong,
+        ),
+        (
+            r#"[], anniversary_option = anniversary_option(3, "20", 100, "40", 99, 60, 60)"#.to_string(),
+            anniversary_wrong,
+        ),
+        (
+            r#"[], anniversary_option = anniversary_option(3, "20", 100, "40", 200, 0, 60)"#.to_string(),
+            anniversary_wrong,
+        ),
         (yearly(r#", requires = """#), anniversary_wrong),
         (yearly(", once_in_days = 0"), anniversary_wrong),
         (yearly(", days_before = 0"), anniversary_wrong),
@@ -785,7 +830,10 @@ fn the_loader_refuses_unsound_option_totals_and_anniversary_options() {
         (adding(r#"{"income": {}}"#, ""), adding_wrong),
         (adding(r#"{"trauma": {"expiry": "to-70"}}"#, ""), adding_wrong),
         (adding("{}", ""), adding_wrong),
-        (r#"[], adds_cover = adds_cover_option(["marriage"], {"trauma": {}}, "50", 100, 0, 60, 55)"#.to_string(), adding_wrong),
+        (
+            r#"[], adds_cover = adds_cover_option(["marriage"], {"trauma": {}}, "50", 100, 0, 60, 55)"#.to_string(),
+            adding_wrong,
+        ),
         (adding(r#"{"trauma": {}}"#, ", from_age = 55"), adding_wrong),
     ];
     for (axes, why) in &cases {
@@ -795,7 +843,13 @@ fn the_loader_refuses_unsound_option_totals_and_anniversary_options() {
     // Buy-backs: this cover or one it reduces, once each, with a feature, waits and a window.
     let cc = living.cover("critical-conditions-accelerated").unwrap();
     let restores: Vec<(&str, bool, Option<i64>)> = cc.buybacks.iter().map(|b| (b.restores.as_str(), b.only_after_nil, b.max_minor)).collect();
-    assert_eq!(restores, vec![("critical-conditions-accelerated", true, Some(2_000_000_00)), ("life", false, Some(2_000_000_00))]);
+    assert_eq!(
+        restores,
+        vec![
+            ("critical-conditions-accelerated", true, Some(2_000_000_00)),
+            ("life", false, Some(2_000_000_00))
+        ]
+    );
     assert!(living.cover("progressive-care").unwrap().buybacks.is_empty());
     let back = |b: &str| format!(r#"[], buybacks = [{b}]"#);
     assert!(mini(&[("LIFE_AXES", &back(r#"buyback("life", "x", [183, 365], 60, max = 100, only_after_nil = True)"#))]).is_ok());
@@ -816,7 +870,10 @@ fn the_loader_refuses_unsound_option_totals_and_anniversary_options() {
     assert!(err.contains(buyback_wrong), "{err}");
     // On a cover that pays an income the options grow the monthly benefit; a health cover has
     // no sum to grow.
-    let income = format!("{}, insurability_option = insurability_option([\"salary_increase\"], \"10\", 100, 99, 60, 56)", yearly(", max_cover_after = 2000, shared_total = True"));
+    let income = format!(
+        "{}, insurability_option = insurability_option([\"salary_increase\"], \"10\", 100, 99, 60, 56)",
+        yearly(", max_cover_after = 2000, shared_total = True")
+    );
     assert!(mini(&[("INCOME_AXES", &income), ("GROUP", trauma)]).is_ok());
     for bad in [yearly(", shared_total = True"), yearly(", max_cover_after = 0")] {
         let err = mini(&[("INCOME_AXES", &bad), ("GROUP", trauma)]).unwrap_err();
@@ -840,7 +897,10 @@ fn the_loader_refuses_unsound_option_totals_and_anniversary_options() {
         ("INCOME_AXES", r#"conversion("income", 0, axis = "premium", choices = ["level"])"#),
         ("LIFE_AXES", r#"conversion("trauma", 60, with_cover = "life")"#),
         ("LIFE_AXES", r#"conversion("income", 60)"#),
-        ("INCOME_AXES", r#"conversion("income", 65, axis = "premium", choices = ["level"], from_choices = ["stepped"])"#),
+        (
+            "INCOME_AXES",
+            r#"conversion("income", 65, axis = "premium", choices = ["level"], from_choices = ["stepped"])"#,
+        ),
         ("LIFE_AXES", r#"conversion("trauma", 60, from_choices = ["level"])"#),
     ] {
         let err = mini(&[(slot, &conv(PREMIUM, c)), ("GROUP", trauma)]).unwrap_err();

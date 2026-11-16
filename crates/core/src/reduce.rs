@@ -23,7 +23,15 @@ use crate::premium::{retail_premium_with, Layers};
 /// Take `cut` off a life's cover from a date, newest layer first. Giving
 /// the cover up ends every layer, whatever its amount. Returns each layer
 /// ended and what was taken from it.
-pub(crate) fn cut_layers(policy: &mut Policy, ctx: &mut Ctx<'_>, code: &str, life: &LifeId, effective: NaiveDate, mut cut: i64, give_up: bool) -> Vec<(u32, i64)> {
+pub(crate) fn cut_layers(
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    code: &str,
+    life: &LifeId,
+    effective: NaiveDate,
+    mut cut: i64,
+    give_up: bool,
+) -> Vec<(u32, i64)> {
     let id = policy.id.clone();
     let mut taken = Vec::new();
     let Some(cover) = policy.covers.get_mut(code) else {

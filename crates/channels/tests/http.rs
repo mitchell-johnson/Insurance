@@ -4456,6 +4456,21 @@ async fn the_underwriting_console() {
     assert_eq!(tell("sub-amy", json!({ "requeue_effect": { "effect": effect } })).await.0, StatusCode::OK);
     assert!(matches!(last().command, Uw::RequeueEffect { by, .. } if by == "amy"));
     assert_eq!(ask("sub-amy", "parked".into()).await.1, json!([]));
+    // More time for a life, and the proof for an option, are sent as the person signed in.
+    assert_eq!(
+        tell("sub-amy", json!({ "set_more_time": { "proposal": "P2", "life": "L1", "more_time": true } }))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert!(matches!(last().command, Uw::SetMoreTime { more_time: true, .. }));
+    let (status, problem) = tell(
+        "sub-amy",
+        json!({ "check_option_evidence": { "case": "none", "underwriter": "someone", "accepted": true } }),
+    )
+    .await;
+    assert_ne!(status, StatusCode::BAD_REQUEST, "{problem}");
+    assert!(matches!(last().command, Uw::CheckOptionEvidence { underwriter, .. } if underwriter == "amy"));
     let (status, report) = ask("sub-sam", "report?from=2026-01-01T00:00:00Z&to=2030-01-01T00:00:00Z".into()).await;
     assert_eq!((status, report["decisions"].as_u64().map(|n| n >= 1)), (StatusCode::OK, Some(true)), "{report}");
 

@@ -887,15 +887,33 @@ fn trauma_increases_without_evidence_keep_to_the_trauma_wording() {
     let mut c = cluster();
     let living = product("aia_living.star");
     let (life, cc) = (pick(&living, "life", &[]), pick(&living, "critical-conditions", &[]));
-    let id = issue(&mut c, policy(1, "aia-living", d(1987, 6, 1), &[("life", 500_000_00, Some(life)), ("critical-conditions", 300_000_00, Some(cc))])).unwrap();
+    let id = issue(
+        &mut c,
+        policy(
+            1,
+            "aia-living",
+            d(1987, 6, 1),
+            &[("life", 500_000_00, Some(life)), ("critical-conditions", 300_000_00, Some(cc))],
+        ),
+    )
+    .unwrap();
     let code = |r: Result<(), Reject>| r.unwrap_err().code;
     let wedding = start() + chrono::Days::new(30);
     let too_early = start() + chrono::Days::new(61);
 
-    assert_eq!(code(use_option(&mut c, &id, "critical-conditions", "se-0", "marriage", too_early, 1_00, None)), "option_window");
-    assert_eq!(code(use_option(&mut c, &id, "critical-conditions", "se-0", "marriage", wedding, 150_000_01, None)), "option_limit");
+    assert_eq!(
+        code(use_option(&mut c, &id, "critical-conditions", "se-0", "marriage", too_early, 1_00, None)),
+        "option_window"
+    );
+    assert_eq!(
+        code(use_option(&mut c, &id, "critical-conditions", "se-0", "marriage", wedding, 150_000_01, None)),
+        "option_limit"
+    );
     use_option(&mut c, &id, "critical-conditions", "se-1", "marriage", wedding, 150_000_00, None).unwrap();
-    assert_eq!(code(use_option(&mut c, &id, "critical-conditions", "se-2", "mortgage", start(), 1_00, None)), "option_too_soon");
+    assert_eq!(
+        code(use_option(&mut c, &id, "critical-conditions", "se-2", "mortgage", start(), 1_00, None)),
+        "option_too_soon"
+    );
     // Life cover keeps its own 12 months (and is asked for only after the event).
     assert_eq!(code(use_option(&mut c, &id, "life", "se-3", "marriage", wedding, 1_00, None)), "option_window");
     use_option(&mut c, &id, "life", "se-3", "birth_or_adoption", start(), 100_000_00, None).unwrap();
@@ -905,8 +923,14 @@ fn trauma_increases_without_evidence_keep_to_the_trauma_wording() {
     let third = d(2030, 11, 15);
     close_to(&mut c, third - chrono::Days::new(26));
     let today = c.state(0).business_date.unwrap();
-    assert_eq!(code(use_option(&mut c, &id, "critical-conditions", "fi-0", "anniversary", today, 1_00, None)), "not_an_anniversary");
-    assert_eq!(code(use_option(&mut c, &id, "critical-conditions", "fi-0", "anniversary", third, 60_000_01, None)), "option_limit");
+    assert_eq!(
+        code(use_option(&mut c, &id, "critical-conditions", "fi-0", "anniversary", today, 1_00, None)),
+        "not_an_anniversary"
+    );
+    assert_eq!(
+        code(use_option(&mut c, &id, "critical-conditions", "fi-0", "anniversary", third, 60_000_01, None)),
+        "option_limit"
+    );
     use_option(&mut c, &id, "critical-conditions", "fi-1", "anniversary", third, 60_000_00, None).unwrap();
     assert_eq!(held(&c, &id, "critical-conditions"), 510_000_00);
 }
@@ -931,18 +955,101 @@ fn a_special_event_adds_accelerated_trauma_or_tpd_once_within_its_limit() {
     let to_65 = pick(&living, "tpd-any-occupation-accelerated", &[("expiry", "to-65")]);
     let from = |o: &String| Some(("life", o.clone()));
 
-    assert_eq!(code(use_option(&mut c, &id, "severe-trauma-accelerated", "add-0", "birth_or_adoption", born, 1_00, from(&cc))), "no_option");
-    assert_eq!(code(use_option(&mut c, &id, "tpd-any-occupation-accelerated", "add-0", "birth_or_adoption", born, 1_00, from(&to_70))), "excess_option");
-    assert_eq!(code(use_option(&mut c, &id, "critical-conditions-accelerated", "add-0", "birth_or_adoption", born, 100_000_01, from(&cc))), "option_limit");
-    assert_eq!(code(use_option(&mut c, &id, "critical-conditions-accelerated", "add-0", "birth_or_adoption", born, 1_00, None)), "unknown_cover");
-    use_option(&mut c, &id, "critical-conditions-accelerated", "add-1", "birth_or_adoption", born, 100_000_00, from(&cc)).unwrap();
-    use_option(&mut c, &id, "critical-conditions-accelerated", "add-1", "birth_or_adoption", born, 100_000_00, from(&cc)).unwrap();
+    assert_eq!(
+        code(use_option(
+            &mut c,
+            &id,
+            "severe-trauma-accelerated",
+            "add-0",
+            "birth_or_adoption",
+            born,
+            1_00,
+            from(&cc)
+        )),
+        "no_option"
+    );
+    assert_eq!(
+        code(use_option(
+            &mut c,
+            &id,
+            "tpd-any-occupation-accelerated",
+            "add-0",
+            "birth_or_adoption",
+            born,
+            1_00,
+            from(&to_70)
+        )),
+        "excess_option"
+    );
+    assert_eq!(
+        code(use_option(
+            &mut c,
+            &id,
+            "critical-conditions-accelerated",
+            "add-0",
+            "birth_or_adoption",
+            born,
+            100_000_01,
+            from(&cc)
+        )),
+        "option_limit"
+    );
+    assert_eq!(
+        code(use_option(
+            &mut c,
+            &id,
+            "critical-conditions-accelerated",
+            "add-0",
+            "birth_or_adoption",
+            born,
+            1_00,
+            None
+        )),
+        "unknown_cover"
+    );
+    use_option(
+        &mut c,
+        &id,
+        "critical-conditions-accelerated",
+        "add-1",
+        "birth_or_adoption",
+        born,
+        100_000_00,
+        from(&cc),
+    )
+    .unwrap();
+    use_option(
+        &mut c,
+        &id,
+        "critical-conditions-accelerated",
+        "add-1",
+        "birth_or_adoption",
+        born,
+        100_000_00,
+        from(&cc),
+    )
+    .unwrap();
     assert_eq!(held(&c, &id, "critical-conditions-accelerated"), 100_000_00);
-    assert_eq!(code(use_option(&mut c, &id, "tpd-any-occupation-accelerated", "add-2", "marriage", born, 50_000_00, from(&to_65))), "options_exhausted");
+    assert_eq!(
+        code(use_option(
+            &mut c,
+            &id,
+            "tpd-any-occupation-accelerated",
+            "add-2",
+            "marriage",
+            born,
+            50_000_00,
+            from(&to_65)
+        )),
+        "options_exhausted"
+    );
     let used = &c.state(0).policies[&id].option_uses["add-1"];
     assert_eq!(used.from_cover.as_deref(), Some("life"));
     // The new cover is billed for the rest of the year already billed.
-    assert!(c.state(0).policies[&id].receivables.iter().any(|r| r.net_fine.get("trauma").is_some_and(|m| *m > 0)));
+    assert!(c.state(0).policies[&id]
+        .receivables
+        .iter()
+        .any(|r| r.net_fine.get("trauma").is_some_and(|m| *m > 0)));
 }
 
 /// Purpose: AIA Living Business's Optional Business Safeguard Facility adds cover after a
@@ -959,18 +1066,31 @@ fn business_safeguard_grows_cover_with_the_business_inside_its_limits() {
     let with = pick(&business, "life", &[("safeguard", "yes")]);
     let without = pick(&business, "life", &[]);
     let id = issue(&mut c, policy(1, "aia-living-business", d(1980, 6, 1), &[("life", 1_000_000_00, Some(with))])).unwrap();
-    let plain = issue(&mut c, policy(2, "aia-living-business", d(1980, 6, 1), &[("life", 1_000_000_00, Some(without))])).unwrap();
+    let plain = issue(
+        &mut c,
+        policy(2, "aia-living-business", d(1980, 6, 1), &[("life", 1_000_000_00, Some(without))]),
+    )
+    .unwrap();
     let code = |r: Result<(), Reject>| r.unwrap_err().code;
 
     assert_eq!(code(exercise(&mut c, &id, "m-0", "marriage", start(), 1_00)), "event_not_covered");
-    assert_eq!(code(exercise(&mut c, &id, "bs-0", "business_interest_increase", start(), 1_00)), "option_too_soon");
+    assert_eq!(
+        code(exercise(&mut c, &id, "bs-0", "business_interest_increase", start(), 1_00)),
+        "option_too_soon"
+    );
     close_to(&mut c, start() + chrono::Days::new(183));
     let today = c.state(0).business_date.unwrap();
     assert_eq!(code(exercise(&mut c, &plain, "bs-0", "loan_guarantee_increase", today, 1_00)), "no_option");
     exercise(&mut c, &id, "bs-1", "business_interest_increase", today, 3_000_000_00).unwrap();
-    assert_eq!(code(exercise(&mut c, &id, "bs-2", "loan_guarantee_increase", today, 1_000_000_01)), "option_total");
+    assert_eq!(
+        code(exercise(&mut c, &id, "bs-2", "loan_guarantee_increase", today, 1_000_000_01)),
+        "option_total"
+    );
     exercise(&mut c, &id, "bs-2", "loan_guarantee_increase", today, 500_000_00).unwrap();
-    assert_eq!(code(exercise(&mut c, &id, "bs-3", "value_to_business_increase", today, 1_00)), "option_too_soon");
+    assert_eq!(
+        code(exercise(&mut c, &id, "bs-3", "value_to_business_increase", today, 1_00)),
+        "option_too_soon"
+    );
     assert_eq!(life_layers(&c, &id), vec![1_000_000_00, 3_000_000_00, 500_000_00]);
 }
 
@@ -1027,7 +1147,11 @@ fn next_day(c: &mut Cluster) {
 
 /// Everything billed on a policy for a cover type.
 fn billed_for(c: &Cluster, id: &PolicyId, cover_type: &str) -> i128 {
-    c.state(0).policies[id].receivables.iter().map(|r| r.net_fine.get(cover_type).copied().unwrap_or(0)).sum()
+    c.state(0).policies[id]
+        .receivables
+        .iter()
+        .map(|r| r.net_fine.get(cover_type).copied().unwrap_or(0))
+        .sum()
 }
 
 /// Purpose: AIA Living's Premium Conversion Facility moves part of a life's cover from rate for
@@ -1092,17 +1216,49 @@ fn standalone_trauma_converts_to_accelerated_trauma_with_life_cover() {
     let code = |r: Result<(), Reject>| r.unwrap_err().code;
     next_day(&mut c);
 
-    assert_eq!(code(convert(&mut c, &id, "critical-conditions", "severe-trauma-accelerated", &cca, 1_00, "sc-0")), "no_conversion");
-    assert_eq!(code(convert(&mut c, &id, "critical-conditions", "critical-conditions-accelerated", &cca, 200_000_01, "sc-0")), "life_not_covered");
-    assert_eq!(code(convert(&mut c, &old, "critical-conditions", "critical-conditions-accelerated", &cca, 1_00, "sc-0")), "conversion_age");
+    assert_eq!(
+        code(convert(&mut c, &id, "critical-conditions", "severe-trauma-accelerated", &cca, 1_00, "sc-0")),
+        "no_conversion"
+    );
+    assert_eq!(
+        code(convert(
+            &mut c,
+            &id,
+            "critical-conditions",
+            "critical-conditions-accelerated",
+            &cca,
+            200_000_01,
+            "sc-0"
+        )),
+        "life_not_covered"
+    );
+    assert_eq!(
+        code(convert(
+            &mut c,
+            &old,
+            "critical-conditions",
+            "critical-conditions-accelerated",
+            &cca,
+            1_00,
+            "sc-0"
+        )),
+        "conversion_age"
+    );
     assert_eq!(held(&c, &id, "critical-conditions"), 200_000_00);
     convert(&mut c, &id, "critical-conditions", "critical-conditions-accelerated", &cca, 200_000_00, "sc-1").unwrap();
     assert_eq!(
-        (held(&c, &id, "critical-conditions"), held(&c, &id, "critical-conditions-accelerated"), held(&c, &id, "life")),
+        (
+            held(&c, &id, "critical-conditions"),
+            held(&c, &id, "critical-conditions-accelerated"),
+            held(&c, &id, "life")
+        ),
         (0, 200_000_00, 700_000_00)
     );
     let done = &c.state(0).policies[&id].conversions["sc-1"];
-    assert_eq!((done.to_cover.as_str(), done.sum_insured_minor), ("critical-conditions-accelerated", 200_000_00));
+    assert_eq!(
+        (done.to_cover.as_str(), done.sum_insured_minor),
+        ("critical-conditions-accelerated", 200_000_00)
+    );
 }
 
 /// Purpose: AIA Living Family Protection grows its monthly benefit on a special event by the
@@ -1116,21 +1272,32 @@ fn family_protection_grows_on_a_special_event_within_its_monthly_limits() {
     let mut c = cluster();
     let living = product("aia_living.star");
     let fp = pick(&living, "family-protection", &[("term", "20y")]);
-    let id = issue(&mut c, policy(1, "aia-living", d(1987, 6, 1), &[("family-protection", 1_000_00, Some(fp.clone()))])).unwrap();
+    let id = issue(
+        &mut c,
+        policy(1, "aia-living", d(1987, 6, 1), &[("family-protection", 1_000_00, Some(fp.clone()))]),
+    )
+    .unwrap();
     let older = issue(&mut c, policy(2, "aia-living", d(1976, 6, 1), &[("family-protection", 1_000_00, Some(fp))])).unwrap();
     let code = |r: Result<(), Reject>| r.unwrap_err().code;
     let born = start() - chrono::Days::new(10);
-    let fp_option = |c: &mut Cluster, id: &PolicyId, r: &str, on: NaiveDate, amount: i64| use_option(c, id, "family-protection", r, "birth_or_adoption", on, amount, None);
+    let fp_option =
+        |c: &mut Cluster, id: &PolicyId, r: &str, on: NaiveDate, amount: i64| use_option(c, id, "family-protection", r, "birth_or_adoption", on, amount, None);
 
     assert_eq!(code(fp_option(&mut c, &older, "fp-0", born, 1_00)), "option_age");
     assert_eq!(code(fp_option(&mut c, &id, "fp-0", born, 500_01)), "option_limit");
     fp_option(&mut c, &id, "fp-1", born, 500_00).unwrap();
-    assert_eq!(code(use_option(&mut c, &id, "family-protection", "fp-2", "marriage", start(), 1_00, None)), "option_too_soon");
+    assert_eq!(
+        code(use_option(&mut c, &id, "family-protection", "fp-2", "marriage", start(), 1_00, None)),
+        "option_too_soon"
+    );
     assert_eq!(held(&c, &id, "family-protection"), 1_500_00);
     // A year on, half the original benefit has been added: nothing more.
     let year = start() + chrono::Days::new(366);
     close_to(&mut c, year);
-    assert_eq!(code(use_option(&mut c, &id, "family-protection", "fp-3", "marriage", year, 1_00, None)), "option_total");
+    assert_eq!(
+        code(use_option(&mut c, &id, "family-protection", "fp-3", "marriage", year, 1_00, None)),
+        "option_total"
+    );
 }
 
 /// An AIA Living policy with one income cover for a life born in 1987 in occupation class 2.
@@ -1170,7 +1337,10 @@ fn income_cover_grows_without_evidence_inside_the_income_wordings_limits() {
     assert_eq!(code(pay_rise(&mut c, &small, "fi-2", 1_00)), "option_used");
     assert_eq!(code(pay_rise(&mut c, &large, "fi-0", 200_01)), "option_total");
     pay_rise(&mut c, &large, "fi-1", 200_00).unwrap();
-    assert_eq!((held(&c, &small, "income-agreed-value"), held(&c, &large, "income-agreed-value")), (5_500_00, 20_000_00));
+    assert_eq!(
+        (held(&c, &small, "income-agreed-value"), held(&c, &large, "income-agreed-value")),
+        (5_500_00, 20_000_00)
+    );
 
     let moved = start() - chrono::Days::new(100);
     let mortgage = |c: &mut Cluster, r: &str, on: NaiveDate, amount: i64| use_option(c, &home, "mortgage-income-rent", r, "mortgage", on, amount, None);
@@ -1203,10 +1373,19 @@ fn cover_for_life_premiums_are_guaranteed_and_a_smoker_can_be_reviewed() {
     let mut c = cluster();
     let cfl = product("aia_cover_for_life.star");
     let living = product("aia_living.star");
-    let mut whole = policy(1, "aia-cover-for-life", d(1987, 6, 1), &[("life", 500_000_00, Some(pick(&cfl, "life", &[("pay-to", "to-65")])))]);
+    let mut whole = policy(
+        1,
+        "aia-cover-for-life",
+        d(1987, 6, 1),
+        &[("life", 500_000_00, Some(pick(&cfl, "life", &[("pay-to", "to-65")])))],
+    );
     whole.lives[0].factors.smoker = Some(true);
     let whole = issue(&mut c, whole).unwrap();
-    let stepped = issue(&mut c, policy(2, "aia-living", d(1987, 6, 1), &[("life", 500_000_00, Some(pick(&living, "life", &[])))])).unwrap();
+    let stepped = issue(
+        &mut c,
+        policy(2, "aia-living", d(1987, 6, 1), &[("life", 500_000_00, Some(pick(&living, "life", &[])))]),
+    )
+    .unwrap();
     let source = include_str!("../../../products/rates/aia_life.star")
         .replace("version = 1,", "version = 2,")
         .replace("effective_from = \"2026-11-14\"", "effective_from = \"2028-03-01\"")
@@ -1245,8 +1424,18 @@ fn cover_for_life_premiums_are_guaranteed_and_a_smoker_can_be_reviewed() {
     let before = billed_for(&c, &whole, "life");
     c.submit(0, "underwriting", review(false)).unwrap();
     let today = c.state(0).business_date.unwrap();
-    assert_eq!(c.state(0).policies[&whole].lives[&ic_core::LifeId("life-1".into())].factors.as_of(today).unwrap().smoker, Some(false));
-    assert!(billed_for(&c, &whole, "life") < before, "the rest of the year is credited at the non-smoker rate");
+    assert_eq!(
+        c.state(0).policies[&whole].lives[&ic_core::LifeId("life-1".into())]
+            .factors
+            .as_of(today)
+            .unwrap()
+            .smoker,
+        Some(false)
+    );
+    assert!(
+        billed_for(&c, &whole, "life") < before,
+        "the rest of the year is credited at the non-smoker rate"
+    );
     assert_eq!(code(c.submit(0, "underwriting", review(false))), "no_change");
 }
 
@@ -1281,7 +1470,11 @@ fn cover_for_life_is_made_paid_up_instead_of_lapsing_after_its_paid_up_date() {
     let mut c = cluster();
     let cfl = product("aia_cover_for_life.star");
     let to_65 = pick(&cfl, "life", &[("pay-to", "to-65")]);
-    let late = issue(&mut c, policy(1, "aia-cover-for-life", d(1972, 6, 1), &[("life", 200_000_00, Some(to_65.clone()))])).unwrap();
+    let late = issue(
+        &mut c,
+        policy(1, "aia-cover-for-life", d(1972, 6, 1), &[("life", 200_000_00, Some(to_65.clone()))]),
+    )
+    .unwrap();
     let early = issue(&mut c, policy(2, "aia-cover-for-life", d(1972, 6, 1), &[("life", 200_000_00, Some(to_65))])).unwrap();
     // Early stops paying at its first anniversary; late pays five years and stops.
     close_paying(&mut c, d(2028, 11, 15), &[&late, &early]);
@@ -1293,7 +1486,11 @@ fn cover_for_life_is_made_paid_up_instead_of_lapsing_after_its_paid_up_date() {
     assert_eq!(p.status, PolicyStatus::InForce);
     // Five of ten years paid, times 0.95, of $200,000.
     assert_eq!(held(&c, &late, "life"), 95_000_00);
-    assert!(p.paid_up.values().any(|r| r.paid_up_minor == 95_000_00 && r.on == d(2032, 12, 17)), "{:?}", p.paid_up);
+    assert!(
+        p.paid_up.values().any(|r| r.paid_up_minor == 95_000_00 && r.on == d(2032, 12, 17)),
+        "{:?}",
+        p.paid_up
+    );
     assert_eq!(p.outstanding_minor(), 0);
     close_paying(&mut c, d(2034, 1, 31), &[]);
     let p = &c.state(0).policies[&late];
@@ -1314,7 +1511,15 @@ fn a_later_trauma_definition_reaches_cover_already_written() {
     let living = product("aia_living.star");
     let id = issue(
         &mut c,
-        policy(1, "aia-living", d(1987, 6, 1), &[("life", 500_000_00, Some(pick(&living, "life", &[]))), ("critical-conditions", 200_000_00, Some(pick(&living, "critical-conditions", &[])))]),
+        policy(
+            1,
+            "aia-living",
+            d(1987, 6, 1),
+            &[
+                ("life", 500_000_00, Some(pick(&living, "life", &[]))),
+                ("critical-conditions", 200_000_00, Some(pick(&living, "critical-conditions", &[]))),
+            ],
+        ),
     )
     .unwrap();
     let source = r#"DEFINITIONS = [
@@ -1325,7 +1530,10 @@ fn a_later_trauma_definition_reaches_cover_already_written() {
     c.activate_everywhere(Command::ActivateDefinitions { definitions: newer }).unwrap();
     let facts = |cover: &str, on: NaiveDate| ic_core::cover_facts(c.state(0), &id.0, cover, Some("life-1"), on).unwrap().definitions;
     let trauma = facts("critical-conditions", d(2028, 4, 1));
-    assert!(trauma.contains(&"aia-critical-conditions@1".to_string()) && trauma.contains(&"aia-critical-conditions@2".to_string()), "{trauma:?}");
+    assert!(
+        trauma.contains(&"aia-critical-conditions@1".to_string()) && trauma.contains(&"aia-critical-conditions@2".to_string()),
+        "{trauma:?}"
+    );
     assert!(!facts("critical-conditions", d(2028, 2, 1)).iter().any(|d| d.ends_with("@2")));
     assert!(!facts("life", d(2028, 4, 1)).iter().any(|d| d.ends_with("@2")));
 }
@@ -1364,7 +1572,10 @@ fn a_long_income_waiting_period_is_shortened_when_the_business_cover_ends() {
     assert_eq!(code(c.submit(0, "policy-servicing", ask(&short, "4w", 4_000_00, proof))), "excess_option");
     c.submit(0, "policy-servicing", ask(&long, "4w", 4_000_00, proof)).unwrap();
     assert_eq!(
-        (held_at(&c, &long, "income-agreed-value", &at("4w")), held_at(&c, &long, "income-agreed-value", &at("52w"))),
+        (
+            held_at(&c, &long, "income-agreed-value", &at("4w")),
+            held_at(&c, &long, "income-agreed-value", &at("52w"))
+        ),
         (4_000_00, 2_000_00)
     );
     let done = &c.state(0).policies[&long].conversions["wpr-1"];

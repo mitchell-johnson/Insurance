@@ -82,7 +82,13 @@ pub(crate) fn overdue_to_lapse(product: &ProductDefinition, policy: &Policy, on:
     product.arrears().is_some_and(|rules| matches!(derive(policy, rules, on), Derived::Lapse))
 }
 
-pub(crate) fn run(ledger: &mut Ledger, catalog: &crate::catalog::Catalog, product: &ProductDefinition, policy: &mut Policy, ctx: &mut Ctx<'_>) -> Result<(), Reject> {
+pub(crate) fn run(
+    ledger: &mut Ledger,
+    catalog: &crate::catalog::Catalog,
+    product: &ProductDefinition,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+) -> Result<(), Reject> {
     if policy.status != PolicyStatus::InForce {
         return Ok(());
     }

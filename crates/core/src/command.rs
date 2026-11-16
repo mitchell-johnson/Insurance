@@ -761,9 +761,13 @@ impl Command {
             Command::ReduceCover(_) => &["policy-servicing"],
             Command::Migration(_) => &["migration"],
             Command::AddCover(_) | Command::ExerciseOption(_) => &["underwriting", "policy-servicing"],
-            Command::ChangeExcess(_) | Command::MakePaidUp(_) | Command::BuyBack(_) | Command::ConvertCover(_) | Command::SuspendCover(_) | Command::ResumeCover { .. } | Command::ChangeBilling(_) => {
-                &["policy-servicing"]
-            }
+            Command::ChangeExcess(_)
+            | Command::MakePaidUp(_)
+            | Command::BuyBack(_)
+            | Command::ConvertCover(_)
+            | Command::SuspendCover(_)
+            | Command::ResumeCover { .. }
+            | Command::ChangeBilling(_) => &["policy-servicing"],
             Command::RecordReplacement(_) => &["underwriting", "new-business"],
             Command::SetPeakSeason(_) => &["new-business", "underwriting", "policy-servicing"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
