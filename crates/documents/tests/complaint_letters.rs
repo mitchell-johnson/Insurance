@@ -409,7 +409,9 @@ async fn deadlock_notices_and_licence_letters_are_issued() {
         told,
         Told::Notified {
             document: "licence-notice:licence:ev-1:cust-1".into(),
-            on: w.today()
+            // The register's day never runs backwards: the deadlock was declared
+            // 21 days on, so the customer is recorded as told on that day.
+            on: w.today() + chrono::Duration::days(21)
         }
     );
     assert_eq!(w.issuer.pass().await, LetterPass::default());
