@@ -14,6 +14,8 @@ pub const QUESTIONS_2026: &str = include_str!("../../../products/underwriting/qu
 pub const QUESTIONS_2027: &str = include_str!("../../../products/underwriting/questions_2027.star");
 pub const RULES_INDIVIDUAL: &str = include_str!("../../../products/underwriting/rules_individual.star");
 pub const RULES_INDIVIDUAL_2027: &str = include_str!("../../../products/underwriting/rules_individual_2027.star");
+pub const RULES_GROUP: &str = include_str!("../../../products/underwriting/rules_group.star");
+pub const RULES_GROUP_2027: &str = include_str!("../../../products/underwriting/rules_group_2027.star");
 pub const PROFILES: &str = include_str!("../../../products/underwriting/profiles.star");
 
 #[derive(Debug, Clone)]
@@ -37,9 +39,13 @@ pub fn load() -> Result<Shipped, LoadError> {
         load_question_set("questions_2027.star", QUESTIONS_2027)?,
     ];
     // Oldest first: the set activated last wins on the dates both cover.
+    // The individual and group sets name different products, so neither
+    // ever stands in for the other.
     let files = [
         ("rules_individual.star", RULES_INDIVIDUAL),
         ("rules_individual_2027.star", RULES_INDIVIDUAL_2027),
+        ("rules_group.star", RULES_GROUP),
+        ("rules_group_2027.star", RULES_GROUP_2027),
     ];
     let mut rule_sets = Vec::new();
     for (file, source) in files {

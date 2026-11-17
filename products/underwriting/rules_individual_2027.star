@@ -56,7 +56,7 @@ RULES = rule_set(
     version = 1,
     effective_from = "2027-11-15",
     question_set = "personal-statement",
-    products = ["term-life", "health-plan", "health-flex", "income-protection", "group-life",
-                "aia-living", "aia-living-business", "aia-start-up-income", "aia-cover-for-life", "aia-essentials-life", "aia-starter", "aia-private-health", "aia-cancer-care", "aia-corporate"],
+    products = ["term-life", "health-plan", "health-flex", "income-protection",
+                "aia-living", "aia-living-business", "aia-start-up-income", "aia-cover-for-life", "aia-essentials-life", "aia-starter", "aia-private-health", "aia-cancer-care"],
     rules = _rules(),
 )
