@@ -245,7 +245,10 @@ test({ id: "E2E-083", area: A, persona: "ST4", story: "US-ST02-1", title: "A lar
   await s.act("#act", "decide_admit", { "Claim": c.claim, "Reason codes (comma separated)": "R-OK" }, { purpose: "decision" });
   await s.done("#act-msg", "Done: decide admit.");
   await s.sees("Waiting for a signature: admit proposed by st4", "#c-waiting");
-  await s.sees("Still needed: 1.", "#c-waiting");
+  await s.sees("Still needed: 1 more.", "#c-waiting");
+  // The notice names who may give the second signature, and the proposer is not among them.
+  const next = ((await s.$("#c-waiting").innerText()).match(/Who can sign it next: ([^.]*)\./) || [])[1];
+  if (!next || next.split(", ").includes("st4")) throw new Error(`the notice names as next signers: ${next}`);
   await s.sees(`${c.claim}: death, open`, "#c-title");
   if ((await summary(s)).Admitted !== nz(0)) throw new Error("the claim shows as admitted on one signature");
 });
