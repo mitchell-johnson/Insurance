@@ -1,9 +1,9 @@
 // The reinsurance console: the exceptions that need a person, the rule that
 // abandoning anything takes a second person, and the month-end check.
 //
-// The reinsurance driver, which delivers the module's instructions to the
-// core, is not part of this stack. The month-end check therefore reports
-// instructions not delivered, and the tests read that as the true state.
+// The reinsurance driver delivers the module's instructions to the core on
+// this stack (since 17 November 2026), so what stops a close in these tests
+// is real reinsurance work left undone, such as a statement not yet cut.
 "use strict";
 const { test } = require("../lib/suite");
 const { cast } = require("../lib/cast");
@@ -98,15 +98,25 @@ test({ id: "E2E-260", area: A, persona: "Reinsurance", story: "US-R01-1", title:
 });
 
 test({ id: "E2E-261", area: A, persona: "ST11", story: "US-ST11-1", title: "The month-end check says what in reinsurance stops the close", matrix: ["FIN-001"],
-  purpose: "Run the month-end check for the current period on a system whose reinsurance instructions have not been delivered.",
+  purpose: "Issue a retail life policy above the retention, so premium is ceded under the quarterly retail treaty, and run the month-end check for the quarter's end before any statement is cut.",
   why: "The finance close asks reinsurance whether it is clean; the answer must name what is outstanding, not just say no." }, async (t) => {
-  await t.policy("term_life", `cust-${t.ref("ri").toLowerCase()}`);
+  // $1.5m of life cover: everything above the $500,000 retention is ceded, and the reinsurers are charged its premium.
+  const shipped = JSON.parse(require("fs").readFileSync(require("path").join(t.stack.run, "shipped.json"), "utf8"));
+  const covers = shipped.applications.term_life.covers.map((c) => c.code === "life" ? { ...c, sum_insured_minor: 150_000_000 } : c);
+  await t.policy("term_life", `cust-${t.ref("ri").toLowerCase()}`, { covers });
   const s = await t.open("/reinsurance", cast.ri1);
   await s.tab("Month-end check");
-  await s.fill("#s-date", `${t.stack.opening.slice(0, 8)}30`);
-  await s.press("Check", "#sweep");
+  // The retail treaty's statements are quarterly: the quarter ends on 31 December.
+  await s.fill("#s-date", `${t.stack.opening.slice(0, 4)}-12-31`);
+  for (let tries = 0; ; tries++) {
+    await s.press("Check", "#sweep");
+    await s.sees("close", "#s-out");
+    if (await s.page.locator("#s-out").getByText("retail-life-surplus").count() || tries >= 20) break;
+    await s.wait(500);
+  }
   await s.sees("Stopping the close:", "#s-out");
-  await s.sees("instructions not delivered", "#s-out");
+  await s.sees("statement not cut", "#s-out");
+  await s.sees("retail-life-surplus", "#s-out");
 });
 
 test({ id: "E2E-262", area: A, persona: "Reinsurance", story: "US-R01-1", title: "Nothing is listed as abandoned on a system where nothing has been", matrix: [],
