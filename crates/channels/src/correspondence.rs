@@ -67,17 +67,19 @@ pub const APPROVALS: [(&str, &str); 3] = [
 /// The commands a person may send, with the callers that module takes each
 /// from (as its `allowed_callers` says, less the drivers). An approval goes
 /// as `config` and needs the approval action instead.
-pub const COMMANDS: [(&str, &[&str]); 17] = [
+pub const COMMANDS: [(&str, &[&str]); 19] = [
     ("place_legal_hold", &["legal"]),
     ("release_legal_hold", &["legal"]),
     ("raise_notice_defect", &["remediation"]),
     ("attach_defect_notices", &["remediation"]),
     ("exclude_from_defect", &["remediation"]),
     ("close_notice_defect", &["remediation"]),
+    ("correct_defect_notices", &["remediation"]),
     ("disable_template", &["remediation", "config"]),
     ("shred_party", &["privacy"]),
     ("dismiss_trigger", &["documents"]),
     ("retry_delivery", &["servicing"]),
+    ("record_returned_post", &["servicing"]),
     ("cancel_letter_request", &["servicing"]),
     ("activate_settings", &["config"]),
     ("activate_retention", &["config"]),
@@ -91,18 +93,21 @@ pub const COMMANDS: [(&str, &[&str]); 17] = [
 pub const LIMIT: usize = 200;
 
 /// The questions the console may put, with the fields the page sends.
-const QUESTIONS: [(&str, &[&str]); 17] = [
+const QUESTIONS: [(&str, &[&str]); 20] = [
     ("templates", &[]),
     ("legal_holds", &[]),
     ("open_defects", &[]),
     ("triggers", &[]),
     ("letters_requested", &[]),
     ("pending_sends", &[]),
+    ("undeliverable", &[]),
     ("settings", &[]),
+    ("authoring", &[]),
     ("document", &["id"]),
     ("defect", &["id"]),
     ("letter_request", &["request"]),
     ("template", &["id", "version"]),
+    ("render_sample", &["id", "version"]),
     ("template_for", &["id"]),
     ("part_usage", &["part"]),
     ("notices_by_template", &["id", "version", "from", "to"]),
@@ -124,7 +129,8 @@ pub fn standing(staff: &StaffState, party: &PartyId, at: At) -> Value {
     let callers = held(&CALLERS);
     let approvals = held(&APPROVALS);
     let view = !callers.is_empty() || !approvals.is_empty() || staff.holds_action(party, actions::VIEW, at);
-    json!({ "staff": party, "view": view, "callers": callers, "approvals": approvals })
+    let download = staff.holds_action(party, crate::documents::actions::DOWNLOAD, at);
+    json!({ "staff": party, "view": view, "callers": callers, "approvals": approvals, "download": download })
 }
 
 /// A question for the documents module, from its name and the fields the page sent.
@@ -151,9 +157,21 @@ pub fn question(name: &str, fields: &BTreeMap<String, String>, at: At) -> Result
     };
     let template = || -> Result<Value, String> { Ok(json!({ "id": given["id"], "version": version()? })) };
     Ok(match name {
-        "templates" | "open_defects" | "triggers" | "letters_requested" | "pending_sends" => json!({ name: { "limit": LIMIT } }),
-        "legal_holds" | "settings" => json!(name),
+        "templates" | "open_defects" | "triggers" | "letters_requested" | "pending_sends" | "undeliverable" => {
+            json!({ name: { "limit": LIMIT } })
+        }
+        "legal_holds" | "settings" | "authoring" => json!(name),
         "template" => json!({ "template": { "template": template()? } }),
+        // A sample is rendered with the data a product's document of the
+        // kind is given, or with the data the page sends as JSON.
+        "render_sample" => {
+            let data = match fields.get("data").map(|d| d.trim()).filter(|d| !d.is_empty()) {
+                Some(text) => Some(serde_json::from_str::<Value>(text).map_err(|e| format!("the sample's data is not JSON: {e}"))?),
+                None => None,
+            };
+            let language = fields.get("language").map(|l| l.trim()).filter(|l| !l.is_empty());
+            json!({ name: { "template": template()?, "language": language, "data": data } })
+        }
         "template_for" => json!({ "template_for": { "id": given["id"], "on": today(at) } }),
         "notices_by_template" => json!({ name: { "template": template()?, "from": given["from"], "to": given["to"] } }),
         _ => json!({ name: given }),
@@ -212,6 +230,12 @@ pub fn command(page: &Value, staff: &PartyId, callers: &[String], approvals: &[S
     if name == "submit_template" {
         fields.insert("author".to_string(), json!(staff));
     }
+    // A hold is placed or released for a reason, kept with who did it and when.
+    let placing = name == "place_legal_hold";
+    if (placing || name == "release_legal_hold") && fields.get("reason").and_then(Value::as_str).is_none_or(|r| r.trim().is_empty()) {
+        let what = if placing { "placed" } else { "released" };
+        return Err(Refused::NotACommand(format!("say why the hold is {what}: the reason is kept with it")));
+    }
     Ok((json!({ name: fields }), caller))
 }
 
@@ -226,7 +250,35 @@ pub fn envelope(key: &str, staff: &PartyId, caller: &str, at: At, command: Value
     })
 }
 
-/// The questions this console forwards, by name, for the MCP tool that asks them.
+/// The questions this console forwards, by name, for the MCP tool that
+/// asks them, and `policies`, which the portal answers itself.
 pub fn question_names() -> Vec<&'static str> {
-    QUESTIONS.iter().map(|q| q.0).collect()
+    QUESTIONS.iter().map(|q| q.0).chain([POLICIES]).collect()
+}
+
+/// The question the portal answers from its own directory of policies:
+/// those whose number is the text, starts with it or ends with it, for a
+/// person who has the number and not the internal reference.
+pub const POLICIES: &str = "policies";
+
+/// The fields of a stored document a person has no use for and must not
+/// be shown: the key its contents are encrypted under, and where in the
+/// vault they are.
+const KEPT_BACK: [&str; 2] = ["wrapped_key", "blob"];
+
+/// An answer as the console shows it: documents without their key material.
+pub fn shown(name: &str, mut answer: Value) -> Value {
+    let strip = |doc: &mut Value| {
+        if let Some(fields) = doc.as_object_mut() {
+            for field in KEPT_BACK {
+                fields.remove(field);
+            }
+        }
+    };
+    match name {
+        "document" => strip(&mut answer),
+        "policy_documents" | "undeliverable" => answer.as_array_mut().into_iter().flatten().for_each(strip),
+        _ => {}
+    }
+    answer
 }

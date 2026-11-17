@@ -260,6 +260,13 @@ pub struct Defect {
     pub raised_by: String,
     pub notices: std::collections::BTreeMap<String, DefectItem>,
     pub closed: Option<DefectClosure>,
+    /// The template version whose notices were wrong, where one was named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<crate::template::TemplateRef>,
+    /// Remediation has asked for corrected notices: the documents service
+    /// issues one for each notice still outstanding.
+    #[serde(default)]
+    pub correcting: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -309,6 +316,9 @@ pub struct Trigger {
     /// the amount applied. Never anything about health.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub detail: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Why the documents service has left it, as it last said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting: Option<String>,
 }
 
 /// An interest in a policy as the core reported it: who holds it and for

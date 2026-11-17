@@ -3,17 +3,37 @@
 <body data-shell="workforce" data-page="documents" data-realm="workforce">
 <main><header class="page"><div><h1>Documents and correspondence</h1><p>Documents waiting to be issued, letters other teams asked for, templates and their approvals, notice defects and legal holds.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
 
-<section data-view="Work"><h2>Documents the core's events require</h2><p class="muted">Each waits for the documents service to issue it. Dismiss one only when it is not to be sent, and say why.</p><div id="tr-msg" aria-live="polite"></div><div id="triggers"></div></section>
+<section data-view="Work"><h2>Documents the core's events require</h2><p class="muted">Each waits for the documents service to issue it, and says why where the service has left it. Dismiss one only when it is not to be sent, and say why.</p><div id="tr-msg" aria-live="polite"></div><div id="triggers"></div></section>
+<section data-view="Work"><h2>Documents that could not be delivered</h2><p class="muted">Every channel was tried and none reached the person. Correct their contact details, then deliver it again.</p><div id="ud-msg" aria-live="polite"></div><div id="undelivered"></div></section>
 <section data-view="Work"><h2>Letters other teams asked for</h2><p class="muted">Underwriting, claims, group and reinsurance letters still to issue, oldest first.</p><div id="lr-msg" aria-live="polite"></div><div id="letters"></div></section>
 <section data-view="Work"><h2>Sends in progress</h2><div id="sends"></div></section>
 
-<section data-view="Templates"><h2>Templates</h2><p class="muted">Every version and where it stands. A draft needs its legal, product and compliance approvals from three people other than its author, and a passing rendering test, before it is activated.</p><div id="tp-msg" aria-live="polite"></div><div id="templates"></div></section>
+<section data-view="Templates"><h2>Templates</h2><p class="muted">Every version and where it stands. A draft needs its legal, product and compliance approvals from three people other than its author, and a passing rendering test, before it is activated. A version of a document the core's events require answers a policy's documents only when it is bound to the policy's product.</p><div id="tp-msg" aria-live="polite"></div><div id="templates"></div></section>
 <section data-view="Templates"><h2>A template</h2><form id="t-form"><div class="row"><div><label for="t-id">Template</label><input id="t-id" required></div><div><label for="t-ver">Version</label><input id="t-ver" type="number" min="1" value="1" required></div><button>Show</button></div></form><div id="t-msg" aria-live="polite"></div><div id="tpl"></div></section>
+<section data-view="Templates" id="writer" hidden><h2>Write a template</h2><p class="muted">Start from a shipped wording or an earlier version, or from nothing. It is submitted as a draft with you as its author; nothing is issued from it until it is tested, approved and activated.</p>
+  <form id="w-form">
+    <div class="row"><div><label for="w-from">Start from</label><select id="w-from"><option value="">Nothing: a new wording</option></select></div></div>
+    <div class="row"><div><label for="w-id">Template</label><input id="w-id" required></div><div><label for="w-ver">Version</label><input id="w-ver" type="number" min="1" value="1" required></div>
+      <div><label for="w-kind">Kind of document</label><select id="w-kind" required></select></div><div><label for="w-title">Title</label><input id="w-title" required></div></div>
+    <p class="muted" id="w-fields"></p>
+    <div class="row"><div><label for="w-products">Products it describes, each as code and version (aia-cancer-care 1), separated by commas</label><input id="w-products"></div>
+      <div><label for="w-lang">Language</label><select id="w-lang"><option value="en">English</option><option value="mi">Māori</option></select></div>
+      <div><label for="w-days">Days of notice (a notice with a notice period only)</label><input id="w-days" type="number" min="1"></div>
+      <div><label for="w-review">Review the wording by</label><input id="w-review" type="date" required></div></div>
+    <fieldset><legend>Also offered as</legend><div class="row" id="w-formats"></div></fieldset>
+    <div><label for="w-body">The wording. Fields are written {{name}}, money {{premium|money}}, dates {{date|date}}.</label><textarea id="w-body" rows="14" required></textarea></div>
+    <p><button>Submit as a draft</button></p>
+  </form><div id="w-msg" aria-live="polite"></div></section>
+<section data-view="Templates" id="tester" hidden><h2>Test a template</h2><p class="muted">The draft is rendered for a sample customer in each of its languages, with the data a product's document of its kind is given. Read each letter. If it is right, record it: the test passes while the wording renders exactly this.</p>
+  <form id="x-form"><div class="row"><div><label for="x-id">Template</label><input id="x-id" required></div><div><label for="x-ver">Version</label><input id="x-ver" type="number" min="1" value="1" required></div>
+    <div><label for="x-data">The sample's data, as JSON (leave empty for the standard sample)</label><textarea id="x-data" rows="3"></textarea></div><button>Render a sample</button></div></form>
+  <div id="x-msg" aria-live="polite"></div><div id="sample"></div></section>
 
-<section data-view="Documents"><h2>A policy's documents</h2><form id="p-form"><div class="row"><div><label for="p-id">Policy</label><input id="p-id" required></div><button>Show</button></div></form><div id="p-msg" aria-live="polite"></div><div id="pdocs"></div></section>
-<section data-view="Documents"><h2>Look something up</h2><form id="lk-form"><div class="row"><div><label for="lk-what">What</label><select id="lk-what"><option value="document">A document</option><option value="defect">A notice defect</option><option value="letter_request">A requested letter</option><option value="template_for">The template in force for an id today</option><option value="part_usage">Where a shared part is used</option><option value="retention">How long a kind of document is kept</option></select></div><div><label for="lk-id">Reference</label><input id="lk-id" required></div><button>Show</button></div></form><div id="lk-msg" aria-live="polite"></div><div id="lk"></div></section>
+<section data-view="Documents"><h2>A policy's documents</h2><form id="p-form"><div class="row"><div><label for="p-id">Policy number</label><input id="p-id" required></div><button>Show</button></div></form><div id="p-msg" aria-live="polite"></div><div id="pdocs"></div></section>
+<section data-view="Documents"><h2>Look something up</h2><form id="lk-form"><div class="row"><div><label for="lk-what">What</label><select id="lk-what"><option value="document">A document</option><option value="defect">A notice defect</option><option value="letter_request">A requested letter</option><option value="template_for">The template in force for an id today</option><option value="notices_by_template">The notices a template version issued</option><option value="part_usage">Where a shared part is used</option><option value="retention">How long a kind of document is kept</option></select></div><div><label for="lk-id">Reference</label><input id="lk-id" required></div>
+  <div class="lk-notices" hidden><label for="lk-ver">Version</label><input id="lk-ver" type="number" min="1" value="1"></div><div class="lk-notices" hidden><label for="lk-from">Issued from</label><input id="lk-from" type="date"></div><div class="lk-notices" hidden><label for="lk-to">To</label><input id="lk-to" type="date"></div><button>Show</button></div></form><div id="lk-msg" aria-live="polite"></div><div id="lk"></div></section>
 
-<section data-view="Defects and holds"><h2>Open notice defects</h2><p class="muted">Notices that were wrong, the population being corrected, and the control that closes each.</p><div id="df-msg" aria-live="polite"></div><div id="defects"></div></section>
+<section data-view="Defects and holds"><h2>Open notice defects</h2><p class="muted">Notices that were wrong, the population being corrected, and the control that closes each. Someone other than the person who raised a defect closes it.</p><div id="df-msg" aria-live="polite"></div><div id="defects"></div></section>
 <section data-view="Defects and holds"><h2>Legal holds</h2><p class="muted">Nothing under a hold is destroyed when its retention period ends.</p><div id="lh-msg" aria-live="polite"></div><div id="holds"></div></section>
 
 <section data-view="Report"><h2>The documents report</h2><form id="rp-form"><div class="row"><div><label for="rp-from">From</label><input id="rp-from" type="date" required></div><div><label for="rp-to">To</label><input id="rp-to" type="date" required></div><button>Show</button></div></form><div id="rp-msg" aria-live="polite"></div><div id="report"></div></section>
@@ -27,53 +47,120 @@
 const { h, put, table, signIn, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "workforce", BASE = "/staff/v1/documents/";
-let me = {}, acts = { choose: () => {} }, templates = [], defects = [], triggers = [], letters = [];
+let me = {}, acts = { choose: () => {} }, templates = [], defects = [], triggers = [], letters = [], authoring = { kinds: [], formats: [], placeholders: [] };
 const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
-const send = (command) => api(R, "POST", BASE + "commands", command);
 const calls = (caller) => (me.callers || []).includes(caller);
 const button = (label, out, act) => h("button", { class: "quiet", type: "button", on: { click: run(out, act) } }, label);
 const ref = (t) => t ? `${t.id} v${t.version}` : "";
+const day = (d) => d ? portal.day(d) : "";
+const grade = (x10) => x10 == null ? "" : (x10 / 10).toFixed(1);
+const status = (s) => typeof s === "string" ? s : Object.keys(s || {})[0] || "";
+const ROLE = { legal: "Legal", product: "Product", compliance: "Compliance" };
+const approvals = (a) => Object.entries(a || {}).map(([role, by]) => `${ROLE[role] || words(role)}: ${by}`).join(", ");
+const products = (t) => (t.products || []).map((p) => `${p.code} v${p.version}`).join(", ");
 const scopeWords = (scope) => Object.entries(scope).map(([k, v]) => `${words(k)} ${v}`).join("");
 // Open one action on the Act tab, filled in from the row pressed.
 const open = (name, prefill) => { portal.view("act"); acts.choose(name, prefill); return ""; };
 
+// Who else may do what the module just refused this person: their colleagues holding the action.
+async function others(action) {
+  try { return (await portal.colleagues(action)).map((p) => p.value).filter((p) => p !== me.staff); } catch { return []; }
+}
+const APPROVER = { legal: "documents.approve_legal", product: "documents.approve_product", compliance: "documents.approve_compliance" };
+async function send(command) {
+  try { return await api(R, "POST", BASE + "commands", command); }
+  catch (e) {
+    const action = command.type === "approve_template" && /approve their own|two of a template/.test(e.message) ? APPROVER[command.role]
+      : command.type === "close_notice_defect" && /raised a defect/.test(e.message) ? "documents.remediation" : null;
+    const who = action ? await others(action) : [];
+    if (who.length) e.message = `${e.message.replace(/\.$/, "")}. They are: ${who.join(", ")}.`;
+    throw e;
+  }
+}
+
+// What the last rendering run of a version came to, in words.
+async function tested(id, version) {
+  const t = await ask("template", { id, version });
+  const run = t.last_run;
+  if (!run) return "No rendering test has run on it.";
+  if (run.failures.length) throw new Error(`The rendering test failed ${run.failures.length} of ${run.cases} cases: ${run.failures.join("; ")}.`);
+  return `The rendering test passed all ${run.cases} cases. Approvals come next, then activation.`;
+}
+
 const template = (v) => ({ id: v.id, version: v.version });
+// A template picked as "lapse-notice v4".
+const picked = (text) => { const m = String(text || "").trim().match(/^(.+?)\s+v(\d+)$/); return m ? { id: m[1], version: Number(m[2]) } : null; };
 const ACTIONS = {
   dismiss_trigger: { label: "Dismiss a document the core required", can: () => calls("documents"), fields: [["trigger", "Trigger", "text"], ["reason", "Why it is not to be sent", "text"]] },
   cancel_letter_request: { label: "Cancel a requested letter", can: () => calls("servicing"), fields: [["request", "Request", "text"], ["reason", "Why", "text"]] },
   retry_delivery: { label: "Deliver a document again", can: () => calls("servicing"), note: "Once the customer's contact details are corrected.", fields: [["document", "Document", "text"], ["party", "Recipient", "text"], ["channels", "Channels, in order (in_app, email, sms, post)", "list"]] },
-  place_legal_hold: { label: "Place a legal hold", can: () => calls("legal"), fields: [["on", "Hold", "select", ["policy", "party", "document"]], ["what", "Policy, party or document", "text"], ["case", "Legal case", "text"]],
-    build: (v) => ({ type: "place_legal_hold", scope: { [v.on]: v.what }, case: v.case }) },
-  release_legal_hold: { label: "Release a legal hold", can: () => calls("legal"), fields: [["on", "Hold", "select", ["policy", "party", "document"]], ["what", "Policy, party or document", "text"]],
-    build: (v) => ({ type: "release_legal_hold", scope: { [v.on]: v.what } }) },
-  raise_notice_defect: { label: "Raise a notice defect", can: () => calls("remediation"), fields: [["defect", "Defect reference", "reference", "DEF"], ["case", "Remediation case", "text"], ["description", "What was wrong", "text"],
-    ["cause", "Cause", "select", ["template_error", "wrong_rate", "wrong_discount", "wrong_fee", "other"]], ["from", "Notices issued from", "date"], ["to", "To", "date"], ["grace_days", "Days a choice stays reopenable (blank for the setting)", "optional"]],
-    build: (v) => ({ type: "raise_notice_defect", ...v, grace_days: v.grace_days ? Number(v.grace_days) : null }) },
-  attach_defect_notices: { label: "Add notices to a defect", can: () => calls("remediation"), note: "The notices of a template version in the period are listed under Look something up.", fields: [["defect", "Defect", "text"], ["notices", "Notices, separated by commas", "list"]] },
+  record_returned_post: { label: "Record a letter that came back", can: () => calls("servicing"), note: "The letter is treated as not delivered, and the next channel is tried.", fields: [["document", "Document", "text"], ["party", "Recipient", "text"]] },
+  place_legal_hold: { label: "Place a legal hold", can: () => calls("legal"), fields: [["on", "Hold", "select", ["policy", "party", "document"]], ["what", "Policy, party or document", "text"], ["case", "Legal case", "text"], ["reason", "Why it is needed", "text"]],
+    build: (v) => ({ type: "place_legal_hold", scope: { [v.on]: v.what }, case: v.case, reason: v.reason }) },
+  release_legal_hold: { label: "Release a legal hold", can: () => calls("legal"), fields: [["on", "Hold", "select", ["policy", "party", "document"]], ["what", "Policy, party or document", "text"], ["reason", "Why it is released", "text"]],
+    build: (v) => ({ type: "release_legal_hold", scope: { [v.on]: v.what }, reason: v.reason }) },
+  raise_notice_defect: { label: "Raise a notice defect", can: () => calls("remediation"), note: "Name the template version that was wrong: its notices in the period are then listed for you to add.",
+    fields: [["defect", "Defect reference", "reference", "DEF"], ["case", "Remediation case", "text"], ["template", "Template version that was wrong (blank if none)", "optional"], ["description", "What was wrong", "text"],
+      ["cause", "Cause", "select", ["template_error", "wrong_rate", "wrong_discount", "wrong_fee", "other"]], ["from", "Notices issued from", "date"], ["to", "To", "date"], ["grace_days", "Days a choice stays reopenable (blank for the setting)", "optional"]],
+    build: (v) => {
+      const t = v.template ? picked(v.template) : null;
+      if (v.template && !t) throw new Error("Pick the template version from the list, as its id and version (lapse-notice v4).");
+      return { type: "raise_notice_defect", ...v, template: t, grace_days: v.grace_days ? Number(v.grace_days) : null };
+    } },
+  attach_defect_notices: { label: "Add notices to a defect", can: () => calls("remediation"), note: "Find its notices from the defect's row, or under Look something up: the notices a template version issued.", fields: [["defect", "Defect", "text"], ["notices", "Notices, separated by commas", "list"]] },
   exclude_from_defect: { label: "Take a notice out of a defect", can: () => calls("remediation"), fields: [["defect", "Defect", "text"], ["notice", "Notice", "text"], ["reason", "Why", "text"]] },
-  close_notice_defect: { label: "Close a notice defect", can: () => calls("remediation"), fields: [["defect", "Defect", "text"], ["control", "The control that now catches it", "text"]] },
-  disable_template: { label: "Disable a template version", can: () => calls("remediation") || calls("config"), note: "Nothing more is issued from it.", fields: [["id", "Template", "text"], ["version", "Version", "int"], ["reason", "What is wrong", "text"], ["case", "Case", "text"]],
+  correct_defect_notices: { label: "Send corrected notices", can: () => calls("remediation"), note: "Once a corrected version of the template is active: each notice of the defect is issued again from it, with the facts of the original, to the same people, and replaces it.", fields: [["defect", "Defect", "text"]] },
+  close_notice_defect: { label: "Close a notice defect", can: () => calls("remediation"), note: "Not one you raised.", fields: [["defect", "Defect", "text"], ["control", "The control that now catches it", "text"]] },
+  disable_template: { label: "Disable or withdraw a template version", can: () => calls("remediation") || calls("config"), note: "Nothing more is issued from an active version; a draft is withdrawn and never activated.", fields: [["id", "Template", "text"], ["version", "Version", "int"], ["reason", "What is wrong", "text"], ["case", "Case", "text"]],
     build: (v) => ({ type: "disable_template", template: template(v), reason: v.reason, case: v.case }) },
   approve_template: { label: "Approve a template", can: () => (me.approvals || []).length > 0, note: "Not one you wrote, and one approval per person.", fields: [["id", "Template", "text"], ["version", "Version", "int"], ["role", "Your approval", "select", []]],
     build: (v) => ({ type: "approve_template", template: template(v), role: v.role }) },
-  activate_template: { label: "Activate a template", can: () => calls("config"), fields: [["id", "Template", "text"], ["version", "Version", "int"], ["effective_from", "In force from", "date"]],
-    build: (v) => ({ type: "activate_template", template: template(v), effective_from: v.effective_from }) },
-  run_rendering_tests: { label: "Run a template's rendering tests", can: () => calls("config"), fields: [["id", "Template", "text"], ["version", "Version", "int"], ["cases", "Cases (JSON list)", "json"]],
-    build: (v) => ({ type: "run_rendering_tests", template: template(v), cases: v.cases }) },
-  submit_template: { label: "Submit a template", can: () => calls("config"), note: "You are recorded as its author.", fields: [["template", "The template (JSON)", "json"]], build: (v) => ({ type: "submit_template", ...v.template }) },
+  activate_template: { label: "Activate a template", can: () => calls("config"), note: "A date before today lets documents already waiting since then be issued from this version.", fields: [["id", "Template", "text"], ["version", "Version", "int"], ["effective_from", "In force from", "date"]],
+    build: (v) => ({ type: "activate_template", template: template(v), effective_from: v.effective_from }),
+    done: (v) => v.effective_from < portal.today() ? `Active from ${day(v.effective_from)}, which is before today: documents waiting since then are issued from it.` : null },
+  run_rendering_tests: { label: "Run rendering tests written out (JSON)", can: () => calls("config"), note: "Test a template from its row on the Templates tab: the sample is rendered for you to read.", fields: [["id", "Template", "text"], ["version", "Version", "int"], ["cases", "Cases (JSON list)", "json"]],
+    build: (v) => ({ type: "run_rendering_tests", template: template(v), cases: v.cases }), done: (v) => tested(v.id, v.version) },
+  submit_template: { label: "Submit a template written out (JSON)", can: () => calls("config"), note: "For a wording with translations. Otherwise write it on the Templates tab. You are recorded as its author.", fields: [["template", "The template (JSON)", "json"]], build: (v) => ({ type: "submit_template", ...v.template }) },
   register_part: { label: "Register a shared part", can: () => calls("config"), fields: [["part", "The part (JSON)", "json"]], build: (v) => ({ type: "register_part", ...v.part }) },
   activate_settings: { label: "Activate settings", can: () => calls("config"), note: "The next version, with every setting.", fields: [["settings", "Settings (JSON)", "json"]], build: (v) => ({ type: "activate_settings", ...v.settings }) },
   activate_retention: { label: "Activate retention rules", can: () => calls("config"), fields: [["version", "Version", "int"], ["rules", "Rules by kind (JSON)", "json"]] },
   shred_party: { label: "Shred a party's documents", can: () => calls("privacy"), note: "Destroys what may be destroyed now, and the rest as each retention period ends. It cannot be undone.", fields: [["party", "Party", "text"]] },
 };
 
+// The last channel tried for a recipient, and when it was sent or delivered.
+function tried(v) {
+  const last = v.attempts[v.attempts.length - 1] || {};
+  const st = v.status && v.status.delivered;
+  return [words(last.channel), last.masked_destination ? `to ${last.masked_destination}` : "", st ? `delivered ${day(st.on)}` : last.sent_at ? `sent ${portal.when(last.sent_at)}` : "not yet sent"].filter(Boolean).join(", ");
+}
+const recipient = (v) => `${v.recipient.party}${v.recipient.relationship ? ` (${words(v.recipient.relationship)})` : ""}`;
+// A letter is recorded as come back while its post is out or deemed delivered.
+const postOut = (v) => { const last = v.attempts[v.attempts.length - 1] || {}; return last.channel === "post" && (!last.outcome || status(v.status) === "delivered"); };
+async function download(id) {
+  const purpose = await portal.ask({ title: "Download this document", text: "Say why you need it. The purpose is logged with the download.", label: "Purpose", confirm: "Download" });
+  if (!purpose) return "";
+  return portal.download(R, `${BASE}${encodeURIComponent(id)}/pdf?purpose=${encodeURIComponent(purpose)}`, `${id}.pdf`);
+}
+// The buttons for one document and one of its recipients.
+function documentActions(d, v, out) {
+  const s = v ? status(v.status) : "";
+  return h("span", {},
+    me.download && !d.destroyed_on ? button("Download", out, () => download(d.id)) : null,
+    v && s === "undeliverable" && calls("servicing") ? button("Deliver again", out, async () => open("retry_delivery", { document: d.id, party: v.recipient.party, channels: v.chain.join(", ") })) : null,
+    v && postOut(v) && calls("servicing") ? button("Came back", out, async () => open("record_returned_post", { document: d.id, party: v.recipient.party })) : null);
+}
+const documentRows = (docs, out) => docs.flatMap((d) => (d.deliveries.length ? d.deliveries : [null]).map((v) =>
+  [d.id, words(d.kind), day(d.issued_on), v ? recipient(v) : "", v ? tried(v) : "", v ? words(status(v.status)) : "", documentActions(d, v, out)]));
+
 async function showWork() {
-  const [tr, lr, ps] = await Promise.all([ask("triggers"), ask("letters_requested"), ask("pending_sends")]);
+  const [tr, lr, ps, ud] = await Promise.all([ask("triggers"), ask("letters_requested"), ask("pending_sends"), ask("undeliverable")]);
   triggers = tr || []; letters = lr || [];
-  put($("triggers"), triggers.length ? table(["Policy", "Document", "For", "Business date", ""], triggers.map((t) => [t.policy, words(t.kind), words(t.purpose || ""), t.business_date,
+  put($("triggers"), triggers.length ? table(["Policy", "Document", "For", "Business date", "Why it waits", ""], triggers.map((t) => [t.policy, words(t.kind), words(t.purpose || ""), day(t.business_date), t.waiting || "Its turn: the service issues it on its next pass",
     calls("documents") ? button("Dismiss", $("tr-msg"), async () => open("dismiss_trigger", { trigger: t.id })) : ""])) : portal.empty("Nothing is waiting to be issued."));
-  put($("letters"), letters.length ? table(["Request", "Letter", "Asked by", "Received", "About", "Status", ""], letters.map((l) => [l.request.request, words(l.request.kind), words(l.caller), l.received, l.request.subject, words(typeof l.status === "string" ? l.status : Object.keys(l.status || {})[0]),
+  put($("undelivered"), (ud || []).length ? table(["Document", "Kind", "Issued", "Recipient", "Last tried", "Status", ""], documentRows(ud.map((d) => ({ ...d, deliveries: d.deliveries.filter((v) => status(v.status) === "undeliverable") })), $("ud-msg")))
+    : portal.empty("Every document reached someone, or is still on its way."));
+  put($("letters"), letters.length ? table(["Request", "Letter", "Asked by", "Received", "About", "Status", ""], letters.map((l) => [l.request.request, words(l.request.kind), words(l.caller), day(l.received), l.request.subject, words(status(l.status)),
     calls("servicing") ? button("Cancel", $("lr-msg"), async () => open("cancel_letter_request", { request: l.request.request })) : ""])) : portal.empty("No letter is waiting."));
   put($("sends"), (ps || []).length ? table(["Document", "To", "By", "Kind"], ps.map((s) => [s.document, s.party, words(s.channel), words(s.kind)])) : portal.empty("Nothing is being sent."));
 }
@@ -81,62 +168,182 @@ async function showWork() {
 async function showTemplates() {
   templates = await ask("templates") || [];
   const mine = me.approvals || [];
-  put($("templates"), templates.length ? table(["Template", "Kind", "Title", "Status", "Approved by", "In force from", ""], templates.map((t) => {
+  put($("templates"), templates.length ? table(["Template", "Kind", "Title", "Products", "Status", "Reading grade", "Approved by", "In force from", ""], templates.map((t) => {
     const r = t.template, owed = mine.filter((role) => !(t.approvals || {})[role]);
-    return [ref(r), words(t.kind), t.title, words(t.status), Object.entries(t.approvals || {}).map(([role, by]) => `${role}: ${by}`).join(", ") || "none", t.effective_from || "",
+    // An active notice the core's events need, bound to no product, is never picked for a policy.
+    const serves = products(t) || (t.event_kind ? "None: used only where it is asked for by its id" : "");
+    return [ref(r), words(t.kind), t.title, serves, words(t.status), grade(t.reading_grade_x10), approvals(t.approvals) || "none", day(t.effective_from),
       h("span", {},
         t.status === "draft" && owed.length && t.author !== me.staff ? button("Approve", $("tp-msg"), async () => open("approve_template", { id: r.id, version: r.version, role: owed[0] })) : null,
+        t.status === "draft" && calls("config") ? button("Test", $("tp-msg"), async () => { fillTester(r); return ""; }) : null,
         t.status === "draft" && calls("config") ? button("Activate", $("tp-msg"), async () => open("activate_template", { id: r.id, version: r.version, effective_from: portal.today() })) : null,
+        t.status === "draft" && (calls("remediation") || calls("config")) ? button("Withdraw", $("tp-msg"), async () => open("disable_template", { id: r.id, version: r.version, reason: "withdrawn: not to be used" })) : null,
         t.status === "active" && (calls("remediation") || calls("config")) ? button("Disable", $("tp-msg"), async () => open("disable_template", { id: r.id, version: r.version })) : null,
+        calls("config") ? button("New version", $("tp-msg"), async () => { await startFrom(`t:${r.id}:${r.version}`); return ""; }) : null,
         button("Show", $("tp-msg"), async () => { $("t-id").value = r.id; $("t-ver").value = r.version; await showTemplate(); return ""; }))];
-  })) : portal.empty("No template is loaded."));
+  })) : portal.empty(calls("config") ? "No template is loaded. Write one below, starting from a shipped wording." : "No template is loaded."));
+  // Where to start a new one from: the shipped wordings and every version so far.
+  const keep = $("w-from").value;
+  put($("w-from"), h("option", { value: "" }, "Nothing: a new wording"),
+    h("optgroup", { label: "Shipped wordings (placeholders for legal review)" }, authoring.placeholders.map((p) => h("option", { value: `ph:${p.id}` }, `${p.title} (${p.id})`))),
+    templates.length ? h("optgroup", { label: "Earlier versions" }, templates.map((t) => h("option", { value: `t:${t.template.id}:${t.template.version}` }, `${ref(t.template)}: ${t.title}`))) : null);
+  $("w-from").value = keep;
 }
 async function showTemplate() {
   const t = await ask("template", { id: $("t-id").value.trim(), version: $("t-ver").value });
-  put($("tpl"), portal.details({ title: t.template.title, kind: t.template.kind, status: t.status, author: t.template.author, approvals: t.approvals, effective_from: t.effective_from, review_by: t.template.review_by,
-    required_fields: [...(t.required_fields || [])].join(", "), last_rendering_test: t.last_run, disabled: t.disabled ? t.disabled.join(": ") : null }));
+  const run = t.last_run;
+  put($("tpl"), portal.details({ title: t.template.title, kind: words(t.template.kind), status: t.status, author: t.template.author, products: products(t.template) || "none",
+    reading_grade: grade(t.reading_grade_x10), approvals: approvals(t.approvals) || "none", in_force_from: day(t.effective_from), review_by: day(t.template.review_by),
+    fields_it_needs: [...(t.required_fields || [])].join(", ") || "none",
+    last_rendering_test: run ? `${portal.when(run.at)}: ${run.cases} cases, ${run.failures.length ? `failed: ${run.failures.join("; ")}` : "passed"}` : "none yet",
+    disabled: t.disabled ? `${t.disabled[0]} (case ${t.disabled[1]})` : null }),
+    h("h3", {}, "Wording"), Object.entries(t.template.bodies).map(([lang, body]) => [h("h4", {}, lang), h("pre", {}, body)]));
+}
+
+// ---- Writing a template, from a shipped wording, an earlier version or nothing.
+const next = (id) => Math.max(0, ...templates.filter((t) => t.template.id === id).map((t) => t.template.version)) + 1;
+function describe() {
+  const k = authoring.kinds.find((x) => x.kind === $("w-kind").value);
+  const top = k && k.fields ? k.fields.filter((f) => !/[.[]/.test(f)) : null;
+  $("w-fields").textContent = !k ? "" : [top ? `Bound to a product, a ${k.words} is given: ${top.join(", ")}.` : `A ${k.words} is given what the team that asks for it sends.`,
+    k.proven ? "It must be proven delivered." : "", k.compliance ? "Compliance approves it too." : ""].filter(Boolean).join(" ");
+  $("w-days").disabled = !(k && k.proven);
+}
+function fill(t) {
+  $("w-id").value = t.id; $("w-ver").value = next(t.id); $("w-kind").value = t.kind; $("w-title").value = t.title;
+  $("w-products").value = (t.products || []).map((p) => `${p.code} ${p.version}`).join(", ");
+  $("w-lang").value = t.primary_language || "en"; $("w-days").value = t.minimum_notice_days || "";
+  $("w-body").value = (t.bodies || {})[t.primary_language || "en"] || "";
+  for (const box of $("w-formats").querySelectorAll("input")) box.checked = (t.alternate_formats || ["large_print"]).includes(box.value);
+  describe();
+}
+async function startFrom(from) {
+  $("writer").hidden = false; $("w-from").value = from; portal.view("templates");
+  if (from.startsWith("ph:")) {
+    const p = authoring.placeholders.find((x) => `ph:${x.id}` === from);
+    fill({ id: p.id, kind: p.kind, title: p.title, minimum_notice_days: p.notice_days, bodies: { en: p.body } });
+    portal.say($("w-msg"), "warn", "This is a placeholder for legal review. Rewrite it and remove its first line: a wording that still carries it is never activated. Bind it to the products it describes.");
+  } else if (from.startsWith("t:")) {
+    const [, id, version] = from.match(/^t:(.+):(\d+)$/);
+    fill((await ask("template", { id, version })).template);
+    put($("w-msg"));
+  }
+  $("w-form").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+$("w-from").addEventListener("change", run($("w-msg"), async () => { if ($("w-from").value) await startFrom($("w-from").value); return ""; }));
+$("w-kind").addEventListener("change", describe);
+$("w-id").addEventListener("change", () => { $("w-ver").value = next($("w-id").value.trim()); });
+$("w-form").addEventListener("submit", run($("w-msg"), async () => {
+  const bindings = $("w-products").value.split(",").map((x) => x.trim()).filter(Boolean).map((x) => {
+    const m = x.match(/^(\S+)\s+v?(\d+)$/);
+    if (!m) throw new Error(`Write each product as its code and version, such as aia-cancer-care 1: "${x}" is not.`);
+    return { code: m[1], version: Number(m[2]) };
+  });
+  const lang = $("w-lang").value, id = $("w-id").value.trim(), version = Number($("w-ver").value);
+  const formats = [...$("w-formats").querySelectorAll("input:checked")].map((b) => b.value);
+  await send({ type: "submit_template", id, version, kind: $("w-kind").value, title: $("w-title").value.trim(), products: bindings, primary_language: lang,
+    bodies: { [lang]: $("w-body").value }, alternate_formats: formats, minimum_notice_days: $("w-days").disabled || !$("w-days").value ? null : Number($("w-days").value),
+    review_by: $("w-review").value });
+  await showTemplates();
+  const t = templates.find((x) => x.template.id === id && x.template.version === version);
+  fillTester({ id, version });
+  return `${id} v${version} is a draft${t ? `, reading at grade ${grade(t.reading_grade_x10)}` : ""}. Test it next: its sample is below.`;
+}));
+
+// ---- Testing a draft: render the sample, read it, record it.
+let rendered = null;
+function fillTester(r) { $("tester").hidden = false; $("x-id").value = r.id; $("x-ver").value = r.version; put($("sample")); put($("x-msg")); portal.view("templates"); $("x-form").scrollIntoView({ behavior: "smooth", block: "start" }); }
+$("x-form").addEventListener("submit", run($("x-msg"), async () => {
+  const id = $("x-id").value.trim(), version = Number($("x-ver").value), data = $("x-data").value.trim();
+  const t = await ask("template", { id, version });
+  const samples = await Promise.all(Object.keys(t.template.bodies).map((language) => ask("render_sample", { id, version, language, ...(data ? { data } : {}) })));
+  rendered = { id, version, products: t.template.products.length ? t.template.products : [{ code: "none", version: 0 }], samples };
+  put($("sample"), samples.map((s) => h("div", {}, h("h3", {}, `In ${s.language}, reading grade ${grade(s.reading_grade_x10)}`), h("pre", {}, s.text))),
+    h("p", {}, button("These are right: record the test", $("x-msg"), record)));
+  return `Rendered ${samples.length} language${samples.length === 1 ? "" : "s"}. Read each, then record the test.`;
+}));
+async function record() {
+  const { id, version, products: bound, samples } = rendered;
+  const cases = bound.flatMap((p) => samples.map((s) => ({ product_code: p.code, product_version: p.version, persona: "sample", language: s.language, data: s.data,
+    product_fields: s.product_fields, expected_sha256: s.sha256 })));
+  await send({ type: "run_rendering_tests", template: { id, version }, cases });
+  await showTemplates();
+  return tested(id, version);
 }
 
 async function showPolicy() {
   const docs = await ask("policy_documents", { policy: $("p-id").value.trim() }) || [];
-  put($("pdocs"), docs.length ? table(["Document", "Kind", "Issued", "Recipient", "Delivery", ""], docs.flatMap((d) => (d.deliveries.length ? d.deliveries : [null]).map((v) => {
-    const status = !v ? "" : typeof v.status === "string" ? v.status : Object.keys(v.status)[0];
-    return [d.id, words(d.kind), d.issued_on, v ? v.recipient.party : "", words(status),
-      v && status === "undeliverable" && calls("servicing") ? button("Deliver again", $("p-msg"), async () => open("retry_delivery", { document: d.id, party: v.recipient.party, channels: v.chain.join(", ") })) : ""];
-  }))) : portal.empty("No document for this policy."));
+  put($("pdocs"), docs.length ? table(["Document", "Kind", "Issued", "Recipient", "Last tried", "Delivery", ""], documentRows(docs, $("p-msg")))
+    : portal.empty("No document has been issued on this policy. Check the number: pick it from the list as you type."));
 }
 
 async function showDefects() {
   const [df, lh] = await Promise.all([ask("open_defects"), ask("legal_holds")]);
   defects = df || [];
-  put($("defects"), defects.length ? table(["Defect", "Case", "What was wrong", "Cause", "Notices", "Raised by", ""], defects.map((d) => [d.id, d.case, d.description, words(d.cause), Object.keys(d.notices || {}).length, d.raised_by,
-    calls("remediation") ? h("span", {}, button("Add notices", $("df-msg"), async () => open("attach_defect_notices", { defect: d.id })), button("Close", $("df-msg"), async () => open("close_notice_defect", { defect: d.id }))) : ""])) : portal.empty("No defect is open."));
-  put($("holds"), (lh || []).length ? table(["On", "Case", ""], lh.map(([scope, kase]) => {
-    const [on, what] = Object.entries(scope)[0];
-    return [scopeWords(scope), kase, calls("legal") ? button("Release", $("lh-msg"), async () => open("release_legal_hold", { on, what })) : ""];
+  const count = (d) => { const n = Object.values(d.notices || {}).map((i) => typeof i === "string" ? i : Object.keys(i)[0]); return n.length ? `${n.length}: ${[...new Set(n)].map((s) => `${n.filter((x) => x === s).length} ${words(s)}`).join(", ")}` : "none yet"; };
+  put($("defects"), defects.length ? table(["Defect", "Case", "Template", "What was wrong", "Cause", "Notices", "Raised by", ""], defects.map((d) => [d.id, d.case, ref(d.template), d.description, words(d.cause), count(d) + (d.correcting ? "; corrections asked for" : ""), d.raised_by,
+    calls("remediation") ? h("span", {},
+      d.template ? button("Find its notices", $("df-msg"), async () => {
+        const found = await ask("notices_by_template", { id: d.template.id, version: d.template.version, from: d.from, to: d.to });
+        const fresh = (found || []).filter((n) => !(d.notices || {})[n]);
+        if (!fresh.length) return `No other notice of ${ref(d.template)} was issued from ${day(d.from)} to ${day(d.to)}.`;
+        return open("attach_defect_notices", { defect: d.id, notices: fresh.slice(0, 200).join(", ") });
+      }) : null,
+      button("Add notices", $("df-msg"), async () => open("attach_defect_notices", { defect: d.id })),
+      button("Correct", $("df-msg"), async () => open("correct_defect_notices", { defect: d.id })),
+      d.raised_by !== me.staff ? button("Close", $("df-msg"), async () => open("close_notice_defect", { defect: d.id })) : null) : ""])) : portal.empty("No defect is open."));
+  put($("holds"), (lh || []).length ? table(["On", "Case", "Why", "Placed by", "Placed on", ""], lh.map((x) => {
+    const [on, what] = Object.entries(x.scope)[0];
+    return [scopeWords(x.scope), x.case, x.reason || "not recorded", x.by || "not recorded", day(x.on), calls("legal") ? button("Release", $("lh-msg"), async () => open("release_legal_hold", { on, what })) : ""];
   })) : portal.empty("No legal hold is in place."));
+}
+
+function showSettings(s) {
+  put($("settings"), portal.details({ settings_version: s.version ? String(s.version) : "None activated: these are the defaults",
+    highest_reading_grade: grade(s.max_reading_grade_x10), longest_sentence: `${s.max_sentence_words} words`,
+    electronic_sends_confirmed_within: `${s.electronic_confirm_hours} hours, or the next channel is tried`, post_deemed_delivered: `${s.post_deemed_days} days after it is lodged`,
+    a_choice_stays_reopenable: `${s.reopen_grace_days} days after a corrected notice is delivered`, core_events_acted_on: `for ${s.live_event_days} days` }));
 }
 
 $("t-form").addEventListener("submit", run($("t-msg"), showTemplate));
 $("p-form").addEventListener("submit", run($("p-msg"), showPolicy));
+const lkWhat = () => { for (const el of document.querySelectorAll(".lk-notices")) el.hidden = $("lk-what").value !== "notices_by_template"; };
+$("lk-what").addEventListener("change", lkWhat);
 $("lk-form").addEventListener("submit", run($("lk-msg"), async () => {
-  const what = $("lk-what").value, key = { document: "id", defect: "id", letter_request: "request", template_for: "id", part_usage: "part", retention: "kind" }[what];
-  put($("lk"), portal.details(await ask(what, { [key]: $("lk-id").value.trim() })));
+  const what = $("lk-what").value, text = $("lk-id").value.trim();
+  if (what === "notices_by_template") {
+    const found = await ask(what, { id: text, version: $("lk-ver").value, from: $("lk-from").value, to: $("lk-to").value });
+    put($("lk"), found.length ? table(["Notice"], found.map((n) => [n])) : portal.empty("That version issued no notice in the period."));
+    return;
+  }
+  const key = { document: "id", defect: "id", letter_request: "request", template_for: "id", part_usage: "part", retention: "kind" }[what];
+  const answer = await ask(what, { [key]: text });
+  put($("lk"), portal.details(answer), what === "document" && me.download ? h("p", {}, button("Download", $("lk-msg"), () => download(answer.id))) : null);
 }));
 $("rp-form").addEventListener("submit", run($("rp-msg"), async () => { put($("report"), portal.details(await ask("report", { from: $("rp-from").value, to: $("rp-to").value }))); }));
 portal.picker($("t-id"), async () => [...new Map(templates.map((t) => [t.template.id, { value: t.template.id, hint: `${t.title} · ${words(t.status)}` }])).values()], { min: 0, empty: "No template is loaded." });
-// The policies the page already knows of: those with a document waiting or a letter asked for.
-portal.picker($("p-id"), async () => [...new Set([...triggers.map((t) => t.policy), ...letters.map((l) => l.request.policy).filter(Boolean)])].map((value) => ({ value })), { min: 0, empty: "Type the policy." });
+portal.picker($("x-id"), async () => templates.filter((t) => t.status === "draft").map((t) => ({ value: t.template.id, hint: `v${t.template.version} · ${t.title}` })), { min: 0, empty: "No draft to test." });
+portal.picker($("lk-id"), async () => $("lk-what").value === "notices_by_template" ? [...new Set(templates.map((t) => t.template.id))].map((value) => ({ value })) : [], { min: 0, empty: "Type the reference." });
+// Any policy, found by its number as the customer's letters print it.
+portal.picker($("p-id"), async (text) => (await ask("policies", { q: text }) || []).map((p) => ({ value: p.number, hint: [words(p.product), words(p.status)].filter(Boolean).join(" · ") })), { min: 2, none: "No policy has a number like that." });
 $("rp-from").value = portal.month(0) + "-01"; $("rp-to").value = portal.today();
 signIn(R).then(async () => {
   me = await ask("me");
-  const roles = [...(me.callers || []), ...(me.approvals || []).map((a) => `${a} approver`)];
+  const roles = [...(me.callers || []), ...(me.approvals || []).map((a) => `${a} approver`), ...(me.download ? ["downloads"] : [])];
   $("me").textContent = `You are ${me.staff}: ${roles.map(words).join(", ") || "view only"}.`;
   ACTIONS.approve_template.fields[2][3] = me.approvals || [];
-  await Promise.all([showWork(), showTemplates(), showDefects(), ask("settings").then((s) => put($("settings"), portal.details(s)))]);
+  authoring = await ask("authoring");
+  put($("w-kind"), authoring.kinds.map((k) => h("option", { value: k.kind }, k.words)));
+  put($("w-formats"), authoring.formats.map((f) => h("label", {}, h("input", { type: "checkbox", value: f, checked: f === "large_print" }), " ", words(f))));
+  $("w-review").value = portal.days(365); describe(); lkWhat();
+  $("writer").hidden = !calls("config");
+  $("lk-from").value = portal.month(0) + "-01"; $("lk-to").value = portal.today();
+  await Promise.all([showWork(), showTemplates(), showDefects(), ask("settings").then(showSettings)]);
   const ids = () => [...new Set(templates.map((t) => t.template.id))].map((value) => ({ value }));
   acts = portal.actions($("acts"), ACTIONS, { id: "da", send, after: () => Promise.all([showWork(), showTemplates(), showDefects()]),
     pickers: { id: async () => ids(), defect: async () => defects.map((d) => ({ value: d.id, hint: d.description })), trigger: async () => triggers.map((t) => ({ value: t.id, hint: `${t.policy} · ${words(t.kind)}` })),
-      request: async () => letters.map((l) => ({ value: l.request.request, hint: words(l.request.kind) })) } });
+      request: async () => letters.map((l) => ({ value: l.request.request, hint: words(l.request.kind) })),
+      template: async () => templates.map((t) => ({ value: ref(t.template), hint: `${t.title} · ${words(t.status)}` })),
+      case: async () => [...new Set(defects.map((d) => d.case))].map((value) => ({ value, hint: "an open defect's case" })) } });
 }).catch(portal.refuse);
 </script></body></html>

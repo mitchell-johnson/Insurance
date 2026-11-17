@@ -19,6 +19,7 @@ fn raise(kit: &mut Kit, id: &str) {
             from: date("2027-11-01"),
             to: date("2027-11-30"),
             grace_days: None,
+            template: None,
         },
     );
 }
@@ -274,6 +275,7 @@ fn defects_cover_any_proven_letter_and_notices_still_in_transit() {
             from: date("2027-11-15"),
             to: date("2027-11-15"),
             grace_days: Some(45),
+            template: None,
         },
     );
     let events = kit.ok("remediation", "commander", attach("D2", &["d1", "n1"]));
@@ -323,6 +325,7 @@ fn defect_commands_refuse_bad_input() {
         from: date(from),
         to: date(to),
         grace_days: None,
+        template: None,
     };
     assert_eq!(kit.err("remediation", "c", raise_with("", "REM", "2027-11-01", "2027-11-30")), "invalid");
     assert_eq!(kit.err("remediation", "c", raise_with("D1", "REM", "2027-12-01", "2027-11-30")), "invalid");
@@ -386,4 +389,97 @@ fn the_population_is_found_by_template_version_and_period() {
         .state
         .notices_by_template(&tref("receipt", 1), date("2027-11-01"), date("2027-11-30"))
         .is_empty());
+}
+
+fn raise_on(template: Option<ic_documents::template::TemplateRef>) -> Command {
+    Command::RaiseNoticeDefect {
+        defect: "D2".into(),
+        case: "REM-2".into(),
+        description: "lapse warnings gave the old contact centre number".into(),
+        cause: DefectCause::TemplateError,
+        from: date("2027-11-01"),
+        to: date("2027-11-30"),
+        grace_days: None,
+        template,
+    }
+}
+
+/// Purpose: a defect is raised against the template version that was wrong; a version that does
+/// not exist is refused; only that version's notices are added to it, and a document that did
+/// not have to be proven is refused with its id quoted exactly and what a defect takes.
+/// Why it matters: the defect could not be tied to the wrong version, so its population had to
+/// be pasted in by hand, and the refusal rewrote the document id it named (found by the
+/// scenario run, F2-11-3 and F2-11-8).
+#[test]
+fn a_defect_names_its_template_and_takes_only_its_notices() {
+    let mut kit = Kit::ready();
+    kit.issue(kit.renewal_spec("n1"));
+    kit.issue(kit.issue_spec("r1", DocumentKind::PremiumReceipt, "receipt"));
+    assert_eq!(kit.err("remediation", "commander", raise_on(Some(tref("renewal", 9)))), "unknown_template");
+    kit.ok("remediation", "commander", raise_on(Some(tref("lapse", 1))));
+    assert_eq!(kit.state.defects["D2"].template, Some(tref("lapse", 1)));
+    let refused = kit.send("remediation", "commander", attach("D2", &["n1"])).result.unwrap_err();
+    assert_eq!(
+        (refused.code.as_str(), refused.message.as_str()),
+        ("other_template", "`n1` was not issued from lapse version 1")
+    );
+    let refused = kit.send("remediation", "commander", attach("D2", &["r1"])).result.unwrap_err();
+    assert_eq!(refused.code, "not_a_notice");
+    assert!(refused.message.starts_with("`r1` did not have to be proven delivered"), "{}", refused.message);
+    assert!(kit
+        .send("remediation", "commander", attach("D2", &["none"]))
+        .result
+        .unwrap_err()
+        .message
+        .contains("`none`"));
+}
+
+/// Purpose: remediation asks for corrected notices once the wording is put right: the defect is
+/// marked, its outstanding notices are listed as due a correction (not one already corrected or
+/// excluded), and asking when none is outstanding is refused. Whoever raised the defect is told
+/// that another person who works defects closes it.
+/// Why it matters: nothing could issue a corrected notice, so a defect's notices could only be
+/// excluded, never corrected; and a defect's raiser was refused closing it without being told
+/// who could (found by the scenario run, F2-11-2 and F2-11-6).
+#[test]
+fn remediation_asks_for_corrections_and_another_person_closes() {
+    let mut kit = Kit::ready();
+    for id in ["n1", "n2"] {
+        kit.issue(kit.renewal_spec(id));
+    }
+    kit.ok("remediation", "commander", raise_on(Some(tref("renewal", 1))));
+    let correct = Command::CorrectDefectNotices { defect: "D2".into() };
+    assert_eq!(kit.err("remediation", "commander", correct.clone()), "nothing_to_correct");
+    kit.ok("remediation", "commander", attach("D2", &["n1", "n2"]));
+    assert!(kit.state.corrections_due(10).is_empty(), "nothing is due until remediation asks");
+    kit.ok("remediation", "commander", correct.clone());
+    assert!(kit.state.defects["D2"].correcting);
+    assert_eq!(
+        kit.state.corrections_due(10),
+        vec![("D2".to_string(), "n1".to_string()), ("D2".to_string(), "n2".to_string())]
+    );
+    kit.ok(
+        "remediation",
+        "commander",
+        Command::ExcludeFromDefect {
+            defect: "D2".into(),
+            notice: "n2".into(),
+            reason: "policy cancelled".into(),
+        },
+    );
+    kit.issue(corrected(&kit, "c1", "D2", "n1"));
+    assert!(kit.state.corrections_due(10).is_empty());
+    assert_eq!(kit.err("remediation", "commander", correct), "nothing_to_correct");
+    let refused = kit
+        .send(
+            "remediation",
+            "commander",
+            Command::CloseNoticeDefect {
+                defect: "D2".into(),
+                control: "a reviewer reads every changed number".into(),
+            },
+        )
+        .result
+        .unwrap_err();
+    assert!(refused.message.contains("another person who works notice defects"), "{}", refused.message);
 }

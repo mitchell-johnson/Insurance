@@ -460,7 +460,8 @@ async fn expired_documents_are_destroyed_and_held_ones_kept() {
             "legal",
             Command::PlaceLegalHold {
                 scope: HoldScope::Document("r2".into()),
-                case: "lit-1".into()
+                case: "lit-1".into(),
+                reason: None,
             }
         ))
         .await

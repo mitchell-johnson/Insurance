@@ -107,6 +107,14 @@ impl DocumentKind {
     pub fn needs_compliance_approval(self) -> bool {
         self.requires_proof() || self == DocumentKind::MigrationNotice
     }
+
+    /// The kind in words, as a person reads it: `lapse notice`.
+    pub fn words(self) -> String {
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.replace('_', " ")))
+            .unwrap_or_default()
+    }
 }
 
 /// How sensitive a document is. Decides who may open it; a clinical

@@ -384,3 +384,18 @@ The second scenario run (op2-a: quoting, disclosure, consent, underwriting) foun
 - **An authority refusal says why and who can act** (over a limit, in dollars; a loading beyond the profile; a second signature needing a senior), rather than "not authorised".
 - **A sum insured outside a cover's range is said in dollars**, with a hint when it looks typed in dollars rather than cents.
 - **Device-only MCP tools stay listed.** `submit_disclosure` and the signing of consents are described as done on the customer's own device, so an assistant can explain the step rather than not knowing it exists.
+
+## Documents: authoring, corrections and the console (17 Nov 2026)
+
+Decided while fixing the scenario run's documents findings (op2-d, F2-10, F2-11):
+
+- **A sentence is at most 40 words.** `Settings.max_sentence_words`, 40 by default, is checked at submission beside the reading grade: one long sentence can pass a document's average grade and still lose a reader. (F2-10-5)
+- **A product's notice uses only the fields a policy's documents are given.** A template bound to a product, of a kind the core's events ask for, is refused at submission for any other field. A template bound to no product is used only where asked for by its id, as the shipped placeholders are. (F2-10-4)
+- **Activation may be backdated.** `effective_from` may lie before today, so documents that waited for a template issue once it is active from on or before their business date. The page says so beside Activate. (F2-10-10)
+- **A draft is withdrawn by disabling it.** `DisableTemplate` takes a draft too, and nothing can approve or activate it after. (F2-10-9)
+- **Corrected notices are rendered from the original's data with the newer version of the same template.** The service issues them, but only once remediation asks (`CorrectDefectNotices`), and only from a version newer than the wrong one that is in force: the correction says the same thing about the same facts, in the wording put right. (F2-11-2)
+- **Whoever raised a defect does not close it.** Unchanged: a second person who works notice defects checks and closes. The refusal says so, and the page names colleagues who can. (F2-11-6)
+- **A legal hold says why.** The console requires a reason to place or release one, and keeps who and when. The module takes a hold without one, so the log already written replays. (F2-11-11)
+- **Returned post is recorded against the recipient** (`RecordReturnedPost`), which fails that delivery and lists the document as undeliverable until it is sent again. (F2-11-4)
+
+Built in: `crates/documents/src/supplied.rs`, `state.rs`, `module.rs` (`RenderSample`, `Authoring`, `Undeliverable`, `CorrectionsDue`), `required_documents.rs` (corrections, why a trigger waits), `crates/channels/src/correspondence.rs`, `crates/channels/ui/documents.html`.

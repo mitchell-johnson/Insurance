@@ -133,6 +133,7 @@ fn every_command(kit: &Kit) -> Vec<(Command, &'static str)> {
                 from: today,
                 to: today,
                 grace_days: None,
+                template: None,
             },
             "raise_notice_defect",
         ),
@@ -172,12 +173,14 @@ fn every_command(kit: &Kit) -> Vec<(Command, &'static str)> {
             Command::PlaceLegalHold {
                 scope: HoldScope::Party(party("aroha")),
                 case: "c".into(),
+                reason: None,
             },
             "place_legal_hold",
         ),
         (
             Command::ReleaseLegalHold {
                 scope: HoldScope::Policy(policy("pol-1")),
+                reason: None,
             },
             "release_legal_hold",
         ),

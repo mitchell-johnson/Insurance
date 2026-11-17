@@ -546,7 +546,7 @@ async fn a_bill_gets_a_premium_notice_with_its_discount_lines() {
     );
     // The policy's first bill and this one; nothing for the scheme or the
     // credit. Only the policy's schedule waits, for its template.
-    let waiting = vec!["product term-life has no active PolicySchedule template; its documents are waiting".to_string()];
+    let waiting = vec!["product term-life has no active policy schedule template; its documents are waiting".to_string()];
     assert_eq!((pass.issued, pass.left, pass.errors.clone()), (2, 1, waiting.clone()), "{pass:?}");
 
     let w = World::new(&[]).await;
@@ -750,10 +750,13 @@ async fn a_representative_gets_the_notice_in_their_own_language() {
 /// schedule with no wording is left the same way; a policyholder with no
 /// contact point, or who has died, is left for a person; a policy no
 /// partition holds, the core being down, and the module's question failing
-/// are reported; and a trigger left is answered once the gap is filled.
+/// are reported; why each is left is kept on its trigger for the Work view;
+/// and a trigger left is answered once the gap is filled.
 /// Why it matters: the service must never invent wording or write to
 /// nobody, but one missing template must not stop the other documents,
-/// and every gap has to be visible to whoever runs the service.
+/// and every gap has to be visible to whoever runs the service, and to the
+/// people on the documents console, who saw only that documents waited
+/// (found by the scenario run, F2-11-5).
 #[tokio::test]
 async fn documents_wait_for_templates_and_people_and_survive_outages() {
     let mut w = World::new(&[("schedule", DocumentKind::PolicySchedule, SCHEDULE)]).await;
@@ -778,10 +781,13 @@ async fn documents_wait_for_templates_and_people_and_survive_outages() {
     assert_eq!(
         pass.errors,
         vec![
-            "product term-life has no active AvoidanceNotice template; its documents are waiting".to_string(),
-            "product term-life has no active PolicyWording template; its documents are waiting".to_string(),
+            "product term-life has no active avoidance notice template; its documents are waiting".to_string(),
+            "product term-life has no active policy wording template; its documents are waiting".to_string(),
         ]
     );
+    let waiting: std::collections::BTreeSet<String> = w.driver.module.state().triggers.values().filter_map(|t| t.waiting.clone()).collect();
+    assert!(waiting.contains("product term-life has no active avoidance notice template"), "{waiting:?}");
+    assert!(waiting.contains("product term-life has no active policy wording template"), "{waiting:?}");
 
     w.observe(9, vec![avoided(3, "pol-nowhere")]).await;
     let pass = w.pass().await;
@@ -1024,4 +1030,212 @@ async fn the_step_runs_until_stopped() {
     let passes = passes.lock().unwrap().clone();
     assert!(passes.len() >= 2);
     assert_eq!(passes.iter().map(|p| p.issued).sum::<u32>(), 1);
+}
+
+impl World {
+    /// Send the documents module a command that must be accepted.
+    async fn tell(&self, caller: &str, actor: &str, command: Command) {
+        let key = format!("tell-{}", ic_documents::template::sha256_hex(&serde_json::to_vec(&command).unwrap()));
+        let applied = self
+            .driver
+            .module
+            .propose(ic_documents::Envelope {
+                key,
+                caller: caller.into(),
+                actor: actor.into(),
+                at: chrono::Utc::now(),
+                command,
+            })
+            .await
+            .unwrap();
+        assert_eq!(applied.result, Ok(()), "{:?}", applied.result);
+    }
+}
+
+/// Purpose: a lapse notice sent from a wrong template version is put right end to end: the
+/// defect is raised against that version, its notice added, corrections asked for; while no
+/// corrected version is in force the pass leaves it and says what to do; once one is active
+/// the pass issues the corrected notice from the original's data with the new wording, to the
+/// same people, superseding the original, and the defect's notice is then corrected; the next
+/// pass does nothing more.
+/// Why it matters: nothing could issue a corrected notice, so a defect's notices could only be
+/// excluded and "treat the wrong ones as not given, send good ones" could not be done (found by
+/// the scenario run, F2-11-2).
+#[tokio::test]
+async fn a_wrong_notice_is_corrected_from_the_new_wording() {
+    let w = World::new(&[(
+        "lapse",
+        DocumentKind::LapseNotice,
+        "Dear {{name}}. Policy {{policy}} is unpaid. Call 0800 111 222.",
+    )])
+    .await;
+    let grace = CoreEvent::StandingChanged {
+        policy: the_policy(),
+        from: Some(Standing::Paid),
+        to: Some(Standing::InGrace),
+        oldest_unpaid_due: Some(open()),
+    };
+    w.observe(9, vec![event(1, grace)]).await;
+    w.pass().await;
+    let original = "required:9-1:LapseNotice";
+    assert!(w.driver.document(original).await.is_ok());
+    w.tell(
+        "remediation",
+        "records",
+        Command::RaiseNoticeDefect {
+            defect: "DEF-1".into(),
+            case: "REM-1".into(),
+            description: "the old contact centre number".into(),
+            cause: ic_documents::model::DefectCause::TemplateError,
+            from: open(),
+            to: open(),
+            grace_days: None,
+            template: Some(tref("lapse", 1)),
+        },
+    )
+    .await;
+    w.tell(
+        "remediation",
+        "records",
+        Command::AttachDefectNotices {
+            defect: "DEF-1".into(),
+            notices: vec![original.into()],
+        },
+    )
+    .await;
+    w.tell("remediation", "records", Command::CorrectDefectNotices { defect: "DEF-1".into() }).await;
+    let pass = w.pass().await;
+    assert!(
+        pass.errors.iter().any(|e| e.contains("no corrected version of template lapse is in force")),
+        "{:?}",
+        pass.errors
+    );
+
+    // The wording put right, as a new version through its own controls.
+    let mut v2 = template(
+        "lapse",
+        DocumentKind::LapseNotice,
+        "Dear {{name}}. Policy {{policy}} is unpaid. Call 0800 500 123.",
+    );
+    v2.version = 2;
+    v2.minimum_notice_days = Some(14);
+    w.tell("config", "author", Command::SubmitTemplate(Box::new(v2.clone()))).await;
+    for (role, who) in [
+        (ApprovalRole::Legal, "legal"),
+        (ApprovalRole::Product, "product"),
+        (ApprovalRole::Compliance, "compliance"),
+    ] {
+        w.tell(
+            "config",
+            who,
+            Command::ApproveTemplate {
+                template: tref("lapse", 2),
+                role,
+            },
+        )
+        .await;
+    }
+    let case = Kit::new().case_for(&v2, &sample());
+    w.tell(
+        "config",
+        "author",
+        Command::RunRenderingTests {
+            template: tref("lapse", 2),
+            cases: vec![case],
+        },
+    )
+    .await;
+    w.tell(
+        "config",
+        "product",
+        Command::ActivateTemplate {
+            template: tref("lapse", 2),
+            effective_from: open(),
+        },
+    )
+    .await;
+
+    let pass = w.pass().await;
+    assert_eq!(pass.issued, 1, "{pass:?}");
+    let fixed = w.driver.document("correction:DEF-1:required:9-1:LapseNotice").await.unwrap();
+    assert_eq!(fixed.template, Some(tref("lapse", 2)));
+    assert_eq!(fixed.supersedes.as_deref(), Some(original));
+    assert_eq!(fixed.notice.as_ref().unwrap().purpose, "lapse");
+    assert_eq!(fixed.deliveries[0].recipient.party, party("party-00000001"));
+    assert_eq!(
+        w.driver.read(&fixed.id).await.unwrap().text,
+        "Dear Aroha Ngata. Policy KTL00000001 is unpaid. Call 0800 500 123."
+    );
+    let state = w.driver.module.state();
+    assert_eq!(
+        state.defects["DEF-1"].notices[original],
+        ic_documents::model::DefectItem::Corrected { by: fixed.id.clone() }
+    );
+    assert!(state.corrections_due(10).is_empty());
+    assert_eq!(w.pass().await.issued, 0);
+}
+
+/// Purpose: the standard sample a template author renders gives every field a real policy's
+/// documents are given: the policy's data and a scheme member's, the addressee's name and the
+/// date, and each event's facts for the kind it asks for; a kind the events never ask for has
+/// no standard sample.
+/// Why it matters: the sample is what a person reads and records as a rendering test, and its
+/// fields are what a product's template is checked against at submission. If it drifted from
+/// what the policy gives, a template that renders in the test would fail on a real customer
+/// (found by the scenario run, F2-10-3 and F2-10-4).
+#[tokio::test]
+async fn the_standard_sample_gives_what_a_policy_gives() {
+    use ic_documents::render::supplied;
+    use ic_documents::supplied::{fields, sample, REQUIRED_KINDS};
+    let w = World::new(&[]).await;
+    let record = w.core.policy(&the_policy()).await.unwrap().unwrap();
+    let life = record.policy.lives.keys().next().unwrap().clone();
+    let given: std::collections::BTreeSet<String> = supplied(&policy_data(&record, open()))
+        .into_iter()
+        .chain(supplied(&ic_documents::required_documents::member_data(&record, open(), &life)))
+        .chain(["name".to_string(), "date".to_string()])
+        .collect();
+    for kind in REQUIRED_KINDS {
+        let known = fields(kind).unwrap();
+        let missing: Vec<_> = given.iter().filter(|f| !known.contains(*f)).collect();
+        assert!(missing.is_empty(), "{kind:?} lacks {missing:?}");
+    }
+    let facts = |kind: DocumentKind, happened: CoreEvent| {
+        let triggers = ic_documents::triggers::triggers(&event(1, happened));
+        let t = triggers.iter().find(|t| t.kind == kind).unwrap().clone();
+        let known = fields(kind).unwrap();
+        for key in t.detail.keys() {
+            assert!(known.contains(key), "{kind:?} lacks {key}");
+        }
+    };
+    facts(
+        DocumentKind::LapseNotice,
+        CoreEvent::StandingChanged {
+            policy: the_policy(),
+            from: None,
+            to: Some(Standing::InGrace),
+            oldest_unpaid_due: Some(open()),
+        },
+    );
+    facts(
+        DocumentKind::PremiumReceipt,
+        CoreEvent::ReceiptApplied {
+            policy: the_policy(),
+            receipt: "rc-1".into(),
+            allocated_minor: 1,
+            to_suspense_minor: 0,
+            net_by_cover_type: Default::default(),
+            fund: None,
+        },
+    );
+    facts(
+        DocumentKind::GeneralCorrespondence,
+        CoreEvent::PolicyStatusChanged {
+            policy: the_policy(),
+            from: ic_core::PolicyStatus::InForce,
+            to: ic_core::PolicyStatus::Lapsed,
+        },
+    );
+    assert!(sample(DocumentKind::RenewalNotice).is_none() && fields(DocumentKind::ClaimDecisionLetter).is_none());
+    assert_eq!(sample(DocumentKind::Invoice).unwrap()["discounts"][0]["amount"], 655);
 }

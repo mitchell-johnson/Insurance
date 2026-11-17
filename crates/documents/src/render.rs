@@ -449,3 +449,13 @@ pub fn reading_grade_x10(text: &str) -> u32 {
     let grade = (39 * word_count) / (10 * sentences) + (118 * syllable_count) / word_count - 156;
     grade.max(0) as u32
 }
+
+/// The longest sentence of a text, split as [`reading_grade_x10`] splits
+/// sentences: its number of words and the sentence. `None` for a text
+/// with no words.
+pub fn longest_sentence(text: &str) -> Option<(usize, &str)> {
+    text.split(['.', '!', '?', '\n'])
+        .map(|s| (s.split(|c: char| !c.is_alphabetic() && c != '\'').filter(|w| !w.is_empty()).count(), s.trim()))
+        .filter(|(words, _)| *words > 0)
+        .max_by_key(|(words, _)| *words)
+}

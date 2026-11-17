@@ -329,25 +329,134 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
         };
         // A product with no template of a kind is said once, not once a policy.
         let mut no_template = BTreeSet::new();
+        // Why each trigger left waits, told to the module where it changed,
+        // so the people who can put it right read it on the Work view.
+        let mut notes = Vec::new();
         for trigger in &due {
-            match self.required_document(policies, trigger).await {
-                Ok(Ok(())) => pass.issued += 1,
+            let why = match self.required_document(policies, trigger).await {
+                Ok(Ok(())) => {
+                    pass.issued += 1;
+                    None
+                }
                 Ok(Err(Left::NoTemplate(kind, product))) => {
                     pass.left += 1;
+                    let why = format!("product {product} has no active {} template", kind.words());
                     if no_template.insert((kind, product.clone())) {
-                        pass.errors
-                            .push(format!("product {product} has no active {kind:?} template; its documents are waiting"));
+                        pass.errors.push(format!("{why}; its documents are waiting"));
                     }
+                    Some(why)
                 }
-                Ok(Err(Left::NotSent)) => pass.left += 1,
+                Ok(Err(Left::NotSent)) => {
+                    pass.left += 1;
+                    None
+                }
                 Ok(Err(Left::Said(why))) => {
                     pass.left += 1;
                     pass.errors.push(format!("{}: {why}", trigger.id));
+                    Some(why)
                 }
-                Err(e) => pass.errors.push(format!("{}: {e}", trigger.id)),
+                Err(e) => {
+                    pass.errors.push(format!("{}: {e}", trigger.id));
+                    None
+                }
+            };
+            if let Some(why) = why.filter(|w| trigger.waiting.as_ref() != Some(w)) {
+                notes.push((trigger.id.clone(), why));
             }
         }
+        if !notes.is_empty() {
+            let key = format!(
+                "waiting:{}",
+                &crate::template::sha256_hex(&serde_json::to_vec(&notes).unwrap_or_default())[..16]
+            );
+            if let Err(e) = self.send(key, "documents", Command::NoteTriggersWaiting { notes }).await {
+                pass.errors.push(format!("noting why documents wait: {e}"));
+            }
+        }
+        self.corrections(&mut pass).await;
         pass
+    }
+
+    /// Issue the corrected notices remediation asked for: each is the
+    /// original's data rendered again with the version of its template
+    /// now in force, to the same people, superseding the original. A
+    /// notice whose template has no later version in force is left, and
+    /// the pass says so.
+    async fn corrections(&self, pass: &mut LetterPass) {
+        let due: Result<Vec<(String, String)>, DriverError> = match self.module.ask(Query::CorrectionsDue { limit: self.batch }).await {
+            Ok(answer) => serde_json::from_value(answer).map_err(|e| DriverError::Answer(e.to_string())),
+            Err(e) => Err(e),
+        };
+        let due = match due {
+            Ok(due) => due,
+            Err(e) => {
+                pass.errors.push(format!("corrections: {e}"));
+                return;
+            }
+        };
+        let today = crate::state::nz_date((self.clock)());
+        for (defect, notice) in due {
+            match self.correction(&defect, &notice, today).await {
+                Ok(None) => pass.issued += 1,
+                Ok(Some(why)) => {
+                    pass.left += 1;
+                    pass.errors.push(format!("{notice} under defect {defect}: {why}"));
+                }
+                Err(e) => pass.errors.push(format!("{notice} under defect {defect}: {e}")),
+            }
+        }
+    }
+
+    /// One corrected notice, or why it is left for now.
+    async fn correction(&self, defect: &str, notice: &str, today: NaiveDate) -> Result<Option<String>, DriverError> {
+        let original = self.document(notice).await?;
+        let (Some(was), Some(clock)) = (original.template.clone(), original.notice.clone()) else {
+            return Ok(Some(
+                "a letter with no notice period is not corrected here: send it again by hand and take it out of the defect".into(),
+            ));
+        };
+        let current: Option<crate::state::TemplateRecord> =
+            serde_json::from_value(self.module.ask(Query::TemplateFor { id: was.id.clone(), on: today }).await?)
+                .map_err(|e| DriverError::Answer(e.to_string()))?;
+        let Some(current) = current.filter(|t| t.template.version != was.version) else {
+            return Ok(Some(format!(
+                "no corrected version of template {} is in force; activate one to send the correction",
+                was.id
+            )));
+        };
+        let data = self.read(notice).await?.data;
+        let request = IssueRequest {
+            document: format!("correction:{defect}:{notice}"),
+            caller: "documents".into(),
+            template: was.id,
+            template_version: Some(current.template.version),
+            policy: original.policy.clone(),
+            other_policies: original.other_policies.clone(),
+            data_class: original.data_class,
+            lives: original.lives.clone(),
+            prove_delivery: original.proof,
+            owner: original.owner.clone(),
+            recipients: original.deliveries.iter().map(|d| d.recipient.clone()).collect(),
+            language: original.language.clone(),
+            format: original.format,
+            data,
+            trigger_event: original.trigger_event.clone(),
+            case: None,
+            supersedes: Some(notice.to_string()),
+            reason: Some(format!("corrects {notice} under notice defect {defect}")),
+            wordings: original.wordings.clone(),
+            components: vec![],
+            notice: Some(NoticeSpec {
+                purpose: clock.purpose,
+                corrects: Some(crate::model::Correction {
+                    defect: defect.to_string(),
+                    original: notice.to_string(),
+                }),
+            }),
+            copy_of: None,
+        };
+        self.issue_with_representatives(request, today).await?;
+        Ok(None)
     }
 }
 

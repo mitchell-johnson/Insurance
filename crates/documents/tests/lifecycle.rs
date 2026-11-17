@@ -330,14 +330,19 @@ fn a_legal_hold_blocks_destruction_until_released() {
     for id in ["r1", "r2", "r3"] {
         kit.issue(kit.issue_spec(id, DocumentKind::PremiumReceipt, "receipt"));
     }
-    let hold = |scope| Command::PlaceLegalHold { scope, case: "LIT-9".into() };
+    let hold = |scope| Command::PlaceLegalHold {
+        scope,
+        case: "LIT-9".into(),
+        reason: None,
+    };
     assert_eq!(
         kit.err(
             "legal",
             "counsel",
             Command::PlaceLegalHold {
                 scope: HoldScope::Document("r1".into()),
-                case: String::new()
+                case: String::new(),
+                reason: None,
             }
         ),
         "no_case"
@@ -357,7 +362,8 @@ fn a_legal_hold_blocks_destruction_until_released() {
             "legal",
             "counsel",
             Command::ReleaseLegalHold {
-                scope: HoldScope::Policy(policy("pol-1"))
+                scope: HoldScope::Policy(policy("pol-1")),
+                reason: None,
             }
         ),
         "no_hold"
@@ -367,7 +373,8 @@ fn a_legal_hold_blocks_destruction_until_released() {
             "legal",
             "counsel",
             Command::ReleaseLegalHold {
-                scope: HoldScope::Document("r1".into())
+                scope: HoldScope::Document("r1".into()),
+                reason: None,
             }
         ),
         vec![Event::LegalHoldReleased]
@@ -383,6 +390,7 @@ fn a_legal_hold_blocks_destruction_until_released() {
         "counsel",
         Command::ReleaseLegalHold {
             scope: HoldScope::Policy(policy("pol-1")),
+            reason: None,
         },
     );
     kit.ok("legal", "counsel", hold(HoldScope::Party(party("aroha"))));

@@ -121,6 +121,7 @@ fn every_question_is_answered_from_the_state() {
             from: today,
             to: today,
             grace_days: None,
+            template: None,
         },
     );
     kit.ok(
@@ -137,6 +138,7 @@ fn every_question_is_answered_from_the_state() {
         Command::PlaceLegalHold {
             scope: ic_documents::command::HoldScope::Policy(policy("pol-9")),
             case: "LIT-1".into(),
+            reason: Some("a dispute over the claim".into()),
         },
     );
     let hosted = hosted_from(&kit);
@@ -211,7 +213,12 @@ fn every_question_is_answered_from_the_state() {
         "{templates}"
     );
     assert_eq!(ask(h, Query::Templates { limit: 1 }).as_array().unwrap().len(), 1);
-    assert_eq!(ask(h, Query::LegalHolds), json!([[{"policy": "pol-9"}, "LIT-1"]]));
+    assert_eq!(
+        ask(h, Query::LegalHolds),
+        json!([{ "scope": {"policy": "pol-9"}, "case": "LIT-1", "reason": "a dispute over the claim", "by": "counsel", "on": today }])
+    );
+    assert_eq!(ask(h, Query::Undeliverable { limit: 10 }), json!([]));
+    assert_eq!(ask(h, Query::CorrectionsDue { limit: 10 }), json!([]));
     assert_eq!(ask(h, Query::OpenDefects { limit: 10 })[0]["id"], json!("d1"));
     assert_eq!(ask(h, Query::Settings)["post_deemed_days"], json!(kit.state.settings.post_deemed_days));
     assert_eq!(ask(h, Query::StateHash), json!(kit.state.state_hash()));
@@ -322,4 +329,184 @@ fn a_saved_state_restores_to_the_same_module() {
     assert_eq!(ask(restored.as_ref(), Query::StateHash), ask(hosted.as_ref(), Query::StateHash));
     assert_eq!(ask(restored.as_ref(), Query::CoreOutbox { limit: 10 }).as_array().unwrap().len(), 1);
     assert!(restored.load(json!({"settings": 5})).is_err());
+}
+
+/// Purpose: a draft is rendered for a sample customer with the data a product's document of
+/// its kind is given (or with data sent), answering the text, its SHA-256, the fields it needs
+/// and the fields the data gives; a rendering test built from that answer passes; a kind with
+/// no standard sample, a template that does not exist and a field the data lacks are refused
+/// in words. The authoring answer lists every kind with its fields, the formats, and the
+/// shipped wordings, among them the policy wording a schedule needs.
+/// Why it matters: a rendering test needed the SHA-256 of a letter nobody could see, so the
+/// tester wrote their own renderer; and nothing loaded the shipped wordings, so no product
+/// could issue a schedule (found by the scenario run, F2-10-3 and F2-10-1).
+#[test]
+fn a_sample_is_rendered_for_a_person_to_read_and_record() {
+    let mut kit = Kit::new();
+    let t = template(
+        "lapse",
+        DocumentKind::LapseNotice,
+        "Dear {{name}}. Policy {{policy}} is unpaid since {{oldest_unpaid_due|date}}.",
+    );
+    kit.ok("config", "author", Command::SubmitTemplate(Box::new(t.clone())));
+    let h = hosted_from(&kit);
+    let sample = ask(
+        h.as_ref(),
+        Query::RenderSample {
+            template: tref("lapse", 1),
+            language: None,
+            data: None,
+        },
+    );
+    assert_eq!(sample["text"], json!("Dear Aroha Sample. Policy SAMPLE-1 is unpaid since 15 October 2027."));
+    assert_eq!(sample["language"], json!("en"));
+    assert_eq!(sample["required_fields"], json!(["name", "oldest_unpaid_due", "policy"]));
+    let case = ic_documents::command::RenderCase {
+        product_code: "term-life".into(),
+        product_version: 1,
+        persona: "sample".into(),
+        language: "en".into(),
+        data: sample["data"].clone(),
+        product_fields: serde_json::from_value(sample["product_fields"].clone()).unwrap(),
+        expected_sha256: sample["sha256"].as_str().unwrap().into(),
+    };
+    kit.ok(
+        "config",
+        "author",
+        Command::RunRenderingTests {
+            template: tref("lapse", 1),
+            cases: vec![case],
+        },
+    );
+    assert!(kit.state.templates[&tref("lapse", 1)].last_run.as_ref().unwrap().failures.is_empty());
+
+    let refused = |q: Query| h.query(serde_json::to_value(q).unwrap()).unwrap_err();
+    let mine = ask(
+        h.as_ref(),
+        Query::RenderSample {
+            template: tref("lapse", 1),
+            language: Some("en".into()),
+            data: Some(json!({"name": "Ben", "policy": "P-2", "oldest_unpaid_due": "2027-01-02"})),
+        },
+    );
+    assert_eq!(mine["text"], json!("Dear Ben. Policy P-2 is unpaid since 2 January 2027."));
+    assert!(refused(Query::RenderSample {
+        template: tref("lapse", 1),
+        language: None,
+        data: Some(json!({}))
+    })
+    .contains("no value for `name`"));
+    assert!(refused(Query::RenderSample {
+        template: tref("none", 1),
+        language: None,
+        data: None
+    })
+    .contains("there is no template none version 1"));
+    let mut renewal = template("renewal", DocumentKind::RenewalNotice, "Dear {{name}}.");
+    renewal.products.clear();
+    kit.ok("config", "author", Command::SubmitTemplate(Box::new(renewal)));
+    let h = hosted_from(&kit);
+    assert!(h
+        .query(
+            serde_json::to_value(Query::RenderSample {
+                template: tref("renewal", 1),
+                language: None,
+                data: None
+            })
+            .unwrap()
+        )
+        .unwrap_err()
+        .contains("give the sample's data"));
+
+    let authoring = ask(h.as_ref(), Query::Authoring);
+    let kinds = authoring["kinds"].as_array().unwrap();
+    assert_eq!(kinds.len(), DocumentKind::ALL.len());
+    let lapse = kinds.iter().find(|k| k["kind"] == "lapse_notice").unwrap();
+    assert_eq!(
+        (lapse["words"].clone(), lapse["proven"].clone(), lapse["answers_events"].clone()),
+        (json!("lapse notice"), json!(true), json!(true))
+    );
+    assert!(lapse["fields"].as_array().unwrap().contains(&json!("oldest_unpaid_due")));
+    assert_eq!(kinds.iter().find(|k| k["kind"] == "renewal_notice").unwrap()["fields"], Value::Null);
+    let shipped = authoring["placeholders"].as_array().unwrap();
+    assert!(shipped.iter().any(|p| p["id"] == "policy-wording" && p["kind"] == "policy_wording"));
+    assert!(shipped
+        .iter()
+        .all(|p| p["body"].as_str().unwrap().starts_with(authoring["marker"].as_str().unwrap())));
+    assert_eq!(authoring["formats"][0], json!("large_print"));
+}
+
+/// Purpose: a legal hold keeps why it was placed, who placed it and when, shown with the hold;
+/// a hold placed without a reason shows none; a release takes the record away with the hold.
+/// Why it matters: a hold showed only its scope and case, with nothing of who placed it, when
+/// or why (found by the scenario run, F2-11-11).
+#[test]
+fn a_hold_says_who_placed_it_when_and_why() {
+    let mut kit = Kit::ready();
+    let place = |scope, reason: Option<&str>| Command::PlaceLegalHold {
+        scope,
+        case: "LIT-2".into(),
+        reason: reason.map(str::to_string),
+    };
+    use ic_documents::command::HoldScope;
+    kit.ok(
+        "legal",
+        "counsel",
+        place(HoldScope::Policy(policy("pol-1")), Some("the Parata file is going to a dispute")),
+    );
+    kit.ok("legal", "counsel", place(HoldScope::Party(party("ben")), Some("")));
+    let holds = kit.state.legal_holds();
+    assert_eq!(
+        holds,
+        vec![
+            json!({ "scope": {"party": "ben"}, "case": "LIT-2", "reason": null, "by": "counsel", "on": kit.today() }),
+            json!({ "scope": {"policy": "pol-1"}, "case": "LIT-2", "reason": "the Parata file is going to a dispute", "by": "counsel", "on": kit.today() }),
+        ]
+    );
+    kit.ok(
+        "legal",
+        "counsel",
+        Command::ReleaseLegalHold {
+            scope: HoldScope::Policy(policy("pol-1")),
+            reason: Some("settled".into()),
+        },
+    );
+    assert_eq!(kit.state.legal_holds().len(), 1);
+}
+
+/// Purpose: a letter that came back in the post is recorded by the person who opened the mail,
+/// as servicing: the delivery is then undeliverable and listed among the documents that could
+/// not be delivered, until it is delivered again with corrected details, when it leaves the
+/// list. A party it was not sent to is refused, and a delivery driver may record it too.
+/// Why it matters: the model knew returned post, but nothing let a person record it, and the
+/// Work view never showed what could not be delivered (found by the scenario run, F2-11-4 and
+/// F2-11-5).
+#[test]
+fn a_returned_letter_is_recorded_and_listed_until_sent_again() {
+    let mut kit = Kit::ready();
+    let mut spec = kit.renewal_spec("n1");
+    spec.recipients[0].channels = vec![Channel::Post];
+    kit.issue(spec);
+    kit.sent("n1", "aroha", Channel::Post);
+    let returned = |p: &str| Command::RecordReturnedPost {
+        document: "n1".into(),
+        party: party(p),
+    };
+    assert_eq!(kit.err("servicing", "mailroom", returned("ben")), "unknown_recipient");
+    kit.ok("servicing", "mailroom", returned("aroha"));
+    // The log holds the refusal, so the question goes to the state itself.
+    let listed = module::answer(&kit.state, serde_json::to_value(Query::Undeliverable { limit: 10 }).unwrap()).unwrap();
+    assert_eq!(listed[0]["id"], json!("n1"));
+    kit.ok(
+        "servicing",
+        "mailroom",
+        Command::RetryDelivery {
+            document: "n1".into(),
+            party: party("aroha"),
+            channels: vec![Channel::Post],
+        },
+    );
+    assert!(kit.state.undeliverable(10).is_empty());
+    kit.ok("delivery", "svc", returned("aroha"));
+    assert_eq!(kit.state.undeliverable(10).len(), 1);
 }

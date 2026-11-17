@@ -126,6 +126,9 @@ pub const PLACEHOLDERS: &[Placeholder] = &[
     placeholder!("collections/final_notice", "collections-final_notice", LapseNotice, "Final notice", None),
     // Documents the core's events require (`required_documents.rs`).
     placeholder!("policy-schedule", "policy-schedule", PolicySchedule, "Policy schedule", None),
+    // A schedule names the wording it is issued under, so a product issues
+    // no schedule until it has one.
+    placeholder!("policy-wording", "policy-wording", PolicyWording, "Policy wording", None),
     placeholder!("lapse-notice", "lapse-notice", LapseNotice, "Premium overdue", Some(14)),
     placeholder!("suspension-notice", "suspension-notice", SuspensionNotice, "Cover suspended", Some(14)),
     placeholder!("policy-ended", "policy-ended", GeneralCorrespondence, "Policy ended", None),

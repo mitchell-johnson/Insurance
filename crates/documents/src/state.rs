@@ -85,6 +85,18 @@ pub struct TemplateRecord {
     pub failed_runs: Vec<DateTime<Utc>>,
     pub effective_from: Option<NaiveDate>,
     pub disabled: Option<(String, String)>,
+    /// The school reading grade of the primary wording, times ten.
+    #[serde(default)]
+    pub reading_grade_x10: u32,
+}
+
+/// A legal hold: the case that needs it, why, who placed it and when.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HoldRecord {
+    pub case: String,
+    pub reason: Option<String>,
+    pub by: String,
+    pub on: NaiveDate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +155,13 @@ pub struct DocumentsState {
     expiry: BTreeMap<NaiveDate, BTreeSet<String>>,
     #[serde(with = "pairs")]
     holds: BTreeMap<HoldScope, String>,
+    /// Why each hold was placed, by whom and when.
+    #[serde(default, with = "pairs")]
+    hold_records: BTreeMap<HoldScope, HoldRecord>,
+    /// Documents a recipient of which could not be reached, for a person
+    /// to correct the contact details and deliver again.
+    #[serde(default)]
+    undeliverable: BTreeSet<String>,
     shredding: BTreeSet<PartyId>,
     /// Vault objects to delete, by document.
     pub pending_deletes: BTreeMap<String, String>,
@@ -490,6 +509,7 @@ impl DocumentsState {
                 outcome,
             } => self.record_outcome(&document, &party, channel, outcome, ctx),
             Command::RetryDelivery { document, party, channels } => self.retry_delivery(&document, &party, channels, ctx),
+            Command::RecordReturnedPost { document, party } => self.record_outcome(&document, &party, Channel::Post, AttemptOutcome::Returned, ctx),
             Command::Tick => {
                 self.tick(ctx);
                 Ok(())
@@ -502,10 +522,32 @@ impl DocumentsState {
                 from,
                 to,
                 grace_days,
-            } => self.raise_defect(defect, case, description, cause, from, to, grace_days, ctx),
+                template,
+            } => self.raise_defect(Defect {
+                id: defect,
+                case,
+                description,
+                cause,
+                from,
+                to,
+                grace_days: grace_days.unwrap_or(self.settings.reopen_grace_days),
+                raised_by: ctx.actor.clone(),
+                notices: BTreeMap::new(),
+                closed: None,
+                template,
+                correcting: false,
+            }),
             Command::AttachDefectNotices { defect, notices } => self.attach_defect_notices(&defect, notices, ctx),
             Command::ExcludeFromDefect { defect, notice, reason } => self.exclude_from_defect(&defect, &notice, reason, ctx),
             Command::CloseNoticeDefect { defect, control } => self.close_defect(&defect, control, ctx),
+            Command::CorrectDefectNotices { defect } => {
+                let d = self.open_defect(&defect)?;
+                if !d.notices.values().any(|i| *i == DefectItem::Outstanding) {
+                    return reject("nothing_to_correct", "every notice of the defect has a correction or an exclusion already");
+                }
+                d.correcting = true;
+                Ok(())
+            }
             Command::ObserveCoreEvents { partition, records } => self.observe(partition, records, ctx),
             Command::DismissTrigger { trigger, reason } => {
                 if reason.is_empty() {
@@ -515,6 +557,18 @@ impl DocumentsState {
                     return reject("unknown_trigger", format!("no document is waiting on {trigger}"));
                 }
                 ctx.events.push(Event::TriggerDismissed { trigger });
+                Ok(())
+            }
+            Command::NoteTriggersWaiting { notes } => {
+                if notes.len() > MAX_CHUNK {
+                    return reject("invalid", format!("at most {MAX_CHUNK} notes at a time"));
+                }
+                // A trigger answered or dismissed since is no longer waiting.
+                for (id, why) in notes {
+                    if let Some(trigger) = self.triggers.get_mut(&id) {
+                        trigger.waiting = Some(why).filter(|w| !w.is_empty());
+                    }
+                }
                 Ok(())
             }
             Command::AckCoreInstructions { ids } => {
@@ -529,18 +583,29 @@ impl DocumentsState {
                 }
                 Ok(())
             }
-            Command::PlaceLegalHold { scope, case } => {
+            Command::PlaceLegalHold { scope, case, reason } => {
                 if case.is_empty() {
                     return reject("no_case", "a legal hold names the case that needs it");
                 }
-                self.holds.insert(scope, case.clone());
+                self.holds.insert(scope.clone(), case.clone());
+                self.hold_records.insert(
+                    scope,
+                    HoldRecord {
+                        case: case.clone(),
+                        reason: reason.filter(|r| !r.is_empty()),
+                        by: ctx.actor.clone(),
+                        on: ctx.today,
+                    },
+                );
                 ctx.events.push(Event::LegalHoldPlaced { case });
                 Ok(())
             }
-            Command::ReleaseLegalHold { scope } => {
+            // The reason for a release stays with the command in the log.
+            Command::ReleaseLegalHold { scope, .. } => {
                 if self.holds.remove(&scope).is_none() {
                     return reject("no_hold", "there is no such legal hold");
                 }
+                self.hold_records.remove(&scope);
                 ctx.events.push(Event::LegalHoldReleased);
                 Ok(())
             }
@@ -648,6 +713,37 @@ impl DocumentsState {
         let required_fields = template
             .validate(&self.parts, self.settings.max_reading_grade_x10)
             .map_err(|e| Reject::new("invalid_template", e.to_string()))?;
+        let prose = template
+            .compile(&template.primary_language, &self.parts)
+            .map_err(|e| Reject::new("invalid_template", e.to_string()))?
+            .prose();
+        let max_words = self.settings.max_sentence_words as usize;
+        if let Some((words, sentence)) = crate::render::longest_sentence(&prose).filter(|(w, _)| *w > max_words) {
+            let start: Vec<&str> = sentence.split_whitespace().take(8).collect();
+            return reject(
+                "invalid_template",
+                format!(
+                    "the sentence starting \"{} …\" has {words} words, above the limit of {max_words}; break it into shorter sentences",
+                    start.join(" ")
+                ),
+            );
+        }
+        // A product's document of a kind the core's events ask for is
+        // rendered from the policy, which gives only so many fields.
+        if let Some(supplied) = crate::supplied::fields(template.kind).filter(|_| !template.products.is_empty()) {
+            if let Some(unknown) = required_fields.iter().find(|f| !supplied.contains(*f)) {
+                let top: Vec<&str> = supplied.iter().filter(|f| !f.contains(['.', '['])).map(String::as_str).collect();
+                return reject(
+                    "invalid_template",
+                    format!(
+                        "`{unknown}` is not a field a product's {} is given; it is given {}",
+                        template.kind.words(),
+                        top.join(", ")
+                    ),
+                );
+            }
+        }
+        let reading_grade_x10 = crate::render::reading_grade_x10(&prose);
         let content_hash = template.content_hash(&self.parts);
         ctx.events.push(Event::TemplateSubmitted {
             template: r.clone(),
@@ -665,6 +761,7 @@ impl DocumentsState {
                 failed_runs: vec![],
                 effective_from: None,
                 disabled: None,
+                reading_grade_x10,
             },
         );
         Ok(())
@@ -683,7 +780,13 @@ impl DocumentsState {
             return reject("not_draft", "only a draft is approved");
         }
         if record.template.author == actor {
-            return reject("maker_checker", "an author does not approve their own template");
+            return reject(
+                "maker_checker",
+                format!(
+                    "an author does not approve their own template: another person who gives the {} approval does",
+                    role.word()
+                ),
+            );
         }
         if record.approvals.iter().any(|(held, by)| *held != role && *by == actor) {
             return reject("maker_checker", "one person does not give two of a template's approvals");
@@ -799,8 +902,8 @@ impl DocumentsState {
         let record = self.template_mut(&r)?;
         match record.status {
             TemplateStatus::Disabled => return Ok(()),
-            TemplateStatus::Draft => return reject("not_active", "a draft is not in use, so there is nothing to disable"),
-            TemplateStatus::Active => {}
+            // A draft that will not be used is withdrawn the same way.
+            TemplateStatus::Draft | TemplateStatus::Active => {}
         }
         record.status = TemplateStatus::Disabled;
         record.disabled = Some((reason, case.clone()));
@@ -826,14 +929,58 @@ impl DocumentsState {
                     "author": t.template.author,
                     "effective_from": t.effective_from,
                     "disabled": t.disabled,
+                    "products": t.template.products,
+                    // A version of a kind the core's events ask for, bound
+                    // to no product, is picked only where it is asked for
+                    // by its id: it answers no policy's documents.
+                    "event_kind": crate::supplied::answers_events(t.template.kind),
+                    "answers_events": crate::supplied::answers_events(t.template.kind) && !t.template.products.is_empty(),
+                    "reading_grade_x10": t.reading_grade_x10,
                 })
             })
             .collect()
     }
 
-    /// The legal holds in place, each with the case it was placed for.
-    pub fn legal_holds(&self) -> Vec<(&HoldScope, &String)> {
-        self.holds.iter().collect()
+    /// The legal holds in place: the case each was placed for, why, by
+    /// whom and when (not known for a hold placed before that was kept).
+    pub fn legal_holds(&self) -> Vec<serde_json::Value> {
+        self.holds
+            .iter()
+            .map(|(scope, case)| {
+                let record = self.hold_records.get(scope);
+                serde_json::json!({
+                    "scope": scope,
+                    "case": case,
+                    "reason": record.and_then(|r| r.reason.clone()),
+                    "by": record.map(|r| r.by.clone()),
+                    "on": record.map(|r| r.on),
+                })
+            })
+            .collect()
+    }
+
+    /// Documents a recipient of which could not be reached, newest first.
+    pub fn undeliverable(&self, limit: usize) -> Vec<&Document> {
+        let mut docs: Vec<&Document> = self.undeliverable.iter().filter_map(|id| self.documents.get(id)).collect();
+        docs.sort_by(|a, b| b.issued_at.cmp(&a.issued_at).then_with(|| a.id.cmp(&b.id)));
+        docs.truncate(limit);
+        docs
+    }
+
+    /// The notices of open defects that remediation asked to correct and
+    /// that have no correction yet, as (defect, notice).
+    pub fn corrections_due(&self, limit: usize) -> Vec<(String, String)> {
+        self.defects
+            .values()
+            .filter(|d| d.correcting && d.closed.is_none())
+            .flat_map(|d| {
+                d.notices
+                    .iter()
+                    .filter(|(_, item)| **item == DefectItem::Outstanding)
+                    .map(|(n, _)| (d.id.clone(), n.clone()))
+            })
+            .take(limit)
+            .collect()
     }
 
     pub fn template_for(&self, id: &str, on: NaiveDate) -> Option<&TemplateRecord> {
@@ -1394,6 +1541,9 @@ impl DocumentsState {
         if let Some(notice) = &mut doc.notice {
             notice.undeliverable = false;
         }
+        if !doc.deliveries.iter().any(|d| d.status == DeliveryStatus::Undeliverable) {
+            self.undeliverable.remove(document);
+        }
         self.open_deliveries.insert(document.to_string());
         Ok(())
     }
@@ -1405,6 +1555,11 @@ impl DocumentsState {
             self.open_deliveries.remove(id);
         } else {
             self.open_deliveries.insert(id.to_string());
+        }
+        if doc.deliveries.iter().any(|d| d.status == DeliveryStatus::Undeliverable) {
+            self.undeliverable.insert(id.to_string());
+        } else {
+            self.undeliverable.remove(id);
         }
         let policy = doc.policy.clone();
         let addressees: Vec<&DeliveryStatus> = doc
@@ -1587,41 +1742,20 @@ impl DocumentsState {
 
     // --- notice defects ---
 
-    fn raise_defect(
-        &mut self,
-        id: String,
-        case: String,
-        description: String,
-        cause: DefectCause,
-        from: NaiveDate,
-        to: NaiveDate,
-        grace_days: Option<u32>,
-        ctx: &mut Ctx,
-    ) -> Result<(), Reject> {
-        if id.is_empty() || case.is_empty() || description.is_empty() {
+    fn raise_defect(&mut self, defect: Defect) -> Result<(), Reject> {
+        if defect.id.is_empty() || defect.case.is_empty() || defect.description.is_empty() {
             return reject("invalid", "a notice defect names itself, its remediation case and the defect");
         }
-        if from > to {
+        if defect.from > defect.to {
             return reject("invalid", "the defect's period ends before it starts");
         }
-        if self.defects.contains_key(&id) {
-            return reject("defect_exists", format!("notice defect {id} already exists"));
+        if self.defects.contains_key(&defect.id) {
+            return reject("defect_exists", format!("notice defect {} already exists", defect.id));
         }
-        self.defects.insert(
-            id.clone(),
-            Defect {
-                id,
-                case,
-                description,
-                cause,
-                from,
-                to,
-                grace_days: grace_days.unwrap_or(self.settings.reopen_grace_days),
-                raised_by: ctx.actor.clone(),
-                notices: BTreeMap::new(),
-                closed: None,
-            },
-        );
+        if let Some(t) = defect.template.as_ref().filter(|t| !self.templates.contains_key(*t)) {
+            return reject("unknown_template", format!("there is no template {} version {}", t.id, t.version));
+        }
+        self.defects.insert(defect.id.clone(), defect);
         Ok(())
     }
 
@@ -1640,16 +1774,22 @@ impl DocumentsState {
         if notices.is_empty() || notices.len() > MAX_CHUNK {
             return reject("invalid", format!("a chunk has between one and {MAX_CHUNK} notices"));
         }
-        let (from, to, case) = {
+        let (from, to, case, template) = {
             let d = self.open_defect(id)?;
-            (d.from, d.to, d.case.clone())
+            (d.from, d.to, d.case.clone(), d.template.clone())
         };
         for n in &notices {
             let Some(doc) = self.documents.get(n) else {
-                return reject("unknown_document", format!("there is no document {n}"));
+                return reject("unknown_document", format!("there is no document `{n}`"));
             };
             if !doc.requires_proof() {
-                return reject("not_a_notice", format!("{n} is not a document that had to be proven"));
+                return reject(
+                    "not_a_notice",
+                    format!("`{n}` did not have to be proven delivered: a defect takes only notices and letters that did"),
+                );
+            }
+            if let Some(t) = template.as_ref().filter(|t| doc.template.as_ref() != Some(*t)) {
+                return reject("other_template", format!("`{n}` was not issued from {} version {}", t.id, t.version));
             }
             if doc.issued_on < from || doc.issued_on > to {
                 return reject("outside_period", format!("{n} was not issued in the defect's period"));
@@ -1718,7 +1858,10 @@ impl DocumentsState {
         let today = ctx.today;
         let defect = self.open_defect(id)?;
         if defect.raised_by == actor {
-            return reject("maker_checker", "whoever raised a defect does not close it");
+            return reject(
+                "maker_checker",
+                "whoever raised a defect does not close it: another person who works notice defects checks and closes it",
+            );
         }
         if defect.notices.is_empty() {
             return reject("empty", "the defect has no notices attached");
@@ -1940,6 +2083,7 @@ impl DocumentsState {
         }
         self.pending_deletes.insert(id.to_string(), doc.blob.clone());
         self.open_deliveries.remove(id);
+        self.undeliverable.remove(id);
         let owner = doc.owner.clone();
         if doc.policies().next().is_some() {
             self.listing.insert(id.to_string(), false);

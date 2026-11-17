@@ -328,20 +328,21 @@ Besides runs, exceptions and matches, the page has "Notices and cases" (each rol
 |---|---|---|
 | `documents.view` | (nothing) | Reads templates, legal holds, open defects, triggers, requested letters, sends in progress, settings, a document, defect, letter request or template, the template in force, a part's use, a template version's notices, a policy's documents, retention and the report. |
 | `documents.legal` | `legal` | Place and release legal holds. |
-| `documents.remediation` | `remediation` | Raise, fill, exclude from and close notice defects; disable a template version. |
+| `documents.remediation` | `remediation` | Raise, fill, exclude from and close notice defects; ask for a defect's notices to be corrected; disable a template version. |
 | `documents.privacy` | `privacy` | Shred a party's documents. |
 | `documents.triggers` | `documents` | Dismiss a document the core's events required. |
-| `documents.delivery` | `servicing` | Deliver a document again; cancel a requested letter. |
+| `documents.delivery` | `servicing` | Deliver a document again; record post that came back; cancel a requested letter. |
+| `documents.download` | (nothing) | Download a document's PDF from its row, giving a purpose; without it the download is refused, naming the action to ask for. |
 | `documents.configuration` | `config` | Submit, test, activate and disable templates; register parts; settings and retention. |
 | `documents.approve_legal`, `.approve_product`, `.approve_compliance` | `config` | That one of a template's three approvals. |
 
 | Route | |
 |---|---|
 | `GET /staff/v1/documents/me` | Your callers and approvals there. |
-| `GET /staff/v1/documents/{question}` | `templates`, `legal_holds`, `open_defects`, `triggers`, `letters_requested`, `pending_sends`, `settings`, `document?id=`, `defect?id=`, `letter_request?request=`, `template?id=&version=`, `template_for?id=` (today in New Zealand), `part_usage?part=`, `notices_by_template?id=&version=&from=&to=`, `report?from=&to=`, `policy_documents?policy=`, `retention?kind=`. Lists are cut at 200; a null answer is 404. |
-| `POST /staff/v1/documents/commands` | `{"type": name, ...}` for one of the commands above, with an `Idempotency-Key`. A command people do not send (rendering, sending, the core's events, listing, deletion) is 400; one the person's actions do not cover is 403; the module's refusal is 409 with its code. |
+| `GET /staff/v1/documents/{question}` | `templates`, `legal_holds`, `open_defects`, `triggers`, `letters_requested`, `pending_sends`, `settings`, `document?id=`, `defect?id=`, `letter_request?request=`, `template?id=&version=`, `template_for?id=` (today in New Zealand), `part_usage?part=`, `notices_by_template?id=&version=&from=&to=`, `report?from=&to=`, `policy_documents?policy=` (an id, or a policy number in any case), `retention?kind=`, `undeliverable`, `render_sample?id=&version=&language=&data=` (data as JSON), `authoring`, `policies?q=` (policies found by number, for the picker). Documents' wrapped keys and blob names are never sent to the page. Lists are cut at 200; a null answer is 404. |
+| `POST /staff/v1/documents/commands` | `{"type": name, ...}` for one of the commands above, with an `Idempotency-Key`. A legal hold placed or released without a reason is 400. A command people do not send (rendering, sending, the core's events, listing, deletion) is 400; one the person's actions do not cover is 403; the module's refusal is 409 with its code. |
 
-The page has six views: Work (triggers with Dismiss, requested letters with Cancel, sends in progress), Templates (every version with Approve, Activate or Disable on its row), Documents (a policy's documents with Deliver again for an undeliverable recipient, and lookups), Defects and holds, Report and settings, and Act (a form for every command, `portal.actions`). The documents module gained three questions for it: `Templates`, `LegalHolds` and `OpenDefects` (noted in `docs/documents.md`).
+The page has six views: Work (triggers with why each waits and Dismiss, documents that could not be delivered, requested letters with Cancel, sends in progress), Templates (every version with its products, reading grade and approvals in words, and Approve, Test, Activate, Withdraw, Disable, New version on its row; a form to write a template from a placeholder or an earlier version, with the kinds and fields listed; and a tester that renders each language from the standard sample and records the test once a person has read it), Documents (a policy found by its number, its documents with recipient, status, Download, Deliver again and Came back, and lookups including a template version's notices), Defects and holds (a defect's template, Find its notices, Add notices, Correct and Close, Close hidden from whoever raised it; holds with why, by whom and when), Report and settings (in words), and Act (a form for every command, `portal.actions`). A form that makes a reference says it when done. A refusal that needs another person names colleagues who hold the action. The documents module gained three questions for it: `Templates`, `LegalHolds` and `OpenDefects` (noted in `docs/documents.md`).
 
 ## The collections console
 

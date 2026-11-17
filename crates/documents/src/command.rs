@@ -39,6 +39,11 @@ pub struct Settings {
     pub post_deemed_days: u32,
     /// Default days a choice stays reopenable after a corrected notice.
     pub reopen_grace_days: u32,
+    /// The most words one sentence of a template may have. The reading
+    /// grade is an average over the whole letter, so one long sentence
+    /// among short ones passes it; this stops that sentence.
+    #[serde(default = "default_sentence_words")]
+    pub max_sentence_words: u32,
     /// Core events older than this many days are not acted on, so a replay
     /// of the stream cannot send a flood of old documents.
     pub live_event_days: u32,
@@ -52,9 +57,17 @@ impl Default for Settings {
             electronic_confirm_hours: 72,
             post_deemed_days: 5,
             reopen_grace_days: 30,
+            max_sentence_words: default_sentence_words(),
             live_event_days: 7,
         }
     }
+}
+
+/// Plain-language guidance puts the average sentence at 15 to 20 words
+/// and the longest at about 35; 40 leaves room for a list of covers read
+/// as one sentence (`docs/decisions.md`).
+fn default_sentence_words() -> u32 {
+    40
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -63,6 +76,17 @@ pub enum ApprovalRole {
     Legal,
     Product,
     Compliance,
+}
+
+impl ApprovalRole {
+    /// The approval in words: `legal`, `product`, `compliance`.
+    pub fn word(self) -> &'static str {
+        match self {
+            ApprovalRole::Legal => "legal",
+            ApprovalRole::Product => "product",
+            ApprovalRole::Compliance => "compliance",
+        }
+    }
 }
 
 /// One rendering test: a persona's data for a product version, and the
@@ -192,7 +216,8 @@ pub enum Command {
         effective_from: NaiveDate,
     },
     /// Containment when a template is found to be wrong: nothing more is
-    /// issued from this version.
+    /// issued from this version. A draft that will not be used is disabled
+    /// the same way, so nobody approves or activates it.
     DisableTemplate {
         template: TemplateRef,
         reason: String,
@@ -229,6 +254,12 @@ pub enum Command {
         party: PartyId,
         channels: Vec<Channel>,
     },
+    /// A letter came back in the post: recorded by the person who opened
+    /// the returned mail, as the post provider never reports one.
+    RecordReturnedPost {
+        document: String,
+        party: PartyId,
+    },
     /// Let time pass: unconfirmed sends fall back, lodged post is deemed
     /// delivered, retention periods end. Does a bounded amount per command.
     Tick,
@@ -243,6 +274,10 @@ pub enum Command {
         to: NaiveDate,
         #[serde(default)]
         grace_days: Option<u32>,
+        /// The template version whose notices were wrong, where one was:
+        /// its notices in the period are the defect's population.
+        #[serde(default)]
+        template: Option<TemplateRef>,
     },
     /// One chunk of the population.
     AttachDefectNotices {
@@ -259,6 +294,12 @@ pub enum Command {
         /// The control that should have caught it, and now will.
         control: String,
     },
+    /// The wording is put right: issue a corrected notice for each notice
+    /// of the defect that has none, from the version of its template now
+    /// in force and the data the original was rendered from.
+    CorrectDefectNotices {
+        defect: String,
+    },
 
     // --- the core ---
     /// The next events of one core partition, in order.
@@ -269,6 +310,11 @@ pub enum Command {
     DismissTrigger {
         trigger: String,
         reason: String,
+    },
+    /// Why the documents service left documents the core's events require,
+    /// for the people who can put that right. Only what changed is sent.
+    NoteTriggersWaiting {
+        notes: Vec<(String, String)>,
     },
     AckCoreInstructions {
         ids: Vec<String>,
@@ -281,9 +327,14 @@ pub enum Command {
     PlaceLegalHold {
         scope: HoldScope,
         case: String,
+        /// Why it is needed, kept with who placed it and when.
+        #[serde(default)]
+        reason: Option<String>,
     },
     ReleaseLegalHold {
         scope: HoldScope,
+        #[serde(default)]
+        reason: Option<String>,
     },
     /// Crypto-shred a party: destroy what may be destroyed now, and the
     /// rest as each retention period ends.
@@ -326,13 +377,16 @@ impl Command {
             Command::RecordSend { .. } => "record_send",
             Command::RecordOutcome { .. } => "record_outcome",
             Command::RetryDelivery { .. } => "retry_delivery",
+            Command::RecordReturnedPost { .. } => "record_returned_post",
             Command::Tick => "tick",
             Command::RaiseNoticeDefect { .. } => "raise_notice_defect",
             Command::AttachDefectNotices { .. } => "attach_defect_notices",
             Command::ExcludeFromDefect { .. } => "exclude_from_defect",
             Command::CloseNoticeDefect { .. } => "close_notice_defect",
+            Command::CorrectDefectNotices { .. } => "correct_defect_notices",
             Command::ObserveCoreEvents { .. } => "observe_core_events",
             Command::DismissTrigger { .. } => "dismiss_trigger",
+            Command::NoteTriggersWaiting { .. } => "note_triggers_waiting",
             Command::AckCoreInstructions { .. } => "ack_core_instructions",
             Command::MarkPublished { .. } => "mark_published",
             Command::PlaceLegalHold { .. } => "place_legal_hold",
@@ -356,12 +410,14 @@ impl Command {
             Command::RegisterPartyKey { .. } | Command::IssueDocument(_) => &["documents", "remediation", "complaints"],
             Command::ImportLegacy(_) => &["migration"],
             Command::RecordSend { .. } | Command::RecordOutcome { .. } | Command::Tick => &["delivery"],
-            Command::RetryDelivery { .. } => &["delivery", "servicing"],
-            Command::RaiseNoticeDefect { .. } | Command::AttachDefectNotices { .. } | Command::ExcludeFromDefect { .. } | Command::CloseNoticeDefect { .. } => {
-                &["remediation"]
-            }
+            Command::RetryDelivery { .. } | Command::RecordReturnedPost { .. } => &["delivery", "servicing"],
+            Command::RaiseNoticeDefect { .. }
+            | Command::AttachDefectNotices { .. }
+            | Command::ExcludeFromDefect { .. }
+            | Command::CloseNoticeDefect { .. }
+            | Command::CorrectDefectNotices { .. } => &["remediation"],
             Command::ObserveCoreEvents { .. } | Command::AckCoreInstructions { .. } | Command::MarkPublished { .. } | Command::AckListing { .. } => &["relay"],
-            Command::DismissTrigger { .. } => &["documents"],
+            Command::DismissTrigger { .. } | Command::NoteTriggersWaiting { .. } => &["documents"],
             Command::PlaceLegalHold { .. } | Command::ReleaseLegalHold { .. } => &["legal"],
             Command::ShredParty { .. } => &["privacy"],
             Command::RequestLetter(_) => &["underwriting", "reinsurance", "group", "claims"],
