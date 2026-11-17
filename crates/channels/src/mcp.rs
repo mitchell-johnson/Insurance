@@ -283,7 +283,7 @@ pub fn catalogue() -> Vec<Tool> {
             .json(r#"{"access": "viewer" | "financial" | "support" | null}"#),
         tool("my_requests", "My requests", C, M::GET, "/app/v1/requests", "Every request you made or that waits for you, with where it stands."),
         tool("make_request", "Ask for a change", C, M::POST, "/app/v1/requests", "Ask for a change to a policy (or prepare one as its adviser). Requests that move money need the enrolled device's signature; an adviser's needs the customer's approval.")
-            .json(r#"{"id": "<your own ID for it>", "policy": "<policy>", "kind": "<what you ask, e.g. change_sum_insured>", "module": "<owning module, e.g. policy-servicing>", "payload": {...}, "signed"?: {"challenge", "signature"}}"#),
+            .json(r#"{"id": "<your own ID for it>", "policy": "<policy>", "kind": "<what you ask: with module policy-servicing, decline_indexation (payload {declined}), change_frequency (payload {frequency, billing_day?}, signed) or cancel_policy (signed); notify_claim with module claims>", "module": "<owning module, e.g. policy-servicing>", "payload": {...}, "signed"?: {"challenge", "signature"}}"#),
         tool("withdraw_request", "Withdraw a request", C, M::DELETE, "/app/v1/requests/{id}", "Withdraw a request of yours that has not been acted on."),
         tool("approve_request", "Approve a request prepared for me", C, M::POST, "/app/v1/requests/{id}/approve", "Approve a change your adviser, a support person or a joint owner prepared. Needs the enrolled device's signature over this approval.")
             .json(r#"{"signed": {"challenge": "<from the device>", "signature": "<the device key's>"}}"#),

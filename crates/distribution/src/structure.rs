@@ -263,24 +263,22 @@ impl Structure {
         Ok(())
     }
 
-    /// Record a licence status from a date. A record for a date already on
-    /// file replaces it only if the source is the same notice; history is
-    /// otherwise added to, never rewritten.
+    /// Record a licence status from a date. History is added to, never
+    /// rewritten: a second status for a date already on file (a suspension
+    /// recorded in error and put right the same day, a regulator's
+    /// reinstatement notice) is kept after the first, and the latest
+    /// recorded for a day is the one in force. Sending the same record
+    /// again changes nothing.
     pub fn record_licence(&mut self, party: &PartyId, record: LicenceRecord) -> Result<(), StructureError> {
         let node = self.parties.get_mut(party).ok_or_else(|| StructureError::UnknownParty(party.clone()))?;
         if record.source_ref.trim().is_empty() {
             return Err(StructureError::Invalid("a licence status needs its source reference".into()));
         }
-        if let Some(existing) = node.licence.iter().find(|r| r.effective == record.effective) {
-            if *existing == record {
-                return Ok(());
-            }
-            return Err(StructureError::Invalid(format!(
-                "{party} already has a licence status effective {}; record the change on another date",
-                record.effective
-            )));
+        if node.licence.iter().rev().find(|r| r.effective == record.effective) == Some(&record) {
+            return Ok(());
         }
         node.licence.push(record);
+        // A stable sort: records for the same day keep the order they were recorded in.
         node.licence.sort_by_key(|r| r.effective);
         Ok(())
     }

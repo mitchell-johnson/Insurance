@@ -103,9 +103,35 @@ fn a_backdated_suspension_moves_paid_commission_to_held_and_opens_a_conduct_case
     w.assert_reconciled();
 }
 
+/// Purpose: a suspension recorded in error can be put right on the same day: recording the
+/// provider active again for that date is accepted, kept after the suspension, and is the
+/// status in force, so its advisers can work again without waiting for a business day to close.
+/// Why it matters: found by the scenario run (SCN-03): compliance recorded a suspension, could
+/// not record the reinstatement that day nor date it ahead, and every adviser of the provider
+/// stayed read-only with no way to correct it.
+#[test]
+fn a_suspension_recorded_in_error_is_put_right_the_same_day() {
+    let (mut w, _, _) = suspended();
+    w.licence("fap-one", LicenceState::Active, start()).unwrap();
+    let structure = &w.dist.config.structure;
+    let day: Vec<_> = structure.parties[&party("fap-one")]
+        .licence
+        .iter()
+        .filter(|r| r.effective == start())
+        .map(|r| r.state)
+        .collect();
+    assert_eq!(day, vec![LicenceState::Suspended, LicenceState::Active], "the history keeps both, in order");
+    assert_eq!(structure.own_licence(&party("fap-one"), start()).unwrap().state, LicenceState::Active);
+    assert!(
+        w.licence("fap-one", LicenceState::Active, start()).unwrap().is_empty(),
+        "the same record again changes nothing"
+    );
+}
+
 /// Purpose: licence records are added to, never rewritten: the same notice twice is a no-op, a
-/// different status on the same date is refused, a future date is refused, and a return to
-/// active sends new earnings to payable while what was held stays held.
+/// different status on the same date is kept after the first and is the one in force, a future
+/// date is refused, and a return to active sends new earnings to payable while what was held
+/// stays held.
 /// Why it matters: the regulator's register is replayed and corrected. Idempotence stops a
 /// second conduct case; keeping held money held after reactivation leaves its release a decision.
 #[test]
@@ -113,7 +139,13 @@ fn licence_history_is_append_only_and_reactivation_does_not_release_held_money()
     let (mut w, policy, held) = suspended();
     assert!(w.licence("fap-one", LicenceState::Suspended, start()).unwrap().is_empty());
     assert_eq!(w.dist.cases.len(), 1);
-    assert_eq!(code(w.licence("fap-one", LicenceState::Revoked, start())), "structure");
+    w.licence("fap-one", LicenceState::Revoked, start()).unwrap();
+    let history = &w.dist.config.structure.parties[&party("fap-one")].licence;
+    assert_eq!(history.iter().filter(|r| r.effective == start()).count(), 2, "both records are kept");
+    assert_eq!(
+        w.dist.config.structure.own_licence(&party("fap-one"), start()).unwrap().state,
+        LicenceState::Revoked
+    );
     let tomorrow = w.today().succ_opt().unwrap();
     assert_eq!(code(w.licence("fap-one", LicenceState::Active, tomorrow)), "future_licence_event");
     assert_eq!(code(w.licence("ghost", LicenceState::Lapsed, start())), "structure");

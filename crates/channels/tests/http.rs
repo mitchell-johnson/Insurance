@@ -595,6 +595,32 @@ impl Portal {
             .await
     }
 
+    /// A request of Kiri's with her phone's signature over exactly it, as the app sends one
+    /// that gives up cover, changes what is collected or moves money.
+    async fn signed(&self, mut request: Value) -> Value {
+        let policy = request["policy"].as_str().map(ic_core::PolicyId::from);
+        let action = ic_channels::http::request_action(
+            request["id"].as_str().unwrap(),
+            policy.as_ref(),
+            request["kind"].as_str().unwrap(),
+            &request.get("payload").cloned().unwrap_or(Value::Null),
+        );
+        let ask = json!({ "action": action }).to_string();
+        let headers = self.proof(&self.phone, "POST", "/app/v1/challenges", &ask);
+        let (status, challenge) = self
+            .send("POST", "/app/v1/challenges", &headers, Some(serde_json::from_str(&ask).unwrap()))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{challenge}");
+        let message = format!(
+            "{}\n{}\n{}",
+            challenge["challenge"].as_str().unwrap(),
+            challenge["nonce"].as_str().unwrap(),
+            challenge["action_hash"].as_str().unwrap()
+        );
+        request["signed"] = json!({ "challenge": challenge["challenge"], "signature": self.phone.sign(message.as_bytes()) });
+        request
+    }
+
     /// Headers proving the phone's key for one request.
     fn proof(&self, key: &Key, method: &str, path: &str, body: &str) -> Vec<(&'static str, String)> {
         let now = self.now();
@@ -6831,7 +6857,12 @@ async fn customers_changes_are_carried_to_the_core() {
     };
     // Not yet placed on a partition: it waits, and is carried once a partition answers for it.
     portal
-        .write("POST", "sub-kiri", "/app/v1/requests", file("s-0", "cancel_policy", json!({})))
+        .write(
+            "POST",
+            "sub-kiri",
+            "/app/v1/requests",
+            portal.signed(file("s-0", "cancel_policy", json!({}))).await,
+        )
         .await;
     assert_eq!(mine("s-0").await["status"], "pending");
     assert_eq!(portal.state.carry_servicing_requests().await, Ok(0));
@@ -6844,7 +6875,7 @@ async fn customers_changes_are_carried_to_the_core() {
             "POST",
             "sub-kiri",
             "/app/v1/requests",
-            file("s-1", "change_frequency", json!({ "frequency": "yearly" })),
+            portal.signed(file("s-1", "change_frequency", json!({ "frequency": "yearly" }))).await,
         )
         .await;
     assert_eq!(status, StatusCode::ACCEPTED);
@@ -6883,7 +6914,7 @@ async fn customers_changes_are_carried_to_the_core() {
             "POST",
             "sub-kiri",
             "/app/v1/requests",
-            file("s-4", "change_frequency", json!({ "frequency": "daily" })),
+            portal.signed(file("s-4", "change_frequency", json!({ "frequency": "daily" }))).await,
         )
         .await;
     assert_eq!(mine("s-4").await["code"], "bad_frequency");

@@ -88,6 +88,18 @@ pub fn chosen(code: &str) -> Option<Value> {
 /// with no signal is not queued and sent later as if it had been signed.
 pub const MONEY_KINDS: &[&str] = &["make_payment", "change_payment_method", "change_bank_account", "withdrawal", "surrender"];
 
+/// Requests that give up cover or change what is collected and when. Like
+/// money, a person's own request of one of these kinds is taken only signed
+/// on their enrolled device, so a stolen session or an assistant acting on a
+/// sign-in alone cannot end someone's cover or change their debits. Declining
+/// an indexation is not among them: it is taken back as easily as it is made.
+pub const CONTRACT_KINDS: &[&str] = &["cancel_policy", "change_frequency"];
+
+/// Whether a person's own request of this kind needs their device's signature.
+pub fn needs_signature(kind: &str) -> bool {
+    MONEY_KINDS.contains(&kind) || CONTRACT_KINDS.contains(&kind)
+}
+
 pub mod assisted {
     /// Enter a change for a customer, for them to approve in the app.
     pub const ENTER: &str = "service.enter_change";
@@ -910,8 +922,14 @@ impl ChannelState {
                 }
             }
         };
+        // Someone who prepares a change for the customer to approve (an adviser,
+        // a support person) is not the one whose circumstances decide how it is
+        // handled: the customer's routing is taken when they approve it.
+        if matches!(actor, Actor::Party(_)) && request.status == (RequestStatus::AwaitingApproval { from: Approver::Customer }) {
+            request.route_to_person = false;
+        }
         // Where others must still approve, the customer's signature is taken at approval.
-        if matches!(actor, Actor::Party(_)) && request.status == RequestStatus::Pending && MONEY_KINDS.contains(&request.kind.as_str()) && !request.signed {
+        if matches!(actor, Actor::Party(_)) && request.status == RequestStatus::Pending && needs_signature(&request.kind) && !request.signed {
             return Err(reject("step_up_required", "sign this on your device while connected; nothing has been sent"));
         }
         request.submitted = at;

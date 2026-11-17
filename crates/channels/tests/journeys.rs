@@ -57,6 +57,33 @@ fn submit(id: &str, policy: Option<&PolicyId>, kind: &str, module: &str) -> Comm
     }
 }
 
+/// A request as `submit` makes it, signed on the requester's enrolled device.
+fn signed(id: &str, policy: Option<&PolicyId>, kind: &str, module: &str) -> Command {
+    let Command::SubmitRequest {
+        id,
+        policy,
+        kind,
+        module,
+        payload,
+        route_to_person,
+        assisted,
+        ..
+    } = submit(id, policy, kind, module)
+    else {
+        unreachable!()
+    };
+    Command::SubmitRequest {
+        id,
+        policy,
+        kind,
+        module,
+        payload,
+        signed: true,
+        route_to_person,
+        assisted,
+    }
+}
+
 /// A change staff entered for a customer who rang, with why and the case.
 fn entered(id: &str, policy: &PolicyId, payload: serde_json::Value, reason: &str) -> Command {
     Command::SubmitRequest {
@@ -1079,7 +1106,7 @@ fn employer_changes_can_need_a_second_administrator() {
 
 /// Purpose: an adviser the customer authorised sees the policy and prepares changes the customer approves with a signature; the customer can end the access at once.
 /// Why it matters: adviser access exists only by the customer's authority, and an adviser must never be able to change a policy without the customer's own signed approval.
-/// A request an adviser prepares is routed by the customer who approves it, so a vulnerable customer reaches a person whoever typed it.
+/// A request an adviser prepares is routed by the customer who approves it, so a vulnerable customer reaches a person whoever typed it. The adviser's own routing never counts, so an adviser unknown to the customer master does not leave every change they prepare waiting for a person.
 #[test]
 fn an_adviser_acts_by_the_customers_authority() {
     let mut w = World::new();
@@ -1114,9 +1141,15 @@ fn an_adviser_acts_by_the_customers_authority() {
     assert!(w.feed("adv-1").is_none(), "advisers use the portal");
     assert!(w.ch.data.directory.adviser_policies[&p("adv-1")].contains(&pol));
 
-    // The adviser prepares; the customer approves with their device's signature.
-    w.send(party("adv-1"), submit("r1", Some(&pol), "decline_indexation", "policy-servicing"))
-        .unwrap();
+    // The adviser prepares; the customer approves with their device's signature. The adviser is
+    // not in the customer master, so the portal's routing answer for them is "a person" (a master
+    // that cannot answer routes to a person): that is not the customer's circumstance and must not
+    // stop the change being carried once she approves it (found by SCN-01).
+    let mut prepared = submit("r1", Some(&pol), "decline_indexation", "policy-servicing");
+    if let Command::SubmitRequest { route_to_person, .. } = &mut prepared {
+        *route_to_person = true;
+    }
+    w.send(party("adv-1"), prepared).unwrap();
     assert_eq!(w.ch.data.requests["r1"].status, RequestStatus::AwaitingApproval { from: Approver::Customer });
     assert_eq!(w.row(KIRI, &format!("{pol}/request/r1")).unwrap()["state"]["status"], "awaiting_approval");
     // Kiri needs a person to handle her changes: the adviser's preparing it does not change that.
@@ -1471,7 +1504,7 @@ fn every_joint_owner_signs_and_ownership_passes_to_the_buyer() {
     let effects = w.dir(module("customer-master"), end("partner-2")).unwrap();
     assert_eq!(revoked(&effects), ["partner-2".to_string(), "adv-2".to_string()].into());
     assert_eq!(w.ch.data.directory.owners(&pol), [p("buyer")].into());
-    w.send(party("buyer"), submit("r-own", Some(&pol), "change_frequency", "policy-servicing"))
+    w.send(party("buyer"), signed("r-own", Some(&pol), "change_frequency", "policy-servicing"))
         .unwrap();
     assert_eq!(w.ch.data.requests["r-own"].status, RequestStatus::Pending, "one owner, nobody else to sign");
 }
@@ -1503,7 +1536,7 @@ fn subjects_bind_to_one_party() {
     assert!(w.ch.data.directory.party_of_subject("sub-1").is_none());
 }
 
-/// Purpose: requests are recorded, shown as pending and resolved later; who may submit, cancel and resolve is enforced, and a refusal reads the same as "no such policy".
+/// Purpose: requests are recorded, shown as pending and resolved later; who may submit, cancel and resolve is enforced, and a refusal reads the same as "no such policy". Giving up cover or changing what is collected is taken only signed on the policyholder's device.
 /// Why it matters: writes are asynchronous by contract, so the request record is the customer's only view of what they asked for; and an error that distinguishes "exists but not yours" leaks who is insured.
 #[test]
 fn requests_are_asynchronous_and_owned() {
@@ -1521,8 +1554,17 @@ fn requests_are_asynchronous_and_owned() {
     assert_eq!(code(w.send(staff("ana"), submit("r0", None, "x", "claims"))), "bad_request");
     assert!(w.ch.data.requests.is_empty());
 
-    // The policyholder's own request goes straight to the module.
-    let effects = w.send(party(KIRI), submit("r1", Some(&pol), "cancel_policy", "policy-servicing")).unwrap();
+    // Giving up cover is taken only signed on the policyholder's device: a sign-in alone (a stolen
+    // session, an assistant) cannot cancel a policy, and nothing is kept (found by SCN-10).
+    for kind in ["cancel_policy", "change_frequency"] {
+        assert_eq!(
+            code(w.send(party(KIRI), submit("r1", Some(&pol), kind, "policy-servicing"))),
+            "step_up_required"
+        );
+    }
+    assert!(w.ch.data.requests.is_empty());
+    // Signed, the policyholder's own request goes straight to the module.
+    let effects = w.send(party(KIRI), signed("r1", Some(&pol), "cancel_policy", "policy-servicing")).unwrap();
     assert!(effects.contains(&Effect::RequestReady {
         id: "r1".into(),
         module: "policy-servicing".into()
@@ -1530,7 +1572,7 @@ fn requests_are_asynchronous_and_owned() {
     assert_eq!(w.row(KIRI, &format!("{pol}/request/r1")).unwrap()["state"]["status"], "pending");
     assert_eq!(w.ch.data.requests["r1"].submitted, w.at);
     assert_eq!(
-        code(w.send(party(KIRI), submit("r1", Some(&pol), "cancel_policy", "policy-servicing"))),
+        code(w.send(party(KIRI), signed("r1", Some(&pol), "cancel_policy", "policy-servicing"))),
         "duplicate"
     );
 
