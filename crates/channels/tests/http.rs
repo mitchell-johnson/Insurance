@@ -3274,6 +3274,20 @@ async fn a_person_keeps_their_own_customer_record() {
 
     // A hold on your own money going out: on at once, off only after a fresh identity check and the cooling-off period.
     assert_eq!(portal.get("sub-kiri", "/app/v1/profile/spending-hold").await.1["held"], false);
+    // Putting a hold on only protects the person, so a sign-in alone does it (F2-05-3); asking for it to end does not.
+    let (status, _) = portal
+        .write("POST", "sub-kiri", "/app/v1/profile/commands", json!({ "command": "place_spending_hold" }))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, problem) = portal
+        .write(
+            "POST",
+            "sub-kiri",
+            "/app/v1/profile/commands",
+            json!({ "command": "request_hold_removal", "verification": "idv-2" }),
+        )
+        .await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("device_required")));
     let ((status, _), _) = send(json!({ "command": "place_spending_hold" }), None).await;
     assert_eq!(status, StatusCode::OK);
     let hold = portal.get("sub-kiri", "/app/v1/profile/spending-hold").await.1;

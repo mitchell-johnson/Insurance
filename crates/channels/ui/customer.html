@@ -408,8 +408,10 @@ async function details() {
   } catch (e) { say($("hold"), "warn", e.message); }
 }
 const signature = (what) => { if (!enrolled) throw new Error(`${what} needs your signature. Set up this browser under Signing first.`); };
+// Putting a hold on, or keeping it on, only protects you: it needs no signature. Anything else does.
+const PROTECTIVE = ["place_spending_hold", "cancel_hold_removal"];
 async function change(command) {
-  signature("Changing your details");
+  if (!PROTECTIVE.includes(command.command)) signature("Changing your details");
   await api(R, "POST", "/app/v1/profile/commands", command);
   await details();
 }

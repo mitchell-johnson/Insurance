@@ -1001,11 +1001,13 @@ async fn staff_document(
 /// Change your contact details or consents, from an enrolled device.
 async fn profile_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
     let session = s.customer(&headers, &method, &uri, &body).await?;
-    if session.device.is_none() {
+    let command: Value = parse(&body)?;
+    // A hold that only protects the person (placing it, keeping it on) is quick
+    // to put on from a sign-in alone; lifting it needs an identity check (F2-05-3).
+    if session.device.is_none() && !crate::customers::PROTECTIVE.contains(&command["command"].as_str().unwrap_or_default()) {
         return Err(device_required("changing your details"));
     }
     let key = key(&headers, &session.party.0)?;
-    let command: Value = parse(&body)?;
     crate::customers::check(&command).map_err(Problem::forbidden)?;
     let version = header(&headers, "if-match");
     mastered(s.master()?.command(&session.party, version, key, command).await)
