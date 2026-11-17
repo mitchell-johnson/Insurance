@@ -5846,11 +5846,25 @@ async fn an_assistant_is_told_where_its_arguments_go() {
         not_his["content"][0]["text"]
             .as_str()
             .unwrap()
-            .ends_with("it needs one of these actions: customers.export"),
+            .starts_with("this tool is not open to you: it needs a role that gives customers.export"),
         "{not_his}"
     );
     let hers = call_tool(&portal, "sub-hr", "set_scheme_admin", json!({ "policy": scheme })).await;
     assert_eq!(hers["content"][0]["text"], "party is required", "{hers}");
+    // Arguments that would do reach the route, which refuses and logs it, and the assistant is told the same way what the
+    // tool needs (F2-01-6); a module's tools are named by the module.
+    let core = call_tool(&portal, "sub-amy", "core_policy", json!({ "number": "KTL00000071" })).await;
+    let said = core["content"][0]["text"].as_str().unwrap();
+    assert!(
+        said.starts_with("this tool is not open to you: it needs a role that gives policy.core_view"),
+        "{said}"
+    );
+    let named = |name: &str| ic_channels::mcp::not_yours(&ic_channels::mcp::catalogue().into_iter().find(|t| t.name == name).unwrap());
+    assert!(named("payments_question").contains("any payments action"));
+    assert!(named("adviser_statement").contains("an adviser's engagement or practice"));
+    assert!(named("set_scheme_admin").contains("being a scheme's administrator"));
+    assert!(named("policy_claims").contains("an adviser's engagement or being a scheme's administrator"));
+    assert!(named("status").contains("a sign-in of the kind it is for"));
 }
 
 /// Purpose: what a write answers says only what concerns the person who wrote: their own feed's new version (so the app syncs to
@@ -6835,8 +6849,8 @@ async fn new_business_quotes_but_never_issues_by_hand() {
     let quote = "/staff/v1/new-business/quote?case=nb-77";
     let (status, priced) = portal.write("POST", "sub-nb1", quote, application(71, "term-life")).await;
     assert_eq!(status, StatusCode::OK, "{priced}");
-    assert_eq!(priced["premium"]["total_minor"], 1234);
-    assert_eq!(priced["premium"]["partition"], priced["partition"]);
+    assert_eq!((&priced["total_minor"], &priced["total"]), (&json!(1234), &json!("$12.34")), "{priced}");
+    assert_eq!(priced["frequency"], "monthly");
     // The core's refusal is its own; a date not yet open is a wait, not a failure.
     let refused = portal.write("POST", "sub-nb1", quote, application(72, "none")).await;
     assert_eq!(
@@ -6928,7 +6942,7 @@ fn reconciliation_joins_the_partitions() {
 }
 
 /// Purpose: staff find, read, change and merge people in the customer master through the portal: each is decided by the four questions and logged, then sent to the master in the role and with the purpose the master's own policy expects, naming the person as the actor.
-/// Why it matters: the customer master's staff work had no screen and no tool. Sending it in the wrong role or purpose would be refused by the master or, worse, logged as the wrong kind of access; doing it without the portal's check would let anyone with a staff sign-in search every customer.
+/// Why it matters: the customer master's staff work had no screen and no tool. Sending it in the wrong role or purpose would be refused by the master or, worse, logged as the wrong kind of access; doing it without the portal's check would let anyone with a staff sign-in search every customer. A possible duplicate names who it may be and the next step, found by the scenario run, F2-01-5.
 #[tokio::test]
 async fn staff_work_in_the_customer_master() {
     use ic_channels::customers::Desk;
@@ -7035,9 +7049,12 @@ async fn staff_work_in_the_customer_master() {
             json!({ "kind": "person", "facts": [{ "field": "family_name", "value": "Twin" }] }),
         )
         .await;
-    assert_eq!(
-        (status, twin["title"].as_str(), twin["detail"].as_str()),
-        (StatusCode::CONFLICT, Some("possible_duplicate"), Some("this person may already be known"))
+    assert_eq!((status, twin["title"].as_str()), (StatusCode::CONFLICT, Some("possible_duplicate")), "{twin}");
+    // It names who it may be and what to do next (F2-01-5).
+    let said = twin["detail"].as_str().unwrap_or_default();
+    assert!(
+        said.starts_with("this person may already be known: ") && said.contains("match_customer") && said.contains("allow_duplicate: true"),
+        "{said}"
     );
     let merged = portal
         .write(
@@ -8034,4 +8051,194 @@ fn a_payments_question_that_finds_nothing_says_what() {
         json!({ "q": "find_payees", "text": "smith" })
     );
     assert!(question("find_payees", &text, &[], at).is_err());
+}
+
+/// A row underwriting publishes for Kiri as a life on a proposal, applied to the portal's read model.
+fn kiri_on(portal: &Portal, proposal: &str, life: &str, body: Value, index: u64) {
+    let now = portal.now();
+    let retail = portal.retail.clone();
+    portal.local.with(|state| {
+        use ic_log::StateMachine;
+        let rows = json!({ "publish_rows": { "rows": [{ "key": format!("{retail}/underwriting/{proposal}/{life}"), "policy": retail, "kind": "proposal_life",
+            "subject": KIRI, "sensitive": true, "body": body }], "remove": [] } });
+        let command: Command = serde_json::from_value(rows).unwrap();
+        let output = state.apply(
+            index,
+            ic_channels::Envelope {
+                key: format!("row-{index}"),
+                at: now,
+                actor: module("underwriting"),
+                command,
+            },
+        );
+        assert!(output.result.is_ok(), "{:?}", output.result);
+    });
+}
+
+/// Purpose: a new business officer quotes a walk-in from what they know (the product, the cover and its amount, how often
+/// they would pay, and the life's birth date, sex and smoking) with no identifier typed and no person named; the product's
+/// own conditions are asked of underwriting first, so cover above what the life's age allows is refused saying the amount
+/// and the limit in dollars; the answer gives the total in dollars and how GST applies; and a missing fact is named.
+/// Why it matters: the quote priced $600,000 of cover the product does not take at 61, made the officer invent a policy,
+/// number, group and purpose, and answered with an internal field and no total, found by the scenario run, F2-01-1,
+/// F2-01-3 and F2-01-4.
+#[tokio::test]
+async fn a_walk_in_is_quoted_from_what_the_officer_knows() {
+    let portal = portal();
+    let quote = "/staff/v1/new-business/quote";
+    let walk_in = |sum: i64| {
+        json!({ "product_code": "aia-essentials-life", "frequency": "monthly",
+            "life": { "date_of_birth": "1965-06-01", "sex": "female", "smoker": false },
+            "covers": [{ "code": "life", "sum_insured_minor": sum }] })
+    };
+    let (status, priced) = portal.write("POST", "sub-nb1", quote, walk_in(400_000_00)).await;
+    assert_eq!(status, StatusCode::OK, "{priced}");
+    assert_eq!((&priced["total"], &priced["frequency"]), (&json!("$12.34"), &json!("monthly")), "{priced}");
+    assert_eq!(priced["gst"], "none: life and health cover is exempt from GST");
+    assert!(priced.get("partition").is_none(), "{priced}");
+
+    let (status, refused) = portal.write("POST", "sub-nb1", quote, walk_in(600_000_00)).await;
+    assert_eq!((status, refused["title"].as_str()), (StatusCode::CONFLICT, Some("eligibility")), "{refused}");
+    let said = refused["detail"].as_str().unwrap_or_default();
+    assert!(said.contains("$600,000.00") && said.contains("$500,000.00"), "{said}");
+
+    let mut no_birth = walk_in(400_000_00);
+    no_birth["life"]["date_of_birth"] = json!(" ");
+    let (status, problem) = portal.write("POST", "sub-nb1", quote, no_birth).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+    assert!(problem["detail"].as_str().unwrap_or_default().contains("date_of_birth"), "{problem}");
+
+    // Logged as a quote for nobody in particular, with no purpose asked.
+    let lines = logged(&portal, "sub-nb1").await;
+    assert!(
+        lines
+            .iter()
+            .any(|(a, r, allowed)| a == "new_business.quote" && r == "quote:walk-in" && *allowed),
+        "{lines:?}"
+    );
+}
+
+/// Purpose: the life on a proposal reads the questions to answer from the question set in force, every one worded for them
+/// with the shape of its answer, the duty they answer under, and the consents the proposal asks of them (the adviser's
+/// access where an adviser is named); a proposal underwriting does not hold has no questions; and refusing a consent is
+/// taken from a sign-in without an enrolled device, while giving one still needs the device.
+/// Why it matters: no screen or tool took health answers or consents, so a customer could not complete her application,
+/// and asking for a device's signature to say no kept people from refusing, found by the scenario run, F2-02-1, F2-02-2 and
+/// F2-02-3.
+#[tokio::test]
+async fn the_life_reads_the_questions_and_may_refuse_a_consent_anywhere() {
+    let portal = &portal();
+    kiri_on(
+        portal,
+        "P3",
+        "L1",
+        json!({ "proposal": "P3", "life": "L1", "stage": "awaiting_disclosure", "waiting_on": "applicant" }),
+        9_101,
+    );
+    kiri_on(
+        portal,
+        "P9",
+        "L1",
+        json!({ "proposal": "P9", "life": "L1", "stage": "awaiting_disclosure", "waiting_on": "applicant" }),
+        9_102,
+    );
+    let (status, asked) = portal.get("sub-kiri", "/app/v1/proposals/P3/lives/L1/questions").await;
+    assert_eq!(status, StatusCode::OK, "{asked}");
+    let questions = asked["questions"].as_array().unwrap();
+    assert!(!questions.is_empty(), "{asked}");
+    for q in questions {
+        assert!(!q["text"].as_str().unwrap_or_default().is_empty(), "every question is worded: {q}");
+        assert!(q["answer"].is_string() || q["answer"].is_object(), "{q}");
+    }
+    assert!(asked["duty"].as_str().is_some_and(|d| !d.is_empty()), "{asked}");
+    let kinds: Vec<&str> = asked["consents"].as_array().unwrap().iter().filter_map(|c| c["kind"].as_str()).collect();
+    assert!(kinds.contains(&"obtain_records") && kinds.contains(&"adviser_access"), "{kinds:?}");
+    assert_eq!(portal.get("sub-adv", "/app/v1/proposals/P3/lives/L1/questions").await.0, StatusCode::NOT_FOUND);
+    let (status, none) = portal.get("sub-kiri", "/app/v1/proposals/P9/lives/L1/questions").await;
+    assert_eq!((status, none["title"].as_str()), (StatusCode::CONFLICT, Some("no_questions")), "{none}");
+
+    let consent = "/app/v1/proposals/P3/lives/L1/consents/obtain_records";
+    let (status, problem) = portal.write("POST", "sub-kiri", consent, json!({ "granted": true })).await;
+    assert_eq!(
+        (status, problem["title"].as_str()),
+        (StatusCode::UNAUTHORIZED, Some("device_required")),
+        "{problem}"
+    );
+    let before = portal.underwriting.log().len();
+    let (status, refused) = portal.write("POST", "sub-kiri", consent, json!({ "granted": false })).await;
+    assert_ne!(status, StatusCode::UNAUTHORIZED, "{refused}");
+    let sent = portal.underwriting.log();
+    assert_eq!(sent.len(), before + 1, "the refusal reached the module");
+    assert_eq!(sent.last().unwrap().caller, "customer-app");
+}
+
+/// Purpose: before answering an offer, the life reads its terms in words (an exclusion by its kind), the date it is open
+/// until, whether they may still ask us to look again, and the first premium on those terms priced by the core on the books'
+/// date; an offer that is not the one open is not found; and the list of applications carries no application to price.
+/// Why it matters: the customer accepted an offer without ever seeing its terms or price, found by the scenario run, F2-02-7;
+/// and "Ask us to look again" was offered after it was used, F2-02-9.
+#[tokio::test]
+async fn the_life_reads_an_offer_before_answering() {
+    let portal = &portal();
+    let terms = json!([{ "cover": "life", "outcome": { "outcome": "accept", "loading_percent": 50,
+        "exclusions": [{ "code": "EX-5001", "from": "2026-11-11", "until": null }] } }]);
+    kiri_on(
+        portal,
+        "P3",
+        "L1",
+        json!({ "proposal": "P3", "life": "L1", "stage": "offer_open", "waiting_on": "applicant",
+            "offer": { "offer": "O-1", "expires_on": "2027-12-15", "terms": terms, "look_again": false, "application": application(81, "term-life") } }),
+        9_103,
+    );
+    let (status, offer) = portal.get("sub-kiri", "/app/v1/proposals/P3/lives/L1/offers/O-1").await;
+    assert_eq!(status, StatusCode::OK, "{offer}");
+    assert_eq!((&offer["look_again"], &offer["expires_on"]), (&json!(false), &json!("2027-12-15")), "{offer}");
+    assert_eq!(offer["terms"][0]["said"], "Offered with an extra 50% on its premium");
+    assert_eq!(offer["terms"][0]["exclusions"][0]["about"], "Not covered: your work");
+    assert_eq!((&offer["premium_minor"], &offer["frequency"]), (&json!(1234), &json!("monthly")), "{offer}");
+    assert_eq!(
+        portal.get("sub-kiri", "/app/v1/proposals/P3/lives/L1/offers/O-2").await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(portal.get("sub-adv", "/app/v1/proposals/P3/lives/L1/offers/O-1").await.0, StatusCode::NOT_FOUND);
+    let (_, mine) = portal.get("sub-kiri", "/app/v1/proposals").await;
+    let listed = mine.as_array().unwrap().iter().find(|p| p["proposal"] == "P3").cloned().unwrap();
+    assert!(listed["offer"].get("application").is_none(), "{listed}");
+    assert_eq!(listed["offer"]["look_again"], false);
+}
+
+/// Purpose: an underwriter declares a conflict with the person on a proposal, saying how they are connected; from then on
+/// the proposal is closed to them with a reason that says so, and its case leaves their queue; a conflict with no reason
+/// is refused, saying what to give.
+/// Why it matters: a conflicted underwriter could still read the whole proposal, a privacy breach, and the refusal did
+/// not say why, found by the scenario run, F2-03-1 and F2-03-3.
+#[tokio::test]
+async fn a_conflicted_underwriter_reads_nothing_of_the_case() {
+    let portal = portal();
+    let case = portal.underwriting.case("P2", "L1").expect("P2 waits for a person");
+    let in_queue = |items: &Value| items.as_array().unwrap().iter().any(|i| i["case"] == case.as_str());
+    let medical = |who: &'static str| {
+        let portal = &portal;
+        async move { portal.get(who, "/staff/v1/underwriting/queue?queue=occupational").await.1 }
+    };
+    assert!(in_queue(&medical("sub-amy").await), "the case waits in the occupational queue");
+    let declare = |reason: Value| json!({ "declare_conflict": { "party": "PTY-L1", "reason": reason } });
+    let (status, problem) = portal.write("POST", "sub-amy", "/staff/v1/underwriting/commands", declare(json!(" "))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+    assert!(problem["detail"].as_str().unwrap_or_default().contains("reason"), "{problem}");
+    let (status, declared) = portal
+        .write("POST", "sub-amy", "/staff/v1/underwriting/commands", declare(json!("my neighbour")))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{declared}");
+
+    let (status, closed) = portal.get("sub-amy", "/staff/v1/underwriting/proposal?proposal=P2").await;
+    assert_eq!((status, closed["title"].as_str()), (StatusCode::FORBIDDEN, Some("conflict")), "{closed}");
+    assert!(
+        closed.get("lives").is_none() && closed["detail"].as_str().is_some_and(|d| d.contains("conflict")),
+        "{closed}"
+    );
+    assert!(!in_queue(&medical("sub-amy").await), "nor is its case in their queue");
+    // A colleague still reads it, and sees it waiting.
+    assert_eq!(portal.get("sub-abe", "/staff/v1/underwriting/proposal?proposal=P2").await.0, StatusCode::OK);
+    assert!(in_queue(&medical("sub-abe").await));
 }

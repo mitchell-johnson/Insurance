@@ -111,6 +111,19 @@ pub fn rows(p: &Proposal) -> Vec<ProgressRow> {
             if let Some((offer, expires_on)) = waiting {
                 body["offer"] = json!({ "offer": offer, "expires_on": expires_on });
             }
+            // The terms of our own offer, for the life to read before answering,
+            // whether they may still ask us to look again, and the policy it
+            // would issue as for the channel to price.
+            if let Some(o) = f.open_offer() {
+                let terms = f.decisions.iter().find(|d| d.reference == o.decision).map(|d| &d.terms);
+                body["offer"]["terms"] = json!(terms);
+                body["offer"]["look_again"] = json!(!f.offers.iter().any(|o| o.status == crate::model::OfferStatus::Countered));
+                if p.entry == Entry::NewBusiness {
+                    if let Ok(application) = crate::flow::offered(p, life) {
+                        body["offer"]["application"] = json!(application);
+                    }
+                }
+            }
         }
         // The product changed between the quote and the issue: the
         // applicant is asked to accept a new price before anything is

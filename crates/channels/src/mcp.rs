@@ -144,7 +144,8 @@ pub fn reach_of(name: &str) -> Reach {
         "documents_question" | "documents_command" => Reach::Actions(DOCUMENTS),
         "wellness_question" => Reach::Actions(&["wellness."]),
         "group_question" | "group_command" | "group_reoffer" | "try_mapping" | "first_scheme_admin" => Reach::Actions(&["group."]),
-        "underwriting_question" | "underwriting_command" | "underwriting_decide" | "read_disclosures" => Reach::Actions(&["underwriting."]),
+        "underwriting_question" | "underwriting_command" | "read_disclosures" => Reach::Actions(&["underwriting."]),
+        "underwriting_decide" => Reach::Actions(&[crate::underwriting::actions::SENIOR]),
         "reinsurance_question" | "reinsurance_command" | "reinsurance_decide" => Reach::Actions(&["reinsurance."]),
         "finance_question" | "finance_command" | "rate_table_dry_run" => Reach::Actions(&["finance."]),
         "pricing_question" | "pricing_command" => Reach::Actions(&["unit_pricing."]),
@@ -412,19 +413,21 @@ pub fn catalogue() -> Vec<Tool> {
         tool("export_my_data", "Everything held about me", C, M::GET, "/app/v1/profile/export", "A copy of everything the insurer holds about you (a Privacy Act access request). Needs your enrolled device."),
         tool("my_spending_hold", "My hold on money going out", C, M::GET, "/app/v1/profile/spending-hold", "Whether your own hold on money leaving your policies is on, since when, and any removal waiting to take effect."),
         tool("my_document", "One of my documents", C, M::GET, "/app/v1/documents/{id}/pdf", "A document you own or were sent a copy of, as a PDF. Anyone else's is not found, the same as one that does not exist."),
-        tool("disclosure_to_sign", "Disclosure to sign", C, M::POST, "/app/v1/proposals/{proposal}/lives/{life}/disclosures/to-sign", "For the person insured on a proposal: the exact bytes to sign for their health and lifestyle answers.")
-            .json(r#"{"step": "disclosure" | "interview", "answers": {...}, "adviser_entered": false}"#),
-        tool("submit_disclosure", "Submit a signed disclosure", C, M::POST, "/app/v1/proposals/{proposal}/lives/{life}/disclosures", "Submit the answers with the message disclosure_to_sign gave and the enrolled device's signature over it.")
+        tool("disclosure_questions", "The health and lifestyle questions", C, M::GET, "/app/v1/proposals/{proposal}/lives/{life}/questions", "For the person insured on a proposal: each question in the words they read, its id and version, what kind of answer it takes and the exact shape to send, whether it must be answered, the duty they answer under, and the consents they are asked for and whether each is given."),
+        tool("disclosure_to_sign", "Check answers and see what to sign", C, M::POST, "/app/v1/proposals/{proposal}/lives/{life}/disclosures/to-sign", "For the person insured on a proposal: checks the answers against the questions (disclosure_questions) and names any missing or wrong, or gives the exact bytes to sign. Nothing is kept. Signing and sending is done in the app on their phone, or on a browser they set up under Signing.")
+            .json(r#"{"step": "disclosure" | "interview", "answers": {"<question id>": [<question version>, {"yes_no": true} | {"number": 172} | {"choice": "<option value>"} | {"money": <cents>} | {"text": "..."}]}, "adviser_entered"?: ["<question ids the adviser typed>"]}"#),
+        tool("submit_disclosure", "Submit a signed disclosure", C, M::POST, "/app/v1/proposals/{proposal}/lives/{life}/disclosures", "Sending the signed answers is done from the person's enrolled device: the app on their phone, or a browser they set up under Signing on the customer page. Here it is refused, as no device signs through an assistant.")
             .json(r#"{"step", "answers", "adviser_entered", "message": "<base64 from disclosure_to_sign>", "signature": "<the device key's>"}"#),
         tool("consent_to_sign", "Consent to sign", C, M::GET, "/app/v1/proposals/{proposal}/lives/{life}/consents/{kind}/to-sign", "For the life on a proposal: the exact bytes to sign to give a consent, and whether this kind needs the device's signature.")
             .choose("kind", crate::disclosures::CONSENTS.to_vec()),
-        tool("give_consent", "Give or withdraw a consent", C, M::POST, "/app/v1/proposals/{proposal}/lives/{life}/consents/{kind}", "Give or withdraw a consent for the life on a proposal. Adviser access, the employer seeing a loading and the replacement disclosure need the enrolled device's signature.")
+        tool("give_consent", "Give, refuse or withdraw a consent", C, M::POST, "/app/v1/proposals/{proposal}/lives/{life}/consents/{kind}", "For the life on a proposal. Refusing or withdrawing a consent (granted: false) works here. Giving one is done from their enrolled device, the app on their phone or a browser set up under Signing; adviser access, the employer seeing a loading and the replacement disclosure are also signed there.")
             .choose("kind", crate::disclosures::CONSENTS.to_vec())
             .json(r#"{"granted": true | false, "signature"?: "<the device key's, over consent_to_sign's bytes>"}"#),
         tool("my_proposals", "My applications", C, M::GET, "/app/v1/proposals", "The applications you are a life on: where each stands, and any offer of terms waiting for your answer."),
         tool("offer_to_sign", "Offer answer to sign", C, M::GET, "/app/v1/proposals/{proposal}/lives/{life}/offers/{offer}/{response}/to-sign", "For the life on a proposal: the exact bytes to sign to accept, decline or ask again about an offer of terms. The offer is named on the life's proposal row.")
             .choose("response", crate::disclosures::OFFER_RESPONSES.to_vec()),
-        tool("answer_offer", "Answer an offer of terms", C, M::POST, "/app/v1/proposals/{proposal}/lives/{life}/offers/{offer}", "Accept, decline or ask again about an offer of terms, signed by the enrolled device. The terms are in the offer letter in your documents.")
+        tool("offer_terms", "The terms offered", C, M::GET, "/app/v1/proposals/{proposal}/lives/{life}/offers/{offer}", "For the life on a proposal: each cover's terms in words (standard, an extra premium, an exclusion), the first premium on those terms, the date the offer is open until, and whether they may still ask us to look again (once only)."),
+        tool("answer_offer", "Answer an offer of terms", C, M::POST, "/app/v1/proposals/{proposal}/lives/{life}/offers/{offer}", "Accept, decline or ask us to look again (once) at an offer of terms; read them first with offer_terms. The answer is signed on the enrolled device, the app on their phone or a browser set up under Signing, so here it is refused.")
             .json(r#"{"response": "accept" | "decline" | "counter", "signature": "<the device key's, over offer_to_sign's bytes>"}"#),
         tool("requote", "A new price to accept", C, M::GET, "/app/v1/proposals/{proposal}/lives/{life}/requote", "When the product changed before your policy was issued: the premium you accepted, the new one, and the exact bytes to sign to accept it."),
         tool("accept_requote", "Accept a new price", C, M::POST, "/app/v1/proposals/{proposal}/lives/{life}/requote", "Accept the new price shown by requote, signed by the enrolled device; the policy is then issued.")
@@ -563,7 +566,7 @@ pub fn catalogue() -> Vec<Tool> {
             .query("`proposal`, `queue`, `from`, `to`, `on` as the question needs."),
         tool("underwriting_command", "Act in underwriting", S, M::POST, "/staff/v1/underwriting/commands", "A command to underwriting in its own JSON. A non-disclosure remedy is prepared for a second senior to sign.")
             .json(r#"{"<command>": {...}}"#),
-        tool("underwriting_decide", "Sign or withdraw a prepared remedy", S, M::POST, "/staff/v1/underwriting/{verb}/{id}", "As a second senior, sign and send a prepared remedy, or take it back.")
+        tool("underwriting_decide", "Sign or withdraw a prepared remedy", S, M::POST, "/staff/v1/underwriting/{verb}/{id}", "As a second senior, sign and send a prepared remedy (verb sign), or take back one you prepared (verb withdraw). Say the verb and the remedy's id (listed under pending by underwriting_question me); the body is empty.")
             .choose("verb", vec!["sign", "withdraw"])
             .json("{}"),
         tool("read_disclosures", "Read a life's disclosure", S, M::POST, "/staff/v1/underwriting/disclosures", "The intake's record of a life's answers, for a purpose your role allows.")
@@ -593,9 +596,9 @@ pub fn catalogue() -> Vec<Tool> {
         tool("pricing_command", "Act in unit pricing", S, M::POST, "/staff/v1/unit-pricing/commands", "Prepare, approve or reject a price, suspend or resume a fund, raise or close a price error, republish.")
             .json(r#"{"<command>": {...}}"#),
         // ---- New business and the core's own view of a policy.
-        tool("quote", "Price an application", S, M::POST, "/staff/v1/new-business/quote", "The first period's bill for an application, as the core would charge it. Nothing is written.")
-            .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record.")
-            .json(r#"{"policy", "number", "group", "policyholder", "product_code", "inception": "YYYY-MM-DD", "frequency", "lives": [...], "covers": [...]} as the core's IssuePolicy"#),
+        tool("quote", "Price an application", S, M::POST, "/staff/v1/new-business/quote", "What a person would pay each period for the cover they want, as the core would charge it, with the total and the tax that applies. The product's conditions (ages, amounts by age) are checked first. Nothing is written and no purpose is needed for a walk-in. An application already made up as the core's IssuePolicy, naming a policyholder, is also taken, with the case it is for.")
+            .query("Only for an application naming a policyholder: `case`, the case or task you work on.")
+            .json(r#"{"product_code": "aia-essentials-life", "frequency": "monthly" | "fortnightly" | "yearly" | ..., "life": {"date_of_birth": "YYYY-MM-DD", "sex": "female" | "male", "smoker": false, "occupation_class"?: "1"}, "covers": [{"code": "life", "sum_insured_minor": <cents: $400,000 is 40000000>, "excess_option"?: "basis=simplified"}], "inception"?: "YYYY-MM-DD, the books' date if left out"}"#),
         tool("core_policy", "A policy as the core holds it", S, M::GET, "/staff/v1/core/policies/{number}", "A policy by its number with every cover layer, life, loading, exclusion and the billing position. Underwriting terms imply health, so this needs the insurance-sensitive class.")
             .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record."),
         // ---- The customer master's staff work.
@@ -826,10 +829,12 @@ pub async fn endpoint(State(s): State<Arc<AppState>>, headers: HeaderMap, body: 
                 Some(tool) if !held.realms.contains(&tool.realm) => rpc_result(id, failed("this tool needs a sign-in you do not hold")),
                 Some(tool) => {
                     let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+                    // The route still decides, and logs, the call; a tool not open to the caller is refused in one way
+                    // whatever stopped it, saying what it needs, and arguments that would not do are no news to them.
                     match call(&s, &headers, &tool, &arguments).await {
+                        Ok(result) if result["isError"] == true && !held.offers(&tool) => rpc_result(id, failed(&not_yours(&tool))),
                         Ok(result) => rpc_result(id, result),
-                        // Arguments that would not do are no news to someone the tool is not open to: say that first.
-                        Err(_) if !held.offers(&tool) => rpc_result(id, failed(&not_yours(tool.name))),
+                        Err(_) if !held.offers(&tool) => rpc_result(id, failed(&not_yours(&tool))),
                         Err(problem) => rpc_result(id, failed(&problem)),
                     }
                 }
@@ -841,14 +846,29 @@ pub async fn endpoint(State(s): State<Arc<AppState>>, headers: HeaderMap, body: 
     Json(reply).into_response()
 }
 
-/// Said when a call's arguments would not do and the tool is not open to the caller anyway:
-/// for a staff tool, the actions that open it, so the person asks for the right one.
-fn not_yours(name: &str) -> String {
-    let base = "this tool is not open to you: none of your roles or relationships reaches it, so ask whoever looks after your access if you need it";
-    match reach_of(name) {
-        Reach::Actions(actions) => format!("{base}; it needs one of these actions: {}", actions.join(", ")),
-        _ => base.to_string(),
-    }
+/// Said when a tool not open to the caller is called, whatever stopped it:
+/// what it needs, so the caller asks for the right access.
+pub fn not_yours(tool: &Tool) -> String {
+    let needs = match tool.reach {
+        Reach::Everyone => "a sign-in of the kind it is for".to_string(),
+        Reach::Adviser => "an adviser's engagement or practice".to_string(),
+        Reach::SchemeAdmin => "being a scheme's administrator".to_string(),
+        Reach::AdviserOrAdmin => "an adviser's engagement or being a scheme's administrator".to_string(),
+        Reach::Actions(actions) => {
+            let named: Vec<String> = actions
+                .iter()
+                .map(|a| {
+                    if let Some(module) = a.strip_suffix('.') {
+                        format!("any {} action", module.replace('_', " "))
+                    } else {
+                        (*a).to_string()
+                    }
+                })
+                .collect();
+            format!("a role that gives {}", named.join(" or "))
+        }
+    };
+    format!("this tool is not open to you: it needs {needs}, which none of your roles or relationships gives, so ask whoever looks after your access if you need it")
 }
 
 /// A tool result that says what went wrong, for the model to read.

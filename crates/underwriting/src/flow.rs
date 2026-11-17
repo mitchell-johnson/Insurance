@@ -77,7 +77,14 @@ pub(crate) fn close_cases(f: &mut LifeFile, cx: &mut Cx) {
 /// Ask for evidence. A kind already asked for and still outstanding is not
 /// asked for again; the request id is stable so a retried effect never asks
 /// a doctor twice.
-pub(crate) fn request_evidence(cfg: &Config, p: &mut Proposal, life: &LifeId, kinds: &BTreeSet<EvidenceKind>, cx: &mut Cx) -> Result<(), Reject> {
+pub(crate) fn request_evidence(
+    cfg: &Config,
+    p: &mut Proposal,
+    life: &LifeId,
+    kinds: &BTreeSet<EvidenceKind>,
+    due_on: Option<chrono::NaiveDate>,
+    cx: &mut Cx,
+) -> Result<(), Reject> {
     let proposal = p.id.clone();
     let f = life_mut(p, life)?;
     for kind in kinds {
@@ -90,7 +97,11 @@ pub(crate) fn request_evidence(cfg: &Config, p: &mut Proposal, life: &LifeId, ki
             n => format!("{proposal}/{life}/{}/{}", kind.key(), n + 1),
         };
         let extra = if f.more_time { cfg.settings.more_time_days } else { 0 };
-        let deadline = cx.at + chrono::Duration::days(cfg.settings.evidence_days + extra);
+        // On the books' calendar: the day chosen, or the settings' days from today.
+        let deadline = match due_on {
+            Some(day) => day.and_time(cx.at.time()).and_utc() + chrono::Duration::days(extra),
+            None => cx.books_now() + chrono::Duration::days(cfg.settings.evidence_days + extra),
+        };
         f.evidence.push(EvidenceRequest {
             id: id.clone(),
             kind: *kind,
@@ -191,7 +202,7 @@ pub(crate) fn route(cfg: &Config, p: &mut Proposal, life: &LifeId, cx: &mut Cx, 
                 );
             }
             let kinds: BTreeSet<EvidenceKind> = assessments.iter().flat_map(|a| a.evidence.iter().copied()).collect();
-            request_evidence(cfg, p, life, &kinds, cx)?;
+            request_evidence(cfg, p, life, &kinds, None, cx)?;
             if has_case {
                 let queue = kinds.iter().map(|k| k.queue()).min().unwrap_or(Queue::Medical);
                 let case_type = if queue == Queue::Financial {
@@ -644,6 +655,16 @@ pub(crate) fn application(p: &Proposal, inception: chrono::NaiveDate) -> Result<
         covers,
         migrated: false,
     })
+}
+
+/// The policy a new business proposal would issue as were the life to
+/// accept the terms offered: what the life is told the offer costs.
+pub(crate) fn offered(p: &Proposal, life: &LifeId) -> Result<IssuePolicy, Reject> {
+    let mut accepting = p.clone();
+    if let Some(f) = accepting.lives.get_mut(life) {
+        f.stage = Stage::Accepted;
+    }
+    application(&accepting, p.received_on)
 }
 
 pub(crate) fn issue(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {

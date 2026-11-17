@@ -4,6 +4,11 @@
 # of Insurance Act 2024 applies on 15 November 2027: only what is asked counts. The wording shown to the
 # applicant is held with the digital channel against each question id and
 # version; a change of wording is a new question version here.
+#
+# Blood pressure or cholesterol, asthma or another lung condition, current
+# medication, and anything else in the applicant's own words were added
+# before this set came into force: an applicant on a blood pressure tablet
+# had nowhere to say so (scenario round 2, F2-02-4).
 
 QUESTIONS = question_set(
     id = "personal-statement",
@@ -16,6 +21,9 @@ QUESTIONS = question_set(
         yes_no("smoked_last_12_months"),
         number("alcohol_units_per_week", 0, 200),
         yes_no("heart_condition"),
+        yes_no("high_blood_pressure_or_cholesterol"),
+        yes_no("asthma_or_lung_condition"),
+        yes_no("current_medication"),
         yes_no("cancer_history"),
         yes_no("diabetes"),
         yes_no("mental_health_last_5_years"),
@@ -32,5 +40,8 @@ QUESTIONS = question_set(
         yes_no("previous_decline_or_terms", clinical = False),
         money("annual_income", clinical = False),
         money("existing_cover_elsewhere", clinical = False),
+        # Anything else about your health the questions above did not ask:
+        # the reasonable care set asks it in its own words, so it is version 2.
+        text("anything_else", version = 2, clinical = True),
     ],
 )

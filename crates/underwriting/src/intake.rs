@@ -411,9 +411,17 @@ pub(crate) fn respond(
     open_only(p)?;
     let proposal = p.id.clone();
     let f = life_mut(p, life)?;
+    // The terms are looked at again once; after that the life accepts or declines them.
+    let looked_again = f.offers.iter().any(|o| o.status == OfferStatus::Countered);
     let Some(o) = f.offers.iter_mut().find(|o| o.id == offer && o.status == OfferStatus::Open) else {
         return reject("no_offer", format!("offer {offer} is not open"));
     };
+    if response == OfferResponse::Counter && looked_again {
+        return reject(
+            "looked_again",
+            "we have looked at these terms again once already: accept or decline them, or talk to your adviser or to us",
+        );
+    }
     if !signed.verifies(&message("offer", &[&proposal.0, &life.0, offer, response.key()])) {
         return reject("signature", "the response is not signed by the life's device key");
     }

@@ -522,11 +522,21 @@ async fn profile(State(s): State<Shared>, headers: HeaderMap, method: Method, ur
 
 /// The intake's answer, as it gave it; 503 when it cannot be reached.
 fn intake_answer(answer: Result<crate::disclosures::Answered, String>) -> Answer {
-    let (status, body) = answer.map_err(|e| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "underwriting_intake_unavailable", e))?;
+    let (status, mut body) = answer.map_err(|e| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "underwriting_intake_unavailable", e))?;
+    crate::disclosures::answer_problems(&mut body);
     passed(status, body, "the underwriting intake")
 }
 
 impl AppState {
+    /// The books' business date, which every date a module sets from the
+    /// app is on; the New Zealand date only while the books have none.
+    async fn books_today(&self, at: At) -> String {
+        match self.ask(Question::BusinessDate).await {
+            Ok(day) if day["today"].is_string() => day["today"].as_str().unwrap_or_default().to_string(),
+            _ => crate::payments::nz(at).date().to_string(),
+        }
+    }
+
     fn intake(&self) -> Result<&Arc<dyn crate::disclosures::Intake>, Problem> {
         self.intake.as_ref().ok_or_else(|| {
             Problem::new(
@@ -568,12 +578,37 @@ impl AppState {
             return;
         }
         let command = json!({ "set_more_time": { "proposal": proposal, "life": life, "more_time": true } });
-        let today = crate::payments::nz(session.at).date().to_string();
+        let today = self.books_today(session.at).await;
         let envelope = crate::underwriting::envelope(&format!("more-time:{proposal}:{life}"), session.at, &today, command);
         if let Err(problem) = self.to_underwriting(envelope).await {
             tracing::warn!(proposal, life, problem = %problem.detail, "underwriting did not take the more-time marker");
         }
     }
+}
+
+/// The questions the person insured answers, in their own words, with the
+/// shape of each answer, the duty they answer under and the consents they
+/// are asked for, from the question set in force for the proposal. Only the
+/// life on the proposal may ask.
+async fn disclosure_questions(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path((proposal, life)): Path<(String, String)>) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    s.signer(&session, &proposal, &life).await?;
+    let ask = |query: Value| async {
+        s.underwriting
+            .ask(query)
+            .await
+            .map_err(|e| module_problem("underwriting", StatusCode::BAD_REQUEST, e))
+    };
+    let basis = ask(json!({ "query": "disclosure_basis", "proposal": proposal })).await?;
+    let held = ask(json!({ "query": "proposal", "proposal": proposal })).await?;
+    if basis.is_null() || held.is_null() {
+        return Err(Problem::new(
+            StatusCode::CONFLICT,
+            "no_questions",
+            "no question set is in force for this application, so there is nothing to answer yet: call us and we will look into it",
+        ));
+    }
+    ok(crate::questions::for_life(&basis, &held, &life))
 }
 
 /// What the person insured signs for their answers. The answers go to the
@@ -642,6 +677,53 @@ async fn my_proposals(State(s): State<Shared>, headers: HeaderMap, method: Metho
     ok(s.ask(Question::MyProposals { party: session.party }).await?)
 }
 
+/// An offer of terms as the life reads it before answering: each cover's
+/// terms in words, what the first premium would be on those terms (priced
+/// by the core today, as the policy would issue), the premium quoted when
+/// they applied, the date it is open until, and whether they may still ask
+/// us to look again. Only the life on the proposal may ask.
+async fn offer_terms(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path((proposal, life, offer)): Path<(String, String, String)>,
+) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    s.signer(&session, &proposal, &life).await?;
+    let held = s
+        .ask(Question::Offer {
+            party: session.party.clone(),
+            proposal: proposal.clone(),
+            life: life.clone(),
+        })
+        .await?;
+    if held["offer"] != offer.as_str() {
+        return Err(Problem::not_found());
+    }
+    let today = s.books_today(session.at).await;
+    let categories = s
+        .underwriting
+        .ask(json!({ "query": "exclusions", "on": today }))
+        .await
+        .map(|library| library["entries"].clone())
+        .unwrap_or(Value::Null);
+    let mut out = json!({
+        "offer": offer, "expires_on": held["expires_on"], "look_again": held["look_again"] != false,
+        "terms": crate::disclosures::offered_terms(&held["terms"], &categories),
+    });
+    // Our own new business is priced as it would issue; a member's offer about their loading is the scheme's.
+    if let Ok(mut application) = serde_json::from_value::<ic_core::command::IssuePolicy>(held["application"].clone()) {
+        application.inception = today.parse().unwrap_or(application.inception);
+        out["frequency"] = json!(application.frequency);
+        let partition = crate::claims::partition_of(&application.group, s.claims.count());
+        if let Ok(Some(Ok(premium))) = s.claims.quote(partition, application).await {
+            out["premium_minor"] = json!(crate::disclosures::premium_total(&premium).map_err(|e| Problem::new(StatusCode::BAD_GATEWAY, "quote", e))?);
+        }
+    }
+    ok(out)
+}
+
 /// What the life signs to answer an offer of terms: the exact bytes, base64.
 /// Only the life on the proposal may ask.
 async fn offer_to_sign(
@@ -682,8 +764,13 @@ async fn offer_answer(
         .ok_or_else(|| device_required("answering an offer of terms"))?;
     let command = crate::disclosures::offer_answer(&proposal, &life, &offer, &parse(&body)?, &device, &public_key)
         .map_err(|e| Problem::new(StatusCode::BAD_REQUEST, "bad_answer", e))?;
-    s.to_underwriting(crate::underwriting::app_envelope(&format!("app:{idempotency}"), session.at, command))
-        .await
+    s.to_underwriting(crate::underwriting::app_envelope(
+        &format!("app:{idempotency}"),
+        session.at,
+        &s.books_today(session.at).await,
+        command,
+    ))
+    .await
 }
 
 /// The new price for a proposal whose product changed before it was issued:
@@ -755,8 +842,13 @@ async fn requote_accept(
     let (_, binding) = requote_price(&s, &session, &proposal, &life).await?;
     let command = crate::disclosures::requote(&proposal, &binding, &parse(&body)?, &device, &public_key)
         .map_err(|e| Problem::new(StatusCode::CONFLICT, "price_changed", e))?;
-    s.to_underwriting(crate::underwriting::app_envelope(&format!("app:{idempotency}"), session.at, command))
-        .await
+    s.to_underwriting(crate::underwriting::app_envelope(
+        &format!("app:{idempotency}"),
+        session.at,
+        &s.books_today(session.at).await,
+        command,
+    ))
+    .await
 }
 
 /// What the life reads before signing the replacement disclosure: the cover
@@ -801,18 +893,23 @@ async fn consent_record(
     body: Bytes,
 ) -> Answer {
     let session = s.customer(&headers, &method, &uri, &body).await?;
-    let Some(device) = session.device.clone() else {
-        return Err(device_required("giving or withdrawing a consent"));
-    };
     let idempotency = key(&headers, &session.party.0)?;
-    let public_key = s
-        .signer(&session, &proposal, &life)
-        .await?
-        .ok_or_else(|| device_required("giving or withdrawing a consent"))?;
-    let command = crate::disclosures::consent(&proposal, &life, &kind, &parse(&body)?, Some((&device, &public_key)))
-        .map_err(|e| Problem::new(StatusCode::BAD_REQUEST, "bad_consent", e))?;
-    s.to_underwriting(crate::underwriting::app_envelope(&format!("app:{idempotency}"), session.at, command))
-        .await
+    let public_key = s.signer(&session, &proposal, &life).await?;
+    let sent: Value = parse(&body)?;
+    // Refusing or withdrawing a consent is never held back for want of a device; giving one is done on a device the person enrolled.
+    let signer = match (session.device.as_deref(), public_key.as_deref()) {
+        (Some(device), Some(public_key)) => Some((device, public_key)),
+        _ if sent["granted"] == false => None,
+        _ => return Err(device_required("giving a consent")),
+    };
+    let command = crate::disclosures::consent(&proposal, &life, &kind, &sent, signer).map_err(|e| Problem::new(StatusCode::BAD_REQUEST, "bad_consent", e))?;
+    s.to_underwriting(crate::underwriting::app_envelope(
+        &format!("app:{idempotency}"),
+        session.at,
+        &s.books_today(session.at).await,
+        command,
+    ))
+    .await
 }
 
 /// A document's PDF as the documents module gave it: the file on 200,
@@ -3151,6 +3248,10 @@ async fn underwriting_question(
     if answer.is_null() {
         return Err(Problem::not_found());
     }
+    // A proposal on someone this person declared a conflict with: closed to them, and nothing of it shown.
+    if let Some(why) = answer["closed_to_you"].as_str() {
+        return Err(Problem::new(StatusCode::FORBIDDEN, "conflict", why));
+    }
     ok(answer)
 }
 
@@ -3317,7 +3418,12 @@ async fn underwriting_disclosures(State(s): State<Shared>, headers: HeaderMap, m
         "underwriter": session.party,
         "purpose": field("purpose")?,
     });
-    intake_answer(s.intake()?.open(request).await)
+    // Each answer is shown with the question the person read, so nobody reads a code.
+    let opened = s.intake()?.open(request).await.map(|(status, mut records)| {
+        crate::questions::worded(&mut records);
+        (status, records)
+    });
+    intake_answer(opened)
 }
 
 fn claims_down(reason: String) -> Problem {
@@ -4108,23 +4214,57 @@ fn application(body: &[u8]) -> Result<ic_core::command::IssuePolicy, Problem> {
 }
 
 /// Price an application: the first period's bill. Nothing is written.
+///
+/// A walk-in is quoted from what the officer knows (`crate::quote`): the
+/// product, the cover and amount, how often they would pay, and the life's
+/// birth date, sex and smoking. Nothing names a person, so no purpose is
+/// asked. An application already made up as the core takes it, naming a
+/// policyholder, is quoted as before, with the case it is for. Either way
+/// the product's own conditions on who may apply for what are checked with
+/// underwriting first, so nobody is quoted cover the product would not take.
 async fn staff_quote(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Query(why): Query<Why>, body: Bytes) -> Answer {
     let session = s.staff(&headers, &method, &uri, &body).await?;
-    let application = application(&body)?;
-    let record = format!("application:{}", application.number);
-    s.may_act(
-        &session,
-        staff_actions::QUOTE,
-        DataClass::Personal,
-        record,
-        Some(application.policyholder.clone()),
-        why,
-    )
-    .await?;
+    let sent: Value = parse(&body)?;
+    let today = s.books_today(session.at).await;
+    let application = if sent.get("policy").is_some() {
+        let application = application(&body)?;
+        let record = format!("application:{}", application.number);
+        s.may_act(
+            &session,
+            staff_actions::QUOTE,
+            DataClass::Personal,
+            record,
+            Some(application.policyholder.clone()),
+            why,
+        )
+        .await?;
+        application
+    } else {
+        let application = crate::quote::walk_in(&sent, &today).map_err(Problem::bad_request)?;
+        s.may_act(&session, staff_actions::QUOTE, DataClass::Ordinary, "quote:walk-in".to_string(), None, why)
+            .await?;
+        application
+    };
+    let asked = s
+        .underwriting
+        .ask(crate::quote::eligibility(&application, &today))
+        .await
+        .map_err(|e| module_problem("underwriting", StatusCode::BAD_REQUEST, e))?;
+    if asked["eligible"] == false {
+        return Err(Problem::new(
+            StatusCode::CONFLICT,
+            "eligibility",
+            format!(
+                "the product does not take this: {}",
+                asked["why"].as_str().unwrap_or("it is outside the product's conditions")
+            ),
+        ));
+    }
+    let frequency = application.frequency;
     let partition = crate::claims::partition_of(&application.group, s.claims.count());
     match s.claims.quote(partition, application).await.map_err(core_down)? {
         None => Err(Problem::new(StatusCode::SERVICE_UNAVAILABLE, "not_ready", "the business date is not open")),
-        Some(Ok(premium)) => ok(json!({ "partition": partition, "premium": premium })),
+        Some(Ok(premium)) => ok(crate::quote::answer(&premium, frequency).map_err(|e| Problem::new(StatusCode::BAD_GATEWAY, "quote", e))?),
         Some(Err((code, message))) => Err(module_refusal(&code, &message)),
     }
 }
@@ -4173,6 +4313,16 @@ async fn ops_reconciliation(State(s): State<Shared>, headers: HeaderMap) -> Answ
 fn desked(answer: Result<crate::customers::Answered, String>, role: &str) -> Answer {
     match answer {
         Ok((status, body)) if status < 300 => ok(body),
+        // A possible duplicate names who it may be and what to do next.
+        Ok((409, body)) if body["error"]["code"] == "possible_duplicate" => {
+            let mut said = json!({ "title": "possible_duplicate", "candidates": body["candidates"] });
+            crate::customers::possible_duplicate(&mut said);
+            Err(Problem::new(
+                StatusCode::CONFLICT,
+                "possible_duplicate",
+                said["detail"].as_str().unwrap_or_default().to_string(),
+            ))
+        }
         Ok((401 | 403, body)) => Err(Problem::new(
             StatusCode::BAD_GATEWAY,
             "customer_master_grant",
@@ -4896,7 +5046,8 @@ pub fn router(state: Shared) -> Router {
         .route("/app/v1/proposals/{proposal}/lives/{life}/consents/{kind}", post(consent_record))
         .route("/app/v1/proposals/{proposal}/lives/{life}/consents/{kind}/to-sign", get(consent_to_sign))
         .route("/app/v1/proposals", get(my_proposals))
-        .route("/app/v1/proposals/{proposal}/lives/{life}/offers/{offer}", post(offer_answer))
+        .route("/app/v1/proposals/{proposal}/lives/{life}/offers/{offer}", get(offer_terms).post(offer_answer))
+        .route("/app/v1/proposals/{proposal}/lives/{life}/questions", get(disclosure_questions))
         .route("/app/v1/proposals/{proposal}/lives/{life}/requote", get(requote_offer).post(requote_accept))
         .route("/app/v1/memberships", post(claim_membership))
         .route("/app/v1/memberships/continuations", get(my_continuations))

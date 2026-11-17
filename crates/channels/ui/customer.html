@@ -5,8 +5,9 @@
 
 <section data-view="Your policies"><h2>Policies</h2><div id="summary"></div><div id="policies"></div></section>
 <section data-view="Your policies" id="detail" hidden><h2 id="detail-title">Policy</h2><div id="standing"></div>
+  <p id="interim" class="banner" role="status" hidden>This is free interim cover for accidents while we assess your application. You pay nothing for it. It ends when your policy starts, when the application ends, or after 60 days, whichever is first.</p>
   <h3>Cover</h3><div id="covers"></div>
-  <h3>Your investments</h3><div id="invest"></div>
+  <div id="invest-part"><h3>Your investments</h3><div id="invest"></div></div>
   <h3>What you pay</h3><div id="bills"></div>
   <h3>Claims</h3><div id="claims"></div>
   <h3>Documents</h3><div id="docs"></div><div id="docs-msg" aria-live="polite"></div>
@@ -26,8 +27,12 @@
 
 <section data-view="To approve"><h2>Waiting for you</h2><p class="muted">Changes your adviser or our staff prepared for you. Nothing happens until you approve. Approving is signed, so set up this browser under Signing first, or approve on your phone.</p>
   <div id="waiting"></div><div id="wait-msg" aria-live="polite"></div>
-  <h2>Your applications</h2><p class="muted">Cover you have applied for. When we offer terms, the offer letter is in your documents; accept it, decline it or ask us to look again here. If the product changes before your cover starts, the new price is shown here for you to accept. Your answer is signed.</p>
+  <h2>Your applications</h2><p class="muted">Cover you have applied for. Answer the health and lifestyle questions and give your consents here. When we offer terms, read them here with what your cover would cost, then accept them, decline them or ask us to look again once. If the product changes before your cover starts, the new price is shown here for you to accept. What you send is signed, so set up this browser under Signing first.</p>
   <div id="applications"></div><div id="app-msg" aria-live="polite"></div>
+  <form id="disclose" class="card" hidden><h3 id="ds-title">Your answers</h3><p class="muted" id="ds-duty"></p>
+    <div id="ds-questions"></div><h4>Your consents</h4><div id="ds-consents"></div>
+    <div class="actions"><button>Sign and send</button><button type="button" class="quiet" id="ds-close">Close</button></div></form>
+  <div id="ds-msg" aria-live="polite"></div>
   <h2>Your requests</h2><div id="requests"></div>
   <h2>Cover from your workplace</h2><p class="muted">If your employer's scheme covers you, link it to you with the scheme number and employee ID from your employer. When you leave the scheme you may keep your cover as a policy of your own, with no health questions, until the date shown.</p>
   <form id="claim"><div class="row"><div><label for="cl-scheme">Scheme number</label><input id="cl-scheme" required></div><div><label for="cl-employee">Your employee ID</label><input id="cl-employee" required></div><button>Link it to me</button></div></form><div id="cl-msg" aria-live="polite"></div>
@@ -59,7 +64,7 @@ const $ = (id) => document.getElementById(id);
 const R = "customers";
 const words = (v) => String(v == null ? "" : v).replace(/_/g, " ");
 // A product or cover code (income-protection) as words: Income protection.
-const named = (v) => words(v).replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase());
+const named = (v) => words(v).replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase()).replace(/^Aia\b/, "AIA");
 const PAYS = { weekly: "Weekly", fortnightly: "Fortnightly", monthly: "Monthly", quarterly: "Quarterly", half_yearly: "Half-yearly", yearly: "Yearly" };
 // How often a policy is paid for: as the owner last changed it, else from the length of its latest bill.
 function pays(head, bills) {
@@ -143,7 +148,12 @@ async function open(p) {
   const owed = bills.find((b) => b.outstanding_minor !== undefined);
   // A premium that has fallen due and is not yet paid is due, whatever the standing says.
   const paying = owed && owed.outstanding_minor > 0 && (!head.standing || head.standing === "paid") ? "Due" : words(head.standing || "–");
-  put($("standing"), portal.stats([["Status", words(head.status || p.status)], ["Payments", paying], ["Pays", pays(head, bills)], ["Product", named(p.product)], ["You are", p.relationships.map(words).join(", ")]]));
+  // Interim cover is free, while an application is assessed, and ends when the policy starts: said so, not as a policy paid for.
+  const interim = /interim/.test(String(p.product || "")) || /-I$/.test(String(p.number || ""));
+  $("interim").hidden = !interim;
+  $("appoint").hidden = interim;
+  const status = interim && ["cancelled", "ended", "lapsed"].includes(head.status || p.status) ? "Ended when your policy started, or your application ended" : words(head.status || p.status);
+  put($("standing"), portal.stats([["Status", status], ["Payments", interim ? "Nothing to pay" : paying], ["Pays", interim ? "Free" : pays(head, bills)], ["Product", interim ? "Interim accident cover" : named(p.product)], ["You are", p.relationships.map(words).join(", ")]]));
   // The life insured is named "You" when it is the person signed in; another life keeps its place on the policy.
   const coverRows = view.rows.filter((r) => r.kind === "cover");
   const life = (c) => { const row = coverRows.find((r) => r.body === c); return row && row.subject === me.party ? "You" : c.life.replace(/^life-(\d+)$/, "Life $1"); };
@@ -156,6 +166,8 @@ async function open(p) {
   $("nc-date").max = portal.today();
   // Units held in each fund and what they are worth, always with the date of the price used.
   const holdings = rows("holding"), orders = rows("unit_order");
+  // A policy that does not invest has no investments section.
+  $("invest-part").hidden = !holdings.length && !orders.length && !/invest|bond|super|kiwi/i.test(String(p.product || ""));
   const units = (micro) => (Number(micro) / 1e6).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 6 });
   const ordered = (a) => a.cash ? money(a.cash.minor) : a.units ? units(a.units.micro) + " units" : "all your units";
   put($("invest"), holdings.length || orders.length ? [
@@ -226,16 +238,85 @@ async function waiting() {
 }
 // ---- Applications, and an answer to an offer of terms, signed over underwriting's own message.
 const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+// An offer answered here waits for underwriting to say so; until then it is not offered again.
+const answered = new Set();
+const STAGES = { awaiting_disclosure: "Waiting for your answers", awaiting_evidence: "Waiting for reports we asked for", in_assessment: "With an underwriter",
+  awaiting_countersign: "With a senior underwriter", awaiting_capacity: "Being arranged", awaiting_facultative: "Being arranged", offer_open: "Terms offered to you",
+  accepted: "Accepted", declined: "Not offered", offer_declined: "You declined" };
+// One cover's terms in words: the cover, what is offered, and what is not covered.
+const termWords = (t) => [named(t.cover) + ": " + t.said + (t.revised_sum_insured_minor != null ? `, for ${money(t.revised_sum_insured_minor)}` : ""), ...t.exclusions.map((e) => e.about)].join(". ");
+// A cover's terms on the row, before the life opens them.
+const brief = ({ cover, outcome: o = {} }) => `${named(cover)}: ${o.outcome !== "accept" ? "not offered" : o.loading_percent ? `an extra ${o.loading_percent}% on its premium` : (o.exclusions || []).length ? "with an exclusion" : "standard rates"}`;
 async function applications() {
   const mine = await api(R, "GET", "/app/v1/proposals");
   const answer = (a, response, label, quiet) => h("button", { type: "button", class: quiet ? "quiet" : null, id: `offer-${response}-${a.proposal}-${a.life}`, on: { click: run($("app-msg"), () => respond(a, response, label)) } }, label);
-  put($("applications"), mine.length ? table(["Application", "Stage", "Waiting on", "Offer", ""], mine.map((a) => [a.proposal, words(a.stage), words(a.waiting_on || "nobody"),
-    a.offer ? `Open until ${a.offer.expires_on}` : a.requote ? "The product changed before your cover started" : "",
-    a.offer ? h("div", { class: "actions" }, answer(a, "accept", "Accept"), answer(a, "counter", "Ask us to look again", true), answer(a, "decline", "Decline", true))
-      : a.requote ? h("button", { type: "button", id: `requote-${a.proposal}-${a.life}`, on: { click: run($("app-msg"), () => requote(a)) } }, "See the new price") : ""]))
+  const offer = (a) => a.offer && !answered.has(a.offer.offer);
+  put($("applications"), mine.length ? table(["Application", "Where it stands", "Offer", ""], mine.map((a) => [a.proposal, STAGES[a.stage] || words(a.stage),
+    offer(a) ? h("div", {}, (a.offer.terms || []).map((t) => h("div", {}, brief(t))),
+      h("div", { class: "muted" }, `Open until ${portal.day(a.offer.expires_on)}.` + (a.offer.look_again === false ? " We have looked at these terms again once already." : "")))
+      : a.offer ? "Your answer is being recorded." : a.requote ? "The product changed before your cover started" : "",
+    offer(a) ? h("div", { class: "actions" }, answer(a, "accept", "Read and accept"), a.offer.look_again === false ? null : answer(a, "counter", "Ask us to look again", true), answer(a, "decline", "Decline", true))
+      : a.requote ? h("button", { type: "button", id: `requote-${a.proposal}-${a.life}`, on: { click: run($("app-msg"), () => requote(a)) } }, "See the new price")
+      : a.stage === "awaiting_disclosure" ? h("button", { type: "button", id: `disclose-${a.proposal}-${a.life}`, on: { click: run($("app-msg"), () => questions(a)) } }, "Answer the questions") : ""]))
     : h("p", { class: "muted" }, "You have no application open."));
-  return mine.filter((a) => a.offer || a.requote).length;
+  return mine.filter((a) => offer(a) || a.requote || a.stage === "awaiting_disclosure").length;
 }
+// ---- The health and lifestyle questions, and the consents, signed on this browser.
+let asking = null;
+async function questions(a) {
+  signature("Answering the questions");
+  const base = `/app/v1/proposals/${encodeURIComponent(a.proposal)}/lives/${encodeURIComponent(a.life)}`;
+  const q = await api(R, "GET", `${base}/questions`);
+  asking = { a, base, q };
+  $("ds-title").textContent = `Your answers for application ${a.proposal}`;
+  $("ds-duty").textContent = q.duty;
+  const field = (x) => {
+    const id = "dq-" + x.id, req = !!x.required;
+    const input = x.kind === "yes_no" ? h("select", { id, required: req }, h("option", { value: "" }, "Choose"), h("option", { value: "yes" }, "Yes"), h("option", { value: "no" }, "No"))
+      : x.kind === "choice" ? h("select", { id, required: req }, h("option", { value: "" }, req ? "Choose" : "None chosen"), (x.options || []).map((o) => h("option", { value: o.value }, o.label)))
+      : x.kind === "text" ? h("textarea", { id, required: req, maxlength: "2000", rows: "3" })
+      : h("input", { id, type: "number", required: req, step: "1", min: x.kind === "money" ? "0" : String(x.min), max: x.kind === "money" ? null : String(x.max) });
+    return h("div", { class: "row" }, h("div", {}, h("label", { for: id }, x.text + (x.unit ? ` (${x.unit})` : "") + (req ? "" : " (if any)")), input));
+  };
+  put($("ds-questions"), q.questions.map(field));
+  put($("ds-consents"), q.consents.map((c) => h("div", { class: "row" }, h("label", {}, h("input", { type: "checkbox", id: "dc-" + c.kind, checked: c.given }), " " + c.about))));
+  $("disclose").hidden = false;
+  $("ds-questions").querySelector("select, input, textarea")?.focus();
+  return q.consents.some((c) => c.kind === "obtain_records" && !c.given) ? "Please answer every question. We need your consent to ask your doctors for records if your answers call for them." : "Please answer every question.";
+}
+const signBytes = async (message) => b64(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key.privateKey, fromB64(message)));
+async function consents() {
+  const { base, q } = asking;
+  for (const c of q.consents) {
+    const want = $("dc-" + c.kind).checked;
+    if (want === c.given) continue;
+    const path = `${base}/consents/${c.kind}`;
+    const body = { granted: want };
+    if (want && c.signed) body.signature = await signBytes((await api(R, "GET", `${path}/to-sign`)).message);
+    await api(R, "POST", path, body);
+    c.given = want;
+  }
+}
+$("ds-close").addEventListener("click", () => { $("disclose").hidden = true; asking = null; });
+$("disclose").addEventListener("submit", run($("ds-msg"), async () => {
+  signature("Sending your answers");
+  const { base, q } = asking;
+  const answers = {};
+  for (const x of q.questions) {
+    const v = $("dq-" + x.id).value.trim();
+    if (v === "") continue;
+    const value = x.kind === "yes_no" ? { yes_no: v === "yes" } : x.kind === "choice" ? { choice: v } : x.kind === "text" ? { text: v }
+      : x.kind === "money" ? { money: Math.round(Number(v) * 100) } : { number: Number(v) };
+    answers[x.id] = [x.version, value];
+  }
+  await consents();
+  const sent = { step: "disclosure", answers };
+  const { message } = await api(R, "POST", `${base}/disclosures/to-sign`, sent);
+  await api(R, "POST", `${base}/disclosures`, { ...sent, message, signature: await signBytes(message) });
+  $("disclose").hidden = true; asking = null;
+  await applications();
+  return "Thank you. Your answers and consents are signed and sent. We will tell you what happens next.";
+}));
 // The product changed between the quote and the issue: nothing goes ahead until the applicant accepts the new price, signed.
 async function requote(a) {
   signature("Accepting a new price");
@@ -277,11 +358,18 @@ $("claim").addEventListener("submit", run($("cl-msg"), async () => {
 }));
 async function respond(a, response, label) {
   signature("Answering an offer");
-  if (response !== "accept" && !(await portal.ask({ title: `${label}?`, text: response === "decline" ? "The cover offered will not go ahead." : "An underwriter looks at the terms again and contacts you.", confirm: label, danger: response === "decline" }))) return;
   const base = `/app/v1/proposals/${encodeURIComponent(a.proposal)}/lives/${encodeURIComponent(a.life)}/offers/${encodeURIComponent(a.offer.offer)}`;
+  // Nobody accepts terms they have not read: the terms and what the cover would cost are named before signing.
+  const o = await api(R, "GET", base);
+  const terms = o.terms.map(termWords).join(" ");
+  const cost = o.premium_minor != null ? ` Your premium would be ${money(o.premium_minor)}${o.frequency ? " " + (PAYS[o.frequency] || words(o.frequency)).toLowerCase() : ""}.` : "";
+  const text = response === "accept" ? `${terms}${cost} Your cover starts once you accept.`
+    : response === "decline" ? `${terms} If you decline, the cover offered will not go ahead.`
+    : `${terms} An underwriter looks at the terms once more and contacts you. You can ask this only once.`;
+  if (!(await portal.ask({ title: response === "accept" ? "Accept these terms?" : `${label}?`, text, confirm: response === "accept" ? "Accept and sign" : label, danger: response === "decline" }))) return;
   const { message } = await api(R, "GET", `${base}/${response}/to-sign`);
-  const sig = b64(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key.privateKey, fromB64(message)));
-  await api(R, "POST", base, { response, signature: sig });
+  await api(R, "POST", base, { response, signature: await signBytes(message) });
+  answered.add(a.offer.offer);
   await applications();
   return response === "accept" ? "Accepted. We will let you know when your cover starts." : response === "decline" ? "Declined." : "Sent. An underwriter will be in touch.";
 }

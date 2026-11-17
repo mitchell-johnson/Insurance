@@ -367,3 +367,20 @@ Decided while fixing SCN2-12, SCN2-13, SCN2-14, SCN2-23 and SCN2-24:
 - **A record is not closed while the person has cover.** `exit` from the staff console is refused `cover_in_force`, naming the policies the core holds for the person that have not ended (F2-14-2).
 
 Built in: `crates/customers/src/service.rs` (`ask_about`, `merging`, `dismiss`), `crates/customers/src/store.rs` (`merge`, `dismiss_review`, `judged_apart`), `crates/channels/src/staff.rs` (`propose`, `decide_change`, `check_duties`, `SetManager`), `crates/channels/src/customers.rs` (`settles_capacity`), `crates/channels/src/http.rs` (`refuse_exit_with_cover`), `crates/channels/ui/records.html`.
+
+## New business and underwriting from scenario round 2 (17 Nov 2026)
+
+The second scenario run (op2-a: quoting, disclosure, consent, underwriting) found a customer could not answer the questions, a conflicted underwriter could read the case they were closed to, and underwriting dated work by the wall clock. The calls made:
+
+- **A conflicted underwriter reads nothing of the case.** The proposal question and the queue take the asking underwriter; a case closed to them answers only that it is closed (403 `conflict`). Declaring a conflict needs a reason, which is kept on the `ConflictDeclared` event. (F2-03-1)
+- **Underwriting dates work on the books' business date.** The driver, the disclosure intake and the portal ask the core (partition 0) for its date; the wall clock gives only the time of day. Evidence deadlines, chase days, interview days and offer expiry follow the books, so a test or catch-up day ages work as the ledger does. Only while the core reports no date is the clock's date used. (F2-02-8)
+- **The question wording is held by channels.** The module checks answers by id and version; the portal words each question for the customer and for the underwriter's screen (`crates/channels/src/questions.rs`), so wording can be read without changing what was asked.
+- **The reasonable-care questions add medication, blood pressure, lungs and anything else.** They are a new rule set (`individual-reasonable-care`, from 15 Nov 2027) on the v2 question set, so the in-force v1 set and its rules are unchanged. A yes, or any free text, refers the life for medical review.
+- **Refusing or withdrawing a consent needs no device; giving one does.** A refusal binds nobody, and asking for a signature to say no stopped people refusing.
+- **A customer may ask us to look again once.** A second counter is refused, saying to accept, decline or talk to their adviser. The offer shows its terms and the premium on the books' date before the customer answers.
+- **A walk-in quote names no one and needs no purpose.** The officer gives the product, covers in cents, frequency and the life's birth date, sex and smoking; the product's eligibility is asked of underwriting first (each cover's type taken as its code), so nobody is quoted cover the product would not take.
+- **A queue lead or manager may move a case another underwriter holds**, under the Reassign action, recorded as the holder's move. Anyone else is told who can.
+- **A peer-review period is drawn once, and never empty.** A second draw for the same period or an overlapping window is refused (`already_drawn`); when the rate draws nothing but decisions were eligible, the nearest is drawn, so a period is never signed off unreviewed.
+- **An authority refusal says why and who can act** (over a limit, in dollars; a loading beyond the profile; a second signature needing a senior), rather than "not authorised".
+- **A sum insured outside a cover's range is said in dollars**, with a hint when it looks typed in dollars rather than cents.
+- **Device-only MCP tools stay listed.** `submit_disclosure` and the signing of consents are described as done on the customer's own device, so an assistant can explain the step rather than not knowing it exists.

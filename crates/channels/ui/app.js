@@ -595,7 +595,7 @@ const portal = (() => {
       if (opts.after) await opts.after(name, answer);
       draw();
       return (answer && answer.prepared) ? "Prepared. Someone else signs it before it is sent." : `Done: ${a.label || name.replace(/_/g, " ")}.`;
-    }) } }, h("div", { class: "row" }, h("div", {}, h("label", { for: pick.id }, "Action"), pick)), note, fields, h("p", {}, h("button", {}, "Send")));
+    }) } }, h("div", { class: "row" }, h("div", {}, h("label", { for: pick.id }, opts.pick || "Action"), pick)), note, fields, h("p", {}, h("button", {}, "Send")));
     pick.addEventListener("change", draw);
     put(el, [form, out]);
     draw();

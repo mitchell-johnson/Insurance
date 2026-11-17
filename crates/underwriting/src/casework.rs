@@ -142,7 +142,16 @@ pub(crate) fn move_case(
     reasons: BTreeSet<String>,
 ) -> Result<(), Reject> {
     known_reasons(st, p, &reasons, &BTreeSet::new())?;
-    let c = held(p, life, case, underwriter)?;
+    // Its holder moves it; so may a queue lead or manager, as they may hand it over.
+    let holder = life_ref(p, life)?.cases.iter().find(|c| c.id == case).and_then(|c| c.owner.clone());
+    let mover = match holder {
+        Some(h) if h != underwriter => {
+            st.require(p, life, underwriter, CaseAction::Reassign, &whole_case(p, life), false)?;
+            h
+        }
+        _ => underwriter.to_string(),
+    };
+    let c = held(p, life, case, &mover)?;
     // A second signature and a claim-time review are reached only by their own steps.
     let special = |t: CaseType| matches!(t, CaseType::Countersign | CaseType::NonDisclosureReview);
     if special(c.case_type) || special(case_type) {
@@ -165,8 +174,12 @@ pub(crate) fn request_evidence(
     case: &str,
     underwriter: &str,
     kinds: BTreeSet<EvidenceKind>,
+    due_on: Option<chrono::NaiveDate>,
 ) -> Result<(), Reject> {
     held(p, life, case, underwriter)?;
+    if due_on.is_some_and(|d| d <= cx.today) {
+        return reject("due_on", format!("evidence is asked for by a day after today, {}", cx.today));
+    }
     if p.status != ProposalStatus::Open {
         return reject("closed", "the proposal is no longer open");
     }
@@ -176,7 +189,7 @@ pub(crate) fn request_evidence(
             "evidence is asked for by kind, and only with the life's consent to records being obtained",
         );
     }
-    flow::request_evidence(&st.config, p, life, &kinds, cx)
+    flow::request_evidence(&st.config, p, life, &kinds, due_on, cx)
 }
 
 pub(crate) fn ask_opinion(st: &UnderwritingState, p: &mut Proposal, life: &LifeId, cx: &mut Cx, case: &str, underwriter: &str, of: &str) -> Result<(), Reject> {
@@ -225,6 +238,10 @@ pub(crate) fn schedule_interview(
 ) -> Result<(), Reject> {
     if p.status != ProposalStatus::Open {
         return reject("closed", "the proposal is no longer open");
+    }
+    // Booked for a time still to come, on the books' calendar and the clock.
+    if scheduled_for <= cx.at || scheduled_for.date_naive() < cx.today {
+        return reject("scheduled_for", format!("an interview is booked for a time still to come, after {}", cx.today));
     }
     let proposal = p.id.clone();
     let f = life_mut(p, life)?;

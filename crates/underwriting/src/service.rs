@@ -179,6 +179,12 @@ impl Underwriting for Cluster {
     async fn ask(&self, query: Query) -> Result<Value, DriverError> {
         self.ask_module(crate::host::MODULE, &query).await
     }
+
+    /// The books' business date, as the core's first partition holds it:
+    /// every partition is moved to the next day together.
+    async fn business_date(&self) -> Result<Option<chrono::NaiveDate>, DriverError> {
+        self.client.business_date(0).await.map_err(|e| DriverError::Unavailable(e.to_string()))
+    }
 }
 
 impl Reinsurer for Cluster {

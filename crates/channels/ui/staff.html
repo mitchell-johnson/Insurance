@@ -71,10 +71,13 @@ $("find").addEventListener("submit", run($("find-msg"), async () => {
   const cards = [];
   // A look-alike is said to be one: a name that is not the one typed, even when the birth date matches.
   const typed = $("find-q").value.toLowerCase().split(/[\s,]+/).filter((w) => /^[\p{L}'’-]+$/u.test(w));
+  const day = ($("find-q").value.match(/\b(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})\b/) || []).slice(1);
+  const typedBorn = day.length ? `${day[2]}-${day[1].padStart(2, "0")}-${day[0].padStart(2, "0")}` : null;
+  const sameBorn = (person) => typedBorn != null && String(person.born || "").slice(0, 10) === typedBorn;
   const otherName = (person) => person.name && typed.some((w) => !person.name.toLowerCase().split(/\s+/).includes(w));
   for (const person of r.people) {
     if (person.closed) { cards.push(h("article", { class: "result" }, h("header", {}, h("strong", {}, "A record closed to you"), h("span", {}, "You, or someone you have declared a connection with. Pass the call to a colleague.")))); continue; }
-    cards.push(h("article", { class: "result" }, h("header", {}, h("strong", {}, person.name || "Name not held"), h("span", {}, [person.born ? "Born " + portal.born(person.born) : "", person.died ? "Died " + portal.born(person.died) : "", otherName(person) ? "Not the name you typed" : "", person.strong ? "Strong match" : "Not a strong match: check the name and birth date with the caller"].filter(Boolean).join(" · "))),
+    cards.push(h("article", { class: "result" }, h("header", {}, h("strong", {}, person.name || "Name not held"), h("span", {}, [person.born ? "Born " + portal.born(person.born) : "", person.died ? "Died " + portal.born(person.died) : "", otherName(person) ? "Not the name you typed" : "", person.strong ? "Strong match: an identifier agrees as well" : otherName(person) || !sameBorn(person) ? "Not a strong match: check the name and birth date with the caller" : "Name and birth date match: confirm one more detail, such as an address, email or phone, with the caller"].filter(Boolean).join(" · "))),
       person.policies.length ? table(["Policy", "Product", "As", "Status", ""], person.policies.map((p) => [p.number || p.policy, p.product, p.as, statusOf(p), policyButton(p, "Open")]))
         : h("p", { class: "muted" }, "No policies in their name or on their life."),
       h("p", { class: "actions" }, portal.link("complaints", "record-a-complaint", { complainant: person.party }, "Record a complaint from them"), " ", portal.link("complaints", "register-and-report", { party: person.party }, "Their complaints"))));

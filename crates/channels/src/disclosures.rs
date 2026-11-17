@@ -45,8 +45,30 @@ pub fn answers(proposal: &str, life: &str, body: &Value) -> Result<Value, String
         .as_str()
         .filter(|s| STEPS.contains(s))
         .ok_or("the step is disclosure or interview")?;
-    if !body["answers"].is_object() {
-        return Err("the answers are an object of question IDs".to_string());
+    let Some(given) = body["answers"].as_object() else {
+        return Err("the answers are an object by question id, each [version, answer]: {\"heart_condition\": [2, {\"yes_no\": false}]}".to_string());
+    };
+    // Each answer is the question's version and one kind of answer; said here, as the intake would refuse it without words.
+    const KINDS: [&str; 5] = ["yes_no", "number", "choice", "text", "money"];
+    for (id, answer) in given {
+        let fits = answer.as_array().is_some_and(|pair| {
+            pair.len() == 2
+                && pair[0].is_u64()
+                && pair[1]
+                    .as_object()
+                    .is_some_and(|a| a.len() == 1 && a.keys().all(|k| KINDS.contains(&k.as_str())))
+        });
+        if !fits {
+            return Err(format!(
+                "the answer to {id} is [its version, {{kind: value}}], such as [2, {{\"yes_no\": true}}], [2, {{\"number\": 172}}], [2, {{\"choice\": \"none\"}}], [2, {{\"money\": 9500000}}] (cents) or [2, {{\"text\": \"...\"}}]: disclosure_questions gives each question's version and kind"
+            ));
+        }
+    }
+    if !body
+        .get("adviser_entered")
+        .is_none_or(|a| a.as_array().is_some_and(|ids| ids.iter().all(Value::is_string)))
+    {
+        return Err("adviser_entered lists the ids of the questions the adviser typed, or is left out".to_string());
     }
     Ok(json!({
         "proposal": proposal, "life": life, "step": step, "answers": body["answers"],
@@ -142,21 +164,74 @@ pub fn requote_message(proposal: &str, product_hash: &str, premium_minor: i64) -
     m
 }
 
-/// The new quote a requote binds the proposal to, from the core's dry run
-/// of the policy it would issue as (an `ModalPremium`) and the partition's
-/// register on the day: the product version in use today, the rate tables
-/// in use for the proposal's group (global or scoped to it), and the first
-/// period's premium with tax and levies, in cents.
-pub fn requote_binding(premium: &Value, register: &[Value], product: &str, group: &str, today: chrono::NaiveDate) -> Result<Value, String> {
+/// A period's premium in cents from the core's dry run (a `ModalPremium`):
+/// every cover, the policy fee, tax and levies.
+pub fn premium_total(premium: &Value) -> Result<i64, String> {
     let premium: ic_product::rating::ModalPremium = serde_json::from_value(premium.clone()).map_err(|e| format!("the core's quote was not understood: {e}"))?;
-    let total = premium
+    Ok(premium
         .by_cover
         .values()
         .chain(premium.gst.values())
         .chain(premium.levies.values())
         .map(|m| m.minor)
         .sum::<i64>()
-        + premium.policy_fee.minor;
+        + premium.policy_fee.minor)
+}
+
+/// One cover's terms in an offer, as the life reads them: what is offered,
+/// any extra premium, and what is not covered, with each exclusion's kind
+/// from the code list in force (`categories`, by code).
+pub fn offered_terms(terms: &Value, categories: &Value) -> Vec<Value> {
+    let kind = |code: &str| match categories[code]["category"].as_str().unwrap_or_default() {
+        "condition" => "a medical condition",
+        "body_system" => "a part of the body",
+        "mental_health" => "mental health",
+        "pursuit" => "a sport or pastime",
+        "occupation" => "your work",
+        "travel" => "travel or living overseas",
+        "pre_existing" => "a condition you already have",
+        _ => "a clause in your offer letter",
+    };
+    terms
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .map(|t| {
+            let o = &t["outcome"];
+            let loading = o["loading_percent"].as_u64().unwrap_or(0);
+            let exclusions: Vec<Value> = o["exclusions"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|e| e["code"].as_str())
+                .map(|code| json!({ "code": code, "about": format!("Not covered: {}", kind(code)) }))
+                .collect();
+            let said = match o["outcome"].as_str().unwrap_or_default() {
+                "accept" if loading == 0 && exclusions.is_empty() => "Offered at standard rates".to_string(),
+                "accept" if loading == 0 => "Offered with an exclusion".to_string(),
+                "accept" => format!("Offered with an extra {loading}% on its premium"),
+                "decline" => "Not offered".to_string(),
+                "defer" => format!("Not offered now: you may apply again after {}", o["until"].as_str().unwrap_or_default()),
+                _ => "Offered on terms in your offer letter".to_string(),
+            };
+            let mut out = json!({ "cover": t["cover"], "outcome": o["outcome"], "said": said, "loading_percent": loading, "exclusions": exclusions });
+            if let Some(revised) = o["revised_sum_insured_minor"].as_i64() {
+                out["revised_sum_insured_minor"] = json!(revised);
+            }
+            out
+        })
+        .collect()
+}
+
+/// The new quote a requote binds the proposal to, from the core's dry run
+/// of the policy it would issue as (an `ModalPremium`) and the partition's
+/// register on the day: the product version in use today, the rate tables
+/// in use for the proposal's group (global or scoped to it), and the first
+/// period's premium with tax and levies, in cents.
+pub fn requote_binding(premium: &Value, register: &[Value], product: &str, group: &str, today: chrono::NaiveDate) -> Result<Value, String> {
+    let total = premium_total(premium)?;
     let in_use = |kind: &'static str| register.iter().filter(move |r| r["kind"] == kind && r["in_use"] == true);
     let product_hash = in_use("product")
         .find(|r| r["id"] == product)
@@ -213,6 +288,43 @@ pub fn consent(proposal: &str, life: &str, kind: &str, body: &Value, signer: Opt
     Ok(json!({ "record_consent": { "proposal": proposal, "life": life, "kind": kind, "granted": granted, "signed": signed } }))
 }
 
+/// The intake's answer as JSON. A refusal it gave as plain text, as a
+/// request it could not read is, keeps its words as the message.
+pub fn answered(bytes: &[u8]) -> Value {
+    serde_json::from_slice(bytes).unwrap_or_else(|_| {
+        let text = String::from_utf8_lossy(bytes).trim().to_string();
+        if text.is_empty() {
+            Value::Null
+        } else {
+            json!({ "message": text })
+        }
+    })
+}
+
+/// A refusal of the answers in words: each problem the intake named, with
+/// the question's own words where the channel holds them.
+pub fn answer_problems(body: &mut Value) {
+    let Some(problems) = body["problems"].as_array().filter(|p| !p.is_empty()) else {
+        return;
+    };
+    let said: Vec<String> = problems
+        .iter()
+        .map(|p| {
+            let id = p["question"].as_str().unwrap_or_default();
+            let question =
+                crate::questions::wording(id, p["expected"].as_u64().unwrap_or(0)).map_or_else(|| id.replace('_', " "), |(text, _)| format!("\"{text}\""));
+            match p["problem"].as_str().unwrap_or_default() {
+                "missing" => format!("{question} needs an answer"),
+                "unknown_question" => format!("{id} is not one of the questions asked"),
+                "wrong_version" => format!("{question} is version {}", p["expected"]),
+                "out_of_range" => format!("the answer to {question} is outside what it takes"),
+                _ => format!("the answer to {question} is not the kind it takes"),
+            }
+        })
+        .collect();
+    body["message"] = json!(format!("Some answers need attention: {}.", said.join("; ")));
+}
+
 /// The intake service, reached with the portal's own Entra token for the
 /// intake's audience, which carries the app roles `new-business` (a life's
 /// signed answers) and `underwriting-console` (an underwriter's reading).
@@ -239,7 +351,7 @@ impl Hosted {
         if status == 503 {
             return Err("the underwriting intake asked us to try again".to_string());
         }
-        Ok((status, response.json::<Value>().await.unwrap_or(Value::Null)))
+        Ok((status, answered(&response.bytes().await.unwrap_or_default())))
     }
 }
 

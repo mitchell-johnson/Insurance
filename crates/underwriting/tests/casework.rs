@@ -201,6 +201,7 @@ fn evidence_that_cannot_be_had_goes_to_a_person_with_the_reason() {
             case: case.clone(),
             underwriter: "amy".into(),
             kinds: kinds.clone(),
+            due_on: None,
         },
     )
     .unwrap();
@@ -222,7 +223,8 @@ fn evidence_that_cannot_be_had_goes_to_a_person_with_the_reason() {
             Command::RequestEvidence {
                 case: case.clone(),
                 underwriter: "amy".into(),
-                kinds
+                kinds,
+                due_on: None,
             }
         )
         .unwrap()
@@ -236,7 +238,8 @@ fn evidence_that_cannot_be_had_goes_to_a_person_with_the_reason() {
             Command::RequestEvidence {
                 case: case.clone(),
                 underwriter: "amy".into(),
-                kinds: BTreeSet::new()
+                kinds: BTreeSet::new(),
+                due_on: None,
             }
         )
         .unwrap_err()
@@ -249,7 +252,8 @@ fn evidence_that_cannot_be_had_goes_to_a_person_with_the_reason() {
             Command::RequestEvidence {
                 case: case.clone(),
                 underwriter: "abe".into(),
-                kinds: BTreeSet::new()
+                kinds: BTreeSet::new(),
+                due_on: None,
             }
         )
         .unwrap_err()
@@ -283,6 +287,7 @@ fn evidence_that_cannot_be_had_goes_to_a_person_with_the_reason() {
             case: case.clone(),
             underwriter: "amy".into(),
             kinds: BTreeSet::from([EvidenceKind::MedicalExam]),
+            due_on: None,
         },
     )
     .unwrap();
@@ -315,6 +320,7 @@ fn evidence_that_cannot_be_had_goes_to_a_person_with_the_reason() {
         case,
         underwriter: "amy".into(),
         kinds: BTreeSet::from([EvidenceKind::GpReport]),
+        due_on: None,
     };
     assert_eq!(console(&mut w, ask).unwrap_err().code, "consent_required");
 }
@@ -1082,6 +1088,7 @@ fn nobody_but_the_holder_acts_on_a_case() {
                 case: case.clone(),
                 underwriter: "sue".into(),
                 kinds: BTreeSet::from([ic_underwriting::evidence::EvidenceKind::GpReport]),
+                due_on: None,
             }
         ),
         "not_owner"

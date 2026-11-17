@@ -15,7 +15,7 @@
 <section data-view="Duplicates"><h2>Likely duplicates</h2><p class="muted">People the customer master thinks may be one person. Merge them into the record that stays, or say they are not the same person.</p><div id="dup-msg" aria-live="polite"></div><div id="dups"></div></section>
 <section data-view="Duplicates"><h2>Merge or undo a merge</h2><div id="merges"></div></section>
 
-<section data-view="Add a person"><h2>Add a person</h2><p class="muted">Search under Record first. If the master finds someone who may be the same person it says so, and you can add them anyway once you are sure they are not.</p><div id="create"></div></section>
+<section data-view="Add a person"><h2>Add a person</h2><p class="muted">Search under Record first. If the master finds someone who may be the same person it says so, and you can add them anyway once you are sure they are not.</p><div class="row"><div><label for="np-case">Case, call or task you are working on</label><input id="np-case" required></div></div><div id="create"></div></section>
 </main>
 <script src="/ui/app.js"></script>
 <script>
@@ -30,11 +30,13 @@ const show = (v) => v == null ? "" : typeof v === "object" ? Object.values(v).fi
 
 // ---- The case in hand: said once, kept for this sign-in, sent with every call.
 $("case").value = portal.working();
-$("case").addEventListener("change", () => portal.workOn($("case").value.trim()));
-$("new-call").addEventListener("click", () => { $("case").value = portal.reference("CALL"); portal.workOn($("case").value); $("who").focus(); });
+$("np-case").value = $("case").value;
+// The case is the same one on Record and on Add a person, whichever it is said on.
+for (const [from, to] of [["case", "np-case"], ["np-case", "case"]]) $(from).addEventListener("change", () => { $(to).value = $(from).value; portal.workOn($(from).value.trim()); });
+$("new-call").addEventListener("click", () => { $("case").value = $("np-case").value = portal.reference("CALL"); portal.workOn($("case").value); $("who").focus(); });
 const kase = () => {
-  const c = $("case").value.trim() || portal.working();
-  if (!c) { if (!$("case").closest("[hidden]")) $("case").focus(); throw new Error("Say what you are working on first: the case or task, or press \"A customer is on the phone\" for a call reference."); }
+  const c = $("case").value.trim() || $("np-case").value.trim() || portal.working();
+  if (!c) { const here = ["case", "np-case"].map($).find((f) => !f.closest("[hidden]")); if (here) here.focus(); throw new Error("Say what you are working on first: the case or task, or press \"A customer is on the phone\" for a call reference."); }
   portal.workOn(c);
   return "case=" + encodeURIComponent(c);
 };
@@ -216,12 +218,16 @@ signIn(R).then(async () => {
   } else {
     put($("dups"), portal.empty("Settling duplicates is for people who merge records."));
   }
+<<<<<<< HEAD
   if (may("create")) portal.actions($("create"), CREATE, { id: "np", send: ({ type, ...v }) => addPerson(buildNew(v, type)), after: async (_, made) => {
     if (!made || !made.party) return;
     // Someone who adds people but does not read records is told the person is on file, not refused for opening it.
     if (!may("view")) { portal.say($("msg"), "ok", "Added. The person is on file; you do not need to add them again."); return; }
     $("who").dataset.party = made.party; await openRecord(made.party); portal.view("record");
   } });
+=======
+  if (may("create")) portal.actions($("create"), CREATE, { id: "np", pick: "Person or organisation", send: ({ type, ...v }) => addPerson(buildNew(v, type)), after: async (_, made) => { if (made && made.party) { $("who").dataset.party = made.party; await openRecord(made.party); portal.view("record"); } } });
+>>>>>>> worktree-agent-a422eff5046e206a2
   else put($("create"), portal.empty("Your roles do not let you add people."));
 }).catch(portal.refuse);
 </script></body></html>
