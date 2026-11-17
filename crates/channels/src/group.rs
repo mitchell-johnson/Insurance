@@ -101,8 +101,13 @@ pub fn take_up(offer: &Value, choice: &Value) -> Result<Value, String> {
         .as_i64()
         .filter(|s| *s > 0)
         .ok_or("say how much cover to continue")?;
-    if sum > offer["max_sum_insured_minor"].as_i64().unwrap_or_default() {
-        return Err("that is more than the cover you held when you left".to_string());
+    let most = offer["max_sum_insured_minor"].as_i64().unwrap_or_default();
+    if sum > most {
+        return Err(format!(
+            "that is more than the cover you held when you left; you may keep up to ${}.{:02}",
+            most / 100,
+            most % 100
+        ));
     }
     Ok(json!({ "take_up_continuation": {
         "scheme": scheme, "offer": id,
@@ -159,6 +164,69 @@ pub fn employer_member(answer: &Value) -> Value {
 /// or another module's, and the group service would refuse it anyway; the
 /// portal does not pass it on.
 pub const EMPLOYER_COMMANDS: [&str; 4] = ["approve_file", "withdraw_file", "declare_pool", "choose_health_plan"];
+
+/// The changes an administrator may enter by hand for a named member, as
+/// the employer portal's second-administrator rule names them. Joiners come
+/// in the membership file, which says who they are.
+pub const ENTERED_CHANGES: [&str; 2] = ["remove_member", "change_salary"];
+
+/// What each kind of change the second-administrator rule names is, in words.
+pub fn change_words(kind: &str) -> &str {
+    match kind {
+        "add_member" => "adding a member",
+        "remove_member" => "removing a member",
+        _ => "changing a salary",
+    }
+}
+
+/// A change an administrator entered, as the group service's change-file
+/// row: `{kind, employee_id, effective, salary_minor}` with `kind` one of
+/// [`ENTERED_CHANGES`]. A leaver's date is their last day of employment
+/// as the scheme counts it; a salary is the new annual salary in cents.
+pub fn entered_change(sent: &Value) -> Result<(&str, Value), String> {
+    let kind = sent["kind"]
+        .as_str()
+        .filter(|k| ENTERED_CHANGES.contains(k))
+        .ok_or("choose removing a member or changing a salary; joiners come in the membership file")?;
+    let employee = sent["employee_id"]
+        .as_str()
+        .map(str::trim)
+        .and_then(name)
+        .ok_or("give the member's employee ID")?;
+    let effective = sent["effective"]
+        .as_str()
+        .and_then(|d| d.parse::<chrono::NaiveDate>().ok())
+        .ok_or("give the date the change takes effect")?;
+    let (change, attrs) = if kind == "remove_member" {
+        ("leave", json!({}))
+    } else {
+        let salary = sent["salary_minor"].as_i64().filter(|s| *s > 0).ok_or("give the new annual salary")?;
+        ("change", json!({ "salary_minor": salary }))
+    };
+    Ok((
+        kind,
+        json!({ "row": 1, "employee_id": employee, "change": change, "effective": effective, "attrs": attrs }),
+    ))
+}
+
+/// The name of the change file for changes entered under one idempotency
+/// key: the same key names the same file, so a retry enters nothing twice.
+pub fn entered_file(key: &str) -> String {
+    let tail: String = key.chars().filter(char::is_ascii_alphanumeric).rev().take(40).collect();
+    format!("entered-{}", tail.chars().rev().collect::<String>())
+}
+
+/// The kinds of change in a file that the employer asked a second
+/// administrator to approve, from the file's summary.
+pub fn needs_second_admin(file: &Value, kinds: &Value) -> Vec<&'static str> {
+    let asked = |kind: &str| kinds.as_array().is_some_and(|k| k.iter().any(|k| k == kind));
+    let has = |count: &str| file["summary"][count].as_u64().unwrap_or(0) > 0;
+    [("add_member", "joiners"), ("remove_member", "leavers"), ("change_salary", "changes")]
+        .into_iter()
+        .filter(|(kind, count)| asked(kind) && has(count))
+        .map(|(kind, _)| kind)
+        .collect()
+}
 
 /// Which scheme is on a policy.
 pub fn scheme_of(policy: &str) -> Value {

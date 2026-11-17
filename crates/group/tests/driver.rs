@@ -893,7 +893,9 @@ async fn served(d: Arc<Rig>) -> (String, String) {
 /// the driver's commands, read the outbox, or announce a file without uploading it.
 /// Why it matters: these routes are how the employer portal, staff screens and the other
 /// services reach the module. The driver's commands (scan results, core answers) are what
-/// make the module trust a file, so they must not be reachable from a portal.
+/// make the module trust a file, so they must not be reachable from a portal. A mapping
+/// staff set is sealed here, because the scenario run found a layout could be set only by
+/// copying a SHA-256 hash into it (SCN-19, F-SCN19-3).
 #[tokio::test]
 async fn the_service_routes_admit_only_what_a_portal_may_do() {
     let d = Arc::new(rig());
@@ -1038,6 +1040,21 @@ async fn the_service_routes_admit_only_what_a_portal_may_do() {
         200,
         "the same key after a 503 is safe"
     );
+    // A mapping is sealed by the service, so staff never work out its content hash: an
+    // unsealed next version reaches the module's own rules, and one that cannot be sealed is
+    // refused with why.
+    let mut next = named_mapping();
+    next.version = 3;
+    next.content_hash = String::new();
+    let unsealed = serde_json::json!({"set_mapping": {"scheme": SCHEME, "mapping": next.clone()}});
+    assert_eq!(
+        post("/v1/commands", Some(all.as_str()), &[], command("group-admin", "k5", unsealed)).await.1["error"]["code"],
+        "mapping_not_tried"
+    );
+    next.version = 0;
+    let broken = serde_json::json!({"set_mapping": {"scheme": SCHEME, "mapping": next}});
+    let (status, refused) = post("/v1/commands", Some(all.as_str()), &[], command("group-admin", "k6", broken)).await;
+    assert_eq!((status, refused["error"]["code"].as_str()), (422, Some("invalid_mapping")));
 
     // Questions.
     let (status, scheme) = post("/v1/questions", Some(all.as_str()), &[], br#"{"ask":"scheme","scheme":"harbour"}"#.to_vec()).await;

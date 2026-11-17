@@ -659,6 +659,14 @@ impl Directory {
                 if view.policy(&policy).is_none() {
                     return Err(reject("unknown_policy", "no such scheme"));
                 }
+                // A colleague is named once they have signed in, so a slip of
+                // the keyboard cannot make someone nobody knows an administrator.
+                if admin && by_admin && !self.subjects.values().any(|p| *p == party) {
+                    return Err(reject(
+                        "unknown_person",
+                        "nobody with that reference has signed in; ask your colleague to sign in to the employer portal once and give you the reference it shows them",
+                    ));
+                }
                 let last = self.employer_admins.get(&policy).is_some_and(|a| a.len() == 1 && a.contains(&party));
                 if !admin && by_admin && last {
                     return Err(reject("last_admin", "a scheme keeps at least one administrator"));

@@ -29,6 +29,7 @@ fn members() -> Vec<ic_group::record::MemberRow> {
 /// Why it matters: this is the document the employer pays from and splits across its own
 /// cost centres. If it differs from what the core posted, the employer pays the wrong
 /// amount; if a loading showed against a member, the employer learns about their health.
+/// The scenario run found invoices hard to read without their totals (SCN-07, F-SCN07-6).
 #[test]
 fn the_invoice_view_agrees_with_the_core_by_billing_group() {
     let mut h = Harness::new(terms());
@@ -69,6 +70,14 @@ fn the_invoice_view_agrees_with_the_core_by_billing_group() {
         invoice.total_minor() - invoice.adjustments_by_group["wlg"] - invoice.loading_adjustments_minor
     );
     assert_eq!(invoice.members(), 3);
+    // The employer reads each invoice with its totals worked out (found by the scenario run,
+    // SCN-07, F-SCN07-6): what this period costs, what was brought forward, and what is asked.
+    let listed = ic_group::answer(&h.g, serde_json::json!({ "ask": "invoices", "scheme": SCHEME })).unwrap();
+    let first = &listed["invoices"][0];
+    assert_eq!(
+        (first["members"].as_u64(), first["total_minor"].as_i64(), first["amount_due_minor"].as_i64()),
+        (Some(3), Some(invoice.total_minor()), Some(invoice.amount_due_minor()))
+    );
     assert!(h.saw(|e| matches!(
         e,
         GroupEvent::InvoiceIssued {

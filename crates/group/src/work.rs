@@ -27,6 +27,25 @@ use crate::state::{
 };
 use crate::terms::{ExcessLoading, ExcessPath, MemberBasis, NoAgreement, SchemeTerms};
 
+/// The most a pool's declared salary may average a head. Above it the
+/// total is almost certainly a slip (cents typed as dollars, an extra
+/// nought), and it would be billed as cover at once.
+pub const MAX_POOL_AVERAGE_SALARY_MINOR: i64 = 1_000_000_00;
+
+/// An amount in minor units as a person reads it: `$1,234,567.89`.
+pub fn dollars(minor: i64) -> String {
+    let (whole, cents) = (minor.unsigned_abs() / 100, minor.unsigned_abs() % 100);
+    let digits = whole.to_string();
+    let mut grouped = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(c);
+    }
+    format!("{}${grouped}.{cents:02}", if minor < 0 { "-" } else { "" })
+}
+
 /// The core asks for a retry: nothing is wrong with what was sent.
 const TRANSIENT: [&str; 2] = ["invoice_in_progress", "policy_transferring"];
 /// The core refuses anything for this policy: no row is at fault.
@@ -274,6 +293,9 @@ impl GroupState {
                 total_salary_minor,
             } => {
                 let life = LifeId(format!("pool:{pool}"));
+                if *headcount == 0 {
+                    return Ok(Some(MemberChange::Left { life, effective: *effective }));
+                }
                 let factors = LifeFactors {
                     category: Some(category.clone()),
                     pool: Some(PoolAggregate {
@@ -557,7 +579,11 @@ impl GroupState {
             Work::Pool {
                 pool, effective, headcount, ..
             } => {
-                s.pools.insert(pool.clone(), effective);
+                if headcount == 0 {
+                    s.pools.remove(&pool);
+                } else {
+                    s.pools.insert(pool.clone(), effective);
+                }
                 s.declaration_due = None;
                 self.clear(&s.id, ExceptionKind::DeclarationOverdue, None);
                 self.emit(GroupEvent::PoolDeclared {
@@ -1717,8 +1743,27 @@ impl GroupState {
                 if pool.is_empty() || !known_category(&s.product, &category) {
                     return Err(Reject::new("unknown_value", "the pool needs a name and a category the scheme has"));
                 }
-                if headcount == 0 || total_salary_minor <= 0 {
+                // A headcount and salary of nought end a pool declared by
+                // mistake, as long as the scheme keeps another.
+                let ending = headcount == 0 && total_salary_minor == 0 && s.pools.contains_key(&pool);
+                if ending && s.pools.len() == 1 {
+                    return Err(Reject::new(
+                        "last_pool",
+                        "a pool scheme keeps at least one pool; to end the scheme, ask group administration",
+                    ));
+                }
+                if !ending && (headcount == 0 || total_salary_minor <= 0) {
                     return Err(Reject::new("invalid_amount", "a declaration needs a headcount and a total salary"));
+                }
+                if total_salary_minor > i64::from(headcount) * MAX_POOL_AVERAGE_SALARY_MINOR {
+                    return Err(Reject::new(
+                        "implausible_salary",
+                        format!(
+                            "a total salary of {} for {headcount} people is more than {} a head; check that it is the year's total in dollars",
+                            dollars(total_salary_minor),
+                            dollars(MAX_POOL_AVERAGE_SALARY_MINOR)
+                        ),
+                    ));
                 }
                 let earliest = today.checked_sub_days(Days::new(u64::from(s.terms.backdating_limit_days))).unwrap_or(today);
                 if effective > today || effective < s.inception.max(earliest) {

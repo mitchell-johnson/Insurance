@@ -134,3 +134,32 @@ fn what_an_administrator_may_ask_and_send() {
     let member = employer_member(&json!({ "employee": "E1", "loading": 1, "covers": [{ "cover": "c", "exclusion": "x" }] }));
     assert_eq!(member, json!({ "employee": "E1", "covers": [{ "cover": "c" }], "above_automatic": [] }));
 }
+
+/// Purpose: a change an administrator enters by hand becomes one change-file row: a leaver or a new salary, never a joiner; its
+/// file is named from the request key; and the second-administrator rule names only the kinds both asked for and in the file.
+/// Why it matters: found by the scenario run, SCN-05 (F-SCN05-5): a hand change was stored as a request nothing
+/// acted on, and the rule a scheme chose for a second administrator was never applied to the files that carried those changes.
+#[test]
+fn a_hand_change_is_one_row_of_a_change_file() {
+    use ic_channels::group::{change_words, entered_change, entered_file, needs_second_admin};
+    let leaver = json!({ "kind": "remove_member", "employee_id": " E002 ", "effective": "2027-12-01" });
+    let (kind, row) = entered_change(&leaver).unwrap();
+    assert_eq!(
+        (kind, row),
+        (
+            "remove_member",
+            json!({ "row": 1, "employee_id": "E002", "change": "leave", "effective": "2027-12-01", "attrs": {} })
+        )
+    );
+    let salary = json!({ "kind": "change_salary", "employee_id": "E001", "effective": "2027-12-01", "salary_minor": 70_000_00 });
+    assert_eq!(entered_change(&salary).unwrap().1["attrs"], json!({ "salary_minor": 70_000_00 }));
+    assert!(entered_change(&json!({ "kind": "add_member" })).unwrap_err().contains("membership file"));
+    assert_eq!(entered_file("api:hr-1:Key/With-Dashes"), "entered-apihr1KeyWithDashes");
+    assert_eq!(entered_file(&"k".repeat(60)).len(), "entered-".len() + 40);
+
+    let file = json!({ "summary": { "joiners": 1, "leavers": 2, "changes": 0 } });
+    assert_eq!(needs_second_admin(&file, &json!(["add_member", "change_salary"])), vec!["add_member"]);
+    assert_eq!(needs_second_admin(&file, &json!(null)), Vec::<&str>::new());
+    let words: Vec<&str> = ["add_member", "remove_member", "change_salary"].into_iter().map(change_words).collect();
+    assert_eq!(words, ["adding a member", "removing a member", "changing a salary"]);
+}

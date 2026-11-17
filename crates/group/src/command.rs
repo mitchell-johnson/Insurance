@@ -205,6 +205,21 @@ pub enum GroupCommand {
         resolutions: Vec<(String, Resolution)>,
         last: bool,
     },
+    /// Changes an administrator enters on the employer portal for named
+    /// members: a leaver or a new salary, each with its date. They become a
+    /// change file of their own, compared and approved as any file is, and
+    /// are refused whole if any row is refused, saying which member and
+    /// why. Joiners come in the membership file, which carries who they
+    /// are. `second_approver` asks that someone other than the person who
+    /// entered them approves them, as the employer chose for that kind of
+    /// change.
+    EnterChanges {
+        scheme: String,
+        file: String,
+        rows: Vec<MemberRow>,
+        #[serde(default)]
+        second_approver: bool,
+    },
     /// Put back members a file removed in error, from the day they were
     /// removed, with no gap.
     Reinstate {
@@ -391,7 +406,7 @@ impl GroupCommand {
             | AgreeRenewal { .. }
             | Terminate { .. }
             | SplitScheme { .. } => &[STAFF],
-            ReceiveFile { .. } | ApproveFile { .. } | WithdrawFile { .. } | DeclarePool { .. } => &[EMPLOYER, STAFF],
+            ReceiveFile { .. } | ApproveFile { .. } | WithdrawFile { .. } | DeclarePool { .. } | EnterChanges { .. } => &[EMPLOYER, STAFF],
             RecordScan { .. }
             | RefuseFile { .. }
             | SubmitRows { .. }

@@ -15,12 +15,25 @@ use crate::diff::{derive, trips_safety_check, Ambiguity, DiffContext};
 use crate::event::{ExceptionKind, FileSummary, GroupEvent, Outbound, ReinsuranceNotice};
 use crate::mapping::{FileKind, FileMapping, RowReject};
 use crate::model::{ChangeKind, Membership, Proposed};
-use crate::record::MemberRow;
+use crate::record::{MemberRow, RowChange};
 use crate::terms::{ExcessLoading, MemberBasis, SchemeTerms};
 use crate::work::{Item, Work};
 
 /// Rows accepted in one `SubmitRows` command.
 pub const MAX_ROWS_PER_PART: usize = 2_000;
+/// Changes an administrator enters by hand at one time.
+pub const MAX_ENTERED_ROWS: usize = 50;
+
+/// Why a change entered by hand was refused, in words that say what to do.
+fn entered_refusal(employee: &str, code: &str) -> String {
+    match code {
+        "unknown_member" => format!("{employee} is not a member of this scheme; check the employee ID"),
+        "before_joining" => format!("{employee} joined after that date; give a date on or after the day they joined"),
+        "no_change" => format!("{employee} already has that salary"),
+        other => format!("the change for {employee} was refused ({}); ask group administration", other.replace('_', " ")),
+    }
+}
+
 /// Idempotency keys and closed files are kept this long.
 pub const RETENTION_DAYS: u64 = 400;
 
@@ -47,6 +60,36 @@ pub enum FileStatus {
     Applying,
     Applied,
     Withdrawn,
+}
+
+impl FileRecord {
+    /// A file just received from `actor`, in quarantine.
+    fn received(id: &str, content_hash: String, today: NaiveDate, actor: &str) -> Self {
+        FileRecord {
+            id: id.to_string(),
+            content_hash,
+            status: FileStatus::Quarantined,
+            received: today,
+            uploaded_by: actor.to_string(),
+            approved_by: None,
+            kind: None,
+            file_date: None,
+            rows: vec![],
+            rejected: vec![],
+            ambiguities: vec![],
+            changes: vec![],
+            summary: FileSummary::default(),
+            unresolved: BTreeSet::new(),
+            resolutions: BTreeMap::new(),
+            remaining: 0,
+            applied: 0,
+            refused: 0,
+            scheduled: 0,
+            code: None,
+            stale_flagged: false,
+            second_approver: false,
+        }
+    }
 }
 
 impl FileStatus {
@@ -99,6 +142,11 @@ pub struct FileRecord {
     pub code: Option<String>,
     #[serde(default)]
     pub stale_flagged: bool,
+    /// Someone other than the uploader must approve it: the scheme's terms
+    /// say so for every file, or the employer did for the kind of change
+    /// entered.
+    #[serde(default)]
+    pub second_approver: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -451,7 +499,10 @@ impl Scheme {
             ));
         }
         if let Some(reason) = &self.frozen {
-            return Err(Reject::new("scheme_frozen", format!("files are on hold: {reason}")));
+            return Err(Reject::new(
+                "scheme_frozen",
+                format!("the scheme is on hold while group administration looks into something ({reason}); files cannot be sent or approved until they lift the hold"),
+            ));
         }
         match self.status {
             SchemeStatus::Active => Ok(()),
@@ -581,9 +632,22 @@ fn file_in<'a>(files: &'a mut BTreeMap<String, FileRecord>, file: &str, expected
         .get_mut(file)
         .ok_or_else(|| Reject::new("unknown_file", format!("file {file} is not known for this scheme")))?;
     if !expected.contains(&f.status) {
-        return Err(Reject::new("wrong_file_status", format!("file {file} is {:?}", f.status)));
+        return Err(Reject::new("wrong_file_status", file_standing(file, f.status)));
     }
     Ok(f)
+}
+
+/// Where a file stands, in words, for a refusal: one still in quarantine
+/// says to wait for the virus check.
+fn file_standing(file: &str, status: FileStatus) -> String {
+    if status == FileStatus::Quarantined {
+        return format!("file {file} is still being checked for viruses; wait a few minutes, look at it again, and then approve it");
+    }
+    let words = serde_json::to_value(status)
+        .ok()
+        .and_then(|v| v.as_str().map(|s| s.replace('_', " ")))
+        .unwrap_or_default();
+    format!("file {file} is {words}")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -645,7 +709,8 @@ impl GroupState {
             // Every handler checks before it writes, so a refused command
             // leaves no trace.
             self.today = Some(env.today);
-            self.dispatch(&env.actor, env.today, env.command)
+            self.employer_limits(&env.caller, &env.command)
+                .and_then(|()| self.dispatch(&env.actor, env.today, env.command))
         } else {
             Err(Reject::new("caller_not_allowed", format!("{} may not send {}", env.caller, env.command.name())))
         };
@@ -657,6 +722,29 @@ impl GroupState {
             },
         );
         Outcome { result, duplicate: false }
+    }
+
+    /// What an employer may not do that staff may: declare a pool the
+    /// scheme does not have. A mistyped pool name would otherwise become a
+    /// new insured life, billed from its date.
+    fn employer_limits(&self, caller: &str, command: &GroupCommand) -> Result<(), Reject> {
+        let GroupCommand::DeclarePool { scheme, pool, .. } = command else {
+            return Ok(());
+        };
+        let Some(s) = self.schemes.get(scheme).filter(|_| caller == crate::command::caller::EMPLOYER) else {
+            return Ok(());
+        };
+        if s.terms.basis != MemberBasis::Pool || s.pools.contains_key(pool) {
+            return Ok(());
+        }
+        let known: Vec<&str> = s.pools.keys().map(String::as_str).collect();
+        Err(Reject::new(
+            "unknown_pool",
+            format!(
+                "{pool} is not one of this scheme's pools ({}); check the name, or ask group administration to add a new pool",
+                known.join(", ")
+            ),
+        ))
     }
 
     /// The business date of the last command applied.
@@ -908,6 +996,12 @@ impl GroupState {
                 st.emit(GroupEvent::FileAwaitingApproval { scheme: s.id.clone(), file });
                 Ok(())
             }),
+            EnterChanges {
+                scheme,
+                file,
+                rows,
+                second_approver,
+            } => self.with_scheme(&scheme, |st, s| st.enter_changes(s, actor, today, file, rows, second_approver)),
             ApproveFile { scheme, file } => self.with_scheme(&scheme, |st, s| st.approve_file(s, actor, today, &file)),
             DecideBackdating { scheme, file, approve } => self.with_scheme(&scheme, |st, s| {
                 let f = s.file_mut(&file, &[FileStatus::AwaitingBackdatingDecision])?;
@@ -938,6 +1032,7 @@ impl GroupState {
                 f.rows.clear();
                 f.changes.clear();
                 st.close_file(s, &file);
+                st.clear(&s.id, ExceptionKind::JoinerHeldForReview, Some(&file));
                 st.emit(GroupEvent::FileWithdrawn { scheme: s.id.clone(), file });
                 Ok(())
             }),
@@ -1044,12 +1139,14 @@ impl GroupState {
         self.schemes.insert(scheme.id.clone(), scheme);
     }
 
-    fn receive_file(&mut self, s: &mut Scheme, actor: &str, today: NaiveDate, file: String, content_hash: String) -> Result<(), Reject> {
+    /// Whether a new file may be opened on the scheme under this name, and,
+    /// for a received file, whether the same content came before.
+    fn may_open_file(s: &Scheme, file: &str, content_hash: Option<&str>) -> Result<(), Reject> {
         s.can_take_files()?;
         if s.terms.basis == MemberBasis::Pool {
             return Err(Reject::new("pool_scheme", "a pool scheme declares aggregates; it has no membership files"));
         }
-        if s.files.contains_key(&file) {
+        if s.files.contains_key(file) {
             return Err(Reject::new("file_exists", format!("file {file} was already received")));
         }
         // The same content again is the same file: nothing to do, and the
@@ -1057,41 +1154,68 @@ impl GroupState {
         if let Some(same) = s
             .files
             .values()
-            .find(|f| f.content_hash == content_hash && f.status != FileStatus::Refused && f.status != FileStatus::Withdrawn)
+            .find(|f| Some(f.content_hash.as_str()) == content_hash && f.status != FileStatus::Refused && f.status != FileStatus::Withdrawn)
         {
             return Err(Reject::new("duplicate_file", format!("the same content was received as file {}", same.id)));
         }
         if let Some(open) = &s.open_file {
-            return Err(Reject::new("file_in_progress", format!("file {open} is still being worked on")));
+            return Err(Reject::new(
+                "file_in_progress",
+                format!("file {open} is still being worked on; approve or withdraw it first"),
+            ));
         }
+        Ok(())
+    }
+
+    fn receive_file(&mut self, s: &mut Scheme, actor: &str, today: NaiveDate, file: String, content_hash: String) -> Result<(), Reject> {
+        Self::may_open_file(s, &file, Some(&content_hash))?;
         s.open_file = Some(file.clone());
-        s.files.insert(
-            file.clone(),
-            FileRecord {
-                id: file.clone(),
-                content_hash,
-                status: FileStatus::Quarantined,
-                received: today,
-                uploaded_by: actor.to_string(),
-                approved_by: None,
-                kind: None,
-                file_date: None,
-                rows: vec![],
-                rejected: vec![],
-                ambiguities: vec![],
-                changes: vec![],
-                summary: FileSummary::default(),
-                unresolved: BTreeSet::new(),
-                resolutions: BTreeMap::new(),
-                remaining: 0,
-                applied: 0,
-                refused: 0,
-                scheduled: 0,
-                code: None,
-                stale_flagged: false,
-            },
-        );
+        s.files.insert(file.clone(), FileRecord::received(&file, content_hash, today, actor));
         self.emit(GroupEvent::FileQuarantined { scheme: s.id.clone(), file });
+        Ok(())
+    }
+
+    /// Changes entered on the employer portal: a change file of their own,
+    /// read as it is entered, so it waits only for approval. Refused whole
+    /// if any row is, naming the member and why, so that nobody approves
+    /// half of what they meant.
+    fn enter_changes(
+        &mut self,
+        s: &mut Scheme,
+        actor: &str,
+        today: NaiveDate,
+        file: String,
+        rows: Vec<MemberRow>,
+        second_approver: bool,
+    ) -> Result<(), Reject> {
+        if rows.is_empty() || rows.len() > MAX_ENTERED_ROWS {
+            return Err(Reject::new("bad_request", format!("enter between 1 and {MAX_ENTERED_ROWS} changes at a time")));
+        }
+        if let Some(row) = rows.iter().find(|r| !matches!(r.change, Some(RowChange::Leave | RowChange::Change))) {
+            return Err(Reject::new(
+                "joiners_by_file",
+                format!(
+                    "{} is not a leaver or a change; joiners come in the membership file, which says who they are",
+                    row.employee_id
+                ),
+            ));
+        }
+        Self::may_open_file(s, &file, None)?;
+        let compared = compare(s, today, FileKind::Changes, today, &rows, vec![]);
+        if let Some(r) = compared.rejected.first() {
+            let who = r.employee_id.clone().unwrap_or_default();
+            return Err(Reject::new(&r.code, entered_refusal(&who, &r.code)));
+        }
+        let mut f = FileRecord::received(&file, format!("entered:{file}"), today, actor);
+        f.kind = Some(FileKind::Changes);
+        f.file_date = Some(today);
+        f.second_approver = second_approver;
+        f.summary = compared.summary;
+        f.changes = compared.changes;
+        f.status = FileStatus::AwaitingApproval;
+        s.open_file = Some(file.clone());
+        s.files.insert(file.clone(), f);
+        self.emit(GroupEvent::FileAwaitingApproval { scheme: s.id.clone(), file });
         Ok(())
     }
 
@@ -1153,6 +1277,7 @@ impl GroupState {
         let mapper_rejected = std::mem::take(&mut f.rejected);
         let compared = compare(s, today, kind, file_date, &rows, mapper_rejected);
         let (members_before, leavers, held) = (compared.summary.members_before, compared.summary.leavers, compared.held);
+        let looks_alike = compared.rejected.iter().any(|r| r.code == "held_for_review");
         let f = file_in(&mut s.files, file, &[FileStatus::Scanned])?;
         f.rejected = compared.rejected;
         f.ambiguities = compared.ambiguities;
@@ -1180,6 +1305,11 @@ impl GroupState {
                 file: file.to_string(),
             });
         }
+        // The scheme's latest file says who is still waiting for review.
+        self.clear(&s.id, ExceptionKind::JoinerHeldForReview, None);
+        if looks_alike {
+            self.raise(&s.id, ExceptionKind::JoinerHeldForReview, file);
+        }
         Ok(())
     }
 
@@ -1187,8 +1317,11 @@ impl GroupState {
         s.can_take_files()?;
         let second = s.terms.second_approver;
         let f = file_in(&mut s.files, file, &[FileStatus::AwaitingApproval])?;
-        if second && f.uploaded_by == actor {
-            return Err(Reject::new("second_approver", "this scheme needs approval by someone other than the uploader"));
+        if (second || f.second_approver) && f.uploaded_by == actor {
+            return Err(Reject::new(
+                "second_approver",
+                "another administrator must approve this: it cannot be approved by the person who sent it",
+            ));
         }
         f.approved_by = Some(actor.to_string());
         let backdated = f.changes.iter().filter(|c| c.needs_backdating_approval).count() as u32;

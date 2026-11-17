@@ -29,8 +29,8 @@
   <h2>Your applications</h2><p class="muted">Cover you have applied for. When we offer terms, the offer letter is in your documents; accept it, decline it or ask us to look again here. If the product changes before your cover starts, the new price is shown here for you to accept. Your answer is signed.</p>
   <div id="applications"></div><div id="app-msg" aria-live="polite"></div>
   <h2>Your requests</h2><div id="requests"></div>
-  <h2>Cover from your workplace</h2><p class="muted">If your employer's scheme covers you, link it to you with the scheme code and employee ID from your employer. When you leave the scheme you may keep your cover as a policy of your own, with no health questions, until the date shown.</p>
-  <form id="claim"><div class="row"><div><label for="cl-scheme">Scheme code</label><input id="cl-scheme" required></div><div><label for="cl-employee">Your employee ID</label><input id="cl-employee" required></div><button>Link it to me</button></div></form><div id="cl-msg" aria-live="polite"></div>
+  <h2>Cover from your workplace</h2><p class="muted">If your employer's scheme covers you, link it to you with the scheme number and employee ID from your employer. When you leave the scheme you may keep your cover as a policy of your own, with no health questions, until the date shown.</p>
+  <form id="claim"><div class="row"><div><label for="cl-scheme">Scheme number</label><input id="cl-scheme" required></div><div><label for="cl-employee">Your employee ID</label><input id="cl-employee" required></div><button>Link it to me</button></div></form><div id="cl-msg" aria-live="polite"></div>
   <div id="continuations"></div><div id="cn-out" aria-live="polite"></div></section>
 
 <section data-view="Your details"><h2>Your details</h2><div id="record"></div>
@@ -165,12 +165,16 @@ async function open(p) {
   ] : h("p", { class: "muted" }, "No units held yet. If this policy invests, units are bought once a payment is invested."));
   put($("bills"), owed && owed.outstanding_minor > 0 ? h("div", { class: "banner warn", role: "status" }, `${money(owed.outstanding_minor)} is due, the oldest from ${owed.oldest_unpaid_due}.`) : h("p", { class: "muted" }, "Nothing is overdue."),
     table(["From", "To", "Amount"], bills.filter((b) => b.period_start).map((b) => [b.period_start, b.period_end, money(b.total_minor)])));
-  const claims = await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(p.policy) + "/claims");
+  put($("claims"), claims.rows.length ? table(["Claim", "Status", "Told us", "Closed"], claims.rows.map((c) => [c.claim, CLAIM_WORDS[c.status] || words(c.status), c.notified_on, c.closed_on || ""])) : h("p", { class: "muted" }, "No claims."));
+=======
+  // The claims on a policy are read by its policyholder or adviser; a scheme member's own claims go through the claims team.
+  const reads = p.relationships.some((r) => ["policyholder", "adviser", "employer_admin"].includes(r));
+  const claims = reads ? await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(p.policy) + "/claims") : null;
   // A claim's status in the customer's words, with what they can do next. Never why.
   const CLAIM_WORDS = { paid: "paid: the money has been sent to your bank, and can take a few working days to arrive",
     declined: "declined: we have written to you with the reasons. If you disagree, ask the claims team for a review, or make a complaint and we will look at it again",
     in_payment: "being paid", admitted: "accepted: payment is on its way", open: "being assessed" };
-  put($("claims"), claims.rows.length ? table(["Claim", "Status", "Told us", "Closed"], claims.rows.map((c) => [c.claim, CLAIM_WORDS[c.status] || words(c.status), c.notified_on, c.closed_on || ""])) : h("p", { class: "muted" }, "No claims."));
+  put($("claims"), !claims ? h("p", { class: "muted" }, "Claims on your workplace cover are made with the claims team, who keep you told.") : claims.rows.length ? table(["Claim", "Status", "Told us", "Closed"], claims.rows.map((c) => [c.claim, CLAIM_WORDS[c.status] || words(c.status), c.notified_on, c.closed_on || ""])) : h("p", { class: "muted" }, "No claims."));
   put($("docs"), portal.documents(R, view.rows, $("docs-msg")));
   const advisers = rows("adviser");
   put($("advisers"), advisers.length ? table(["Adviser", "State", ""], advisers.map((a) => [a.adviser, a.state === "available" ? "Available"
@@ -251,7 +255,7 @@ const FREQUENCIES = [["monthly", "Monthly"], ["fortnightly", "Fortnightly"], ["q
 async function continuations() {
   const open = await api(R, "GET", "/app/v1/memberships/continuations");
   put($("continuations"), open.map((o, n) => h("form", { id: `cn-${n}`, class: "card", on: { submit: run($("cn-out"), () => keep(o, n)) } },
-    h("h3", {}, `Keep your cover from scheme ${o.scheme}`),
+    h("h3", {}, `Keep your cover from scheme ${o.number || o.scheme}`),
     h("p", { class: "muted" }, `You left on ${o.left}. You may keep up to ${money(o.max_sum_insured_minor)} until ${o.expires}.`),
     h("div", { class: "row" },
       h("div", {}, h("label", { for: `cn-${n}-product` }, "Product"), h("select", { id: `cn-${n}-product` }, o.products.map((p) => h("option", { value: p }, words(p))))),

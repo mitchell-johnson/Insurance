@@ -97,7 +97,8 @@ fn a_full_file_reaches_the_core_as_the_employer_approved_it() {
 /// next one.
 /// Why it matters: employer files arrive from outside. Parsing one before it is scanned is
 /// how malware gets in, and a refused file that kept the scheme locked would stop every
-/// later file for that employer.
+/// later file for that employer. A refusal while the file is still being checked says to
+/// wait, not "is Quarantined" (found by the scenario run, SCN-07, F-SCN07-7).
 #[test]
 fn a_file_is_quarantined_until_scanned_and_a_bad_one_is_refused() {
     let mut h = Harness::new(terms());
@@ -124,6 +125,9 @@ fn a_file_is_quarantined_until_scanned_and_a_bad_one_is_refused() {
     receive(&mut h, "f1").unwrap();
     assert_eq!(h.scheme().files["f1"].status, FileStatus::Quarantined);
     assert_eq!(code(submit(&mut h, "f1", mapping(1).content_hash, first_file(), true)), "wrong_file_status");
+    // Approving it now says to wait for the virus check (found by the scenario run, SCN-07, F-SCN07-7).
+    let early = h.approve("f1").unwrap_err();
+    assert!(early.message.contains("checked for viruses"), "{}", early.message);
     assert_eq!(code(receive(&mut h, "f1")), "file_exists");
     assert_eq!(code(receive(&mut h, "f2")), "file_in_progress");
 
@@ -138,7 +142,8 @@ fn a_file_is_quarantined_until_scanned_and_a_bad_one_is_refused() {
     h.settle();
     assert_eq!(h.scheme().files["f1"].status, FileStatus::Refused);
     assert!(h.saw(|e| matches!(e, GroupEvent::FileRefused { code, .. } if code == "malware")));
-    assert_eq!(code(scan(&mut h, "f1", true)), "wrong_file_status");
+    let again = scan(&mut h, "f1", true).unwrap_err();
+    assert_eq!((again.code.as_str(), again.message.as_str()), ("wrong_file_status", "file f1 is refused"));
     assert_eq!(code(scan(&mut h, "nope", true)), "unknown_file");
 
     // The next file can start. It cannot be read with another mapping, for a future date,
@@ -488,4 +493,136 @@ fn a_change_to_a_priced_detail_is_sent_to_reinsurance_again() {
     let smokes = ic_group::record::MemberAttrs { smoker: Some(true), ..raise };
     h.apply("f3", FileKind::Changes, vec![change(1, "E002", RowChange::Change, today, smokes)]);
     assert_eq!(factors(&h), vec![None, Some(true)]);
+}
+
+/// Purpose: a leaver or a salary change an administrator enters by hand becomes a change file
+/// of its own, waiting only for approval; a wrong employee ID, a date before the member joined,
+/// a salary already held, any other refused change and a joiner are refused whole, naming the
+/// member, and leave the scheme free; one entered as needing a second administrator cannot be
+/// approved by the person who entered it, and is applied once a colleague approves it; and the
+/// file's answer lists each change with who sent it.
+/// Why it matters: found by the scenario run, SCN-05 (F-SCN05-5). The employer's "ask for a
+/// change" went nowhere: a mistyped ID was accepted, the second-administrator rule never applied,
+/// and the member stayed on cover.
+#[test]
+fn changes_an_administrator_enters_are_checked_and_approved_like_a_file() {
+    use ic_group::record::MemberAttrs;
+    let mut h = Harness::new(terms());
+    h.apply(
+        "f1",
+        FileKind::Full,
+        vec![
+            row(1, "E001", attrs("staff", 60_000_00, "akl")),
+            row(2, "E002", attrs("staff", 50_000_00, "akl")),
+        ],
+    );
+    let today = h.today();
+    let enter = |file: &str, rows: Vec<ic_group::record::MemberRow>, second_approver: bool| GroupCommand::EnterChanges {
+        scheme: SCHEME.into(),
+        file: file.into(),
+        rows,
+        second_approver,
+    };
+    let leave = |id: &str, on| change(1, id, RowChange::Leave, on, MemberAttrs::default());
+    let salary = |id: &str, minor: i64| {
+        let attrs = MemberAttrs {
+            salary_minor: Some(minor),
+            ..MemberAttrs::default()
+        };
+        change(1, id, RowChange::Change, today, attrs)
+    };
+    let refused = |r: Result<(), Reject>| {
+        let r = r.unwrap_err();
+        (r.code, r.message)
+    };
+    let (why, words) = refused(h.employer(enter("c0", vec![leave("E0O2", today)], false)));
+    assert_eq!(
+        (why.as_str(), words.as_str()),
+        ("unknown_member", "E0O2 is not a member of this scheme; check the employee ID")
+    );
+    assert!(h.scheme().open_file.is_none() && !h.scheme().files.contains_key("c0"), "nothing was opened");
+    let (why, words) = refused(h.employer(enter("c0", vec![leave("E002", d(2027, 10, 1))], false)));
+    assert_eq!(why, "before_joining");
+    assert!(words.contains("E002 joined after that date"), "{words}");
+    assert!(refused(h.employer(enter("c0", vec![salary("E001", 60_000_00)], false)))
+        .1
+        .contains("E001 already has that salary"));
+    let pilots = MemberAttrs {
+        category: Some("pilots".into()),
+        ..MemberAttrs::default()
+    };
+    let other = refused(h.employer(enter("c0", vec![change(1, "E001", RowChange::Change, today, pilots)], false))).1;
+    assert!(other.starts_with("the change for E001 was refused"), "{other}");
+    let joiner = change(1, "E009", RowChange::Join, today, attrs("staff", 50_000_00, "akl"));
+    assert_eq!(code(h.employer(enter("c0", vec![joiner], false))), "joiners_by_file");
+    assert_eq!(code(h.employer(enter("c0", vec![], false))), "bad_request");
+
+    // A leaver the employer asked a second administrator to approve.
+    h.employer(enter("c1", vec![leave("E002", today)], true)).unwrap();
+    let f = &h.scheme().files["c1"];
+    assert_eq!(
+        (f.status, f.summary.leavers, f.kind),
+        (FileStatus::AwaitingApproval, 1, Some(FileKind::Changes))
+    );
+    let answer = ic_group::host::answer(&h.g, serde_json::json!({ "ask": "file", "scheme": SCHEME, "file": "c1" })).unwrap();
+    assert_eq!(
+        (
+            &answer["changes"][0]["employee"],
+            &answer["changes"][0]["change"],
+            &answer["uploaded_by"],
+            &answer["second_approver"]
+        ),
+        (
+            &serde_json::json!("E002"),
+            &serde_json::json!("leave"),
+            &serde_json::json!("admin-bo"),
+            &serde_json::json!(true)
+        ),
+        "{answer}"
+    );
+    let busy = refused(h.employer(enter("c2", vec![salary("E001", 70_000_00)], false)));
+    assert_eq!(busy.0, "file_in_progress");
+    assert!(busy.1.contains("approve or withdraw it first"), "{}", busy.1);
+    assert_eq!(code(h.approve("c1")), "second_approver");
+    assert!(h.scheme().membership.active("E002").is_some());
+    let approve = file_cmd(|scheme, file| GroupCommand::ApproveFile { scheme, file }, "c1");
+    h.send_as(caller::EMPLOYER, "admin-cy", approve).unwrap();
+    h.settle();
+    assert!(h.scheme().membership.active("E002").is_none(), "the leaver came off on approval");
+    assert_eq!(h.scheme().files["c1"].status, FileStatus::Applied);
+
+    // A salary change that needs nobody else, approved by the person who entered it.
+    h.employer(enter("c2", vec![salary("E001", 70_000_00)], false)).unwrap();
+    h.approve("c2").unwrap();
+    assert_eq!(h.scheme().membership.active("E001").unwrap().attrs.salary_minor, Some(70_000_00));
+    assert_eq!(code(h.employer(enter("c2", vec![salary("E001", 80_000_00)], false))), "file_exists");
+}
+
+/// Purpose: a joiner held because they look like a current member raises work for group
+/// administration naming the file; withdrawing the file clears it, applying the rest of the
+/// file leaves it, and the scheme's next file clears it.
+/// Why it matters: found by the scenario run, SCN-05 (F-SCN05-3). The look-alike was refused as
+/// "held for review" but nobody was asked to review it, so the joiner was left without cover.
+#[test]
+fn a_look_alike_joiner_is_put_to_group_administration() {
+    let mut h = Harness::new(terms());
+    let mut twin = row(2, "E009", attrs("staff", 50_000_00, "akl"));
+    twin.fingerprint = Some("fp-E001".into());
+    let founder = || row(1, "E001", attrs("staff", 60_000_00, "akl"));
+    h.upload("f1", FileKind::Full, vec![founder(), twin.clone()]).unwrap();
+    let raised = |h: &Harness| {
+        let held = h.g.exceptions.values().filter(|e| e.kind == ExceptionKind::JoinerHeldForReview);
+        held.map(|e| e.subject.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(raised(&h), vec!["f1".to_string()]);
+    assert!(h.scheme().files["f1"].rejected.iter().any(|r| r.code == "held_for_review"));
+    h.employer(file_cmd(|scheme, file| GroupCommand::WithdrawFile { scheme, file }, "f1")).unwrap();
+    assert!(raised(&h).is_empty(), "withdrawing the file clears it");
+
+    h.upload("f2", FileKind::Full, vec![founder(), twin]).unwrap();
+    assert_eq!(raised(&h), vec!["f2".to_string()]);
+    h.approve("f2").unwrap();
+    assert_eq!(raised(&h), vec!["f2".to_string()], "applying the rest of the file leaves it for staff");
+    h.upload("f3", FileKind::Full, vec![founder()]).unwrap();
+    assert!(raised(&h).is_empty(), "the next file says who is still waiting");
 }
