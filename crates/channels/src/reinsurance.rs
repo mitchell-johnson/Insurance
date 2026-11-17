@@ -200,6 +200,14 @@ pub fn question_names() -> Vec<&'static str> {
     QUESTIONS.iter().map(|q| q.0).collect()
 }
 
+/// Each question with the fields it needs, for the MCP tool's description.
+pub fn question_fields() -> Vec<(&'static str, Vec<&'static str>)> {
+    QUESTIONS
+        .iter()
+        .map(|(name, text, numbers)| (*name, text.iter().chain(numbers.iter()).copied().collect()))
+        .collect()
+}
+
 /// The commands this console forwards, by name, for the MCP tool that sends them.
 pub fn command_names() -> Vec<&'static str> {
     DIRECT.iter().copied().chain(COUNTERSIGNED).collect()

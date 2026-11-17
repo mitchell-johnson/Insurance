@@ -305,3 +305,12 @@ Mitchell asked for every declared AIA benefit to work. The calls made, and why:
 - **Guaranteed rates are chosen per layer.** Each layer keeps the rate table version in force when it was priced. An increase is priced on the table of its own day, which is what the wording says.
 - **Cover for Life is made paid up instead of lapsing** only where every paying cover qualifies. Otherwise it lapses as before. Premium for the days ahead is credited first, then what is unpaid for the days already covered is written off as at a lapse. This posts under its own kind (`paid_up_arrears`), so the conduct return does not count it as a lapse.
 - **Medical Advancements and Enhancement Pass Back are shown in the cover check.** The facts list the later definition version beside the bound one, and the assessor applies whichever is more favourable. The claims decision records both.
+
+## What the portal offers and asks of people (17 Nov 2026)
+
+Decided while fixing the scenario run's portal findings (SCN-01, SCN-02, SCN-08, SCN-13, SCN-16):
+
+- **An assistant is offered only the tools it could use.** The MCP tool list is filtered by what the caller holds, not by which sign-in they used. Staff see a tool when one of their templates, or an active one-off or break-glass grant, gives an action the route checks. Customer-realm callers see adviser tools only with an engagement or practice, and employer tools only as a scheme administrator. A profile uplift changes limits, not actions, so it offers nothing new. The route still decides each call; the list is only so that an assistant is not shown tools that can only refuse it.
+- **A phone number written with a leading 0 is a New Zealand number.** `021 123 4567` is stored as `+64211234567`; spaces, dashes, brackets and dots are dropped. A number for another country must start with `+`. Customers are in New Zealand, and asking them to type `+64` was refused as an error they could not understand.
+- **Lifting a hold needs a person.** A customer cannot lift a hold on their record from the page: removing it needs an identity check passed in the last 24 hours, which a person on the phone does. The page says to call, rather than asking for a code the customer has never been given.
+- **A policy is reached by its number in any case, or by the last three digits in a search.** Callers read out numbers, often only the end. A search by number lists a policy closed to the searcher (their own, or a declared connection's) only as closed, with nothing of it shown.

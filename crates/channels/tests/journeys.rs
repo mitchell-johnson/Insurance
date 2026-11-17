@@ -2234,3 +2234,30 @@ fn an_incoming_broker_sees_the_scheme_from_the_appointment_day() {
     assert_eq!(w.ch.data.directory.standing("e-brk", appointed), AdviserStanding::Active);
     assert_eq!(rows(&pol, appointed), 0, "and to nothing else");
 }
+
+/// Purpose: once the owner changes how often they pay, the policy's own row says the new frequency and the day it starts, from the
+/// core's `BillingChanged`; before any change it says nothing, and the bills show it.
+/// Why it matters: after approving a change of frequency neither the customer nor the adviser could see what the policy is now paid
+/// by, so nobody could check the change was made (found by the scenario run, SCN-01 and SCN-13).
+#[test]
+fn a_change_of_frequency_shows_on_the_policy() {
+    let mut w = World::new();
+    let policy = retail(&mut w);
+    let on = w.ch.today(w.at);
+    let head = |w: &World| w.ch.rows(&policy, on, None).values().find(|r| r.kind == "policy").unwrap().body.clone();
+    assert_eq!(head(&w)["frequency"], serde_json::Value::Null);
+    let partition = w.ch.data.view.policy(&policy).unwrap().partition;
+    let change = ic_core::billing_change::ChangeBilling {
+        policy: policy.clone(),
+        reference: "r-freq".into(),
+        frequency: Some(Frequency::Fortnightly),
+        billing_day: None,
+    };
+    w.cluster
+        .submit(partition, "policy-servicing", ic_core::Command::ChangeBilling(Box::new(change)))
+        .unwrap();
+    w.relay();
+    let shown = head(&w)["frequency"].clone();
+    assert_eq!(shown["frequency"], "fortnightly", "{shown}");
+    assert!(shown["from"].is_string(), "{shown}");
+}

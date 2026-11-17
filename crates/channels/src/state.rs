@@ -93,7 +93,7 @@ pub const MONEY_KINDS: &[&str] = &["make_payment", "change_payment_method", "cha
 /// on their enrolled device, so a stolen session or an assistant acting on a
 /// sign-in alone cannot end someone's cover or change their debits. Declining
 /// an indexation is not among them: it is taken back as easily as it is made.
-pub const CONTRACT_KINDS: &[&str] = &["cancel_policy", "change_frequency"];
+pub const CONTRACT_KINDS: &[&str] = &["cancel_policy", "change_frequency", "reduce_cover"];
 
 /// Whether a person's own request of this kind needs their device's signature.
 pub fn needs_signature(kind: &str) -> bool {
@@ -175,6 +175,10 @@ pub struct Request {
     /// Entered by staff for a customer who rang.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assisted: Option<Assisted>,
+    /// Cancelled by the policyholder rather than by whoever asked: the
+    /// customer declined a change prepared for them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declined_by: Option<PartyId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,6 +298,9 @@ pub struct PolicyExtras {
     /// Orders placed and not yet executed or cancelled, by order ID.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub orders: BTreeMap<String, PendingOrder>,
+    /// How often premium falls due, once the owner has changed it, and from when.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency: Option<(ic_product::Frequency, NaiveDate)>,
 }
 
 /// A policy's units in one fund, in millionths of a unit.
@@ -479,6 +486,8 @@ impl ChannelState {
                 "number": entry.number, "product": entry.product_code, "status": entry.status, "ended": ended(entry.status), "standing": entry.standing,
                 "indexation_declined": extras.and_then(|e| e.indexation_declined),
                 "last_anniversary": extras.and_then(|e| e.last_anniversary).map(|(n, on)| json!({ "number": n, "on": on })),
+                // Changed by the owner: what they now pay by and from when. Until then the bills show it.
+                "frequency": extras.and_then(|e| e.frequency).map(|(f, from)| json!({ "frequency": f, "from": from })),
             }),
         );
         if let Some(b) = d.view.billing(policy) {
@@ -569,7 +578,25 @@ impl ChannelState {
                 "request",
                 Some(r.party.clone()),
                 false,
-                json!({ "id": r.id, "kind": r.kind, "submitted": r.submitted, "state": r.status }),
+                json!({
+                    "id": r.id,
+                    "kind": r.kind,
+                    "submitted": r.submitted,
+                    "state": r.status,
+                    // What a servicing change is, so whoever approves it reads it in words: choices only, never a claim's content.
+                    "payload": (r.module == crate::servicing::MODULE).then(|| r.payload.clone()),
+                    "prepared_by": if r.assisted.is_some() {
+                        "staff"
+                    } else if d.directory.owns(policy, &r.party) {
+                        "owner"
+                    } else if d.directory.authorities.get(policy).is_some_and(|a| a.contains_key(&r.party)) {
+                        "adviser"
+                    } else {
+                        "support"
+                    },
+                    "approved_by": r.approved_by,
+                    "declined": r.declined_by.is_some(),
+                }),
             );
         }
         for (key, row) in d.published.get(policy).into_iter().flatten() {
@@ -664,6 +691,11 @@ impl ChannelState {
             self.data.today = Some(record.business_date);
         }
         match &record.event {
+            Event::BillingChanged {
+                policy, frequency, first_day, ..
+            } => {
+                self.data.extras.entry(policy.clone()).or_default().frequency = Some((*frequency, *first_day));
+            }
             Event::PremiumDue {
                 policy,
                 receivable,
@@ -1010,7 +1042,13 @@ impl ChannelState {
                     (_, IdentityCommand::RevokeSessions { .. }) => false,
                 };
                 if !allowed {
-                    return Err(reject("forbidden", "that is not yours to do"));
+                    // A signature over a challenge the device was never given reads as a forgery, not a missing permission.
+                    let why = if matches!(command, IdentityCommand::RedeemChallenge { .. }) {
+                        "that signature does not answer a challenge your enrolled device was given; sign it again on your phone"
+                    } else {
+                        "that is not yours to do"
+                    };
+                    return Err(reject("forbidden", why));
                 }
                 for event in self.data.identity.apply(at, command)? {
                     if let IdentityEvent::DeviceRevoked { party, .. } | IdentityEvent::SessionsRevoked { party } = &event {
@@ -1114,6 +1152,7 @@ impl ChannelState {
                         signed_by: BTreeSet::new(),
                         route_to_person,
                         assisted,
+                        declined_by: None,
                     },
                 )?;
                 if request.status == RequestStatus::Pending {
@@ -1219,6 +1258,7 @@ impl ChannelState {
                 let policy = request.policy.clone();
                 if let Some(r) = self.data.requests.get_mut(&id) {
                     r.status = RequestStatus::Cancelled;
+                    r.declined_by = actor.party().filter(|_| !by_requester).cloned();
                 }
                 if let Some(policy) = policy {
                     self.refresh(&policy, on, None, &mut effects);

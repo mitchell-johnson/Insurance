@@ -15,9 +15,9 @@
   <form id="change"><h2>Prepare a change for the customer to approve</h2>
   <div class="row"><div><label for="kind">Change</label><select id="kind"><option value="decline_indexation">Decline indexation</option><option value="change_frequency">Change payment frequency</option><option value="cancel_policy">Cancel policy</option></select></div>
   <div><label for="freq">New payment frequency (for a change of frequency)</label><select id="freq"><option value="monthly">Monthly</option><option value="fortnightly">Fortnightly</option><option value="quarterly">Quarterly</option><option value="half_yearly">Half-yearly</option><option value="yearly">Yearly</option></select></div>
-  <div><label for="note">Details</label><input id="note" maxlength="200"></div><button id="send">Send to customer</button></div>
+  <div><label for="note">A note for the customer</label><input id="note" maxlength="200"></div><button id="send">Send to customer</button></div><div id="send-why"></div>
   <p class="muted">The customer approves in their app with their device. Nothing changes until they do.</p></form><div id="change-msg" aria-live="polite"></div></section>
-<section data-view="Your book"><h2>Requests you have made</h2><div id="requests"></div></section></main>
+<section data-view="Your book"><h2>Requests you have made</h2><div id="requests"></div><div id="req-msg" aria-live="polite"></div></section></main>
 <script src="/ui/app.js"></script>
 <script>
 "use strict";
@@ -25,7 +25,7 @@ const { h, clear, put, money, table, say, signIn, signOut, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "customers";
 let current = null;
-const standing = (s) => s.state === "active" ? "Active" : s.state === "ended" ? "Ended" : `Read-only since ${s.since}: licence of ${s.licence_of} is ${s.status}`;
+const standing = (s) => s.state === "active" ? "Active" : s.state === "ended" ? "Ended" : `Read-only since ${s.since}: the licence of ${s.licence_of} is ${String(s.status).replace(/_/g, " ")}`;
 async function open(policy, canTransact) {
   const view = await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(policy.policy));
   current = policy.policy;
@@ -50,12 +50,17 @@ async function open(policy, canTransact) {
   put($("claims"), claims.rows.length ? table(["Claim", "Status", "Notified", "Closed"], claims.rows.map((c) => [c.claim, String(c.status).replace(/_/g, " "), c.notified_on, c.closed_on || ""]))
     : h("p", { class: "muted" }, "No claims."));
   $("send").disabled = !canTransact;
+  put($("send-why"), canTransact ? null : h("p", { class: "muted" }, "You cannot send changes while your access is read-only. The customer can still call us."));
   $("detail").scrollIntoView({ behavior: "smooth" });
 }
 async function load() {
   const book = await api(R, "GET", "/adviser/v1/book");
   clear($("readonly"));
-  if (book.read_only) $("readonly").append(h("div", { class: "banner warn", role: "status" }, h("strong", {}, "Your access is read-only. "), "You can see your book. Nothing can be quoted, submitted or changed until the licence your engagement depends on is restored or you move to another provider."));
+  // Which licence, and since when, so the adviser knows what to fix.
+  const held = book.engagements.map((e) => e.standing).find((s) => s.state === "read_only");
+  if (book.read_only) $("readonly").append(h("div", { class: "banner warn", role: "status" }, h("strong", {}, "Your access is read-only. "),
+    held ? `The licence of ${held.licence_of} has been ${String(held.status).replace(/_/g, " ")} since ${held.since}. ` : "",
+    "You can see your book. Nothing can be quoted, submitted or changed until that licence is restored or you move to another provider."));
   put($("engagements"), table(["Engagement", "Provider", "From", "To", "Standing"], book.engagements.map((e) => [e.engagement, e.fap, e.from, e.to || "", standing(e.standing)])));
   const totals = Object.entries(book.held.held || {});
   put($("held"), totals.length ? h("p", {}, "Total held: ", h("strong", {}, totals.map(([c, v]) => money(v, c)).join(", ")), ". It is released when the reason below is resolved.") : h("p", { class: "muted" }, "Nothing is being held from you."),
@@ -72,10 +77,20 @@ async function load() {
     !m.disputed && !m.overturned ? h("button", { class: "quiet", type: "button", on: { click: () => { disputing = m.layer; $("dispute").hidden = false; $("d-reason").focus(); } } }, "Dispute") : ""]))
     : h("p", { class: "muted" }, "None of your business has been treated as a replacement."));
   const requests = await api(R, "GET", "/app/v1/requests");
-  // A request names its policy by the number the adviser knows it by.
+  // A request names its policy by the number the adviser knows it by, even once it has left the book.
   const numbers = Object.fromEntries(book.policies.map((p) => [p.policy, p.number]));
-  put($("requests"), requests.length ? table(["Request", "Policy", "Change", "State"], requests.map((r) => [r.id, numbers[r.policy] || r.policy || "", String(r.kind).replace(/_/g, " "), String(r.status).replace(/_/g, " ")]))
+  put($("requests"), requests.length ? table(["Sent", "Policy", "Change", "Where it stands", ""], requests.map((r) => [portal.day(r.submitted), r.number || numbers[r.policy] || r.policy || "",
+    portal.change(r.kind, r.payload), portal.requestState(r, true),
+    r.status === "awaiting_approval" ? h("button", { type: "button", class: "quiet", id: "withdraw-" + r.id, on: { click: run($("req-msg"), () => withdraw(r)) } }, "Withdraw") : ""]))
     : portal.empty("You have sent no changes for customers to approve."));
+}
+// Taking back a change the customer has not yet approved.
+async function withdraw(r) {
+  const what = portal.change(r.kind, r.payload);
+  if (!(await portal.ask({ title: "Withdraw this change?", text: `${what}: the customer is no longer asked to approve it.`, confirm: "Withdraw it", keep: "Keep it", danger: true }))) return;
+  await api(R, "DELETE", "/app/v1/requests/" + encodeURIComponent(r.id));
+  await load();
+  return `Withdrawn: ${what}.`;
 }
 $("st-form").addEventListener("submit", run($("st-msg"), async () => {
   const st = await api(R, "GET", "/adviser/v1/statements/" + encodeURIComponent($("st-number").value));

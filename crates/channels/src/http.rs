@@ -453,7 +453,7 @@ fn device_required(what: &str) -> Problem {
     Problem::new(
         StatusCode::UNAUTHORIZED,
         "device_required",
-        format!("{what} needs proof of an enrolled device's key"),
+        format!("{what} needs proof of an enrolled device's key: do it in the app on your phone, or set up this browser under Signing first"),
     )
 }
 
@@ -473,7 +473,35 @@ impl AppState {
 /// when it could not be reached.
 fn mastered(answer: Result<crate::customers::Answered, String>) -> Answer {
     let (status, body) = answer.map_err(|e| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "customer_master_unavailable", e))?;
+    passed(status, body, "the customer master")
+}
+
+/// Another service's answer passed on as it gave it. A refusal is also said
+/// the way the portal's own refusals are, with `title` its code and `detail`
+/// its words, so a page and an assistant can tell the person why; the
+/// service's own `error` is kept for callers that read it.
+fn passed(status: u16, body: Value, service: &str) -> Answer {
     let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+    if status.is_success() {
+        return Ok((status, Json(body)).into_response());
+    }
+    let error = body.get("error").cloned().unwrap_or(Value::Null);
+    let code = error["code"]
+        .as_str()
+        .or(error.as_str())
+        .or(body["title"].as_str())
+        .or(body["code"].as_str())
+        .unwrap_or(status.canonical_reason().unwrap_or("refused"))
+        .to_string();
+    let detail = body["detail"]
+        .as_str()
+        .or(error["message"].as_str())
+        .or(body["message"].as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{service} refused this without saying why ({})", status.as_u16()));
+    let mut body = if body.is_object() { body } else { json!({}) };
+    body["title"] = json!(code);
+    body["detail"] = json!(detail);
     Ok((status, Json(body)).into_response())
 }
 
@@ -481,13 +509,21 @@ fn mastered(answer: Result<crate::customers::Answered, String>) -> Answer {
 /// consents, with the version a change must name.
 async fn profile(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
     let session = s.customer(&headers, &method, &uri, b"").await?;
-    mastered(s.master()?.record(&session.party).await)
+    match s.master()?.record(&session.party).await {
+        // A sign-in bound to no record yet: say what to do, not "no such party".
+        Ok((404, _)) => Err(Problem::new(
+            StatusCode::NOT_FOUND,
+            "no_customer_record",
+            "we have no customer record for you yet; if you hold a policy with us, call us and we will link it to this sign-in",
+        )),
+        answer => mastered(answer),
+    }
 }
 
 /// The intake's answer, as it gave it; 503 when it cannot be reached.
 fn intake_answer(answer: Result<crate::disclosures::Answered, String>) -> Answer {
     let (status, body) = answer.map_err(|e| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "underwriting_intake_unavailable", e))?;
-    Ok((StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), Json(body)).into_response())
+    passed(status, body, "the underwriting intake")
 }
 
 impl AppState {
@@ -889,7 +925,49 @@ async fn profile_export(State(s): State<Shared>, headers: HeaderMap, method: Met
     if session.device.is_none() {
         return Err(device_required("a copy of your record"));
     }
-    mastered(s.master()?.export(&session.party).await)
+    let master = s.master()?;
+    let mut held = Vec::new();
+    for answer in [master.record(&session.party).await, master.export(&session.party).await] {
+        match answer {
+            Ok((200..=299, body)) => held.push(body),
+            refused => return mastered(refused),
+        }
+    }
+    let (history, details) = (held.pop(), held.pop());
+    // Everything the page promises, each part under a name a person can read: what the customer master holds and how it came to
+    // be, then each policy as the person sees it, what they asked for or approved, and the devices that sign for them.
+    let policies = s
+        .ask(Question::Policies {
+            party: session.party.clone(),
+            at: session.at,
+        })
+        .await?;
+    let mut views = Vec::new();
+    for summary in policies.as_array().into_iter().flatten() {
+        let policy = PolicyId::from(summary["policy"].as_str().unwrap_or_default());
+        views.push(
+            s.ask(Question::Policy {
+                viewer: session.party.clone(),
+                policy,
+                at: session.at,
+            })
+            .await?,
+        );
+    }
+    let requests = s.ask(Question::Requests { party: session.party.clone() }).await?;
+    let devices = s.ask(Question::Devices { party: session.party.clone() }).await?;
+    let today = s.ask(Question::BusinessDate).await?;
+    ok(json!({
+        "party": session.party,
+        "as_at": today["today"],
+        "about": "Everything we hold about you: your details, how they came to be as they are, your policies as you see them, \
+                  what you asked for or approved, and the devices that sign for you.",
+        "your_details": details,
+        "history_of_your_details": history,
+        "policies": views,
+        "requests": requests,
+        "devices": devices,
+    }))
 }
 
 async fn sync(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Query(q): Query<Have>) -> Answer {
@@ -1270,7 +1348,8 @@ async fn book(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: 
             .await?;
         if practice["advisers"].as_array().is_none_or(|a| a.is_empty()) {
             return Err(Problem::forbidden(
-                "the adviser portal is for advisers and advice providers, and you are not engaged as either",
+                "the adviser portal is for advisers and advice providers, and you are not engaged as either: \
+                 ask your advice provider, or our distribution team, to set up your engagement",
             ));
         }
     }
@@ -1292,8 +1371,12 @@ async fn practice(State(s): State<Shared>, headers: HeaderMap, method: Method, u
 /// sees their own lines, a provider or group the lines paid to it, with
 /// totals by component (its overrides among them). Anyone else's
 /// statement cannot be named, and one not yet cut is 404.
-async fn own_statement(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(number): Path<u32>) -> Answer {
+async fn own_statement(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(number): Path<String>) -> Answer {
     let session = s.customer(&headers, &method, &uri, b"").await?;
+    let number: u32 = number
+        .trim()
+        .parse()
+        .map_err(|_| Problem::bad_request(format!("a statement number is a whole number, such as 1, not {number:?}")))?;
     let question = json!({ "statement": { "payee": session.party, "number": number } });
     let answer = s
         .commission
@@ -1301,7 +1384,11 @@ async fn own_statement(State(s): State<Shared>, headers: HeaderMap, method: Meth
         .await
         .map_err(|e| module_problem("commission", StatusCode::BAD_REQUEST, e))?;
     if answer.is_null() {
-        return Err(Problem::not_found());
+        return Err(Problem::new(
+            StatusCode::NOT_FOUND,
+            "no_such_statement",
+            format!("you have no statement number {number}: your statements are numbered from 1, the latest on your Commission tab"),
+        ));
     }
     ok(crate::commission::own_statement(&answer))
 }
@@ -1533,7 +1620,7 @@ fn group_down(e: String) -> Problem {
 /// The group service's answer as it gave it.
 fn grouped(answer: Result<crate::group::Answered, String>) -> Answer {
     let (status, body) = answer.map_err(group_down)?;
-    Ok((StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), Json(body)).into_response())
+    passed(status, body, "the group service")
 }
 
 /// The scheme's standing, its invoices, one file with its preview, or one
@@ -2540,7 +2627,10 @@ async fn payments_command(State(s): State<Shared>, headers: HeaderMap, method: M
     let key = key(&headers, &session.party.0)?;
     let command: Value = parse(&body)?;
     if crate::payments::console_command(&command).is_none() {
-        return Err(Problem::bad_request("that is not a command people send to payments"));
+        return Err(Problem::bad_request(format!(
+            "that is not a command people send to payments: name it as {{\"type\": ...}}, one of {}",
+            crate::payments::COMMANDS.join(", ")
+        )));
     }
     let envelope = crate::payments::envelope(&key, &session.party, &roles, session.at, command);
     let output = s
@@ -3443,6 +3533,8 @@ async fn staff_caller(State(s): State<Shared>, headers: HeaderMap, method: Metho
     if view["found"] != true {
         return Err(Problem::not_found());
     }
+    // Named by its number, the policy is recorded by its ID.
+    let policy = view["policy"].as_str().map_or(policy, str::to_string);
     let holders: Vec<&str> = view["policyholders"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
     let owner = caller.is_some_and(|c| holders.contains(&c));
     let mut answers = Vec::new();
@@ -3886,7 +3978,7 @@ async fn staff_find(State(s): State<Shared>, headers: HeaderMap, method: Method,
         .filter(|p| p["closed"] != true)
         .filter_map(|p| p["party"].as_str().map(PartyId::from))
         .collect();
-    let mut found = s
+    let found = s
         .ask(Question::StaffFind {
             number: wanted.number.clone(),
             parties: open,
@@ -3896,8 +3988,36 @@ async fn staff_find(State(s): State<Shared>, headers: HeaderMap, method: Method,
         let held = person["party"].as_str().map(|p| found["parties"][p].clone()).unwrap_or(Value::Null);
         person["policies"] = if held.is_array() { held } else { json!([]) };
     }
+    // A policy found by its number that is the person's own, or a connection's, says only that it is closed to them.
+    let numbered: Vec<PolicyId> = found["policies"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| p["policy"].as_str())
+        .map(PolicyId::from)
+        .collect();
+    let closed = s
+        .ask(Question::ClosedTo {
+            staff: session.party.clone(),
+            policies: numbered,
+            at: session.at,
+        })
+        .await?;
+    let closed: Vec<&str> = closed.as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    let policies: Vec<Value> = found["policies"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|p| {
+            if p["policy"].as_str().is_some_and(|id| closed.contains(&id)) {
+                json!({ "closed": true })
+            } else {
+                p.clone()
+            }
+        })
+        .collect();
     ok(json!({
-        "policies": found["policies"].take(),
+        "policies": policies,
         "people": people,
         "searched_people": wanted.probe.is_some(),
         "customer_master_unavailable": master_down || (wanted.probe.is_some() && s.master.is_none()),
@@ -4346,8 +4466,15 @@ fn hardened(mut response: Response) -> Response {
     response
 }
 
-fn page(s: &AppState, body: &'static str) -> Response {
-    let mut response = Html(body).into_response();
+/// A page, told the books' business date in a `business-date` meta tag so
+/// that the dates it fills in are the books' and not the browser's clock.
+async fn page(s: &AppState, body: &'static str) -> Response {
+    let today = s.ask(Question::BusinessDate).await.ok().and_then(|d| d["today"].as_str().map(str::to_string));
+    let html = match today {
+        Some(day) => body.replacen("<head>", &format!("<head><meta name=\"business-date\" content=\"{day}\">"), 1),
+        None => body.to_string(),
+    };
+    let mut response = Html(html).into_response();
     // The policy is built from validated settings and base64 hashes, so it is always a legal header.
     if let Ok(policy) = HeaderValue::from_str(&s.ui.policy(body)) {
         response.headers_mut().insert("content-security-policy", policy);
@@ -4513,26 +4640,44 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/customers/{party}/audit", get(customers_audit))
         .route("/staff/v1/actors/{actor}/actions", get(customers_actions_by))
         .route("/status.json", get(status_json))
-        .route("/status", get(|State(s): State<Shared>| async move { page(&s, crate::ui::STATUS) }))
-        .route("/", get(|State(s): State<Shared>| async move { page(&s, crate::ui::INDEX) }))
-        .route("/customer", get(|State(s): State<Shared>| async move { page(&s, crate::ui::CUSTOMER) }))
-        .route("/adviser", get(|State(s): State<Shared>| async move { page(&s, crate::ui::ADVISER) }))
-        .route("/employer", get(|State(s): State<Shared>| async move { page(&s, crate::ui::EMPLOYER) }))
-        .route("/staff", get(|State(s): State<Shared>| async move { page(&s, crate::ui::STAFF) }))
-        .route("/ops", get(|State(s): State<Shared>| async move { page(&s, crate::ui::OPS) }))
-        .route("/complaints", get(|State(s): State<Shared>| async move { page(&s, crate::ui::COMPLAINTS) }))
-        .route("/finance", get(|State(s): State<Shared>| async move { page(&s, crate::ui::FINANCE) }))
-        .route("/claims", get(|State(s): State<Shared>| async move { page(&s, crate::ui::CLAIMS) }))
-        .route("/reinsurance", get(|State(s): State<Shared>| async move { page(&s, crate::ui::REINSURANCE) }))
-        .route("/payments", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PAYMENTS) }))
-        .route("/collections", get(|State(s): State<Shared>| async move { page(&s, crate::ui::COLLECTIONS) }))
-        .route("/documents", get(|State(s): State<Shared>| async move { page(&s, crate::ui::DOCUMENTS) }))
-        .route("/records", get(|State(s): State<Shared>| async move { page(&s, crate::ui::RECORDS) }))
-        .route("/group", get(|State(s): State<Shared>| async move { page(&s, crate::ui::GROUP) }))
-        .route("/underwriting", get(|State(s): State<Shared>| async move { page(&s, crate::ui::UNDERWRITING) }))
-        .route("/pricing", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PRICING) }))
-        .route("/replacements", get(|State(s): State<Shared>| async move { page(&s, crate::ui::REPLACEMENTS) }))
-        .route("/commission", get(|State(s): State<Shared>| async move { page(&s, crate::ui::COMMISSION) }))
+        .route("/status", get(|State(s): State<Shared>| async move { page(&s, crate::ui::STATUS).await }))
+        .route("/", get(|State(s): State<Shared>| async move { page(&s, crate::ui::INDEX).await }))
+        .route("/customer", get(|State(s): State<Shared>| async move { page(&s, crate::ui::CUSTOMER).await }))
+        .route("/adviser", get(|State(s): State<Shared>| async move { page(&s, crate::ui::ADVISER).await }))
+        .route("/employer", get(|State(s): State<Shared>| async move { page(&s, crate::ui::EMPLOYER).await }))
+        .route("/staff", get(|State(s): State<Shared>| async move { page(&s, crate::ui::STAFF).await }))
+        .route("/ops", get(|State(s): State<Shared>| async move { page(&s, crate::ui::OPS).await }))
+        .route(
+            "/complaints",
+            get(|State(s): State<Shared>| async move { page(&s, crate::ui::COMPLAINTS).await }),
+        )
+        .route("/finance", get(|State(s): State<Shared>| async move { page(&s, crate::ui::FINANCE).await }))
+        .route("/claims", get(|State(s): State<Shared>| async move { page(&s, crate::ui::CLAIMS).await }))
+        .route(
+            "/reinsurance",
+            get(|State(s): State<Shared>| async move { page(&s, crate::ui::REINSURANCE).await }),
+        )
+        .route("/payments", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PAYMENTS).await }))
+        .route(
+            "/collections",
+            get(|State(s): State<Shared>| async move { page(&s, crate::ui::COLLECTIONS).await }),
+        )
+        .route("/documents", get(|State(s): State<Shared>| async move { page(&s, crate::ui::DOCUMENTS).await }))
+        .route("/records", get(|State(s): State<Shared>| async move { page(&s, crate::ui::RECORDS).await }))
+        .route("/group", get(|State(s): State<Shared>| async move { page(&s, crate::ui::GROUP).await }))
+        .route(
+            "/underwriting",
+            get(|State(s): State<Shared>| async move { page(&s, crate::ui::UNDERWRITING).await }),
+        )
+        .route("/pricing", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PRICING).await }))
+        .route(
+            "/replacements",
+            get(|State(s): State<Shared>| async move { page(&s, crate::ui::REPLACEMENTS).await }),
+        )
+        .route(
+            "/commission",
+            get(|State(s): State<Shared>| async move { page(&s, crate::ui::COMMISSION).await }),
+        )
         .route("/ui/app.js", get(|| async { asset("text/javascript; charset=utf-8", crate::ui::SCRIPT) }))
         .route("/ui/app.css", get(|| async { asset("text/css; charset=utf-8", crate::ui::STYLE) }))
         .route("/ui/theme.js", get(|| async { asset("text/javascript; charset=utf-8", crate::ui::THEME) }))
