@@ -53,12 +53,12 @@ const SHAPE = {
   start_engagement: (f) => ({ id: portal.reference("ENG"), engagement: { adviser: f.adviser, with: f.with, from: f.from, to: f.to || null, accreditations: f.accreditations.split(",").map((x) => x.trim()).filter(Boolean) } }),
   relate: (f) => ({ ...f, to: null }),
 };
-// What was recorded, repeated back in words.
+// What was recorded, repeated back in words, naming what it was done to (an engagement by its reference: F2-20-10).
 const said = (name, f, body) => {
   const who = f.party || f.payee || f.child || f.adviser || f.id || "";
   const rest = Object.entries(f).filter(([k, v]) => v != null && v !== "" && v !== who).map(([k, v]) => `${words(k)} ${words(v)}`).join(", ");
   const made = name === "start_engagement" ? ` as ${body.id}` : "";
-  return `Done: ${ACTIONS[name][0].toLowerCase()}${who && who !== f.id ? ` for ${who}` : ""}${made}${rest ? ` (${rest})` : ""}.`;
+  return `Done: ${ACTIONS[name][0].toLowerCase()}${who ? (who === f.id ? ` ${who}` : ` for ${who}`) : ""}${made}${rest ? ` (${rest})` : ""}.`;
 };
 // Draw a set of fields into a row, and read them back as an object.
 function draw(row, prefix, spec) {

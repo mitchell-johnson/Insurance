@@ -150,6 +150,56 @@ const QUESTIONS: [(&str, &[&str]); 33] = [
 /// connectivity administrator's alone.
 const DETAILED: [&str; 4] = ["authority", "payee", "refund", "find_payees"];
 
+/// What a reader sees of an answer they may ask (F2-18-1): every bank
+/// account's number masked to its last four digits and every overseas
+/// beneficiary's address withheld, wherever in the answer they sit. A
+/// run's items carry the account each is paid to; an auditor checks who
+/// was paid and how much, not where to send money.
+pub fn for_reader(answer: &mut Value) {
+    match answer {
+        Value::Object(fields) => {
+            for (key, value) in fields.iter_mut() {
+                match (key.as_str(), value) {
+                    ("account" | "drill_account", Value::Object(account)) => {
+                        if let Some(Value::String(number)) = account.get_mut("number") {
+                            *number = masked(number);
+                        }
+                    }
+                    ("foreign", Value::Object(foreign)) => {
+                        if let Some(address) = foreign.get_mut("address") {
+                            *address = json!("withheld");
+                        }
+                    }
+                    (_, value) => for_reader(value),
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(for_reader),
+        _ => {}
+    }
+}
+
+/// An account number with all but its last four letters or digits hidden
+/// and its separators kept: 01-0001-8016911-39 shows as **-****-*****11-39.
+fn masked(number: &str) -> String {
+    let total = number.chars().filter(char::is_ascii_alphanumeric).count();
+    let mut seen = 0;
+    number
+        .chars()
+        .map(|c| {
+            if !c.is_ascii_alphanumeric() {
+                return c;
+            }
+            seen += 1;
+            if seen + 4 > total {
+                c
+            } else {
+                '*'
+            }
+        })
+        .collect()
+}
+
 /// Questions about money-laundering cases: who paid whose premium. Only
 /// compliance sees them.
 const COMPLIANCE_ONLY: [&str; 2] = ["payer_cases", "payer_case"];
@@ -254,4 +304,37 @@ pub fn question_names() -> Vec<&'static str> {
 /// Each question with the fields it needs, for the MCP tool's description.
 pub fn question_fields() -> Vec<(&'static str, Vec<&'static str>)> {
     QUESTIONS.iter().map(|(name, fields)| (*name, fields.to_vec())).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Purpose: a reader's copy of a payments answer has every account
+    /// number masked to its last four digits, separators kept, and every
+    /// overseas beneficiary's address withheld, however deep in the answer
+    /// they sit; other fields are left as they were.
+    /// Why it matters: a read-only auditor was sent payees' full account
+    /// numbers in a run's answer, which is a payment-fraud exposure (found
+    /// by the scenario run, F2-18-1).
+    #[test]
+    fn a_reader_sees_accounts_masked() {
+        let mut answer = json!({
+            "run": "r1",
+            "items": [{
+                "item": "i1",
+                "account": {"name": "Account Holder", "number": "01-0001-8016911-39"},
+                "foreign": {"bic": "DEUTDEFF", "country": "DE", "currency": "EUR", "address": "1 Strasse, Berlin"}
+            }],
+            "drill_account": {"name": "Drill", "number": "0101234567"},
+            "number": "7"
+        });
+        for_reader(&mut answer);
+        assert_eq!(answer["items"][0]["account"]["number"], json!("**-****-*****11-39"));
+        assert_eq!(answer["items"][0]["account"]["name"], json!("Account Holder"));
+        assert_eq!(answer["items"][0]["foreign"]["address"], json!("withheld"));
+        assert_eq!(answer["items"][0]["foreign"]["country"], json!("DE"));
+        assert_eq!(answer["drill_account"]["number"], json!("******4567"));
+        assert_eq!(answer["number"], json!("7"));
+    }
 }

@@ -1277,7 +1277,7 @@ fn a_lost_licence_makes_the_adviser_read_only() {
     // The customer is told, with a direct route to the insurer.
     assert_eq!(
         w.row(KIRI, &format!("{pol}/adviser/adv-1")).unwrap(),
-        json!({ "adviser": "adv-1", "state": "unavailable", "since": "2027-11-15", "contact": "insurer" })
+        json!({ "adviser": "adv-1", "state": "unavailable", "since": "2027-11-15", "contact": "insurer", "licence": "provider" })
     );
     // The adviser still sees the book and can change nothing.
     assert_eq!(w.sees("adv-1", &pol).len(), 6);
@@ -1310,8 +1310,12 @@ fn a_lost_licence_makes_the_adviser_read_only() {
     assert!(w.ch.data.directory.licence_on(&p("nobody"), open()).is_none(), "no record means licensed");
 }
 
-/// Purpose: an engagement's end ends the adviser's access with it; the structure above an adviser is dated; and bad distribution data is refused.
-/// Why it matters: access belongs to the engagement, not the adviser or the advice business, so a move between providers must not carry the old book along.
+/// Purpose: an engagement's end ends the adviser's access with it, and the customer is told in words from when; appointing an
+/// adviser under an engagement that has ended is refused in words, and under one in force it holds; the structure above an
+/// adviser is dated; and bad distribution data is refused.
+/// Why it matters: access belongs to the engagement, not the adviser or the advice business, so a move between providers must not
+/// carry the old book along. The customer was left with "No adviser on this policy" and no reason, and an appointment under an
+/// ended engagement reported success and did nothing (found by the scenario run, F2-20-1 and F2-20-2).
 #[test]
 fn access_ends_with_the_engagement() {
     let mut w = World::new();
@@ -1375,8 +1379,42 @@ fn access_ends_with_the_engagement() {
     assert_eq!(w.ch.data.directory.standing("e1", open()), AdviserStanding::Ended);
     assert_eq!(w.ch.data.directory.standing("nope", open()), AdviserStanding::Ended);
     assert!(w.sees("adv-1", &pol).is_empty());
-    assert!(w.row(KIRI, &format!("{pol}/adviser/adv-1")).is_none());
+    // The customer is told the adviser can no longer act, from when, with a route to the insurer.
+    assert_eq!(
+        w.row(KIRI, &format!("{pol}/adviser/adv-1")).unwrap(),
+        json!({ "adviser": "adv-1", "state": "ended", "since": "2027-11-15", "contact": "insurer" })
+    );
     assert_eq!(code(w.send(party("adv-1"), submit("r1", Some(&pol), "x", "policy-servicing"))), "not_found");
+    // Appointing under the ended engagement is refused in words, not accepted and then shown as no adviser.
+    let again = DirectoryCommand::GrantAdviserAuthority {
+        policy: pol.clone(),
+        adviser: p("adv-1"),
+        engagement: "e1".into(),
+    };
+    let refused = w.dir(party(KIRI), again).unwrap_err();
+    assert_eq!(refused.code, "engagement_ended");
+    assert!(refused.message.contains("ended on 15/11/2027"), "{}", refused.message);
+    // Under the engagement the adviser works under now, the appointment holds.
+    let record = |from| DirectoryCommand::RecordEngagement {
+        engagement: ic_channels::directory::Engagement {
+            id: "e4".into(),
+            adviser: p("adv-1"),
+            fap: p("fap-2"),
+            from,
+            to: None,
+        },
+    };
+    w.dir(module("distribution"), record(d(2025, 1, 1))).unwrap();
+    w.dir(
+        party(KIRI),
+        DirectoryCommand::GrantAdviserAuthority {
+            policy: pol.clone(),
+            adviser: p("adv-1"),
+            engagement: "e4".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(w.row(KIRI, &format!("{pol}/adviser/adv-1")).unwrap()["state"], json!("available"));
 }
 
 /// Purpose: when ownership changes, the previous owner's device is purged, their adviser's authority ends, and a lender with an assignment sees only that the policy exists.

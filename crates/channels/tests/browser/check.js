@@ -762,6 +762,15 @@ const sees = async (page, text) => {
   } });
   await visit(browser, "/documents", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/finance", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
+  // A reader is shown what they may read and offered no form that acts (F2-18-3).
+  await visit(browser, "/finance", { subject: "sub-aud" }, { run: async (p) => {
+    await sees(p, "View only");
+    await p.getByRole("tab", { name: "Journals" }).click();
+    await p.locator("#jlookup").waitFor();
+    for (const form of ["#journal", "#ye", "#rf", "#rr", "#dr", "#doc", "#co-form", "#ag-classify"]) {
+      if (await p.locator(form).isVisible()) throw new Error(`a reader was offered ${form}`);
+    }
+  } });
   await visit(browser, "/records", { subject: "sub-cd1" }, { expectStatus: [409], run: async (p) => {
     await say(p, "A customer rings: the desk finds them by name and birth date and opens their record");
     await p.locator("#new-call").click();

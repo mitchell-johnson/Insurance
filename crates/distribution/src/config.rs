@@ -877,7 +877,12 @@ impl DistributionState {
         self.config = config;
         for change in &set.changes {
             match change {
-                Change::CreateBook { id, .. } => ctx.emit(Event::BookCreated { book: id.clone() }),
+                Change::CreateBook { id, engagement, .. } => {
+                    ctx.emit(Event::BookCreated { book: id.clone() });
+                    if let Some(engagement) = engagement {
+                        self.book_made(engagement, id);
+                    }
+                }
                 Change::ActivateRule(rule) => {
                     ctx.emit(Event::RuleActivated {
                         book: rule.book.clone(),
@@ -888,12 +893,17 @@ impl DistributionState {
                         self.replay_book(ctx, &rule.book, rule.effective_from);
                     }
                 }
-                Change::StartEngagement { id, engagement } => ctx.emit(Event::EngagementStarted {
-                    id: id.clone(),
-                    adviser: engagement.adviser.clone(),
-                    with: engagement.with.clone(),
-                    from: engagement.from,
-                }),
+                Change::StartEngagement { id, engagement } => {
+                    ctx.emit(Event::EngagementStarted {
+                        id: id.clone(),
+                        adviser: engagement.adviser.clone(),
+                        with: engagement.with.clone(),
+                        from: engagement.from,
+                    });
+                    // Every book in the set exists by now, so a set that
+                    // makes the engagement's book with it raises no task.
+                    self.book_wanted(ctx, id);
+                }
                 Change::EndEngagement { id, on } => ctx.emit(Event::EngagementEnded { id: id.clone(), on: *on }),
                 Change::MoveLayers { layers, to, from } => {
                     for key in layers {

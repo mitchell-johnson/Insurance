@@ -473,10 +473,14 @@ fn the_outbox_gives_up_only_what_is_acknowledged() {
 }
 
 /// Purpose: every question the hosted module answers returns what the state holds, an
-/// answer is capped, and a question it does not know is refused.
+/// answer is capped, and a question it does not know is refused; a balance asked of a
+/// treaty that does not exist, or of a reinsurer not on its panel, is no answer rather
+/// than 0; and the exposure names each reinsurer's treaties.
 /// Why it matters: these answers are what the driver, the workbench and finance read. They
 /// come over the wire as JSON, so a renamed field or a question that silently answered
-/// null would only be found by whoever relied on it.
+/// null would only be found by whoever relied on it. An auditor asking a misspelt treaty's
+/// balance was told 0, and could not find a treaty's ID anywhere (found by the scenario
+/// run, F2-18-6).
 #[test]
 fn the_hosted_module_answers_its_questions() {
     let mut b = Bench::new();
@@ -521,6 +525,19 @@ fn the_hosted_module_answers_its_questions() {
     );
     assert_eq!(balance, json!(b.ri.balance(&retail(), &north())));
     assert!(balance.as_i64().unwrap() > 0);
+    // No such treaty, or a reinsurer not on its panel: no answer rather than a balance of 0 (F2-18-6).
+    for (treaty, reinsurer) in [("no-such-treaty", "reinsurer-north"), ("retail-life-surplus", "no-such")] {
+        let unknown = Query::Balance {
+            treaty: ic_reinsurance::TreatyId::from(treaty),
+            reinsurer: ic_reinsurance::ReinsurerId::from(reinsurer),
+        };
+        assert_eq!(ask(&b, unknown), Value::Null, "{treaty} {reinsurer}");
+    }
+    // The exposure names each reinsurer's treaties, so the treaty a balance needs is found there.
+    assert!(ask(&b, Query::Exposure { on: d(2027, 3, 1) })["reinsurer-north"]["treaties"]
+        .as_array()
+        .unwrap()
+        .contains(&json!(retail())));
     assert_eq!(ask(&b, Query::Statement { number: 1 })["net_minor"], balance);
     assert_eq!(ask(&b, Query::Statement { number: 2 }), Value::Null);
     let listing = ask(

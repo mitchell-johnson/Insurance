@@ -621,9 +621,11 @@ fn the_hosted_module_follows_events_and_survives_a_snapshot() {
 
 /// Purpose: an advice provider sees each adviser engaged with it today and the policies they service, a group sees the same
 /// through every provider linked under it on the date, and nobody else sees any of it; each policy is a summary as its
-/// adviser sees it, with no health facts, rows or claims.
+/// adviser sees it, with no health facts, rows or claims; an adviser who has left stays on the provider's record up to the
+/// day they left, with the policies they held for it then.
 /// Why it matters: persona row ADV-035. A provider answers for its advisers' advice and a group for its providers, so each
 /// needs the book under it; a link to a group that has ended, or a provider that is not the adviser's, must show nothing.
+/// A provider lost all history of a departed adviser the day he left (found by the scenario run, F2-20-6).
 #[test]
 fn a_provider_and_its_group_see_the_book_under_them() {
     let mut w = World::new();
@@ -666,4 +668,22 @@ fn a_provider_and_its_group_see_the_book_under_them() {
     w.dir(module("distribution"), link("fap-1", "group-1", Some(d(2026, 1, 1)))).unwrap();
     assert_eq!(practice(&w, "group-1")["advisers"], json!([]));
     assert_eq!(practice(&w, "fap-1")["policies"], json!(1));
+    assert_eq!(practice(&w, "fap-1")["former"], json!([]));
+
+    // The adviser leaves today: the provider keeps him on its record up to that day, with the policy he held for it,
+    // and no longer reads the policy itself.
+    w.engage("e1", "adv-1", "fap-1", Some(open())).unwrap();
+    let fap = practice(&w, "fap-1");
+    assert_eq!((&fap["advisers"], &fap["policies"]), (&json!([]), &json!(0)), "{fap}");
+    let number = w.ch.data.view.policy(&pol).unwrap().number.clone();
+    assert_eq!(
+        fap["former"],
+        json!([{ "engagement": "e1", "adviser": "adv-1", "fap": "fap-1", "from": "2025-01-01", "to": "2027-11-15",
+            "policies": [{ "policy": pol, "number": number }] }])
+    );
+    assert_eq!(
+        practice(&w, "fap-2")["former"],
+        json!([]),
+        "another provider's former advisers are not this one's"
+    );
 }

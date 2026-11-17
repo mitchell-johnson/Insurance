@@ -149,6 +149,8 @@ pub fn answer(state: &Reinsurance, question: Value) -> Result<Value, String> {
         Query::FacultativeTerms { reservation_id } => json(state.facultative_terms(&reservation_id)),
         Query::Cession { key } => json(state.cession_record(&key)),
         Query::Retained { life, on } => json(state.retained_on(&life, on)),
+        // No such treaty, or none with that reinsurer on its panel: nothing to answer, not a balance of 0 (F2-18-6).
+        Query::Balance { treaty, reinsurer } if !state.on_panel(&treaty, &reinsurer) => Ok(Value::Null),
         Query::Balance { treaty, reinsurer } => json(state.balance(&treaty, &reinsurer)),
         Query::Statement { number } => json(state.statement(number)),
         Query::Statements { reinsurer, after, limit } => json(state.statements_for(&reinsurer, after, limit.min(MAX_ANSWER))),

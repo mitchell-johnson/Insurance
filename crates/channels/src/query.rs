@@ -549,7 +549,24 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 })
                 .collect();
             let policies: usize = advisers.iter().map(|a| a["policies"].as_array().map_or(0, Vec::len)).sum();
-            json!({ "party": party, "advisers": advisers, "policies": policies })
+            // Former advisers stay on the practice's record up to the day each
+            // left, with the policies they held for it then; the policies
+            // themselves are no longer the practice's to read (F2-20-6).
+            let former: Vec<Value> = d
+                .directory
+                .former(&party, on)
+                .into_iter()
+                .map(|e| {
+                    let numbers: Vec<Value> = d
+                        .directory
+                        .policies_of(e)
+                        .into_iter()
+                        .filter_map(|policy| d.view.policy(policy).map(|entry| json!({ "policy": policy, "number": entry.number })))
+                        .collect();
+                    json!({ "engagement": e.id, "adviser": e.adviser, "fap": e.fap, "from": e.from, "to": e.to, "policies": numbers })
+                })
+                .collect();
+            json!({ "party": party, "advisers": advisers, "policies": policies, "former": former })
         }
         Question::Book { adviser, at } => {
             let on = state.today(at);

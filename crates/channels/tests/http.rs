@@ -2338,14 +2338,27 @@ async fn the_complaints_and_conduct_workbench() {
 
 /// Purpose: reinsurance asks what the insurer keeps on one person's life on a date, by the person, whatever policies insure them;
 /// the question needs the person and a real date, and the MCP tool's description names the fields each question takes.
+/// A balance of a treaty that does not exist is not found rather than 0, and a date sent as a number is told it is text.
 /// Why it matters: found by the scenario run, SCN-22 (F-SCN22-1, F-SCN22-5). A large life above the automatic limit could not be
 /// looked at by screen or by MCP: the console asked only per reinsurer, and an assistant was not told which fields any question needed.
+/// An auditor was told a misspelt treaty's balance was 0, and a numeric date got "input contains invalid characters" (F2-18-6, F2-18-7).
 #[tokio::test]
 async fn reinsurance_reads_a_lifes_accumulation() {
     let portal = portal();
     let (status, kept) = portal.get("sub-riview", "/staff/v1/reinsurance/retained?party=anna&on=2027-11-15").await;
     assert_eq!((status, kept.is_i64()), (StatusCode::OK, true), "{kept}");
-    for (bad, why) in [("retained?on=2027-11-15", "needs party"), ("retained?party=anna&on=soon", "is a date")] {
+    // A balance of a treaty nobody has is not 0; a date given as a number is told the form (F2-18-6, F2-18-7).
+    let (status, problem) = portal.get("sub-riview", "/staff/v1/reinsurance/balance?treaty=no-such&reinsurer=no-such").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{problem}");
+    assert!(
+        problem["detail"].as_str().unwrap().contains("the exposure lists each reinsurer's treaties"),
+        "{problem}"
+    );
+    for (bad, why) in [
+        ("retained?on=2027-11-15", "needs party"),
+        ("retained?party=anna&on=soon", "is a date"),
+        ("exposure?on=20271115", "on is a date written as text, YYYY-MM-DD"),
+    ] {
         let (status, problem) = portal.get("sub-riview", &format!("/staff/v1/reinsurance/{bad}")).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
         assert!(problem["detail"].as_str().unwrap().contains(why), "{problem}");
@@ -2878,7 +2891,8 @@ fn notify_body() -> Value {
 /// ledger takes only from its own services never leave the console; and its refusals come back with their codes.
 /// Why it matters: manual journals and the close are how people change and sign the books. The ledger trusts the console about who
 /// the person is and which roles they hold, so a console that let a reader post, stated roles nobody holds, or rounded an amount in
-/// the browser would break the controls auditors test first.
+/// the browser would break the controls auditors test first. The dashboard needed a `today` nobody should have to give, and the
+/// MCP descriptions did not name the period's form or the commission questions' fields (found by the scenario run, F2-18-5).
 #[tokio::test]
 async fn the_finance_console() {
     let portal = portal();
@@ -2921,6 +2935,13 @@ async fn the_finance_console() {
     let (status, dashboard) = ask("sub-aud", "dashboard?period=2027-11&today=2027-12-03").await;
     assert_eq!(status, StatusCode::OK, "{dashboard}");
     assert!(!dashboard["steps"].as_array().unwrap().is_empty());
+    // Without a date the close is read as of the books' date: nobody has to say what today is (F2-18-5).
+    let (status, dashboard) = ask("sub-aud", "dashboard?period=2027-11").await;
+    assert_eq!(status, StatusCode::OK, "{dashboard}");
+    let tools = ic_channels::mcp::catalogue();
+    let described = |name: &str| tools.iter().find(|t| t.name == name).unwrap().query;
+    assert!(described("finance_question").contains("YYYY-MM-ADJ"));
+    assert!(described("commission_question").contains("clawback_exposure: `date`"));
     for fine in [
         "checks?period=2027-11",
         "trial_balance?period=2027-11&fund=SF1-life",
@@ -2977,7 +2998,7 @@ async fn the_finance_console() {
     // Only the console's questions, each with its fields; one the ledger cannot read is its refusal.
     for bad in [
         "rate_table?id=life-base",
-        "dashboard?period=2027-11",
+        "dashboard",
         "checks?period=November",
         "extract?kind=x&period=2027-11&limit=many",
         "journal?id=nope",
@@ -4604,14 +4625,11 @@ async fn the_commission_console() {
     assert_eq!(tell("sub-dadmin", "", add.clone()).await.0, StatusCode::BAD_REQUEST, "no purpose");
     let (status, done) = tell("sub-dadmin", "onboarding adviser 9", add.clone()).await;
     assert_eq!((status, &done["accepted"]), (StatusCode::OK, &json!(true)), "{done}");
-    // Someone who may only look is refused by the commission module itself.
+    // Someone who may only look is refused before anything is sent, and told who acts there (F2-18-2).
     let other = json!({ "add_party": { "party": "adv-10", "kind": "adviser" } });
     let (status, problem) = tell("sub-dview", "trying", other).await;
-    assert_eq!(
-        (status, problem["title"].as_str()),
-        (StatusCode::FORBIDDEN, Some("not_authorised")),
-        "{problem}"
-    );
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert!(problem["detail"].as_str().unwrap().contains("distribution administrator"), "{problem}");
     // Not the console's to send.
     for command in [
         json!({ "propose_action": {} }),
@@ -4855,10 +4873,11 @@ async fn the_underwriting_console() {
 /// Purpose: staff move money from the payments console: every command reaches the payments module as the person signed in,
 /// with the roles their staff actions give them there, at New Zealand time. A maker prepares and checks a run, the maker cannot
 /// approve it, an approver can; someone holding both approval and payee maintenance is refused by the module; a reader can read
-/// runs but not bank details and cannot act; and the drivers' commands and questions are never sent from here.
+/// runs but not bank details (a run's account numbers come to them masked) and cannot act; and the drivers' commands and
+/// questions are never sent from here.
 /// Why it matters: payments trusts the roles it is told. If the console let a page name the actor or claim roles, or sent a
 /// bank's own answers as a person, the separation between who prepares, who approves and who decides who may be paid would be
-/// gone.
+/// gone. A read-only auditor was sent every payee's full account number in a run's answer (found by the scenario run, F2-18-1).
 #[tokio::test]
 async fn the_payments_console() {
     use ic_payments::model::{Counterparty, NewItem, RunType};
@@ -4929,6 +4948,11 @@ async fn the_payments_console() {
     let (status, totals) = ask("sub-payview", "control_totals?run=r9").await;
     assert_eq!((status, &totals["unsent"]), (StatusCode::OK, &json!(0)), "{totals}");
     assert_eq!(ask("sub-payview", "run?run=r9").await.1["makers"], json!(["pay-mk"]));
+    // The run's items carry the account each is paid to: in full for the maker, masked for a reader (F2-18-1).
+    let (_, made) = ask("sub-paymk", "run?run=r9").await;
+    assert!(made.to_string().contains("0101234567"), "{made}");
+    let (_, read) = ask("sub-payview", "run?run=r9").await;
+    assert!(!read.to_string().contains("0101234567") && read.to_string().contains("******4567"), "{read}");
     // The module's own refusals come back with its code.
     let (status, problem) = tell("sub-paymk", prepare).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("duplicate_run")), "{problem}");
@@ -5880,6 +5904,7 @@ async fn an_assistant_is_told_where_its_arguments_go() {
     );
     let named = |name: &str| ic_channels::mcp::not_yours(&ic_channels::mcp::catalogue().into_iter().find(|t| t.name == name).unwrap());
     assert!(named("payments_question").contains("any payments action"));
+    assert!(named("finance_command").contains("a role that acts in finance, not only views it"));
     assert!(named("adviser_statement").contains("an adviser's engagement or practice"));
     assert!(named("set_scheme_admin").contains("being a scheme's administrator"));
     assert!(named("policy_claims").contains("an adviser's engagement or being a scheme's administrator"));
@@ -6101,6 +6126,42 @@ async fn each_caller_is_offered_the_tools_of_their_sign_in() {
     assert!(records.contains("staff_document") && !records.contains("staff_policy") && !records.contains("documents_command"));
     let refused = call_tool(&portal, "sub-sue", "my_account", json!({})).await;
     assert!(refused["content"][0]["text"].as_str().unwrap().contains("sign-in you do not hold"), "{refused}");
+    // A reader is offered a module's questions and none of its writes; someone who acts there is offered both (F2-18-2).
+    for (reader, question, writes) in [
+        ("sub-payview", "payments_question", &["payments_command"][..]),
+        ("sub-aud", "finance_question", &["finance_command", "rate_table_dry_run"][..]),
+        ("sub-riview", "reinsurance_question", &["reinsurance_command", "reinsurance_decide"][..]),
+        ("sub-dview", "commission_question", &["commission_command"][..]),
+        ("sub-colview", "collections_question", &["collections_command"][..]),
+        ("sub-docview", "documents_question", &["documents_command"][..]),
+        ("sub-grpview", "group_question", &["group_command", "group_reoffer", "first_scheme_admin"][..]),
+    ] {
+        let offered = names(&list(as_subject(reader)).await);
+        assert!(offered.contains(question), "{reader}: {offered:?}");
+        for write in writes {
+            assert!(!offered.contains(*write), "{reader} is offered {write}");
+        }
+    }
+    for (actor, write) in [
+        ("sub-paymk", "payments_command"),
+        ("sub-ri1", "reinsurance_command"),
+        ("sub-dadmin", "commission_command"),
+        ("sub-colof", "collections_command"),
+        ("sub-docla", "documents_command"),
+        ("sub-grp1", "group_command"),
+    ] {
+        assert!(names(&list(as_subject(actor)).await).contains(write), "{actor} is not offered {write}");
+    }
+    // Called anyway, a reader's write is refused for the role before anything about what was sent.
+    let (status, problem) = portal
+        .write("POST", "sub-dview", "/staff/v1/commission/commands", json!({ "command": {} }))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert!(problem["detail"].as_str().unwrap().contains("distribution administrator"), "{problem}");
+    let (status, problem) = portal
+        .write("POST", "sub-riview", "/staff/v1/reinsurance/sign/nothing-waiting", json!({}))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
     let annotations = |name: &str| {
         ic_channels::mcp::catalogue()
             .into_iter()

@@ -26,6 +26,9 @@ pub struct Exposure {
     pub disputed_minor: i64,
     /// Sum at risk ceded to the reinsurer on the date.
     pub ceded_sum_at_risk_minor: i64,
+    /// The treaties with the reinsurer on a panel, by which its balance is asked (F2-18-6).
+    #[serde(default)]
+    pub treaties: std::collections::BTreeSet<TreatyId>,
 }
 
 /// One scheme's sums at risk, and how they fall across its sites.
@@ -71,7 +74,26 @@ impl Reinsurance {
                 }
             }
         }
+        for (reinsurer, exposure) in &mut out {
+            exposure.treaties = self.treaties_of(reinsurer);
+        }
         out
+    }
+
+    /// The treaties with this reinsurer on any version's panel.
+    pub fn treaties_of(&self, reinsurer: &ReinsurerId) -> std::collections::BTreeSet<TreatyId> {
+        self.treaties
+            .iter()
+            .filter(|(_, versions)| versions.values().any(|t| t.panel.iter().any(|p| &p.reinsurer == reinsurer)))
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// Whether this reinsurer is on any version's panel of this treaty.
+    pub fn on_panel(&self, treaty: &TreatyId, reinsurer: &ReinsurerId) -> bool {
+        self.treaties
+            .get(treaty)
+            .is_some_and(|versions| versions.values().any(|t| t.panel.iter().any(|p| &p.reinsurer == reinsurer)))
     }
 
     /// Sums at risk on each scheme with terms on record, on a date.

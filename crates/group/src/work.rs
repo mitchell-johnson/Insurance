@@ -1402,12 +1402,18 @@ impl GroupState {
         self.pump(s);
     }
 
-    fn tick_renewal(&mut self, s: &mut Scheme, today: NaiveDate) {
+    /// The day a scheme's renewal opens: its lead days before the renewal date.
+    fn renewal_opens(s: &Scheme) -> NaiveDate {
         let renewal_date = s.terms.renewal_date;
-        let opens = renewal_date
+        renewal_date
             .checked_sub_days(Days::new(u64::from(s.terms.renewal_lead_days)))
-            .unwrap_or(renewal_date);
-        if s.renewal.is_none() && today >= opens {
+            .unwrap_or(renewal_date)
+    }
+
+    /// Open the renewal once its day has come, at the day's close or when
+    /// terms are agreed for it that day, whichever is first.
+    fn open_renewal(&mut self, s: &mut Scheme, today: NaiveDate) {
+        if s.renewal.is_none() && today >= Self::renewal_opens(s) {
             s.renewal = Some(Renewal {
                 opened: today,
                 agreed: None,
@@ -1415,10 +1421,15 @@ impl GroupState {
             });
             self.emit(GroupEvent::RenewalOpened {
                 scheme: s.id.clone(),
-                renewal_date,
+                renewal_date: s.terms.renewal_date,
                 members: s.membership.active_count() as u32,
             });
         }
+    }
+
+    fn tick_renewal(&mut self, s: &mut Scheme, today: NaiveDate) {
+        let renewal_date = s.terms.renewal_date;
+        self.open_renewal(s, today);
         if today < renewal_date {
             return;
         }
@@ -1899,11 +1910,27 @@ impl GroupState {
                 if terms.scheme_year_start != renewal_date {
                     return Err(Reject::new("renewal_dates", "the new scheme year must start on the renewal date"));
                 }
-                let renewal = s
-                    .renewal
-                    .as_mut()
-                    .filter(|_| s.status == SchemeStatus::Active)
-                    .ok_or_else(|| Reject::new("renewal_not_open", "the scheme has no renewal open"))?;
+                // The window is the scheme's dates, not the day's close: terms
+                // agreed inside it open the renewal there and then (F2-22-2).
+                if s.status == SchemeStatus::Active {
+                    st.open_renewal(s, today);
+                }
+                let opens = Self::renewal_opens(s);
+                let renewal = s.renewal.as_mut().filter(|_| s.status == SchemeStatus::Active).ok_or_else(|| {
+                    Reject::new(
+                        "renewal_not_open",
+                        if s.status == SchemeStatus::Active {
+                            format!(
+                                "the renewal on {} opens on {}, {} days before it: agree its terms from that day",
+                                renewal_date.format("%d/%m/%Y"),
+                                opens.format("%d/%m/%Y"),
+                                s.terms.renewal_lead_days
+                            )
+                        } else {
+                            "the scheme is not active, so it does not renew".to_string()
+                        },
+                    )
+                })?;
                 // A pool is priced on what it declares: its renewal waits for
                 // an overdue declaration.
                 if st.exceptions.values().any(|e| e.scheme == s.id && e.kind == ExceptionKind::DeclarationOverdue) {
@@ -2057,8 +2084,13 @@ impl GroupState {
                     _ => None,
                 });
                 let Some(scheme) = scheme else { return Ok(()) };
+                // Any other refusal, or a member nobody can be asked about yet,
+                // is raised too: an excess that never reaches underwriting
+                // must not wait in silence (F2-22-3).
                 if code == "authority" {
                     self.raise(&scheme, ExceptionKind::DelegatedAuthorityRefused, &key);
+                } else {
+                    self.raise(&scheme, ExceptionKind::UnderwritingNotReached, &format!("{key}: {code}"));
                 }
                 Ok(())
             }
@@ -2072,6 +2104,16 @@ impl GroupState {
                             let (scheme, key) = (request.scheme.clone(), key.clone());
                             self.outbox.remove(&id);
                             self.clear(&scheme, ExceptionKind::DelegatedAuthorityRefused, Some(&key));
+                            // Whatever held it, under whichever code, is over.
+                            let held: Vec<String> = self
+                                .exceptions
+                                .values()
+                                .filter(|e| e.scheme == scheme && e.kind == ExceptionKind::UnderwritingNotReached && e.subject.starts_with(&format!("{key}: ")))
+                                .map(|e| e.subject.clone())
+                                .collect();
+                            for subject in held {
+                                self.clear(&scheme, ExceptionKind::UnderwritingNotReached, Some(&subject));
+                            }
                         }
                         Some(_) => {
                             self.outbox.remove(&id);

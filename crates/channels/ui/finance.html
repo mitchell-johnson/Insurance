@@ -278,18 +278,32 @@ $("j-id").value = portal.reference("JNL"); $("ye-id").value = portal.reference("
 const ROLE_BUTTONS = [["sign-lead", ["finance_lead"]], ["sign-actuary", ["appointed_actuary"]], ["close-period", ["finance_lead"]], ["j-approve", ["finance_approver"]], ["j-sign", ["appointed_actuary"]],
   ["ag-classify", ["finance_operator", "finance_lead"]], ["co-send", ["finance_lead"]], ["rr-send", ["finance_lead"]], ["rf-send", ["finance_operator", "finance_lead"]], ["ye-send", ["finance_operator", "finance_lead"]]];
 for (const [id] of ROLE_BUTTONS) $(id).disabled = true;
+// The forms that act, with the roles that may send each (none named: any finance role).
+const ACTING = [["waive"], ["report"], ["journal"], ["ye"], ["rf"], ["rr"], ["dr", ["finance_lead", "appointed_actuary"]], ["doc"], ["config", ["finance_lead"]],
+  ["retry", ["finance_operator", "finance_lead"]], ["co-form", ["finance_lead"]], ["ag-classify"]];
+// Hides a form and the heading and notes just above it that only introduce it.
+const unoffer = (el) => {
+  el.hidden = true;
+  for (let above = el.previousElementSibling; above && (above.tagName === "H2" || above.matches("p.muted")); above = above.previousElementSibling) {
+    above.hidden = true;
+    if (above.tagName === "H2") break;
+  }
+};
 signIn(R).then(async () => {
   for (const id of ["j-date", "ag-date", "dr-date"]) $(id).value = today();
   $("w-due").value = portal.days(14);
   const me = await ask("me"); roles = me.roles;
   for (const [id, may] of ROLE_BUTTONS) $(id).disabled = !may.some((r) => can(r));
+  // Someone who may only read is not offered forms every send of which would be refused (F2-18-3):
+  // each form that acts goes, with its heading, for anyone holding none of the roles it needs.
+  for (const [id, may] of ACTING) if (!(may ? may.some((r) => can(r)) : roles.length)) unoffer($(id));
   // A sign-off the period shown does not need stays disabled.
   if (shown) for (const [id, role] of [["sign-lead", "finance_lead"], ["sign-actuary", "appointed_actuary"]]) $(id).disabled = !can(role) || !shown.sign_offs_needed.includes(role);
   definitions = (await ask("return_definitions")).rows;
   put($("rd-list"), definitions.length ? table(["Definition", "Title", "Currency", "Lines", "Used from", "Fingerprint"], definitions.map((d) => [d.name, d.title, d.currency, d.lines.length, d.effective_from || "the start", h("code", {}, d.hash)])) : portal.empty("No return definitions are loaded."));
   for (const id of ["rf-def", "rr-def"]) put($(id), definitions.map((d) => h("option", { value: d.name }, `${d.title} (${d.name})`)));
   await proposals();
-  $("roles").textContent = roles.length ? roles.map(words).join(", ") : "View only.";
+  $("roles").textContent = roles.length ? roles.map(words).join(", ") : "View only: acting here is for the finance operator, approver, lead and appointed actuary.";
   const s = await ask("status");
   booksDate = typeof s.last_date === "string" ? s.last_date : null;
   const stalled = s.partitions.filter((p) => p.stalled), operator = can("finance_operator") || can("finance_lead");

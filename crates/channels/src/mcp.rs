@@ -70,6 +70,11 @@ pub enum Reach {
     /// A member of staff holding one of these actions; one ending in `.`
     /// stands for every action of that module.
     Actions(&'static [&'static str]),
+    /// A member of staff holding an action of this module (named with its
+    /// trailing `.`) other than its `view`: someone who may act there, not
+    /// only read. A reader is never offered a tool every call of which
+    /// would be refused to them (F2-18-2).
+    Acting(&'static str),
 }
 
 /// What a person holds, for the tools they are offered.
@@ -96,6 +101,7 @@ impl Held {
                 .actions
                 .iter()
                 .any(|held| needs.iter().any(|need| held == need || (need.ends_with('.') && held.starts_with(need)))),
+            Reach::Acting(module) => self.actions.iter().any(|held| held.strip_prefix(module).is_some_and(|action| action != "view")),
         }
     }
 }
@@ -137,18 +143,28 @@ pub fn reach_of(name: &str) -> Reach {
         "workbench" | "workbench_party" | "proof_of_debt" | "workbench_action" | "replacements" | "decide_replacement" => Reach::Actions(&["held_balance."]),
         "complaints_question" | "complaints_command" => Reach::Actions(&["complaints."]),
         "claims_question" | "claims_definition" | "claims_command" => Reach::Actions(&["claims."]),
-        "commission_question" | "commission_command" => Reach::Actions(&["commission."]),
-        "payments_question" | "payments_command" => Reach::Actions(&["payments."]),
+        "commission_question" => Reach::Actions(&["commission."]),
+        "commission_command" => Reach::Acting("commission."),
+        "payments_question" => Reach::Actions(&["payments."]),
+        "payments_command" => Reach::Acting("payments."),
         "servicing_waiting" | "servicing_carry_out" | "servicing_decline" => Reach::Actions(&["servicing.carry_out"]),
-        "collections_question" | "collections_command" => Reach::Actions(&["collections."]),
-        "documents_question" | "documents_command" => Reach::Actions(DOCUMENTS),
+        "collections_question" => Reach::Actions(&["collections."]),
+        "collections_command" => Reach::Acting("collections."),
+        "documents_question" => Reach::Actions(DOCUMENTS),
+        // Every documents action but reading acts there.
+        "documents_command" => Reach::Actions(DOCUMENTS.split_at(1).1),
         "wellness_question" => Reach::Actions(&["wellness."]),
-        "group_question" | "group_command" | "group_reoffer" | "try_mapping" | "first_scheme_admin" => Reach::Actions(&["group."]),
+        "group_question" | "try_mapping" => Reach::Actions(&["group."]),
+        "group_command" | "group_reoffer" | "first_scheme_admin" => Reach::Actions(&[crate::group::actions::ADMIN]),
         "underwriting_question" | "underwriting_command" | "read_disclosures" => Reach::Actions(&["underwriting."]),
         "underwriting_decide" => Reach::Actions(&[crate::underwriting::actions::SENIOR]),
-        "reinsurance_question" | "reinsurance_command" | "reinsurance_decide" => Reach::Actions(&["reinsurance."]),
-        "finance_question" | "finance_command" | "rate_table_dry_run" => Reach::Actions(&["finance."]),
-        "pricing_question" | "pricing_command" => Reach::Actions(&["unit_pricing."]),
+        "reinsurance_question" => Reach::Actions(&["reinsurance."]),
+        "reinsurance_command" | "reinsurance_decide" => Reach::Acting("reinsurance."),
+        "finance_question" => Reach::Actions(&["finance."]),
+        "finance_command" => Reach::Acting("finance."),
+        "rate_table_dry_run" => Reach::Actions(&[crate::finance::actions::LEAD, crate::finance::actions::ACTUARY]),
+        "pricing_question" => Reach::Actions(&["unit_pricing."]),
+        "pricing_command" => Reach::Acting("unit_pricing."),
         "quote" => Reach::Actions(&["new_business.quote"]),
         "core_policy" => Reach::Actions(&["policy.core_view"]),
         "create_customer" => Reach::Actions(&["customers.create"]),
@@ -381,6 +397,8 @@ static PAYMENTS_QUERY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static PAYMENTS_COMMANDS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static REINSURANCE_QUERY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static REINSURANCE_COMMANDS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static COMMISSION_QUERY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static FINANCE_QUERY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// A description made once from a module's own lists, so it never drifts from them.
 fn once(cell: &'static std::sync::OnceLock<String>, make: impl FnOnce() -> String) -> &'static str {
@@ -521,9 +539,9 @@ pub fn catalogue() -> Vec<Tool> {
         tool("replacements", "Replacement matches", S, M::GET, "/staff/v1/replacements", "Every replacement match, and whether you may decide it."),
         tool("decide_replacement", "Decide a disputed replacement", S, M::POST, "/staff/v1/replacements/decide", "As conduct officer, decide a disputed match: a replacement takes the held commission back; not one makes the layer new business.")
             .json(r#"{"policy", "cover", "layer", "replacement": true | false}"#),
-        tool("commission_question", "Ask the commission module", S, M::GET, "/staff/v1/commission/{question}", "Commission status, tasks, history, conduct cases, relations, positions, statements, held control, month-end blocks and clawbacks.")
+        tool("commission_question", "Ask the commission module", S, M::GET, "/staff/v1/commission/{question}", "Commission status, tasks, history, conduct cases, relations, positions, statements, held control, month-end blocks and clawbacks. Every amount is in cents of New Zealand dollars: 165050 is $1,650.50.")
             .choose("question", with_me(crate::commission::question_names()))
-            .query("As the question needs: `party`, `as_at`, `payee`, `number`, `period`."),
+            .query(once(&COMMISSION_QUERY, || fields_needed(&crate::commission::question_fields()))),
         tool("commission_command", "Act in commission", S, M::POST, "/staff/v1/commission/commands", "A command to the commission module.")
             .json(r#"{"purpose": "<why>", "command": {"<name>": {...}}}"#),
         tool("payments_question", "Ask the payments module", S, M::GET, "/staff/v1/payments/{question}", "Runs, exceptions, matches to approve, a party's authorities, holds, submissions, control totals and compliance cases. Every amount in the answers is in cents of New Zealand dollars, whether or not its name ends in _minor: 165050 is $1,650.50.")
@@ -572,7 +590,7 @@ pub fn catalogue() -> Vec<Tool> {
             .json("{}"),
         tool("read_disclosures", "Read a life's disclosure", S, M::POST, "/staff/v1/underwriting/disclosures", "The intake's record of a life's answers, for a purpose your role allows.")
             .json(r#"{"proposal", "life", "purpose"}"#),
-        tool("reinsurance_question", "Ask reinsurance", S, M::GET, "/staff/v1/reinsurance/{question}", "Exceptions, notices, abandonments, the sweep check, statements, notice retries, what is owed to each reinsurer, and what the insurer keeps on one person's life. `exposure` names the reinsurers there is a balance with.")
+        tool("reinsurance_question", "Ask reinsurance", S, M::GET, "/staff/v1/reinsurance/{question}", "Exceptions, notices, abandonments, the sweep check, statements, notice retries, what is owed to each reinsurer, and what the insurer keeps on one person's life. `exposure` names the reinsurers there is a balance with, and each one's treaties, which `balance` takes. Every amount is in cents of New Zealand dollars.")
             .choose("question", with_me(crate::reinsurance::question_names()))
             .query(once(&REINSURANCE_QUERY, || fields_needed(&crate::reinsurance::question_fields()))),
         tool("reinsurance_command", "Act in reinsurance", S, M::POST, "/staff/v1/reinsurance/commands", "A command to reinsurance in its own JSON. A settlement or an abandonment is prepared, with a reason, for a second person to sign.")
@@ -588,7 +606,12 @@ pub fn catalogue() -> Vec<Tool> {
                 names.push("return_definitions");
                 names
             })
-            .query("As the question needs: `period`, `today`, `fund`, `origin`, `id`, `code`, `version`, `product`, `as_at`, `kind`, `offset`, `limit`, `policy`, `partition`."),
+            .query(once(&FINANCE_QUERY, || {
+                format!(
+                    "{} A period is YYYY-MM, or YYYY-MM-ADJ for its adjustments; the dashboard is as of the books' date unless `today` is given; optional: `fund`, `origin`, `product`, `version`, `offset`, `limit`, `partition`.",
+                    fields_needed(&crate::finance::question_fields())
+                )
+            })),
         tool("finance_command", "Act in the finance ledger", S, M::POST, "/staff/v1/finance/commands", "A command to the finance ledger in its own JSON, under the roles you hold. Maker and checker are kept apart.")
             .json(r#"{"<command>": {...}}"#),
         tool("rate_table_dry_run", "Price a proposed rate table", S, M::POST, "/staff/v1/finance/table_dry_run", "For the finance lead or appointed actuary: price the book in force on a date under a current and a proposed rate table, with loadings.")
@@ -857,6 +880,7 @@ pub fn not_yours(tool: &Tool) -> String {
         Reach::Adviser => "an adviser's engagement or practice".to_string(),
         Reach::SchemeAdmin => "being a scheme's administrator".to_string(),
         Reach::AdviserOrAdmin => "an adviser's engagement or being a scheme's administrator".to_string(),
+        Reach::Acting(module) => format!("a role that acts in {}, not only views it", module.trim_end_matches('.').replace('_', " ")),
         Reach::Actions(actions) => {
             let named: Vec<String> = actions
                 .iter()

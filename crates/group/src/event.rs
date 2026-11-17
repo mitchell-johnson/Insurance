@@ -94,6 +94,14 @@ pub enum ExceptionKind {
     /// each pass; staff put the authority right or take it off the terms.
     /// The subject is the request's key.
     DelegatedAuthorityRefused,
+    /// A member's cover above the automatic limit has not reached
+    /// underwriting: underwriting refused the request (no rules active for
+    /// the product, say), or the member is not yet linked to a person it can
+    /// ask. The request is tried again each pass and the excess stays
+    /// pending; staff put the cause right. The subject is the request's key,
+    /// and the code says why. Cleared when underwriting takes the request
+    /// (F2-22-3).
+    UnderwritingNotReached,
     /// A joiner in a file has the same name and date of birth as a current
     /// member or another joiner, so they were not added on a guess. Staff
     /// ask the employer whether it is the same person; the employer sends

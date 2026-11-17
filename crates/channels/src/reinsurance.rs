@@ -97,6 +97,9 @@ const QUESTIONS: [(&str, &[&str], &[&str]); 12] = [
     ("retained", &["party", "on"], &[]),
 ];
 
+/// The questions' fields that are dates.
+const DATES: [&str; 2] = ["on", "period_end"];
+
 /// What this person may do in the console.
 pub fn standing(staff: &StaffState, party: &PartyId, at: At) -> Value {
     let operate = staff.holds_action(party, actions::OPERATE, at);
@@ -141,7 +144,12 @@ pub fn question(name: &str, fields: &BTreeMap<String, String>) -> Result<Value, 
     }
     let mut inner = Map::new();
     for field in *text {
-        inner.insert((*field).to_string(), json!(given(field).ok_or_else(|| format!("{name} needs {field}"))?));
+        let value = given(field).ok_or_else(|| format!("{name} needs {field}"))?;
+        // A date is checked here, so a number or a misspelling is told the form (F2-18-7).
+        if DATES.contains(field) && value.parse::<chrono::NaiveDate>().is_err() {
+            return Err(format!("{field} is a date written as text, YYYY-MM-DD, as \"2027-11-15\""));
+        }
+        inner.insert((*field).to_string(), json!(value));
     }
     for field in *numbers {
         let value = given(field).ok_or_else(|| format!("{name} needs {field}"))?;

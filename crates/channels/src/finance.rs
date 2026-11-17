@@ -284,6 +284,15 @@ pub fn question_names() -> Vec<&'static str> {
     QUESTIONS.iter().map(|q| q.0).collect()
 }
 
+/// Each question with the fields it must have, for the MCP tool's description.
+/// The dashboard's `today` is the books' date when not given.
+pub fn question_fields() -> Vec<(&'static str, Vec<&'static str>)> {
+    QUESTIONS
+        .iter()
+        .map(|(name, (needed, _, _))| (*name, needed.iter().copied().filter(|f| !(*name == "dashboard" && *f == "today")).collect()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

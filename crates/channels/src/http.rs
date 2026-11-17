@@ -2656,6 +2656,12 @@ async fn commission_command(State(s): State<Shared>, headers: HeaderMap, method:
     let request: Value = parse(&body)?;
     let purpose = request["purpose"].as_str().map(str::trim).unwrap_or_default();
     let standing = commission_standing(&s, &session, purpose).await?;
+    // A reader learns that before anything about what they sent (F2-18-2).
+    if !standing["roles"].as_array().is_some_and(|held| !held.is_empty()) {
+        return Err(Problem::forbidden(
+            "you may read the commission console but hold no role to act in it: the distribution administrator and commission operations act there",
+        ));
+    }
     if purpose.is_empty() {
         return Err(Problem::bad_request("say why: the purpose is recorded with the decision"));
     }
@@ -2749,6 +2755,13 @@ async fn reinsurance_question(
         .ask(question)
         .await
         .map_err(|e| module_problem("reinsurance", StatusCode::BAD_REQUEST, e))?;
+    if answer.is_null() && name == "balance" {
+        return Err(Problem::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "there is no such treaty with that reinsurer: the exposure lists each reinsurer's treaties",
+        ));
+    }
     if answer.is_null() {
         return Err(Problem::not_found());
     }
@@ -2801,6 +2814,12 @@ async fn reinsurance_command(State(s): State<Shared>, headers: HeaderMap, method
 async fn reinsurance_decide(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path((verb, id)): Path<(String, String)>) -> Answer {
     use crate::countersign::CountersignCommand as C;
     let (session, standing) = s.reinsurance_standing(&headers, &method, &uri, b"").await?;
+    // A reader is told so before whether anything is waiting (F2-18-2).
+    if standing["operate"] != true && standing["approve"] != true {
+        return Err(Problem::forbidden(
+            "you may read the reinsurance console but hold no role to act in it: reinsurance operations prepare an abandonment and a second person with reinsurance approval signs it",
+        ));
+    }
     let actor = Actor::Staff(session.party.clone());
     let fresh = |what: &str| format!("countersign:{id}:{what}:{}:{}", session.party.0, session.at);
     match verb.as_str() {
@@ -2921,14 +2940,19 @@ async fn payments_question(
     if name == "me" {
         return ok(standing);
     }
-    let question = crate::payments::question(&name, &fields, &payment_roles(&standing), session.at).map_err(Problem::bad_request)?;
-    let answer = s
+    let roles = payment_roles(&standing);
+    let question = crate::payments::question(&name, &fields, &roles, session.at).map_err(Problem::bad_request)?;
+    let mut answer = s
         .payments
         .ask(question)
         .await
         .map_err(|e| module_problem("payments", StatusCode::BAD_REQUEST, e))?;
     if answer.is_null() {
         return Err(Problem::new(StatusCode::NOT_FOUND, "not_found", crate::payments::nothing_found(&name, &fields)));
+    }
+    // A reader never sees an account number in full, whichever question.
+    if roles.is_empty() {
+        crate::payments::for_reader(&mut answer);
     }
     ok(answer)
 }
@@ -3690,6 +3714,12 @@ async fn finance_question(
         };
         fields.insert("policy".into(), policy["policy"].as_str().unwrap_or_default().to_string());
         fields.insert("partition".into(), policy["partition"].to_string());
+    }
+    // The close is read as of the books' date unless another is asked (F2-18-5).
+    if name == "dashboard" && fields.get("today").is_none_or(|t| t.trim().is_empty()) {
+        let (session, _) = s.finance_standing(&headers, &method, &uri, b"").await?;
+        let books = s.ask(Question::BusinessDate).await?;
+        fields.insert("today".into(), business_date(&books, session.at));
     }
     let question = crate::finance::question(&name, &fields).map_err(Problem::bad_request)?;
     let answer = s

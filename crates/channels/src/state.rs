@@ -564,8 +564,20 @@ impl ChannelState {
                 AdviserStanding::Active => json!({ "adviser": adviser, "state": "available" }),
                 // The customer is told the adviser cannot act, and given a
                 // direct route to the insurer. They may appoint another at any time.
-                AdviserStanding::ReadOnly { since, .. } => json!({ "adviser": adviser, "state": "unavailable", "since": since, "contact": "insurer" }),
-                AdviserStanding::Ended => continue,
+                // Whose licence it is: the adviser's own, or their provider's (F2-20-11).
+                AdviserStanding::ReadOnly { since, licence_of, .. } => json!({
+                    "adviser": adviser, "state": "unavailable", "since": since, "contact": "insurer",
+                    "licence": if licence_of == *adviser { "adviser" } else { "provider" },
+                }),
+                // An engagement that has ended is said so, with the day, so the
+                // customer knows to appoint another (F2-20-1); one not yet begun
+                // is not shown.
+                AdviserStanding::Ended => {
+                    let Some(to) = d.directory.engagement_of(policy, adviser).and_then(|e| e.to).filter(|to| *to <= on) else {
+                        continue;
+                    };
+                    json!({ "adviser": adviser, "state": "ended", "since": to, "contact": "insurer" })
+                }
             };
             add(format!("adviser/{adviser}"), "adviser", None, false, body);
         }
@@ -1015,7 +1027,7 @@ impl ChannelState {
                 self.data.directory.heard = self.data.directory.heard.max(at);
             }
             Command::Directory(command) => {
-                let touched = self.data.directory.apply(&actor, at, &self.data.view, command)?;
+                let touched = self.data.directory.apply(&actor, at, on, &self.data.view, command)?;
                 for policy in &touched.policies {
                     self.refresh(policy, on, None, &mut effects);
                 }

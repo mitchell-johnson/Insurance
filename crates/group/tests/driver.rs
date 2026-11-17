@@ -107,6 +107,8 @@ struct Sink {
     continued: Arc<Mutex<Vec<(String, String, u64, String)>>>,
     /// While set, underwriting refuses every request: the broker's authority is not in force.
     authority_refused: Flag,
+    /// While set, underwriting refuses every request: no rules are active for the product.
+    rules_missing: Flag,
 }
 
 impl Peers for Sink {
@@ -141,6 +143,9 @@ impl Peers for Sink {
         self.underwriting_down.check("underwriting")?;
         if self.authority_refused.check("authority").is_err() {
             return Err("underwriting refused: authority".to_string());
+        }
+        if self.rules_missing.check("rules").is_err() {
+            return Err("underwriting refused: no_rules".to_string());
         }
         self.requests.lock().unwrap().push(request.clone());
         Ok(())
@@ -1895,11 +1900,14 @@ async fn the_driver_asks_underwriting_to_continue_a_leavers_cover() {
 
 /// Purpose: when underwriting refuses a member's request because the broker's delegated
 /// authority is not in force, staff are told by an exception naming the request; the request
-/// stays in the outbox and is tried each pass; once it is taken the exception clears; and a
-/// refusal of another kind is retried without raising one.
+/// stays in the outbox and is tried each pass; once it is taken the exception clears; an
+/// outage is retried without raising one; and any other refusal (no rules active for the
+/// product) raises an exception that the request has not reached underwriting, with the code,
+/// cleared when it is taken.
 /// Why it matters: until someone puts the authority right the member's cover above the
 /// automatic amount is decided by nobody. Retried silently, it looked only like a slow
-/// outbox in the metrics.
+/// outbox in the metrics; an executive's excess sat pending with nothing in any queue (found
+/// by the scenario run, F2-22-3).
 #[tokio::test]
 async fn a_refused_delegated_authority_is_raised_until_the_request_is_taken() {
     use ic_group::event::ExceptionKind;
@@ -1936,4 +1944,42 @@ async fn a_refused_delegated_authority_is_raised_until_the_request_is_taken() {
     d.deliver().await.unwrap();
     assert_eq!(d.peers.requests.lock().unwrap().len(), 1, "taken once the authority is in force");
     assert_eq!((waiting(&d), raised(&d)), (0, 0), "cleared when underwriting took it");
+
+    // Refused for want of rules: raised as not reached, with the code, and cleared once taken.
+    let not_reached = |d: &Rig| {
+        d.module
+            .state
+            .lock()
+            .unwrap()
+            .exceptions
+            .values()
+            .filter(|x| x.kind == ExceptionKind::UnderwritingNotReached)
+            .map(|x| x.subject.clone())
+            .collect::<Vec<_>>()
+    };
+    let again = |d: &Rig, key: &str, linked: bool| {
+        let mut request = d.peers.requests.lock().unwrap()[0].clone();
+        if !linked {
+            request.party = None;
+        }
+        let mut g = d.module.state.lock().unwrap();
+        // Far past the module's own numbering, so nothing it sends lands on it.
+        let next = g.outbox.keys().max().copied().unwrap_or(0).max(900_000) + 1;
+        g.outbox.insert(next, ic_group::event::Outbound::Underwriting { key: key.to_string(), request });
+    };
+    let key = "grp-uw:again:1";
+    again(&d, key, true);
+    d.peers.rules_missing.set(true);
+    d.deliver().await.unwrap();
+    d.deliver().await.unwrap();
+    assert_eq!(not_reached(&d), vec![format!("{key}: no_rules")], "raised once, with why");
+    d.peers.rules_missing.set(false);
+    d.deliver().await.unwrap();
+    assert!(not_reached(&d).is_empty(), "cleared when underwriting took it");
+
+    // A member not yet linked to a person: the request waits, and staff are shown it waits.
+    again(&d, "grp-uw:again:2", false);
+    d.deliver().await.unwrap();
+    assert_eq!(not_reached(&d), vec!["grp-uw:again:2: member_not_linked".to_string()]);
+    assert_eq!(waiting(&d), 1);
 }
