@@ -309,9 +309,9 @@ impl Command {
             | Command::EndEngagement { .. }
             | Command::MarkCeased { .. } => ("structure.manage", any()),
             Command::RecordLicence { .. } => ("licence.record", any()),
+            Command::SetPaymentHold { party, .. } => ("payee.hold", party.0.clone()),
             Command::RegisterPayee { party, .. }
             | Command::AddPayeeAccount { party, .. }
-            | Command::SetPaymentHold { party, .. }
             | Command::SetWithholding { party, .. }
             | Command::SetAccrualHold { party, .. }
             | Command::RemovePaymentInstruction { party, .. } => ("payee.manage", party.0.clone()),
@@ -1107,6 +1107,24 @@ impl DistributionState {
             Command::SetPaymentHold { party, reason } => {
                 if reason.as_ref().is_some_and(|r| r.trim().is_empty()) {
                     return reject("invalid_hold", "a payment hold records why");
+                }
+                if !self.payees.contains_key(&party) {
+                    // What a party earns may be paid to another: then that payee is the one to hold.
+                    let today = self.date()?;
+                    let paid_to: Vec<String> = self
+                        .config
+                        .structure
+                        .relations
+                        .iter()
+                        .filter(|r| r.parent == party && r.kind == RelationKind::PayeeFor && r.on(today))
+                        .map(|r| r.child.to_string())
+                        .collect();
+                    let next = if paid_to.is_empty() {
+                        format!("nothing is paid to {party} to hold; register {party} as a payee first, and its payments can then be held")
+                    } else {
+                        format!("what {party} earns is paid to {}; hold that payee's payments", paid_to.join(" and "))
+                    };
+                    return reject("unknown_payee", format!("{party} is not a registered payee: {next}"));
                 }
                 self.payee_mut(&party)?.payment_hold = reason;
                 ctx.emit(Event::PayeeChanged {

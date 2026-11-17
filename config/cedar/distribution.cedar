@@ -17,6 +17,12 @@ when { principal.roles.contains("distribution_admin") };
 permit (principal, action == Action::"licence.record", resource)
 when { principal.roles.contains("distribution_admin") || principal.roles.contains("compliance") };
 
+// A payee's payments are held, and released, by the distribution administrator
+// and by compliance, who hold them while an adviser is investigated without
+// touching the licence.
+permit (principal, action == Action::"payee.hold", resource)
+when { principal.roles.contains("distribution_admin") || principal.roles.contains("compliance") };
+
 // Rules, schedules, books and book-level items are proposed by commission
 // operations and approved by a commission approver and by compliance.
 permit (principal, action in [Action::"config.propose", Action::"statement.cut", Action::"policy.assign"], resource)

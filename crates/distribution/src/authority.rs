@@ -337,10 +337,54 @@ impl Authority {
         } else if ask.limit.is_some() && ask.amount_minor > limit && allowed(limit)? {
             // The same action for an amount inside the limit would be allowed.
             format!("the amount {} is above your limit of {limit}", ask.amount_minor)
+        } else if let Some(conflict) = conflict(ask.action, &roles) {
+            conflict.to_string()
         } else {
-            format!("none of your roles allows {}", ask.action)
+            match described(ask.action) {
+                Some((what, who)) => format!("none of your roles allows {} ({what}): that is done by {who}", ask.action),
+                None => format!("none of your roles allows {}", ask.action),
+            }
         };
         Err(AuthorityError::Denied(why))
+    }
+}
+
+/// A staff action in words, and who does it, for a refusal people read.
+fn described(action: &str) -> Option<(&'static str, &'static str)> {
+    Some(match action {
+        "structure.manage" => ("changing the distribution structure", "the distribution administrator"),
+        "payee.manage" => ("managing payees and their accounts", "the distribution administrator"),
+        "payee.hold" => ("holding or releasing a payee's payments", "the distribution administrator or compliance"),
+        "licence.record" => ("recording a licence state", "compliance or the distribution administrator"),
+        "config.propose" => ("proposing or withdrawing a change to the commission rules", "commission operations"),
+        "statement.cut" => ("cutting a payee's statement", "commission operations"),
+        "policy.assign" => ("assigning business to an adviser", "commission operations"),
+        "config.approve" => ("approving a change to the commission rules", "a commission approver"),
+        "config.approve_compliance" => ("approving a change to the commission rules as compliance", "compliance"),
+        "workbench.prepare" => ("preparing a held balance action", "counterparty finance"),
+        "workbench.approve" => ("approving a held balance action", "a counterparty finance approver"),
+        "workbench.approve_legal" => ("approving a held balance action as legal", "legal"),
+        "workbench.approve_conduct" => ("approving a held balance action as the conduct officer", "the conduct officer"),
+        "workbench.view" | "workbench.document" => (
+            "working the held balance workbench",
+            "counterparty finance, its approvers, legal or the conduct officer",
+        ),
+        "payee.restricted_instruction" => ("entering a court order or statutory deduction", "legal"),
+        "case.manage" => ("working a conduct case", "the conduct officer or compliance"),
+        _ => return None,
+    })
+}
+
+/// A declared conflict of duties that refuses the action whatever else the person holds.
+fn conflict(action: &str, roles: &BTreeSet<Role>) -> Option<&'static str> {
+    match action {
+        "config.approve" if roles.contains(&Role::DistributionAdmin) => {
+            Some("someone who manages the distribution structure does not approve what it is paid: another commission approver must")
+        }
+        "workbench.approve" if roles.contains(&Role::CounterpartyFinance) => Some(
+            "someone who prepares held balance actions does not approve them, even another person's: a counterparty finance approver who prepares none must",
+        ),
+        _ => None,
     }
 }
 
