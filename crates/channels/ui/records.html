@@ -218,16 +218,12 @@ signIn(R).then(async () => {
   } else {
     put($("dups"), portal.empty("Settling duplicates is for people who merge records."));
   }
-<<<<<<< HEAD
-  if (may("create")) portal.actions($("create"), CREATE, { id: "np", send: ({ type, ...v }) => addPerson(buildNew(v, type)), after: async (_, made) => {
+  if (may("create")) portal.actions($("create"), CREATE, { id: "np", pick: "Person or organisation", send: ({ type, ...v }) => addPerson(buildNew(v, type)), after: async (_, made) => {
     if (!made || !made.party) return;
     // Someone who adds people but does not read records is told the person is on file, not refused for opening it.
     if (!may("view")) { portal.say($("msg"), "ok", "Added. The person is on file; you do not need to add them again."); return; }
     $("who").dataset.party = made.party; await openRecord(made.party); portal.view("record");
   } });
-=======
-  if (may("create")) portal.actions($("create"), CREATE, { id: "np", pick: "Person or organisation", send: ({ type, ...v }) => addPerson(buildNew(v, type)), after: async (_, made) => { if (made && made.party) { $("who").dataset.party = made.party; await openRecord(made.party); portal.view("record"); } } });
->>>>>>> worktree-agent-a422eff5046e206a2
   else put($("create"), portal.empty("Your roles do not let you add people."));
 }).catch(portal.refuse);
 </script></body></html>
