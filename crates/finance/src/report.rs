@@ -657,7 +657,9 @@ impl FinanceState {
             .take(crate::driver::MAX_AGED_ITEMS)
             .map(|(policy, h)| serde_json::json!({ "party": policy, "reason": "policy_suspense", "amount_minor": h.amount_minor, "since": h.since }))
             .collect();
-        serde_json::json!({ "as_at": as_at, "items": items, "total_minor": total, "count": held.len() })
+        // How far the books have been fed: with no day fed, nothing has been reported to suspense yet,
+        // which is not the same as nothing being there.
+        serde_json::json!({ "as_at": as_at, "items": items, "total_minor": total, "count": held.len(), "fed_to": self.mart.latest_close() })
     }
 
     /// Lines `offset..offset + limit` of the extract of `kind` for a period,

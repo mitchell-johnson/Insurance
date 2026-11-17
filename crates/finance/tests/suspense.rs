@@ -127,3 +127,18 @@ fn suspense_is_aged_from_the_feed_and_needs_a_documented_action() {
     );
     assert!(stored.items.iter().find(|i| i.party == used.0).unwrap().action.is_none());
 }
+
+/// Purpose: the aged suspense answer says how far the books have been fed, and before any
+/// day is fed it says none has been, so an empty list is not read as nothing outstanding.
+/// Why it matters: found by the scenario run, SCN-17 (F-SCN17-4). With no day fed the
+/// screen showed "None, NZ$0.00", which reads as a clean suspense account when nothing
+/// had been reported at all.
+#[test]
+fn aged_suspense_says_how_far_the_books_are_fed() {
+    let start = d(2027, 11, 15);
+    let mut w = World::new(2, start);
+    let answer = aged(&w, start);
+    assert_eq!((answer["count"].as_u64(), &answer["fed_to"]), (Some(0), &Value::Null), "{answer}");
+    w.until(d(2027, 11, 18));
+    assert!(aged(&w, start)["fed_to"].is_string());
+}

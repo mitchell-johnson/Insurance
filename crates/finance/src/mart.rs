@@ -60,7 +60,7 @@ pub enum MartError {
     Partition(PartitionId),
     #[error("expected event {expected} of partition {partition}, got {got}")]
     Gap { partition: PartitionId, expected: u64, got: u64 },
-    #[error("partition {partition} has not closed {date}")]
+    #[error("the books are not yet fed to {date}: policy store {partition} has not closed that day, and the extract can be made once it has")]
     NotClosed { partition: PartitionId, date: NaiveDate },
     #[error("a period runs from its first day to its last: {from} is after {to}")]
     Range { from: NaiveDate, to: NaiveDate },
