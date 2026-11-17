@@ -327,7 +327,9 @@ const portal = (() => {
     function show(found, text) {
       // A value typed in full is chosen already: the list would only stand in front of what comes next.
       // It is chosen, so the page learns of it (onPick), whether its reference or its label was typed.
-      const exact = text && found.find((i) => [i.value, i.label].some((v) => v != null && String(v).toLowerCase() === text.toLowerCase()));
+      // Only one thing can be meant: two people of the same name typed in full are both offered, never the first of them.
+      const same = text ? found.filter((i) => [i.value, i.label].some((v) => v != null && String(v).toLowerCase() === text.toLowerCase())) : [];
+      const exact = same.length === 1 && same[0];
       if (exact) { if (input.dataset.label !== (exact.label || exact.value) || input.value !== (opts.label ? exact.label || exact.value : exact.value)) choose(exact); else { tell(""); close(); } return; }
       items = found.slice(0, opts.max || 12);
       if (!items.length) { close(); return tell(text ? opts.none ?? "Nothing matches that." : opts.empty || "Nothing to choose from yet."); }

@@ -52,9 +52,17 @@ class Screen {
     const input = this.$(selector);
     await input.fill(String(text));
     const entry = input.locator("xpath=..").locator("ul.picks li").filter({ hasText: label }).first();
-    try { await entry.waitFor({ state: "visible", timeout: 10000 }); }
-    catch { const note = await input.locator("xpath=..").locator(".pick-note").innerText().catch(() => ""); throw new Error(`"${text}" offered no "${label}" to pick${note ? `; the field said "${note}"` : ""}`); }
-    await entry.click();
+    // What is typed in full and matches one entry alone is chosen as it is typed: the field then
+    // holds that entry's label, and there is no list to press.
+    const chosen = async () => String(await input.getAttribute("data-label").catch(() => "") || "").includes(label);
+    for (const end = Date.now() + 10000; ;) {
+      if (await entry.isVisible().catch(() => false)) return entry.click();
+      if (await chosen()) return;
+      if (Date.now() > end) break;
+      await this.page.waitForTimeout(100);
+    }
+    const note = await input.locator("xpath=..").locator(".pick-note").innerText().catch(() => "");
+    throw new Error(`"${text}" offered no "${label}" to pick${note ? `; the field said "${note}"` : ""}`);
   }
   async pick(selector, value) { await this.$(selector).selectOption(value); }
   /// Banners already on screen are old news once the person acts again: `outcome` waits for a new one.
