@@ -165,8 +165,6 @@ async function open(p) {
   ] : h("p", { class: "muted" }, "No units held yet. If this policy invests, units are bought once a payment is invested."));
   put($("bills"), owed && owed.outstanding_minor > 0 ? h("div", { class: "banner warn", role: "status" }, `${money(owed.outstanding_minor)} is due, the oldest from ${owed.oldest_unpaid_due}.`) : h("p", { class: "muted" }, "Nothing is overdue."),
     table(["From", "To", "Amount"], bills.filter((b) => b.period_start).map((b) => [b.period_start, b.period_end, money(b.total_minor)])));
-  put($("claims"), claims.rows.length ? table(["Claim", "Status", "Told us", "Closed"], claims.rows.map((c) => [c.claim, CLAIM_WORDS[c.status] || words(c.status), c.notified_on, c.closed_on || ""])) : h("p", { class: "muted" }, "No claims."));
-=======
   // The claims on a policy are read by its policyholder or adviser; a scheme member's own claims go through the claims team.
   const reads = p.relationships.some((r) => ["policyholder", "adviser", "employer_admin"].includes(r));
   const claims = reads ? await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(p.policy) + "/claims") : null;
