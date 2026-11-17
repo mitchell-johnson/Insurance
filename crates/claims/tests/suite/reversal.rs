@@ -187,7 +187,8 @@ fn a_reversal_stops_the_benefit_and_holds_the_overpayment() {
 /// faith changes status only with the conduct officer and legal both signing; holding it needs
 /// neither; every status change is on the overpayment's history.
 /// Why it matters: this is the addendum's central conduct rule. A senior claims manager alone
-/// must not be able to start pursuing a customer for the insurer's mistake.
+/// must not be able to start pursuing a customer for the insurer's mistake. A status outside the
+/// rules is refused saying what is allowed (found by the scenario run, SCN2-09, F2-09-6).
 #[test]
 fn recovering_the_insurers_own_error_needs_conduct_and_legal() {
     let mut w = World::new();

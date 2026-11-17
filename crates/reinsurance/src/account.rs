@@ -344,6 +344,15 @@ impl Reinsurance {
             .latest_treaty(&treaty)
             .ok_or_else(|| Reject::new("unknown_treaty", format!("treaty {treaty} is not active")))?;
         let (currency, period_start) = (terms.currency, terms.statement.period.start_for(period_end));
+        // A statement is a reinsurer's: one on the panel, or one the account still holds money for.
+        let on_panel = terms.panel.iter().any(|p| p.reinsurer == reinsurer);
+        if !on_panel && self.pending_for(&treaty, &reinsurer).next().is_none() {
+            let panel: Vec<String> = terms.panel.iter().map(|p| p.reinsurer.to_string()).collect();
+            return Err(Reject::new(
+                "unknown_reinsurer",
+                format!("{reinsurer:?} is not a reinsurer on treaty {treaty}: pick one of {}", panel.join(", ")),
+            ));
+        }
         if period_end >= ctx.on {
             return Err(Reject::new("period_open", format!("the period to {period_end} has not ended")));
         }
