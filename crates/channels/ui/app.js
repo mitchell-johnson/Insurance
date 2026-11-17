@@ -410,6 +410,8 @@ const portal = (() => {
   }
   // Customers and policies from what the person knows, under the case they are working on.
   async function find(text) {
+    // Nothing typed yet is nothing to look for: a picker opened on an empty field asks nobody.
+    if (!String(text || "").trim()) return { people: [], policies: [] };
     // Every search is recorded against the case in hand; without one there is no search, and the person is told why.
     if (!working()) throw new Error("Say which case, call or task you are working on first: every search is recorded against it.");
     const q = new URLSearchParams({ q: text, case: working() });

@@ -801,8 +801,9 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 .finish()
         }
         Question::StaffAdmin { staff, at } => {
-            if !d.staff.holds_action(&staff, crate::staff::actions::MANAGE_STAFF, at) && !d.staff.holds_action(&staff, crate::staff::actions::APPROVE_GRANT, at)
-            {
+            use crate::staff::actions::*;
+            let administers = [MANAGE_STAFF, APPROVE_GRANT, CONFIGURE, APPROVE_CONFIGURATION, APPROVE_PROFILE_UPLIFT];
+            if !administers.iter().any(|a| d.staff.holds_action(&staff, a, at)) {
                 return json!({ "allowed": false });
             }
             json!({
@@ -810,6 +811,17 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 "grants": d.staff.grants.values().collect::<Vec<_>>(),
                 "members": d.staff.members.values().collect::<Vec<_>>(),
                 "templates": d.staff.templates.values().collect::<Vec<_>>(),
+                // Changes waiting for a second person, and those this person may approve.
+                "pending_changes": d.staff.pending.values().collect::<Vec<_>>(),
+                "changes_i_may_approve": d.staff.pending.values()
+                    .filter(|c| c.proposed_by != staff && d.staff.holds_action(&staff, &c.approver_action, at))
+                    .map(|c| c.id.clone())
+                    .collect::<Vec<_>>(),
+                "decided_changes": d.staff.decided.iter().rev().collect::<Vec<_>>(),
+                "connections": d.staff.connections.iter()
+                    .flat_map(|(s, people)| people.iter().map(move |p| json!({ "staff": s, "party": p })))
+                    .collect::<Vec<_>>(),
+                "connections_ended": d.staff.connections_ended.iter().rev().collect::<Vec<_>>(),
                 "alignment": d.staff.alignment(),
                 "external_source_available": d.staff.external_available,
             })

@@ -3892,7 +3892,8 @@ fn approach(routing: Result<crate::customers::Answered, String>, may_see_kind: b
 /// recertify, administer. The module checks each against the caller.
 async fn staff_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
     let session = s.staff(&headers, &method, &uri, &body).await?;
-    let command: StaffCommand = parse(&body)?;
+    let command: StaffCommand = serde_json::from_slice(&body)
+        .map_err(|e| Problem::bad_request(format!("the staff command was not understood ({e}). {}", crate::staff::PEOPLE_COMMANDS)))?;
     if matches!(command, StaffCommand::Record { .. }) {
         // The access log is written by this service as it serves a read, never by the person read about.
         return Err(Problem::new(StatusCode::FORBIDDEN, "forbidden", "the access log is not written by hand"));
@@ -4210,8 +4211,42 @@ async fn desk(s: &Shared, headers: &HeaderMap, method: &Method, uri: &Uri, body:
         None => "customers".to_string(),
     };
     s.may_act(&session, action, DataClass::Personal, record, desk.about().cloned(), why).await?;
+    if let crate::customers::Desk::Change { party, body, .. } = &desk {
+        if body["command"] == "exit" {
+            s.refuse_exit_with_cover(party, session.at).await?;
+        }
+    }
     let (role, _) = desk.role();
-    desked(master.desk(&session.party, desk).await, role)
+    // Facts are dated by the books' business date, as every other screen is.
+    let books = s.ask(Question::BusinessDate).await?["today"].as_str().and_then(|d| d.parse().ok());
+    desked(master.desk_on(&session.party, desk, books).await, role)
+}
+
+impl AppState {
+    /// A record is closed only once the person has no cover with us: the
+    /// core's policies they are on that have not ended are named, and the
+    /// record stays open, kept until seven years after the last one ends.
+    async fn refuse_exit_with_cover(&self, party: &PartyId, at: At) -> Result<(), Problem> {
+        let held = self.ask(Question::Policies { party: party.clone(), at }).await?;
+        let live: Vec<String> = held
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|p| p["ended"] != true)
+            .map(|p| p["number"].as_str().or(p["policy"].as_str()).unwrap_or_default().to_string())
+            .collect();
+        if live.is_empty() {
+            return Ok(());
+        }
+        Err(Problem::new(
+            StatusCode::CONFLICT,
+            "cover_in_force",
+            format!(
+                "this person still has cover with us ({}): their record is closed only once every policy has ended, and is then kept for seven years after the last one ends; to stop marketing, record their consent withdrawn instead",
+                live.join(", ")
+            ),
+        ))
+    }
 }
 
 #[derive(Deserialize)]
@@ -4527,8 +4562,19 @@ async fn customers_dismiss(
     uri: Uri,
     Path(review): Path<String>,
     Query(why): Query<Why>,
+    body: Bytes,
 ) -> Answer {
-    desk(&s, &headers, &method, &uri, b"", why, crate::customers::Desk::Dismiss(review)).await
+    let reason = body_json(&body)?;
+    desk(
+        &s,
+        &headers,
+        &method,
+        &uri,
+        &body,
+        why,
+        crate::customers::Desk::Dismiss { review, body: reason },
+    )
+    .await
 }
 
 async fn ops_customers_index(State(s): State<Shared>, headers: HeaderMap) -> Answer {

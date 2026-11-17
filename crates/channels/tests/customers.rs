@@ -219,11 +219,14 @@ async fn the_client_reads_every_kind_of_answer() {
 }
 
 /// Purpose: staff and operations work goes to the master's own route for it, in the role the master's policy decides it on (staff, privacy, operations), with the purpose it keys on, the member of staff as the actor and no party to act for, and a write's idempotency key.
+/// Settling a question about capacity goes as legal, under its own staff action, since the master takes it from legal only.
 /// Why it matters: the master decides by role and purpose alone; staff work sent as the portal would be refused or logged as a customer's own access, and a missing key would merge twice on a retry.
+/// Found by the scenario run, SCN2-23 (F2-23-6): nobody could settle capacity, because it was asked of the master as staff.
 #[tokio::test]
 async fn the_master_is_asked_for_staff_work_in_the_role_it_needs() {
     use ic_channels::customers::Desk;
     let (master, seen) = master().await;
+    let recorder = seen.clone();
     let staff = PartyId("cd-1".into());
     let party = || PartyId("party-1".into());
     let calls = vec![
@@ -248,6 +251,11 @@ async fn the_master_is_asked_for_staff_work_in_the_role_it_needs() {
             key: "k2".into(),
             body: json!({ "command": "record" }),
         },
+        Desk::Change {
+            party: party(),
+            key: "k5".into(),
+            body: json!({ "command": "settle_capacity", "outcome": "has_capacity" }),
+        },
         Desk::Merge {
             key: "k3".into(),
             body: json!({}),
@@ -257,7 +265,10 @@ async fn the_master_is_asked_for_staff_work_in_the_role_it_needs() {
             body: json!({}),
         },
         Desk::Reviews,
-        Desk::Dismiss("rv/2".into()),
+        Desk::Dismiss {
+            review: "rv/2".into(),
+            body: json!({ "reason": "different people" }),
+        },
         Desk::Export(party()),
         Desk::Audit(party()),
         Desk::ActionsBy(PartyId("sue".into())),
@@ -285,6 +296,7 @@ async fn the_master_is_asked_for_staff_work_in_the_role_it_needs() {
             "GET /v1/parties/party-1/relationships as staff for servicing",
             "GET /v1/parties/party-1/due-diligence as staff for servicing",
             "POST /v1/parties/party-1/commands as staff for servicing",
+            "POST /v1/parties/party-1/commands as legal for capacity",
             "POST /v1/merges as staff for duplicates",
             "POST /v1/unmerges as staff for duplicates",
             "GET /v1/reviews as staff for duplicates",
@@ -303,7 +315,18 @@ async fn the_master_is_asked_for_staff_work_in_the_role_it_needs() {
         assert_eq!(header(headers, "x-ic-party"), None, "staff act for nobody: {path}");
     }
     let keys: Vec<Option<&str>> = seen.iter().map(|(_, _, h)| header(h, "idempotency-key")).collect();
-    assert_eq!(keys.iter().flatten().copied().collect::<Vec<_>>(), ["k1", "k2", "k3", "k4"]);
+    assert_eq!(keys.iter().flatten().copied().collect::<Vec<_>>(), ["k1", "k2", "k5", "k3", "k4"]);
+    let settle = Desk::Change {
+        party: party(),
+        key: "k".into(),
+        body: json!({ "command": "settle_capacity" }),
+    };
+    assert_eq!(settle.action(), Some(ic_channels::staff::actions::SETTLE_CAPACITY));
+    // Told the books' date, the master dates facts by it (SCN2-23, F2-23-9).
+    let books = chrono::NaiveDate::from_ymd_opt(2027, 11, 15);
+    master.desk_on(&staff, Desk::Reviews, books).await.unwrap();
+    let last = recorder.lock().unwrap().last().unwrap().2.clone();
+    assert_eq!(header(&last, "x-ic-business-date"), Some("2027-11-15"));
 }
 
 /// Purpose: the dates a record is read as at are checked and passed in the master's own form, and anything else is refused.

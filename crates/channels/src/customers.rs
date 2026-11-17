@@ -58,6 +58,12 @@ pub trait Master: Send + Sync {
     fn represents(&self, representative: &PartyId, party: &PartyId) -> Asked<'_>;
     /// Staff or operations work in the master, for `actor` ([`Desk`]).
     fn desk(&self, actor: &PartyId, desk: Desk) -> Asked<'_>;
+    /// [`Master::desk`], telling the master the books' business date, so a
+    /// fact is dated by the books rather than the calendar.
+    fn desk_on(&self, actor: &PartyId, desk: Desk, books: Option<chrono::NaiveDate>) -> Asked<'_> {
+        let _ = books;
+        self.desk(actor, desk)
+    }
 }
 
 /// What a member of staff may do with someone who has called about a
@@ -144,8 +150,12 @@ pub enum Desk {
     },
     /// The open reviews: likely duplicates and markers to consider.
     Reviews,
-    /// Close a duplicate review found not to be one.
-    Dismiss(String),
+    /// Close a duplicate review found not to be one, with the reason
+    /// (`{"reason": "..."}`), which a later merge of the pair is shown.
+    Dismiss {
+        review: String,
+        body: Value,
+    },
     /// Everything held about a person, for a Privacy Act request.
     Export(PartyId),
     /// Who read or changed a record.
@@ -166,7 +176,9 @@ impl Desk {
     /// The role the master is asked in, and the purpose declared to it.
     pub fn role(&self) -> (&'static str, &'static str) {
         match self {
-            Desk::Merge { .. } | Desk::Unmerge { .. } | Desk::Reviews | Desk::Dismiss(_) => ("staff", "duplicates"),
+            Desk::Merge { .. } | Desk::Unmerge { .. } | Desk::Reviews | Desk::Dismiss { .. } => ("staff", "duplicates"),
+            // Only legal settles whether a person can decide for themselves.
+            Desk::Change { body, .. } if settles_capacity(body) => ("legal", "capacity"),
             Desk::Export(_) => ("staff", "subject_access"),
             Desk::Audit(_) | Desk::ActionsBy(_) => ("privacy", "audit"),
             Desk::Index | Desk::Verify(_) | Desk::Rewrap(_) | Desk::Reshred(_) => ("operations", "operations"),
@@ -182,8 +194,9 @@ impl Desk {
             Desk::Search(_) | Desk::Match(_) => FIND_CUSTOMER,
             Desk::Create { .. } => CREATE_CUSTOMER,
             Desk::Read { .. } | Desk::History { .. } | Desk::Relationships(_) | Desk::DueDiligence(_) => VIEW_CUSTOMER,
+            Desk::Change { body, .. } if settles_capacity(body) => SETTLE_CAPACITY,
             Desk::Change { .. } => CHANGE_CUSTOMER,
-            Desk::Merge { .. } | Desk::Unmerge { .. } | Desk::Reviews | Desk::Dismiss(_) => MERGE_CUSTOMERS,
+            Desk::Merge { .. } | Desk::Unmerge { .. } | Desk::Reviews | Desk::Dismiss { .. } => MERGE_CUSTOMERS,
             Desk::Export(_) => EXPORT_CUSTOMER,
             Desk::Audit(_) | Desk::ActionsBy(_) => AUDIT_CUSTOMERS,
             Desk::Index | Desk::Verify(_) | Desk::Rewrap(_) | Desk::Reshred(_) => return None,
@@ -215,11 +228,11 @@ impl Desk {
             Desk::Merge { key, body } => (Method::POST, "/v1/merges".into(), Some(key.clone()), Some(body.clone())),
             Desk::Unmerge { key, body } => (Method::POST, "/v1/unmerges".into(), Some(key.clone()), Some(body.clone())),
             Desk::Reviews => (Method::GET, "/v1/reviews".into(), None, None),
-            Desk::Dismiss(review) => (
+            Desk::Dismiss { review, body } => (
                 Method::POST,
                 format!("/v1/reviews/{}/dismiss", encode(&PartyId::from(review.as_str()))),
                 None,
-                None,
+                Some(body.clone()),
             ),
             Desk::Export(party) => (Method::GET, at(party, "/export?purpose=subject_access"), None, None),
             Desk::Audit(party) => (Method::GET, at(party, "/audit"), None, None),
@@ -230,6 +243,12 @@ impl Desk {
             Desk::Reshred(body) => (Method::POST, "/v1/admin/reshred".into(), None, Some(body.clone())),
         }
     }
+}
+
+/// Whether a record command settles a question about capacity, which the
+/// master takes from legal only.
+fn settles_capacity(body: &Value) -> bool {
+    body["command"] == "settle_capacity"
 }
 
 /// The dates a record or its history is read as at, as the master takes
@@ -516,11 +535,16 @@ impl Master for Hosted {
     }
 
     fn desk(&self, actor: &PartyId, desk: Desk) -> Asked<'_> {
+        self.desk_on(actor, desk, None)
+    }
+
+    fn desk_on(&self, actor: &PartyId, desk: Desk, books: Option<chrono::NaiveDate>) -> Asked<'_> {
         let actor = actor.clone();
         Box::pin(async move {
             let (role, purpose) = desk.role();
             let (method, path, key, body) = desk.request();
-            let extra = key.map(|k| vec![("idempotency-key", k)]).unwrap_or_default();
+            let mut extra = key.map(|k| vec![("idempotency-key", k)]).unwrap_or_default();
+            extra.extend(books.map(|d| ("x-ic-business-date", d.to_string())));
             self.call_as(role, None, &actor, method, path, purpose, extra, body).await
         })
     }

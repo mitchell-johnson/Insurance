@@ -14,6 +14,20 @@ fn p(id: &str) -> PartyId {
     PartyId::from(id)
 }
 
+/// Propose a change as `proposer` and approve it as `approver`: a change
+/// to staff configuration takes effect only with a second person.
+fn approved(s: &mut StaffState, proposer: &str, approver: &str, command: StaffCommand) -> Result<Vec<StaffEvent>, ic_core::Reject> {
+    let events = s.apply(&p(proposer), T0, command)?;
+    let id = events
+        .iter()
+        .find_map(|e| match e {
+            StaffEvent::ChangeProposed { change, .. } => Some(change.clone()),
+            _ => None,
+        })
+        .expect("the change waits for a second person");
+    s.apply(&p(approver), T0, StaffCommand::ApproveChange { id })
+}
+
 fn set(items: &[&str]) -> BTreeSet<String> {
     items.iter().map(|s| s.to_string()).collect()
 }
@@ -306,15 +320,16 @@ fn policy_is_the_final_word() {
 fn maker_checker_and_separation_of_duties() {
     let mut s = staffed();
     let pol = policy();
-    s.apply(
-        &p("alice"),
-        T0,
+    approved(
+        &mut s,
+        "alice",
+        "sam",
         StaffCommand::DeclareConflict {
             conflict: Conflict {
                 a: "claim.admit".into(),
                 b: "claim.approve_payment".into(),
             },
-            approved_by: p("sam"),
+            approver: Some(p("sam")),
         },
     )
     .unwrap();
@@ -1011,26 +1026,26 @@ fn configuration_and_profiles_need_two_people() {
     };
     let activate = |profile: &Profile, by: &str| StaffCommand::ActivateProfile {
         profile: profile.clone(),
-        approved_by: p(by),
+        approver: Some(p(by)),
     };
     assert_eq!(code(s.apply(&p("alice"), T0, activate(&v2, "alice"))), "maker_checker");
     assert_eq!(code(s.apply(&p("ana"), T0, activate(&v2, "sam"))), "forbidden");
     assert_eq!(code(s.apply(&p("alice"), T0, activate(&v2, "mia"))), "forbidden");
     let v3 = Profile { version: 3, ..v2.clone() };
     assert_eq!(code(s.apply(&p("alice"), T0, activate(&v3, "sam"))), "bad_version");
-    s.apply(&p("alice"), T0, activate(&v2, "sam")).unwrap();
+    approved(&mut s, "alice", "sam", activate(&v2, "sam")).unwrap();
     let senior = Profile {
         id: "assessor-2".into(),
         version: 1,
         limits: limits(&[("admit", 400_000_00)]),
     };
-    s.apply(&p("alice"), T0, activate(&senior, "sam")).unwrap();
+    approved(&mut s, "alice", "sam", activate(&senior, "sam")).unwrap();
     let huge = Profile {
         id: "assessor-9".into(),
         version: 1,
         limits: limits(&[("admit", 900_000_00)]),
     };
-    s.apply(&p("alice"), T0, activate(&huge, "sam")).unwrap();
+    approved(&mut s, "alice", "sam", activate(&huge, "sam")).unwrap();
 
     let mut admit = request("ana", "claim.admit", DataClass::Financial);
     admit.scopes = vec!["queue:claims-life".into()];
@@ -1046,7 +1061,7 @@ fn configuration_and_profiles_need_two_people() {
     let set_profile = |party: &str, profile: Option<&str>, by: &str| StaffCommand::SetProfile {
         party: p(party),
         profile: profile.map(String::from),
-        approved_by: p(by),
+        approver: Some(p(by)),
     };
     assert_eq!(code(s.apply(&p("ana"), T0, set_profile("ben", Some("assessor-2"), "sam"))), "forbidden");
     assert_eq!(code(s.apply(&p("alice"), T0, set_profile("ana", Some("assessor-2"), "mia"))), "forbidden");
@@ -1064,7 +1079,7 @@ fn configuration_and_profiles_need_two_people() {
     assert_eq!(code(s.apply(&p("alice"), T0, set_profile("ana", Some("nope"), "sam"))), "unknown_profile");
     assert_eq!(code(s.apply(&p("alice"), T0, set_profile("ana", Some("assessor-9"), "sam"))), "above_ceiling");
     assert_eq!(code(s.apply(&p("alice"), T0, set_profile("ghost", None, "sam"))), "not_staff");
-    s.apply(&p("alice"), T0, set_profile("ana", Some("assessor-2"), "sam")).unwrap();
+    approved(&mut s, "alice", "sam", set_profile("ana", Some("assessor-2"), "sam")).unwrap();
     admit.amount = Some(Amount {
         limit: "admit".into(),
         value: 390_000_00,
@@ -1072,7 +1087,7 @@ fn configuration_and_profiles_need_two_people() {
     assert_eq!(s.authorise(&pol, &admit).profile, Some(("assessor-2".to_string(), 1)));
     assert!(s.authorise(&pol, &admit).allowed);
     assert_eq!(s.own_access(&p("ana"), T0 + 1)["profile"]["id"], "assessor-2");
-    s.apply(&p("alice"), T0, set_profile("ana", None, "sam")).unwrap();
+    approved(&mut s, "alice", "sam", set_profile("ana", None, "sam")).unwrap();
 
     let t = template("trainee", &["claim.view"], &[DataClass::Ordinary], "nope", &[]);
     assert_eq!(
@@ -1081,7 +1096,7 @@ fn configuration_and_profiles_need_two_people() {
             T0,
             StaffCommand::DefineTemplate {
                 template: t.clone(),
-                approved_by: p("sam")
+                approver: Some(p("sam"))
             }
         )),
         "unknown_profile"
@@ -1090,12 +1105,13 @@ fn configuration_and_profiles_need_two_people() {
         default_profile: "none".into(),
         ..t
     };
-    s.apply(
-        &p("alice"),
-        T0,
+    approved(
+        &mut s,
+        "alice",
+        "sam",
         StaffCommand::DefineTemplate {
             template: t,
-            approved_by: p("sam"),
+            approver: Some(p("sam")),
         },
     )
     .unwrap();
@@ -1104,12 +1120,13 @@ fn configuration_and_profiles_need_two_people() {
         recertify_every: 90 * DAY,
         ..Settings::default()
     };
-    s.apply(
-        &p("alice"),
-        T0,
+    approved(
+        &mut s,
+        "alice",
+        "sam",
         StaffCommand::ChangeSettings {
             settings: settings.clone(),
-            approved_by: p("sam"),
+            approver: Some(p("sam")),
         },
     )
     .unwrap();
@@ -1155,7 +1172,7 @@ fn external_source_drives_templates() {
     let m = mapping(1);
     let activate = |m: &Mapping, by: &str| StaffCommand::ActivateMapping {
         mapping: m.clone(),
-        approved_by: p(by),
+        approver: Some(p(by)),
     };
     let sync = |holdings: Vec<ExternalHolding>, full: bool| StaffCommand::ExternalSync { holdings, full };
     let holding = |person: &str, entitlement: &str, to: Option<At>| ExternalHolding {
@@ -1188,7 +1205,7 @@ fn external_source_drives_templates() {
         };
         assert_eq!(code(s.apply(&p("alice"), T0, activate(&unowned, "sam"))), "no_alignment_owner");
     }
-    s.apply(&p("alice"), T0, activate(&m, "sam")).unwrap();
+    approved(&mut s, "alice", "sam", activate(&m, "sam")).unwrap();
     assert_eq!(s.alignment().owner, Some(p("sam")));
 
     // Templates now come from the source.
@@ -1271,12 +1288,13 @@ fn external_elevation_is_capped_and_fails_closed() {
         code(s.apply(&p("m"), T0, elevate("r1", "ben", "pam-cover", cover.clone(), T0 + DAY))),
         "no_mapping"
     );
-    s.apply(
-        &p("alice"),
-        T0,
+    approved(
+        &mut s,
+        "alice",
+        "sam",
         StaffCommand::ActivateMapping {
             mapping: mapping(1),
-            approved_by: p("sam"),
+            approver: Some(p("sam")),
         },
     )
     .unwrap();
@@ -1355,7 +1373,8 @@ fn external_elevation_is_capped_and_fails_closed() {
 /// Purpose: staff declare their own personal connections, only a staff administrator who is not the person concerned can remove one,
 /// and an attempt on a record with no path or on a personal record is flagged in the log and raised as an event.
 /// Why it matters: looking up a relative, an ex-partner or oneself is the classic misuse of an insurer's systems. A declaration the
-/// person could quietly withdraw, or a refused attempt nobody is told about, would not deter it.
+/// person could quietly withdraw, or a refused attempt nobody is told about, would not deter it. Found by the scenario run, SCN2-24
+/// (F2-24-7, F2-24-9): a removal asked no reason and left nothing visible, and the only administrator's own declaration could never go.
 #[test]
 fn personal_connections_and_flagged_attempts() {
     let mut s = staffed();
@@ -1368,6 +1387,7 @@ fn personal_connections_and_flagged_attempts() {
     let end = |staff: &str, party: &str| StaffCommand::EndConnection {
         staff: p(staff),
         party: p(party),
+        reason: "no longer related".into(),
     };
     assert_eq!(code(s.apply(&p("ana"), T0, end("ana", "cousin"))), "forbidden");
     assert_eq!(code(s.apply(&p("ben"), T0, end("ana", "cousin"))), "forbidden");
@@ -1403,8 +1423,261 @@ fn personal_connections_and_flagged_attempts() {
     assert_eq!(flags, [Some("no_path".to_string()), Some("personal".to_string()), None]);
     assert!(Denial::Personal.explain().contains("colleague"));
 
-    s.apply(&p("alice"), T0, end("ana", "cousin")).unwrap();
+    let unexplained = StaffCommand::EndConnection {
+        staff: p("ana"),
+        party: p("cousin"),
+        reason: " ".into(),
+    };
+    assert_eq!(code(s.apply(&p("alice"), T0, unexplained)), "no_reason");
+    // An access approver may remove it too, so the only administrator's own declaration is not stuck (F2-24-9).
+    s.apply(&p("sam"), T0, end("ana", "cousin")).unwrap();
     assert!(s.connections[&p("ana")].is_empty());
+    let ended = &s.connections_ended[0];
+    assert_eq!((&ended.staff, &ended.by, ended.reason.as_str()), (&p("ana"), &p("sam"), "no longer related"));
+    s.apply(&p("alice"), T0, StaffCommand::DeclareConnection { party: p("cousin") }).unwrap();
+    s.apply(&p("sam"), T0, end("alice", "cousin")).unwrap();
+    assert!(s.connections[&p("alice")].is_empty());
+}
+
+/// Purpose: a change to staff configuration or to a person's authority profile waits as a
+/// proposal naming who is asked; it takes effect only when someone else holding the approving
+/// action approves it, never the proposer or the person it is about; the person asked need
+/// not be the one who approves; a proposal can be declined or withdrawn, and both names are kept
+/// with what it replaced.
+/// Why it matters: found by the scenario run, SCN2-24 (F2-24-1): a proposer named an approver
+/// who never saw the change and it took effect at once, so four-eyes on staff configuration did
+/// not exist.
+#[test]
+fn configuration_waits_for_its_second_person() {
+    let mut s = staffed();
+    let v2 = Profile {
+        id: "assessor-1".into(),
+        version: 2,
+        limits: limits(&[("admit", 150_000_00)]),
+    };
+    let activate = StaffCommand::ActivateProfile {
+        profile: v2.clone(),
+        approver: Some(p("sam")),
+    };
+    let events = s.apply(&p("alice"), T0, activate.clone()).unwrap();
+    assert_eq!(
+        events,
+        vec![StaffEvent::ChangeProposed {
+            change: "chg-1".into(),
+            approver_action: actions::APPROVE_CONFIGURATION.into(),
+            approver: Some(p("sam")),
+        }]
+    );
+    // Nothing has changed yet.
+    assert_eq!(s.profiles["assessor-1"].len(), 1);
+    assert_eq!(s.pending["chg-1"].before["version"], 1);
+    // The proposer cannot approve it, nor can someone without the approving action.
+    assert_eq!(
+        code(s.apply(&p("alice"), T0, StaffCommand::ApproveChange { id: "chg-1".into() })),
+        "maker_checker"
+    );
+    assert_eq!(code(s.apply(&p("ana"), T0, StaffCommand::ApproveChange { id: "chg-1".into() })), "forbidden");
+    assert_eq!(code(s.apply(&p("sam"), T0, StaffCommand::ApproveChange { id: "chg-9".into() })), "not_pending");
+    let events = s.apply(&p("sam"), T0 + 5, StaffCommand::ApproveChange { id: "chg-1".into() }).unwrap();
+    assert_eq!(
+        events,
+        vec![StaffEvent::ChangeDecided {
+            change: "chg-1".into(),
+            applied: true
+        }]
+    );
+    assert_eq!(s.profiles["assessor-1"].len(), 2);
+    assert!(s.pending.is_empty());
+    assert_eq!(s.decided[0].decided, Some((p("sam"), T0 + 5, true)));
+    assert_eq!(s.decided[0].proposed_by, p("alice"));
+
+    // Unnamed, anyone holding the action approves; a proposal checked again at approval can fail then.
+    let v3 = Profile { version: 3, ..v2.clone() };
+    let unnamed = StaffCommand::ActivateProfile {
+        profile: v3.clone(),
+        approver: None,
+    };
+    s.apply(&p("alice"), T0, unnamed.clone()).unwrap();
+    s.apply(&p("alice"), T0, unnamed).unwrap();
+    s.apply(&p("sam"), T0, StaffCommand::ApproveChange { id: "chg-2".into() }).unwrap();
+    assert_eq!(code(s.apply(&p("sam"), T0, StaffCommand::ApproveChange { id: "chg-3".into() })), "bad_version");
+    assert!(s.pending.contains_key("chg-3"), "a refused approval changes nothing");
+    // The proposer withdraws it; someone without the action cannot decline it.
+    assert_eq!(code(s.apply(&p("ana"), T0, StaffCommand::DeclineChange { id: "chg-3".into() })), "forbidden");
+    let events = s.apply(&p("alice"), T0, StaffCommand::DeclineChange { id: "chg-3".into() }).unwrap();
+    assert_eq!(
+        events,
+        vec![StaffEvent::ChangeDecided {
+            change: "chg-3".into(),
+            applied: false
+        }]
+    );
+    assert_eq!(s.profiles["assessor-1"].len(), 3);
+
+    // A profile for a person: proposed by an administrator, approved by a holder of the uplift action, never its subject.
+    let profile = |party: &str| StaffCommand::SetProfile {
+        party: p(party),
+        profile: Some("none".into()),
+        approver: None,
+    };
+    assert_eq!(
+        code(s.apply(
+            &p("alice"),
+            T0,
+            StaffCommand::SetProfile {
+                party: p("ana"),
+                profile: Some("assessor-1".into()),
+                approver: Some(p("ana")),
+            }
+        )),
+        "maker_checker"
+    );
+    assert_eq!(code(s.apply(&p("ana"), T0, profile("ben"))), "forbidden");
+    let events = s.apply(&p("mia"), T0, profile("sam")).unwrap();
+    assert_eq!(
+        events,
+        vec![StaffEvent::ChangeProposed {
+            change: "chg-4".into(),
+            approver_action: actions::APPROVE_PROFILE_UPLIFT.into(),
+            approver: None,
+        }]
+    );
+    assert_eq!(
+        code(s.apply(&p("sam"), T0, StaffCommand::ApproveChange { id: "chg-4".into() })),
+        "maker_checker"
+    );
+    assert_eq!(code(s.apply(&p("sam"), T0, profile("ana"))), "forbidden");
+}
+
+/// Purpose: a template that would join two duties kept apart is refused whether it is assigned,
+/// given on employment or granted for a period, with both duties named.
+/// Why it matters: found by the scenario run, SCN2-24 (F2-24-2): the administrator gave a payments
+/// maker the approver template, which the grant check (F-SCN16-7) exists to prevent.
+#[test]
+fn templates_never_join_duties_kept_apart() {
+    let mut s = staffed();
+    for (id, action) in [("payments-maker", "payments.maker"), ("payments-approver", "payments.approver")] {
+        approved(
+            &mut s,
+            "alice",
+            "sam",
+            StaffCommand::DefineTemplate {
+                template: template(id, &[action], &[DataClass::Ordinary], "none", &[]),
+                approver: None,
+            },
+        )
+        .unwrap();
+    }
+    s.apply(
+        &p("alice"),
+        T0,
+        StaffCommand::AssignTemplate {
+            party: p("col"),
+            template: "payments-maker".into(),
+        },
+    )
+    .unwrap();
+    let r = s.apply(
+        &p("alice"),
+        T0,
+        StaffCommand::AssignTemplate {
+            party: p("col"),
+            template: "payments-approver".into(),
+        },
+    );
+    let refusal = r.unwrap_err();
+    assert_eq!(refusal.code, "separation_of_duties");
+    assert!(
+        refusal.message.contains("payments.maker") && refusal.message.contains("payments.approver"),
+        "{}",
+        refusal.message
+    );
+    let employ = StaffCommand::Employ {
+        party: p("newbie"),
+        team: "payments".into(),
+        manager: None,
+        templates: vec!["payments-maker".into(), "payments-approver".into()],
+    };
+    assert_eq!(code(s.apply(&p("alice"), T0, employ)), "separation_of_duties");
+    let role = StaffCommand::RequestGrant {
+        id: "r1".into(),
+        holder: p("col"),
+        kind: GrantKind::Role {
+            template: "payments-approver".into(),
+        },
+        reason: "cover".into(),
+        from: T0,
+        to: T0 + DAY,
+    };
+    assert_eq!(code(s.apply(&p("mia"), T0, role)), "separation_of_duties");
+}
+
+/// Purpose: a role can be granted for a period: requested with a reason, approved by someone
+/// else, widening what the holder may do while it runs and ending by itself; it is refused
+/// beyond the longest period, for a role already held and for an unknown template.
+/// Why it matters: found by the scenario run, SCN2-24 (F2-24-3): "cover collections for a
+/// fortnight" could only be done by assigning the template for ever and remembering to remove it.
+#[test]
+fn a_role_is_granted_for_a_period() {
+    let mut s = staffed();
+    let role = |id: &str, template: &str, to: At| StaffCommand::RequestGrant {
+        id: id.into(),
+        holder: p("ben"),
+        kind: GrantKind::Role { template: template.into() },
+        reason: "cover collections while col is on leave".into(),
+        from: T0,
+        to,
+    };
+    assert_eq!(code(s.apply(&p("mia"), T0, role("r0", "collections-officer", T0 + 40 * DAY))), "too_long");
+    assert_eq!(code(s.apply(&p("mia"), T0, role("r0", "wizard", T0 + DAY))), "unknown_template");
+    assert_eq!(code(s.apply(&p("mia"), T0, role("r0", "claims-assessor", T0 + DAY))), "already_held");
+    let events = s.apply(&p("mia"), T0, role("r1", "collections-officer", T0 + 14 * DAY)).unwrap();
+    assert!(matches!(&events[0], StaffEvent::GrantRequested { approver_action, .. } if approver_action == actions::APPROVE_GRANT));
+    assert!(!s.holds_action(&p("ben"), "suspense.allocate", T0 + 1));
+    s.apply(&p("sam"), T0, StaffCommand::ApproveGrant { id: "r1".into() }).unwrap();
+    assert!(s.holds_action(&p("ben"), "suspense.allocate", T0 + 1));
+    assert!(!s.holds_action(&p("ben"), "suspense.allocate", T0 + 14 * DAY), "it ends by itself");
+    assert_eq!(GrantKind::Role { template: "x".into() }.key(), "role");
+}
+
+/// Purpose: an administrator names a member of staff's manager, who must be current staff and
+/// not the person; where nobody is named, an administrator other than the person recertifies,
+/// and a refusal says who does.
+/// Why it matters: found by the scenario run, SCN2-24 (F2-24-5, F2-24-6): every seeded member had
+/// no manager and nobody could recertify them, and a manager who did not exist was accepted.
+#[test]
+fn managers_are_named_and_someone_always_recertifies() {
+    let mut s = staffed();
+    let set = |party: &str, manager: Option<&str>| StaffCommand::SetManager {
+        party: p(party),
+        manager: manager.map(p),
+    };
+    assert_eq!(code(s.apply(&p("ana"), T0, set("ben", Some("mia")))), "forbidden");
+    assert_eq!(code(s.apply(&p("alice"), T0, set("ben", Some("ben")))), "bad_manager");
+    assert_eq!(code(s.apply(&p("alice"), T0, set("ben", Some("ghost")))), "bad_manager");
+    assert_eq!(code(s.apply(&p("alice"), T0, set("ghost", Some("mia")))), "not_staff");
+    let employ = StaffCommand::Employ {
+        party: p("newbie"),
+        team: "claims".into(),
+        manager: Some(p("ghost")),
+        templates: vec![],
+    };
+    assert_eq!(code(s.apply(&p("alice"), T0, employ)), "bad_manager");
+    // Sam has no manager: an administrator other than Sam recertifies.
+    let recertify = |party: &str| StaffCommand::Recertify {
+        party: p(party),
+        confirmed: vec!["security".into()],
+    };
+    let refusal = s.apply(&p("ana"), T0, recertify("sam")).unwrap_err();
+    assert!(refusal.message.contains("set_manager"), "{}", refusal.message);
+    s.apply(&p("alice"), T0, recertify("sam")).unwrap();
+    s.apply(&p("alice"), T0, set("sam", Some("mia"))).unwrap();
+    assert_eq!(s.members[&p("sam")].manager, Some(p("mia")));
+    let refusal = s.apply(&p("alice"), T0, recertify("sam")).unwrap_err();
+    assert!(refusal.message.contains("mia"), "{}", refusal.message);
+    s.apply(&p("mia"), T0, recertify("sam")).unwrap();
+    s.apply(&p("alice"), T0, set("sam", None)).unwrap();
+    assert_eq!(s.members[&p("sam")].manager, None);
 }
 
 /// Purpose: a product owner and a platform engineer, whose templates hold no personal data class, are refused customer data

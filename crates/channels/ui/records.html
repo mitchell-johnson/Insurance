@@ -66,7 +66,10 @@ async function openRecord(p) {
   $("rec-title").textContent = name || "Record";
   put($("rec-summary"), portal.details({ kind: record.kind, lifecycle: record.lifecycle, version: record.version, as_of: asOf || "today",
     masked: Object.keys(record.masked || {}).map(words).join(", ") || null, withheld: (record.withheld || []).map(words).join(", ") || null }));
-  const rows = Object.entries(facts).map(([k, x]) => [words(k), show(x && x.value), (x && x.valid_from) || "", x && x.recorded_at ? new Date(x.recorded_at).toLocaleString() : ""]);
+  // A fact with no date it became true from is shown as always true, not as the year 1; times are New Zealand's.
+  const since = (d) => !d || d <= "0001-12-31" ? "always" : portal.day(d);
+  const when = (t) => t ? new Date(t).toLocaleString("en-NZ", { timeZone: "Pacific/Auckland", day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+  const rows = Object.entries(facts).map(([k, x]) => [words(k), show(x && x.value), since(x && x.valid_from), when(x && x.recorded_at)]);
   put($("rec-facts"), rows.length ? table(["Fact", "Value", "True from", "Recorded"], rows) : portal.empty("Nothing your role may read."));
   const consents = Object.entries(record.consents || {});
   put($("rec-consents"), consents.length ? table(["Purpose", "Given"], consents.map(([k, v]) => [words(k), typeof v === "object" ? (v.granted ? "yes" : "no") : String(v)])) : portal.empty("None recorded."));
@@ -95,15 +98,24 @@ async function loadRelationships() {
 // ---- Change: the record commands staff may send. Each goes for the person open under Record.
 const FIELDS = ["given_name", "middle_names", "family_name", "preferred_name", "date_of_birth", "gender", "residency_status", "email", "mobile_phone", "postal_address", "residential_address",
   "preferred_language", "presentation_format", "notice_channel", "ird_number", "tax_residency", "prescribed_investor_rate", "resident_withholding_rate", "organisation_name", "registration_number"];
+const BASES = ["enduring_power_of_attorney", "court_order", "written_authority"];
+const SCOPES = "view, pay_premiums, change_payment_method, change_contact_details, change_bank_details, change_cover, change_beneficiary, surrender, claim, complain, all";
 const KINDS = ["owner", "life_insured", "beneficiary", "dependant", "payer", "interested_party", "assignee", "claimant", "adviser", "employer_administrator", "scheme_member", "broker",
   "director", "trustee", "signatory", "beneficial_owner", "employee", "attorney", "guardian", "authorised_representative", "executor", "partner", "parent", "staff", "premium_payer"];
 const change = () => may("change");
 const ACTIONS = {
-  record: { label: "Record or correct a fact", can: change, note: "A correction is a fact for a date already stated, with a reason. Leave the value empty to say the fact no longer holds.",
+  record: { label: "Record or correct a fact", can: change, note: "A correction is a fact for a date already stated, with a reason: give the date it was always true from (a date of birth is true from birth), or it is recorded as true only from today. Leave the value empty to say the fact no longer holds. An address is one line per part, separated by commas: \"Flat 2, 14 Victoria Street, Hamilton 3204\".",
     fields: [["field", "Fact", "select", FIELDS], ["value", "Value", "optional"], ["valid_from", "True from (blank for today)", "optdate"], ["reason", "Why (needed for a correction)", "optional"]],
-    build: (v) => ({ command: "record", facts: [{ field: v.field, value: v.value == null ? null : v.value, valid_from: v.valid_from }], reason: v.reason }) },
+    build: (v) => ({ command: "record", facts: [{ field: v.field, value: factValue(v.field, v.value), valid_from: v.valid_from }], reason: v.reason }) },
   decline_correction: { label: "Decline a correction the person asked for", can: change, note: "Their statement of correction is kept with the record.", fields: [["field", "Fact", "select", FIELDS], ["statement", "Their statement", "text"]] },
-  add_relationship: { label: "Add a relationship", can: change, note: "To a policy, a scheme, or another person (an attorney, a guardian, an employer).",
+  add_representative: { label: "Add someone who acts for this person (attorney, guardian, authority)", can: change,
+    note: "For the person open under Record. Pick the one who acts for them by name; the authority is recorded on their record, pointing to this one, so a call from them can be checked. What they may do is any of: " + SCOPES + ".",
+    fields: [["id", "Authority reference", "reference", "AUTH"], ["actor", "Who acts for them (name and birth date)", "text"], ["kind", "They are the person's", "select", ["attorney", "guardian", "authorised_representative"]],
+      ["basis", "On the strength of", "select", BASES], ["scope", "What they may do (comma separated)", "text"], ["document", "Authority document reference (optional)", "optional"],
+      ["valid_from", "From", "date"], ["valid_to", "Until (optional)", "optdate"]],
+    build: (v) => ({ _on: v.actor, command: "add_relationship", id: v.id, kind: v.kind, target: { kind: "party", id: party }, valid_from: v.valid_from, valid_to: v.valid_to,
+      attributes: { basis: v.basis, scope: String(v.scope).split(",").map((x) => x.trim()).filter(Boolean), ...(v.document ? { document: v.document } : {}) } }) },
+  add_relationship: { label: "Add a relationship", can: change, note: "From this person to a policy, a scheme, or another person: \"this person is the attorney of the person picked\". To record someone who acts for this person, use \"Add someone who acts for this person\".",
     fields: [["id", "Relationship reference", "reference", "REL"], ["kind", "Relationship", "select", KINDS], ["target_kind", "To a", "select", ["policy", "scheme", "party"]], ["target", "Policy, scheme or person", "text"], ["valid_from", "From", "date"], ["valid_to", "Until (optional)", "optdate"]],
     build: (v) => ({ command: "add_relationship", id: v.id, kind: v.kind, target: { kind: v.target_kind, id: v.target }, valid_from: v.valid_from, valid_to: v.valid_to }) },
   end_relationship: { label: "End a relationship", can: change, note: "The date is the first day it no longer holds.", fields: [["id", "Relationship", "text"], ["valid_to", "No longer holds from", "date"]] },
@@ -117,11 +129,19 @@ const ACTIONS = {
     fields: [["from", "Raised by", "select", ["family", "friend", "carer", "professional", "staff", "other"]], ["about", "About", "select", ["financial_abuse", "capacity", "wellbeing", "bereavement", "coercion", "other"]]] },
   place_spending_hold: { label: "Hold money going out, as the person asked", can: change, note: "Only when the person asks you by phone. Only they can ask for it to end, in their app; you cannot remove it.", fields: [] },
   question_capacity: { label: "Question whether the person can decide for themselves", can: change, note: "Anything a representative asks goes to a person until legal settles it. Cover and claims go on.", fields: [] },
+  settle_capacity: { label: "Settle whether the person can decide for themselves (legal)", can: () => may("settle_capacity"),
+    note: "Once settled, a representative's authority applies again as recorded: an enduring power of attorney for property acts once the person lacks capacity.",
+    fields: [["outcome", "The person", "select", ["lacks_capacity", "has_capacity"]]] },
 };
-const sendChange = async (command) => {
+// An address is kept as its lines; a person types it on one line, separated by commas.
+const factValue = (field, value) => value == null ? null : /_address$/.test(field) ? String(value).split(/\s*[,\n]\s*/).filter(Boolean) : value;
+const sendChange = async (sent) => {
   if (!party) { portal.view("record"); throw new Error("Open the person's record under Record first."); }
+  // Most changes are to the person open; an authority is recorded on the record of whoever holds it.
+  let { _on, ...command } = sent;
   if (!command.command) { const { type, ...rest } = command; command = { command: type, ...rest }; }
-  return post(at(party) + "/commands", command);
+  if (_on === party) throw new Error("Pick someone other than the person themselves.");
+  return post(at(_on || party) + "/commands", command);
 };
 
 // ---- Duplicates: the master's open duplicate reviews, merged or dismissed by a person.
@@ -130,15 +150,35 @@ async function showDuplicates() {
   if (!$("case").value.trim() && !portal.working()) { put($("dups"), portal.empty("Say what you are working on under Record, and the likely duplicates show here.")); return; }
   const r = await get("/reviews");
   const open = (r.reviews || []).filter((x) => x.kind === "duplicate" && x.status !== "dismissed");
-  put($("dups"), open.length ? table(["Review", "Person", "May be the same as", "Raised", ""], open.map((x) => {
-    const other = (x.candidates || []).map((c) => c.party || c)[0] || "";
-    return [x.id, x.party, (x.candidates || []).map((c) => c.party || c).join(", "), x.created_at ? new Date(x.created_at).toLocaleDateString() : "",
-      h("span", {}, h("button", { class: "quiet", type: "button", on: { click: () => mergeActs.choose("merge", { survivor: x.party, absorbed: other, review: x.id }) } }, "Merge"),
-        h("button", { class: "quiet", type: "button", on: { click: run($("dup-msg"), async () => { await post("/reviews/" + encodeURIComponent(x.id) + "/dismiss", {}); await showDuplicates(); return "Recorded as not the same person."; }) } }, "Not the same person"))];
-  })) : portal.empty("No likely duplicates are waiting."));
+  // Each record by name and birth date, with a link to open it, so the two can be compared side by side.
+  const who = async (id) => {
+    if (!may("view")) return { id, text: id };
+    try {
+      const rec = await get(at(id)), f = (k) => rec.facts && rec.facts[k] ? show(rec.facts[k].value) : "";
+      const name = rec.kind === "organisation" ? f("organisation_name") : [f("given_name"), f("family_name")].filter(Boolean).join(" ");
+      return { id, text: [name || id, f("date_of_birth") ? "born " + portal.born(f("date_of_birth")) : "", f("email"), f("mobile_phone")].filter(Boolean).join(" · ") };
+    } catch (e) { return { id, text: id }; }
+  };
+  const cell = (p) => h("button", { class: "quiet", type: "button", title: "Open this record", on: { click: run($("dup-msg"), async () => { await openRecord(p.id); portal.view("record"); return ""; }) } }, p.text);
+  const rows = await Promise.all(open.map(async (x) => {
+    // The review is raised on the record added later; the one it may duplicate was there first, and is the one that usually stays.
+    const older = (x.candidates || []).map((c) => c.party || c)[0] || "";
+    const [newer, first] = await Promise.all([who(x.party), who(older)]);
+    return [cell(first), cell(newer), x.created_at ? portal.day(x.created_at) : "",
+      h("span", {}, h("button", { class: "quiet", type: "button", on: { click: () => mergeActs.choose("merge", { survivor: older, absorbed: x.party, review: x.id }) } }, "Merge"),
+        h("button", { class: "quiet", type: "button", on: { click: run($("dup-msg"), async () => {
+          const reason = await portal.ask({ title: "Not the same person", text: "Say how you know they are different people. A later merge of these two records is shown what you write.", label: "Why they are different people", confirm: "Record it" });
+          if (reason == null) return "";
+          await post("/reviews/" + encodeURIComponent(x.id) + "/dismiss", { reason });
+          await showDuplicates();
+          return "Recorded as not the same person.";
+        }) } }, "Not the same person"))];
+  }));
+  put($("dups"), open.length ? table(["Record there first", "Record added later", "Raised", ""], rows) : portal.empty("No likely duplicates are waiting."));
 }
 const MERGES = {
-  merge: { label: "Merge two records", note: "The record that stays keeps both histories; the other points to it.", fields: [["survivor", "Record that stays", "text"], ["absorbed", "Record merged into it", "text"], ["review", "Duplicate review it settles (optional)", "optional"]] },
+  merge: { label: "Merge two records", note: "The record that stays keeps both histories; the other points to it. Usually the record there first stays. The person signed in on the merged record sees nothing until we confirm it is them, and undoing a merge after people have used the record is hard: check both records first.",
+    fields: [["survivor", "Record that stays", "text"], ["absorbed", "Record merged into it", "text"], ["review", "Duplicate review it settles (optional)", "optional"], ["reason", "Why they are one person (the documents you checked)", "text"]] },
   unmerge: { label: "Undo a merge", note: "Each record is restored as it was, and what was recorded since stays with the record that stayed.", fields: [["survivor", "Record that stayed", "text"], ["absorbed", "Record that was merged into it", "text"]] },
 };
 
@@ -164,16 +204,24 @@ signIn(R).then(async () => {
   if (!held.length) { const e = new Error("You do not work on customer records."); e.status = 403; throw e; }
   $("me").textContent = `You may ${held.map((a) => words(a.slice(10))).join(", ")}.`;
   acts = portal.actions($("acts"), ACTIONS, { id: "ca", send: sendChange, after: async () => { if (party) await openRecord(party); },
-    pickers: { id: async () => { if (party) await loadRelationships(); return relationships.map((r) => ({ value: r.id, hint: `${words(r.kind)} · ${show(r.target)}` })); } } });
+    pickers: { actor: portal.people, id: async () => { if (party) await loadRelationships(); return relationships.map((r) => ({ value: r.id, hint: `${words(r.kind)} · ${show(r.target)}` })); } } });
   if (!may("change")) put($("acts"), portal.empty("Your roles let you read records, not change them."));
   if (may("merge")) {
-    mergeActs = portal.actions($("merges"), MERGES, { id: "mg", send: ({ type, ...body }) => post(type === "merge" ? "/merges" : "/unmerges", body), after: showDuplicates,
+    mergeActs = portal.actions($("merges"), MERGES, { id: "mg", send: async ({ type, ...body }) => {
+      if (type === "merge" && !(await portal.ask({ title: "Merge these records?", text: "Everything held under the second record will be read as the first. Merge only when you are sure they are one person.", confirm: "Merge them", danger: true }))) throw new Error("Nothing was merged.");
+      return post(type === "merge" ? "/merges" : "/unmerges", body);
+    }, after: showDuplicates,
       pickers: { survivor: portal.people, absorbed: portal.people } });
     portal.onView((key) => { if (key === "duplicates") run($("dup-msg"), showDuplicates)(); });
   } else {
     put($("dups"), portal.empty("Settling duplicates is for people who merge records."));
   }
-  if (may("create")) portal.actions($("create"), CREATE, { id: "np", send: ({ type, ...v }) => addPerson(buildNew(v, type)), after: async (_, made) => { if (made && made.party) { $("who").dataset.party = made.party; await openRecord(made.party); portal.view("record"); } } });
+  if (may("create")) portal.actions($("create"), CREATE, { id: "np", send: ({ type, ...v }) => addPerson(buildNew(v, type)), after: async (_, made) => {
+    if (!made || !made.party) return;
+    // Someone who adds people but does not read records is told the person is on file, not refused for opening it.
+    if (!may("view")) { portal.say($("msg"), "ok", "Added. The person is on file; you do not need to add them again."); return; }
+    $("who").dataset.party = made.party; await openRecord(made.party); portal.view("record");
+  } });
   else put($("create"), portal.empty("Your roles do not let you add people."));
 }).catch(portal.refuse);
 </script></body></html>

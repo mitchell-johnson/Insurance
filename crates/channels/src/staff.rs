@@ -32,6 +32,32 @@ pub const SEPARATE_ACTIONS: [(&str, &str); 2] = [("payments.maker", "payments.ap
 /// The policy shipped with the platform.
 pub const DEFAULT_POLICIES: &str = include_str!("../../../config/cedar/staff.cedar");
 
+/// The commands a person sends to the staff module, each with an example,
+/// for the assistant's tool description and for a refusal of a command
+/// that was not understood. Times are seconds since the epoch; limits and
+/// ceilings are in cents. A change marked "(second person)" waits until
+/// someone else holding the approving action sends `approve_change`.
+pub const PEOPLE_COMMANDS: &str = r#"One command per call, as {"<command>": {fields}}:
+- request_grant: {"id":"G-1","holder":"st5b","kind":{"kind":"role","template":"collections"},"reason":"cover collections while st5 is on leave","from":1795000000,"to":1796200000}. Kinds: {"kind":"cover","covered":"st5"}, {"kind":"role","template":"collections"} (a role for a period, at most 31 days), {"kind":"one_off","action":"payments.collections","record":"policy-1"} (one day), {"kind":"profile_uplift","limits":{"assisted_change":250000}}.
+- approve_grant / decline_grant / revoke_grant: {"id":"G-1"}
+- break_glass: {"id":"BG-1","template":"claims","reason":"..."}; review_break_glass: {"id":"BG-1"}
+- declare_connection: {"party":"pty_..."}; end_connection: {"staff":"n7","party":"pty_...","reason":"no longer related"}
+- employ: {"party":"st20","team":"claims","manager":"st4","templates":["claims"]}; end_employment: {"party":"st20"}
+- assign_template / remove_template: {"party":"st20","template":"claims"}; set_manager: {"party":"st20","manager":"st4"}
+- assign_path / remove_path: {"party":"st20","scope":"queue:claims-life"}
+- recertify: {"party":"st20","confirmed":["claims"]} (their manager, or an administrator where none is named)
+- set_profile (second person): {"party":"st20","profile":"junior","approver":"admin2"}
+- define_template, activate_profile, declare_conflict, change_settings, activate_mapping (second person): e.g. {"activate_profile":{"profile":{"id":"junior","version":2,"limits":{"assisted_change":25000}},"approver":"admin2"}}
+- approve_change / decline_change: {"id":"chg-1"} (staff_admin lists pending_changes)"#;
+
+/// The longest a role is granted for a period, where the settings do not
+/// say: a month, so cover for leave expires by itself.
+pub const ROLE_MAX_LIFE: i64 = 31 * 86_400;
+
+/// How many decided configuration changes and ended connections are kept
+/// for the administrator's view.
+pub const DECIDED_LEN: usize = 200;
+
 /// How many of a person's own recent decisions are kept for their access view.
 pub const ACCESS_VIEW_LEN: usize = 200;
 
@@ -58,6 +84,9 @@ pub mod actions {
     pub const CREATE_CUSTOMER: &str = "customers.create";
     /// Change a person's record.
     pub const CHANGE_CUSTOMER: &str = "customers.change";
+    /// Settle whether a person whose capacity was questioned can decide for
+    /// themselves: for legal, and asked of the master as legal.
+    pub const SETTLE_CAPACITY: &str = "customers.settle_capacity";
     /// Merge and unmerge duplicate records, and work the duplicate reviews.
     pub const MERGE_CUSTOMERS: &str = "customers.merge";
     /// Answer a Privacy Act request with everything held about a person.
@@ -142,6 +171,9 @@ pub enum GrantKind {
     OneOff { action: String, record: String },
     /// Emergency access to a wider template. Alerts at once and is reviewed.
     BreakGlass { template: String },
+    /// A role template for a period, such as covering collections for a
+    /// fortnight: approved by someone else, and ending by itself.
+    Role { template: String },
 }
 
 impl GrantKind {
@@ -151,6 +183,7 @@ impl GrantKind {
             GrantKind::ProfileUplift { .. } => "profile_uplift",
             GrantKind::OneOff { .. } => "one_off",
             GrantKind::BreakGlass { .. } => "break_glass",
+            GrantKind::Role { .. } => "role",
         }
     }
 }
@@ -209,10 +242,16 @@ impl Default for Settings {
     fn default() -> Self {
         const DAY: i64 = 86_400;
         Self {
-            max_life: [("cover", 30 * DAY), ("profile_uplift", 14 * DAY), ("one_off", DAY), ("break_glass", 4 * 3600)]
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v))
-                .collect(),
+            max_life: [
+                ("cover", 30 * DAY),
+                ("profile_uplift", 14 * DAY),
+                ("one_off", DAY),
+                ("break_glass", 4 * 3600),
+                ("role", ROLE_MAX_LIFE),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
             recertify_every: 180 * DAY,
         }
     }
@@ -444,15 +483,24 @@ pub enum StaffCommand {
     },
     DefineTemplate {
         template: Template,
-        approved_by: PartyId,
+        /// Who is asked to approve it. Anyone else holding the approving
+        /// action may approve it instead; nothing takes effect until one does.
+        #[serde(default, alias = "approved_by")]
+        approver: Option<PartyId>,
     },
     ActivateProfile {
         profile: Profile,
-        approved_by: PartyId,
+        /// Who is asked to approve it. Anyone else holding the approving
+        /// action may approve it instead; nothing takes effect until one does.
+        #[serde(default, alias = "approved_by")]
+        approver: Option<PartyId>,
     },
     DeclareConflict {
         conflict: Conflict,
-        approved_by: PartyId,
+        /// Who is asked to approve it. Anyone else holding the approving
+        /// action may approve it instead; nothing takes effect until one does.
+        #[serde(default, alias = "approved_by")]
+        approver: Option<PartyId>,
     },
     /// A member of staff declares a personal connection: a relative, a
     /// friend, anyone whose records they must not handle.
@@ -463,10 +511,16 @@ pub enum StaffCommand {
     EndConnection {
         staff: PartyId,
         party: PartyId,
+        /// Why it no longer holds. Kept with who removed it and when.
+        #[serde(default)]
+        reason: String,
     },
     ChangeSettings {
         settings: Settings,
-        approved_by: PartyId,
+        /// Who is asked to approve it. Anyone else holding the approving
+        /// action may approve it instead; nothing takes effect until one does.
+        #[serde(default, alias = "approved_by")]
+        approver: Option<PartyId>,
     },
     Employ {
         party: PartyId,
@@ -488,7 +542,23 @@ pub enum StaffCommand {
     SetProfile {
         party: PartyId,
         profile: Option<String>,
-        approved_by: PartyId,
+        /// Who is asked to approve it (`staff.approve_profile_uplift`).
+        #[serde(default, alias = "approved_by")]
+        approver: Option<PartyId>,
+    },
+    /// Approve a change to staff configuration someone else proposed: it
+    /// takes effect now, with both names kept.
+    ApproveChange {
+        id: String,
+    },
+    /// Decline a proposed change, or withdraw one's own proposal.
+    DeclineChange {
+        id: String,
+    },
+    /// Name a member of staff's manager, who recertifies their access.
+    SetManager {
+        party: PartyId,
+        manager: Option<PartyId>,
     },
     AssignPath {
         party: PartyId,
@@ -536,7 +606,10 @@ pub enum StaffCommand {
     },
     ActivateMapping {
         mapping: Mapping,
-        approved_by: PartyId,
+        /// Who is asked to approve it. Anyone else holding the approving
+        /// action may approve it instead; nothing takes effect until one does.
+        #[serde(default, alias = "approved_by")]
+        approver: Option<PartyId>,
     },
     /// What the external source says people hold. `full` is a reconciliation
     /// pull: anything the source no longer grants is revoked.
@@ -579,6 +652,18 @@ pub enum StaffEvent {
         grant: String,
         approver_action: String,
     },
+    /// A change to staff configuration waits for a second person.
+    ChangeProposed {
+        change: String,
+        approver_action: String,
+        /// The person asked, where the proposer named one.
+        approver: Option<PartyId>,
+    },
+    /// A proposed change was approved and has taken effect, or declined.
+    ChangeDecided {
+        change: String,
+        applied: bool,
+    },
     GrantChanged {
         grant: String,
         state: GrantState,
@@ -619,6 +704,60 @@ pub struct StaffState {
     /// Staff member -> the people they have a personal connection with.
     #[serde(default)]
     pub connections: BTreeMap<PartyId, BTreeSet<PartyId>>,
+    /// Configuration changes waiting for their second person, by ID.
+    #[serde(default)]
+    pub pending: BTreeMap<String, PendingChange>,
+    /// The number of the last change proposed, for the next ID.
+    #[serde(default)]
+    pub changes_proposed: u64,
+    /// Changes approved or declined, newest last.
+    #[serde(default)]
+    pub decided: VecDeque<PendingChange>,
+    /// Connections removed, newest last: who removed which, when and why.
+    #[serde(default)]
+    pub connections_ended: VecDeque<ConnectionEnded>,
+}
+
+/// A change to staff configuration, or to a person's authority, that one
+/// person proposed and a second must approve before it takes effect.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingChange {
+    pub id: String,
+    pub change: StaffCommand,
+    pub proposed_by: PartyId,
+    pub proposed_at: At,
+    /// The action whoever approves must hold.
+    pub approver_action: String,
+    /// The person asked, where the proposer named one.
+    pub approver: Option<PartyId>,
+    /// What the change replaces, for the approver to compare.
+    #[serde(default)]
+    pub before: serde_json::Value,
+    /// Who approved or declined it, when, and whether it took effect.
+    #[serde(default)]
+    pub decided: Option<(PartyId, At, bool)>,
+}
+
+/// What a change that waits for a second person needs.
+struct Needs {
+    /// The action its proposer holds.
+    proposer: &'static str,
+    /// The action whoever approves it holds.
+    approver_action: &'static str,
+    /// The person it is about, who approves nothing about themselves.
+    subject: Option<PartyId>,
+    /// The person asked, where the proposer named one.
+    approver: Option<PartyId>,
+}
+
+/// A declared connection a staff administrator removed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectionEnded {
+    pub staff: PartyId,
+    pub party: PartyId,
+    pub by: PartyId,
+    pub at: At,
+    pub reason: String,
 }
 
 fn yes() -> bool {
@@ -659,16 +798,44 @@ impl StaffState {
 
     /// The templates a person holds at a time: holdings in their window and
     /// confirmed by a manager recently enough.
+    /// A role granted for a period counts while the grant is active.
     pub fn templates_of(&self, party: &PartyId, at: At) -> Vec<&Template> {
         let Some(m) = self.current(party, at) else { return vec![] };
-        if at - m.recertified > self.settings.recertify_every {
-            return vec![];
+        let mut ids: BTreeSet<&String> = BTreeSet::new();
+        if at - m.recertified <= self.settings.recertify_every {
+            ids.extend(m.templates.iter().filter(|(_, h)| h.active(at)).map(|(id, _)| id));
         }
-        m.templates
+        ids.extend(self.active_grants(party, at).into_iter().filter_map(|g| match &g.kind {
+            GrantKind::Role { template } => Some(template),
+            _ => None,
+        }));
+        ids.into_iter().filter_map(|id| self.templates.get(id)).collect()
+    }
+
+    /// The pair of duties kept apart that holding all of `templates`
+    /// together would join, if any. A template that itself carries both
+    /// was approved that way by two people (`define_template`), so it joins
+    /// nothing here; what is refused is joining them from separate roles.
+    fn joins_duties(templates: &[&Template]) -> Option<(&'static str, &'static str)> {
+        let any = |action: &str| templates.iter().any(|t| t.actions.contains(action));
+        SEPARATE_ACTIONS
             .iter()
-            .filter(|(_, h)| h.active(at))
-            .filter_map(|(id, _)| self.templates.get(id))
-            .collect()
+            .find(|(a, b)| any(a) && any(b) && !templates.iter().any(|t| t.actions.contains(*a) && t.actions.contains(*b)))
+            .copied()
+    }
+
+    /// Refuse giving `templates` to `party` where, with what they already
+    /// hold, they would hold two duties kept apart.
+    fn check_duties(&self, party: &PartyId, templates: &[String], at: At) -> Result<(), Reject> {
+        let mut held = self.templates_of(party, at);
+        held.extend(templates.iter().filter_map(|t| self.templates.get(t)));
+        match Self::joins_duties(&held) {
+            Some((a, b)) => Err(reject(
+                "separation_of_duties",
+                format!("{party} would hold both {a} and {b}, which are kept apart: someone who does not hold one of them takes this on"),
+            )),
+            None => Ok(()),
+        }
     }
 
     pub fn active_grants(&self, party: &PartyId, at: At) -> Vec<&Grant> {
@@ -892,17 +1059,144 @@ impl StaffState {
         out
     }
 
-    fn require_config_approval(&self, actor: &PartyId, approved_by: &PartyId, at: At) -> Result<(), Reject> {
-        if actor == approved_by {
-            return Err(reject("maker_checker", "configuration needs a second person: the proposer cannot approve"));
+    /// What a proposed change needs: the action its proposer must hold,
+    /// the action whoever approves it must hold, and the person it is
+    /// about, who may approve neither their own change. `None` for a
+    /// command that takes effect at once.
+    fn needs_second(command: &StaffCommand) -> Option<Needs> {
+        let config = |approver: &Option<PartyId>| Needs {
+            proposer: actions::CONFIGURE,
+            approver_action: actions::APPROVE_CONFIGURATION,
+            subject: None,
+            approver: approver.clone(),
+        };
+        match command {
+            StaffCommand::DefineTemplate { approver, .. }
+            | StaffCommand::ActivateProfile { approver, .. }
+            | StaffCommand::DeclareConflict { approver, .. }
+            | StaffCommand::ChangeSettings { approver, .. }
+            | StaffCommand::ActivateMapping { approver, .. } => Some(config(approver)),
+            StaffCommand::SetProfile { party, approver, .. } => Some(Needs {
+                proposer: actions::MANAGE_STAFF,
+                approver_action: actions::APPROVE_PROFILE_UPLIFT,
+                subject: Some(party.clone()),
+                approver: approver.clone(),
+            }),
+            _ => None,
         }
-        if !self.holds_action(actor, actions::CONFIGURE, at) {
-            return Err(reject("forbidden", "the proposer may not change staff configuration"));
+    }
+
+    /// What a change replaces, for the approver to compare with.
+    fn before(&self, command: &StaffCommand) -> serde_json::Value {
+        match command {
+            StaffCommand::DefineTemplate { template, .. } => json!(self.templates.get(&template.id)),
+            StaffCommand::ActivateProfile { profile, .. } => json!(self.latest_profile(&profile.id)),
+            StaffCommand::ChangeSettings { .. } => json!(self.settings),
+            StaffCommand::ActivateMapping { .. } => json!(self.mapping),
+            StaffCommand::SetProfile { party, .. } => json!(self.members.get(party).and_then(|m| m.profile.as_ref())),
+            _ => serde_json::Value::Null,
         }
-        if !self.holds_action(approved_by, actions::APPROVE_CONFIGURATION, at) {
-            return Err(reject("forbidden", "the approver may not approve staff configuration"));
+    }
+
+    /// Propose a change that waits for a second person. It is checked now
+    /// as if it took effect, so a proposal that could never be approved is
+    /// refused at once, and checked again when it is approved.
+    fn propose(&mut self, actor: &PartyId, at: At, command: StaffCommand, needs: Needs) -> Result<Vec<StaffEvent>, Reject> {
+        let Needs {
+            proposer: proposer_action,
+            approver_action,
+            subject,
+            approver,
+        } = needs;
+        if !self.holds_action(actor, proposer_action, at) {
+            return Err(reject(
+                "forbidden",
+                format!("the proposer may not make this change: it needs {proposer_action}"),
+            ));
         }
-        Ok(())
+        if subject.as_ref() == Some(actor) {
+            return Err(reject("maker_checker", "nobody proposes a change to their own access"));
+        }
+        if let Some(named) = &approver {
+            if named == actor || subject.as_ref() == Some(named) {
+                return Err(reject(
+                    "maker_checker",
+                    "this change needs a second person: neither its proposer nor the person it is about approves it",
+                ));
+            }
+            if !self.holds_action(named, approver_action, at) {
+                return Err(reject(
+                    "forbidden",
+                    format!("{named} does not hold {approver_action}, so cannot approve this: name someone who does, or nobody"),
+                ));
+            }
+        }
+        let mut trial = self.clone();
+        trial.apply_with(actor, at, command.clone(), true)?;
+        self.changes_proposed += 1;
+        let id = format!("chg-{}", self.changes_proposed);
+        let before = self.before(&command);
+        self.pending.insert(
+            id.clone(),
+            PendingChange {
+                id: id.clone(),
+                change: command,
+                proposed_by: actor.clone(),
+                proposed_at: at,
+                approver_action: approver_action.to_string(),
+                approver: approver.clone(),
+                before,
+                decided: None,
+            },
+        );
+        Ok(vec![StaffEvent::ChangeProposed {
+            change: id,
+            approver_action: approver_action.to_string(),
+            approver,
+        }])
+    }
+
+    /// Approve or decline a pending change.
+    fn decide_change(&mut self, actor: &PartyId, at: At, id: &str, approve: bool) -> Result<Vec<StaffEvent>, Reject> {
+        let pending = self.pending.get(id).cloned().ok_or_else(|| {
+            reject(
+                "not_pending",
+                format!("no change {id} is waiting for approval: staff_admin lists those that are"),
+            )
+        })?;
+        let subject = Self::needs_second(&pending.change).and_then(|n| n.subject);
+        let withdrawing = !approve && &pending.proposed_by == actor;
+        if !withdrawing {
+            if &pending.proposed_by == actor || subject.as_ref() == Some(actor) {
+                return Err(reject(
+                    "maker_checker",
+                    "this change needs a second person: neither its proposer nor the person it is about approves it",
+                ));
+            }
+            if !self.holds_action(actor, &pending.approver_action, at) {
+                return Err(reject(
+                    "forbidden",
+                    format!("approving this change needs {}, which your roles do not include", pending.approver_action),
+                ));
+            }
+        }
+        let mut events = Vec::new();
+        if approve {
+            // Checked again as the proposer: roles or configuration may have changed since.
+            events = self.apply_with(&pending.proposed_by, at, pending.change.clone(), true)?;
+        }
+        self.pending.remove(id);
+        let mut decided = pending;
+        decided.decided = Some((actor.clone(), at, approve));
+        self.decided.push_back(decided);
+        while self.decided.len() > DECIDED_LEN {
+            self.decided.pop_front();
+        }
+        events.push(StaffEvent::ChangeDecided {
+            change: id.to_string(),
+            applied: approve,
+        });
+        Ok(events)
     }
 
     fn require(&self, actor: &PartyId, action: &str, at: At) -> Result<(), Reject> {
@@ -921,7 +1215,8 @@ impl StaffState {
     }
 
     fn max_life(&self, kind: &str) -> i64 {
-        self.settings.max_life.get(kind).copied().unwrap_or(0)
+        let fallback = if kind == "role" { ROLE_MAX_LIFE } else { 0 };
+        self.settings.max_life.get(kind).copied().unwrap_or(fallback)
     }
 
     /// Check a grant against the ceilings. A grant never exceeds a template
@@ -983,6 +1278,13 @@ impl StaffState {
                     return Err(reject("not_break_glass", "that template cannot be taken under break-glass"));
                 }
             }
+            GrantKind::Role { template } => {
+                self.check_templates(std::slice::from_ref(template))?;
+                if self.templates_of(holder, at).iter().any(|t| &t.id == template) {
+                    return Err(reject("already_held", format!("{holder} already holds {template}")));
+                }
+                self.check_duties(holder, std::slice::from_ref(template), at)?;
+            }
         }
         Ok(())
     }
@@ -991,10 +1293,24 @@ impl StaffState {
         self.mapping.as_ref().is_some_and(|m| m.grants_external.contains(kind))
     }
 
-    /// Apply a command sent by `actor` at `at`. A rejected command changes nothing.
+    /// Apply a command sent by `actor` at `at`. A rejected command changes
+    /// nothing. A change to staff configuration or to a person's authority
+    /// profile is only proposed: it takes effect when a second person
+    /// approves it.
     pub fn apply(&mut self, actor: &PartyId, at: At, command: StaffCommand) -> Result<Vec<StaffEvent>, Reject> {
+        self.apply_with(actor, at, command, false)
+    }
+
+    /// `approved`: the second person has approved it, or it is being
+    /// checked as if they had.
+    fn apply_with(&mut self, actor: &PartyId, at: At, command: StaffCommand, approved: bool) -> Result<Vec<StaffEvent>, Reject> {
+        if let Some(needs) = Self::needs_second(&command).filter(|_| !approved) {
+            return self.propose(actor, at, command, needs);
+        }
         let mut events = Vec::new();
         match command {
+            StaffCommand::ApproveChange { id } => return self.decide_change(actor, at, &id, true),
+            StaffCommand::DeclineChange { id } => return self.decide_change(actor, at, &id, false),
             StaffCommand::Bootstrap {
                 templates,
                 profiles,
@@ -1040,15 +1356,15 @@ impl StaffState {
                     },
                 );
             }
-            StaffCommand::DefineTemplate { template, approved_by } => {
-                self.require_config_approval(actor, &approved_by, at)?;
+            StaffCommand::DefineTemplate { template, .. } => {
+                self.require(actor, actions::CONFIGURE, at)?;
                 if !self.profiles.contains_key(&template.default_profile) {
                     return Err(reject("unknown_profile", "the template's default profile does not exist"));
                 }
                 self.templates.insert(template.id.clone(), template);
             }
-            StaffCommand::ActivateProfile { profile, approved_by } => {
-                self.require_config_approval(actor, &approved_by, at)?;
+            StaffCommand::ActivateProfile { profile, .. } => {
+                self.require(actor, actions::CONFIGURE, at)?;
                 let versions = self.profiles.entry(profile.id.clone()).or_default();
                 let next = versions.last().map_or(1, |p| p.version + 1);
                 if profile.version != next {
@@ -1056,8 +1372,8 @@ impl StaffState {
                 }
                 versions.push(profile);
             }
-            StaffCommand::DeclareConflict { conflict, approved_by } => {
-                self.require_config_approval(actor, &approved_by, at)?;
+            StaffCommand::DeclareConflict { conflict, .. } => {
+                self.require(actor, actions::CONFIGURE, at)?;
                 self.conflicts.insert(conflict);
             }
             StaffCommand::DeclareConnection { party } => {
@@ -1066,20 +1382,56 @@ impl StaffState {
                 }
                 self.connections.entry(actor.clone()).or_default().insert(party);
             }
-            StaffCommand::EndConnection { staff, party } => {
+            StaffCommand::EndConnection { staff, party, reason } => {
                 // Declaring is the person's own act; undoing it is not, or the declaration would mean nothing.
-                if &staff == actor || !self.holds_action(actor, actions::MANAGE_STAFF, at) {
+                // A staff administrator or an access approver removes it, so the only administrator's own
+                // declaration can still be removed by someone else.
+                let may = self.holds_action(actor, actions::MANAGE_STAFF, at) || self.holds_action(actor, actions::APPROVE_GRANT, at);
+                if &staff == actor || !may {
                     return Err(reject(
                         "forbidden",
-                        "a connection is removed by a staff administrator, never by the person it concerns",
+                        "a connection is removed by a staff administrator or an access approver, never by the person it concerns",
+                    ));
+                }
+                if reason.trim().is_empty() {
+                    return Err(reject(
+                        "no_reason",
+                        "say why the connection no longer holds (reason): it is kept with your name",
                     ));
                 }
                 if !self.connections.get_mut(&staff).is_some_and(|c| c.remove(&party)) {
                     return Err(reject("unknown_connection", "no such connection is declared"));
                 }
+                self.connections_ended.push_back(ConnectionEnded {
+                    staff,
+                    party,
+                    by: actor.clone(),
+                    at,
+                    reason,
+                });
+                while self.connections_ended.len() > DECIDED_LEN {
+                    self.connections_ended.pop_front();
+                }
             }
-            StaffCommand::ChangeSettings { settings, approved_by } => {
-                self.require_config_approval(actor, &approved_by, at)?;
+            StaffCommand::SetManager { party, manager } => {
+                self.require(actor, actions::MANAGE_STAFF, at)?;
+                if manager.as_ref() == Some(&party) {
+                    return Err(reject("bad_manager", "nobody manages themselves"));
+                }
+                if let Some(m) = &manager {
+                    if self.current(m, at).is_none() {
+                        return Err(reject("bad_manager", format!("{m} is not a current member of staff, so cannot be a manager")));
+                    }
+                }
+                let member = self
+                    .members
+                    .get_mut(&party)
+                    .filter(|m| m.ended.is_none())
+                    .ok_or_else(|| reject("not_staff", "no such member of staff"))?;
+                member.manager = manager;
+            }
+            StaffCommand::ChangeSettings { settings, .. } => {
+                self.require(actor, actions::CONFIGURE, at)?;
                 self.settings = settings;
             }
             StaffCommand::Employ {
@@ -1092,6 +1444,16 @@ impl StaffState {
                 self.check_templates(&templates)?;
                 if self.current(&party, at).is_some() {
                     return Err(reject("already_staff", "that person is already a member of staff"));
+                }
+                if let Some(m) = manager.as_ref().filter(|m| self.current(m, at).is_none() || *m == &party) {
+                    return Err(reject("bad_manager", format!("{m} is not a current member of staff, so cannot be the manager")));
+                }
+                let given: Vec<&Template> = templates.iter().filter_map(|t| self.templates.get(t)).collect();
+                if let Some((a, b)) = Self::joins_duties(&given) {
+                    return Err(reject(
+                        "separation_of_duties",
+                        format!("those templates together give both {a} and {b}, which are kept apart: employ with one side only"),
+                    ));
                 }
                 let holding = Holding {
                     from: at,
@@ -1143,6 +1505,7 @@ impl StaffState {
                 if &party == actor {
                     return Err(reject("self_service", "nobody assigns a role to themselves"));
                 }
+                self.check_duties(&party, std::slice::from_ref(&template), at)?;
                 let member = self
                     .members
                     .get_mut(&party)
@@ -1167,11 +1530,10 @@ impl StaffState {
                 holding.to = Some(at);
                 events.push(StaffEvent::SessionsRevoked { party });
             }
-            StaffCommand::SetProfile { party, profile, approved_by } => {
-                // A profile changes with the manager's and the function head's approval.
+            StaffCommand::SetProfile { party, profile, .. } => {
+                // A profile changes with the administrator's proposal and the function head's approval.
                 self.require(actor, actions::MANAGE_STAFF, at)?;
-                self.require(&approved_by, actions::APPROVE_PROFILE_UPLIFT, at)?;
-                if actor == &approved_by || &party == actor || party == approved_by {
+                if &party == actor {
                     return Err(reject("maker_checker", "a profile change needs two people, neither of them its subject"));
                 }
                 if let Some(p) = &profile {
@@ -1372,21 +1734,39 @@ impl StaffState {
                 g.reviewed = Some((actor.clone(), at));
             }
             StaffCommand::Recertify { party, confirmed } => {
-                let member = self
+                let manager = self
                     .members
-                    .get_mut(&party)
+                    .get(&party)
                     .filter(|m| m.ended.is_none())
-                    .ok_or_else(|| reject("not_staff", "no such member of staff"))?;
-                if member.manager.as_ref() != Some(actor) {
-                    return Err(reject("forbidden", "only the person's manager recertifies their access"));
-                }
-                // Anything unconfirmed lapses.
-                for (id, h) in member.templates.iter_mut() {
-                    if h.active(at) && !confirmed.contains(id) {
-                        h.to = Some(at);
+                    .ok_or_else(|| reject("not_staff", "no such member of staff"))?
+                    .manager
+                    .clone();
+                match &manager {
+                    Some(m) if m == actor => {}
+                    Some(m) => {
+                        return Err(reject(
+                            "forbidden",
+                            format!("{party}'s access is recertified by their manager, {m}: ask them, or change the manager with set_manager"),
+                        ));
+                    }
+                    // Nobody is named: a staff administrator other than the person recertifies.
+                    None if &party != actor && self.holds_action(actor, actions::MANAGE_STAFF, at) => {}
+                    None => {
+                        return Err(reject(
+                            "forbidden",
+                            format!("{party} has no manager named, so a staff administrator other than {party} recertifies their access, or names a manager with set_manager"),
+                        ));
                     }
                 }
-                member.recertified = at;
+                // Anything unconfirmed lapses.
+                if let Some(member) = self.members.get_mut(&party) {
+                    for (id, h) in member.templates.iter_mut() {
+                        if h.active(at) && !confirmed.contains(id) {
+                            h.to = Some(at);
+                        }
+                    }
+                    member.recertified = at;
+                }
                 events.push(StaffEvent::SessionsRevoked { party });
             }
             StaffCommand::Record { request, decision } => {
@@ -1443,8 +1823,8 @@ impl StaffState {
                     recent.pop_front();
                 }
             }
-            StaffCommand::ActivateMapping { mapping, approved_by } => {
-                self.require_config_approval(actor, &approved_by, at)?;
+            StaffCommand::ActivateMapping { mapping, .. } => {
+                self.require(actor, actions::CONFIGURE, at)?;
                 let next = self.mapping.as_ref().map_or(1, |m| m.version + 1);
                 if mapping.version != next {
                     return Err(reject("bad_version", format!("the next mapping version is {next}")));
