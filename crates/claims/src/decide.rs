@@ -252,8 +252,16 @@ impl ClaimsState {
                         }
                         // The option the life chose sets the longest benefit period and the age it stops at.
                         let by_period = facts.benefit_months.map(|m| plus_months(p.first_period, m));
-                        if [by_period, facts.benefit_to].into_iter().flatten().any(|latest| p.end > latest) {
-                            return refuse("beyond_benefit_period", "the benefit runs past the period or the age the chosen option pays to");
+                        if let Some(latest) = [by_period, facts.benefit_to].into_iter().flatten().min().filter(|latest| p.end > *latest) {
+                            let which = if by_period == Some(latest) {
+                                "the option's benefit period"
+                            } else {
+                                "the age the option pays to"
+                            };
+                            return Err(Reject::new(
+                                "beyond_benefit_period",
+                                format!("the benefit runs past {which}: the latest it can end is {latest}"),
+                            ));
                         }
                         let mental = self.rules.cause_in(claim.cause_code.as_deref(), "mental");
                         if let Some(months) = facts.mental_health_months.filter(|_| mental) {
@@ -616,17 +624,21 @@ impl ClaimsState {
                 else {
                     return refuse("unknown_overpayment", "there is no such overpayment outstanding on this claim");
                 };
-                let sound = match status {
-                    RecoveryStatus::Held | RecoveryStatus::Pursued => true,
-                    RecoveryStatus::Offset => (1..=self.rules.max_offset_pct).contains(offset_pct),
-                    RecoveryStatus::Arrangement => *instalment_minor > 0,
-                    RecoveryStatus::WrittenOff | RecoveryStatus::Recovered => false,
+                // Each refusal says what would be accepted.
+                let wrong = match status {
+                    RecoveryStatus::Held | RecoveryStatus::Pursued => None,
+                    RecoveryStatus::Offset if (1..=self.rules.max_offset_pct).contains(offset_pct) => None,
+                    RecoveryStatus::Offset => Some(format!(
+                        "an offset takes 1% to {}% of each payment, and {offset_pct}% is outside that: offset at {}% or less, or agree an arrangement",
+                        self.rules.max_offset_pct, self.rules.max_offset_pct
+                    )),
+                    RecoveryStatus::Arrangement if *instalment_minor > 0 => None,
+                    RecoveryStatus::Arrangement => Some("an arrangement names the instalment the person pays".to_string()),
+                    RecoveryStatus::WrittenOff => Some("a write-off is its own decision: decide a write-off".to_string()),
+                    RecoveryStatus::Recovered => Some("an overpayment is recovered when its repayments are recorded, not by a decision".to_string()),
                 };
-                if !sound {
-                    return refuse(
-                        "invalid_recovery_status",
-                        "that status cannot be set this way, or its terms are outside the rules",
-                    );
+                if let Some(why) = wrong {
+                    return Err(Reject::new("invalid_recovery_status", why));
                 }
                 plan.amount_minor = op.outstanding_minor();
             }

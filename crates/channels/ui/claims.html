@@ -3,7 +3,7 @@
 <body data-shell="workforce" data-page="claims" data-realm="workforce">
 <main><header class="page"><div><h1>Claims console</h1><p>Work queues, a claim, and acting on it as yourself.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
 <section data-view="Queue"><h2>Work queue</h2><p class="muted">Most urgent first, then oldest. Open a claim to see what it needs next.</p><form id="queue"><div class="row"><div><label for="q-name">Queue</label><select id="q-name"></select></div><button>Show</button></div></form><div id="q-msg" aria-live="polite"></div><div id="q-rows"></div></section>
-<section data-view="Claim"><h2>A claim</h2><form id="lookup"><div class="row"><div><label for="c-id">Claim reference</label><input id="c-id" required size="36" placeholder="A claim reference, a policy number or the customer's name"></div><button>Show</button><button type="button" class="quiet" id="c-new">Notify a new claim</button></div></form><div id="c-msg" aria-live="polite"></div>
+<section data-view="Claim"><h2>A claim</h2><form id="lookup"><div class="row"><div><label for="c-why">Case, call or task you are working on (a search by name is recorded against it)</label><input id="c-why" size="28"></div><div><label for="c-id">Claim reference</label><input id="c-id" required size="36" placeholder="A claim reference, a policy number or the customer's name"></div><button>Show</button><button type="button" class="quiet" id="c-new">Notify a new claim</button></div></form><div id="c-msg" aria-live="polite"></div>
 <div id="claim" hidden><h2 id="c-title" tabindex="-1"></h2><div id="c-next" class="next"></div><div id="c-summary"></div><div id="c-cover"></div><div id="c-support"></div><div id="c-waiting"></div><h2>Tasks</h2><div id="c-tasks"></div><h2>Evidence</h2><div id="c-evidence"></div><h2>Payments and benefit</h2><div id="c-money"></div><h2>Overpayments</h2><div id="c-over"></div><h2>Service timers</h2><div id="c-timers"></div><h2 id="c-defs-head" hidden>Wording the cover is bound to</h2><div id="c-defs" hidden></div></div></section>
 <section data-view="Claim" id="act-card"><h2>Act</h2><form id="act"><div class="row"><div><label for="a-purpose">Why you are doing this (recorded with it)</label><input id="a-purpose" size="40"></div><div><label for="a-command">Action</label><select id="a-command"></select></div></div><div class="row" id="a-fields"></div><p><button>Send</button></p>
 <p class="muted">You act as yourself: the claims module records you and your purpose, and your authority there decides what you may do. A decision above your limits waits for a second signature.</p></form><div id="act-msg" aria-live="polite"></div></section>
@@ -226,7 +226,7 @@ async function show(id) {
   const taken = w.admitted_minor - w.payable_minor - w.paid_minor;
   put($("c-money"), taken > 0 && !w.benefit ? h("p", { class: "muted" }, `${money(taken)} of what was admitted is not paid to the payee: it settles premium owed on the policy or a debt offset against the benefit, and the customer's statement shows it.`) : null,
     w.payee ? h("p", {}, `Payee: ${w.payee[0]} (${words(w.payee[1])}).`) : none("No payee verified."),
-    b ? h("p", {}, `Benefit ${money(b.monthly_minor)} a month, next period ${b.next_period}, ends ${b.end}. Arrears ${money(b.arrears_minor)}. Reviews ${b.reviews}${b.reviews_overdue ? `, ${b.reviews_overdue} overdue` : ""}.${b.held_for_proof_of_life ? " Held for proof of life." : ""}`) : null,
+    b ? h("p", {}, `Benefit ${money(b.monthly_minor)} a month, next period ${b.next_period}, ends ${b.end}. Arrears ${money(b.arrears_minor)}. Reviews: ${Object.entries(b.reviews || {}).map(([kind, due]) => `${words(kind)} due ${due}`).join(", ") || "none due"}${b.reviews_overdue ? `, ${b.reviews_overdue} overdue` : ""}.${b.held_for_proof_of_life ? " Held for proof of life." : ""}`) : null,
     (w.interests || []).length ? table(["Lender or assignee", "Still owed"], w.interests.map(([party, owed]) => [party, money(owed)])) : null,
     (w.payments || []).length ? table(["Payment", "Amount", "Released", "Returned"], w.payments.map(([ref, amount, on, returned]) => [ref, money(amount), on, returned ? "yes" : ""])) : none("Nothing paid."),
     w.waiver_from ? h("p", {}, `Premium waived from ${w.waiver_from}.`) : null);
@@ -276,8 +276,12 @@ function listed() {
 }
 $("w-filter").addEventListener("input", listed);
 const cell = (v) => v == null ? "" : typeof v === "object" ? portal.text(v) : v;
+// A search by name is recorded against the work it is for: the field beside it says which.
+$("c-why").value = portal.working() || "";
+$("c-why").addEventListener("change", () => { portal.workOn($("c-why").value.trim()); $("a-purpose").value = $("c-why").value.trim(); });
 portal.picker($("c-id"), async (text) => {
   const items = [];
+  if ($("c-why").value.trim()) portal.workOn($("c-why").value.trim());
   // A finder that cannot search says why, such as no case named yet, rather than finding nothing.
   const found = await portal.policies(text).catch((e) => { say($("c-msg"), "bad", e.message); return []; });
   for (const p of found.slice(0, 4)) {

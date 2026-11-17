@@ -494,7 +494,8 @@ fn a_missed_timer_escalates_in_three_steps() {
 /// Why it matters: routing by authority and by conflict is a control. Someone who underwrote the
 /// life, or is related to the claimant, deciding the claim is exactly what it exists to stop. A
 /// refusal for authority names the limit and who may take the claim (found by the scenario run,
-/// SCN-11, F-11-5), so the claim does not sit unassigned.
+/// SCN-11, F-11-5), so the claim does not sit unassigned; so does a refusal for the line, naming the
+/// person's own lines (SCN2-09, F2-09-9).
 #[test]
 fn a_claim_is_offered_only_to_someone_who_may_work_it() {
     let mut w = World::new();
@@ -507,6 +508,13 @@ fn a_claim_is_offered_only_to_someone_who_may_work_it() {
     assert_eq!(w.refused(assign("ben", "ana")), "not_authorised");
     assert_eq!(w.refused(assign("nobody", "sam")), "unknown_staff");
     assert_eq!(w.refused(assign("jon", "sam")), "not_accredited");
+    // The refusal names the person's lines and who could take it (SCN2-09, F2-09-9).
+    let told = w.told(assign("jon", "sam"));
+    assert!(
+        told.starts_with("jon is not accredited for lump sum claims in this queue (their lines: health): "),
+        "{told}"
+    );
+    assert!(told.contains("ben") && told.ends_with("can take it"), "{told}");
     assert_eq!(w.refused(assign("mo", "sam")), "not_accredited");
     assert_eq!(w.refused(assign("una", "sam")), "conflict_of_interest");
     assert_eq!(w.refused(assign("rel", "sam")), "conflict_of_interest");
@@ -1177,4 +1185,22 @@ fn a_trauma_event_overseas_goes_to_the_complex_queue_with_a_case_conference() {
     w.conference("t-1", "sam");
     w.decided("t-1", "sam", World::admit_lump(Some(100_000)), "R-OK");
     assert_eq!(w.claim("t-1").status, Status::Admitted);
+}
+
+/// Purpose: a claim notified without its life takes the cover's own life, as the core reports it
+/// for a policy with one life, and keeps the life the notifier named when there is one.
+/// Why it matters: found by the scenario run, SCN2-08 (F2-08-3): a claim notified with "Life
+/// (optional)" left blank reached reinsurance with no life, so the reinsurer's recovery on it
+/// was silently wrong until someone entered the life by hand.
+#[test]
+fn a_claim_notified_without_its_life_takes_the_covers() {
+    let mut w = World::new();
+    let mut blank = World::notification("c-1", "pol-1", "trauma", ClaimType::Trauma);
+    blank.life = None;
+    w.ok(Command::Notify(Box::new(blank)));
+    assert_eq!(w.claim("c-1").life.as_deref(), Some("life-1"));
+    let mut named = World::notification("c-2", "pol-1", "life", ClaimType::Death);
+    named.life = Some("life-2".into());
+    w.ok(Command::Notify(Box::new(named)));
+    assert_eq!(w.claim("c-2").life.as_deref(), Some("life-2"));
 }

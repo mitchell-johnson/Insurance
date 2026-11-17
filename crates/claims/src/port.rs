@@ -161,6 +161,10 @@ pub struct CoverFacts {
     /// off the cover.
     #[serde(default)]
     pub ends_cover: Option<bool>,
+    /// The life these facts are for: the one named, or the policy's only
+    /// life when none was. A claim notified without its life takes it.
+    #[serde(default)]
+    pub life: Option<String>,
 }
 
 impl CoverFacts {
