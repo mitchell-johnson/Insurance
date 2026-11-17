@@ -352,3 +352,15 @@ The scenario run (op-b, SCN-05, SCN-07, SCN-09, SCN-19) found the employer's "As
 - **A scheme is pools or named members, not both** (F-SCN07-5). A pool and named staff for one employer are two schemes on two policies, each billed and renewed on its own terms. Mixing them would make every file and every declaration answer for members the other counts.
 
 Built in: `crates/group/src/state.rs` (`enter_changes`, `employer_limits`), `crates/group/src/work.rs` (pools), `crates/channels/src/http.rs` (`group_member_change`, `scheme_admins`, `second_administrator`), `crates/channels/src/directory.rs`, `crates/channels/ui/employer.html`. Docs: `docs/group.md`, `docs/channels.md`.
+
+## A large claim's second signature (17 Nov 2026)
+
+The scenario run (SCN2-08, F2-08-2) admitted a $900,000 trauma claim. The claims manager, the only person with authority above $600,000, proposed it; it then waited for a second signature from someone whose own limit also covered $900,000. Nobody held that, so the claim could never be admitted.
+
+**What was chosen.** Authority and the four-eyes check are separate. When the proposer's own profile covers the decision, the second signature needed because of its size is a peer's: another person accredited for the line who may themselves sign that kind of decision at the two-signature level (an admission at `two_signature_admission_minor`, an ex gratia payment at `two_signature_ex_gratia_minor`, a write-off at `two_signature_write_off_minor`; for a decline, the power to decline; for a reversal, a senior with the power to reverse). When the proposer's authority does not cover it, the second signer must cover the whole decision, as before. Conflicts and the different-person rule apply to both.
+
+**Why.** Requiring two people who each hold the full limit makes the top of the authority book a single point of failure: with one claims manager, every claim above everyone else's limit stops. The four-eyes control is that a second competent person checks the decision, not that the insurer has two people able to make it alone; the person accountable for the amount is the proposer, whose authority is recorded with the decision. A peer still has to be trusted with large decisions in their own right (the two-signature level), so a junior cannot wave a large claim through.
+
+**What it costs.** A senior assessor can countersign a decision above their own limit. A business that wants two full-limit signatures above some amount should add a second person to the authority book at that level; the refusal says when nobody else can sign.
+
+Built in: `crates/claims/src/decide.rs` (`Need::Peer`, `peers`, `signers`, `cannot_sign`), `crates/claims/src/report.rs` (`WorkDecision.signers`), `crates/channels/ui/claims.html`. Docs: `docs/claims.md`.

@@ -188,7 +188,10 @@ function nextSteps(w) {
   const step = (words, action, values) => h("button", { type: "button", class: "quiet", on: { click: () => prepare(action, values) } }, words);
   const open = !w.closed_on, out = [];
   if (open && !w.owner) out.push(h("button", { type: "button", on: { click: run($("c-msg"), async () => { await send({ purpose: `Taking claim ${w.claim}`, command: { assign: { claim: w.claim, to: me.staff } } }); await show(w.claim); return `You own ${w.claim} now.`; }) } }, "Assign it to me"), step("Assign to someone else", "assign"));
-  if (w.waiting && w.waiting.proposer !== me.staff) out.push(step("Approve the decision waiting", "approve"), step("Refuse it", "refuse"));
+  // Approve is offered only to someone who could give the signature still needed.
+  const mayApprove = w.waiting && w.waiting.proposer !== me.staff && (!w.waiting.signers || w.waiting.signers.includes(me.staff));
+  if (mayApprove) out.push(step("Approve the decision waiting", "approve"));
+  if (w.waiting && w.waiting.proposer !== me.staff) out.push(step("Refuse it", "refuse"));
   for (const t of (w.tasks || []).filter((t) => !t.completed_on)) out.push(step(`Complete ${words(t.kind)}${t.overdue ? " (overdue)" : ""}`, "complete_task", { task: t.id }));
   for (const [e, kind] of (w.evidence || []).filter((e) => !e[4])) out.push(step(`Record ${kind} received`, "receive_evidence", { evidence: e }));
   if (open && w.admitted_minor === 0 && !w.waiting) out.push(step("Decide: admit", "decide_admit"), step("Decide: decline", "decide_decline"));
@@ -215,7 +218,7 @@ async function show(id) {
   put($("c-cover"), w.cover_now_and_then ? [h("div", { class: "banner warn" }, "The cover on the event date reads differently now than when it was checked, because of something recorded later."),
     table(["Cover on the event date", "Standing", "Life on the policy", "Sum insured"], [["As known now", ...cover(w.cover_now_and_then[0])], ["As known when checked", ...cover(w.cover_now_and_then[1])]])] : null);
   put($("c-support"), w.communication_support ? h("div", { class: "banner warn" }, `Communication support: the claimant deals only with ${w.owner || "their owner, once one is assigned"}. Hand over with a note and a call if the owner changes.`) : null);
-  put($("c-waiting"), w.waiting ? h("div", { class: "banner warn" }, `Waiting for a signature: ${words(w.waiting.kind)} proposed by ${w.waiting.proposer} on ${w.waiting.proposed_on}. Signed by ${[w.waiting.proposer, ...(w.waiting.signed || []).filter((x) => x !== w.waiting.proposer)].join(", ")}. Still needed: ${typeof w.waiting.still_needed === "object" ? JSON.stringify(w.waiting.still_needed) : w.waiting.still_needed}.`) : null);
+  put($("c-waiting"), w.waiting ? h("div", { class: "banner warn" }, `Waiting for a signature: ${words(w.waiting.kind)} proposed by ${w.waiting.proposer} on ${w.waiting.proposed_on}. Signed by ${[w.waiting.proposer, ...(w.waiting.signed || []).filter((x) => x !== w.waiting.proposer)].join(", ")}. Still needed: ${w.waiting.still_needed} more. ${!w.waiting.signers ? "" : w.waiting.signers.length ? `Who can sign it next: ${w.waiting.signers.join(", ")}.` : "Nobody else can sign it today: the claims manager asks for the authority book to name someone, or refuses it."}`) : null);
   put($("c-tasks"), (w.tasks || []).length ? table(["Task", "Kind", "Due", "Completed", ""], w.tasks.map((t) => [t.id, words(t.kind), t.due || "", t.completed_on || "", t.overdue ? "overdue" : ""])) : none("No tasks."));
   put($("c-evidence"), (w.evidence || []).length ? table(["Evidence", "Kind", "From", "Due", "Received"], w.evidence.map(([e, kind, from, due, received]) => [e, kind, from, due || "", received || "outstanding"])) : none("No evidence requested."));
   const b = w.benefit;

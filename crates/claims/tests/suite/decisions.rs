@@ -787,3 +787,64 @@ fn a_non_disclosure_decline_stands_on_underwritings_remedy() {
     w.ok(outcome("ndr-2", NonDisclosureOutcome::Avoid));
     w.decided("c-1", "ana", Request::Decline, "R-NDISC");
 }
+
+/// Purpose: when the proposer's own authority covers a large admission, the second signature is
+/// the four-eyes check: any other person accredited for the line who may sign admissions at the
+/// two-signature level can give it, the work view names who can, and someone who cannot is told
+/// what the signature needs and who could give it.
+/// Why it matters: found by the scenario run, SCN2-08 (F2-08-2): a $900,000 trauma claim proposed
+/// by the only claims manager above $600,000 waited for a second signature from someone whose own
+/// limit also covered $900,000, which nobody held, so the claim could never be admitted.
+#[test]
+fn a_large_admission_inside_the_proposers_authority_needs_a_peer_not_a_second_limit() {
+    let mut w = World::new();
+    w.core.cover(
+        "pol-1",
+        "trauma",
+        CoverFacts {
+            sum_insured_minor: 900_000,
+            ..facts("trauma")
+        },
+    );
+    w.ok(Command::Notify(Box::new(World::notification("c-9", "pol-1", "trauma", ClaimType::Trauma))));
+    w.ok(Command::Acknowledge {
+        claim: "c-9".into(),
+        delivery_ref: "delivered-1".into(),
+    });
+    w.assign("c-9", "sam");
+    w.assess("c-9", "CC-0003");
+    w.decided("c-9", "sam", World::admit_lump(None), "R-OK");
+    let waiting = w.state.work_view("c-9").expect("a view").waiting.expect("waiting");
+    let signers = waiting.signers.expect("known");
+    assert!(signers.contains(&"ben".to_string()) && signers.contains(&"sue".to_string()), "{signers:?}");
+    assert!(!signers.iter().any(|s| ["sam", "jon", "una", "mo"].contains(&s.as_str())), "{signers:?}");
+
+    let told = w.told(Command::Approve {
+        claim: "c-9".into(),
+        actor: actor("jon"),
+    });
+    assert!(told.contains("$3,000.00 or more") && told.contains("ben"), "{told}");
+    // ben's own limit is 600,000, below the 900,000 admitted, yet he may check it.
+    w.approved("c-9", "ben");
+    let c = w.claim("c-9");
+    assert_eq!((c.status, c.admitted_minor), (Status::Admitted, 900_000));
+    assert_eq!(c.decisions.last().expect("recorded").signers, vec!["sam".to_string(), "ben".to_string()]);
+}
+
+/// Purpose: a decision beyond everyone else's authority says so when someone tries to sign it,
+/// naming the amount, instead of a bare "you cannot give any signature".
+/// Why it matters: found by the scenario run, SCN2-08 (F2-08-2): the refusal named neither the
+/// limit nor who could sign, so the assessor could not tell the claims manager what was missing.
+#[test]
+fn a_signature_nobody_else_can_give_is_said_in_words() {
+    let mut w = World::new();
+    w.open_claim("c-1");
+    w.assign("c-1", "sam");
+    w.decided("c-1", "sam", Request::Reserve { amount_minor: 9_500_000 }, "R-OK");
+    assert_eq!(w.state.work_view("c-1").expect("a view").waiting.expect("waiting").signers, Some(vec![]));
+    let told = w.told(Command::Approve {
+        claim: "c-1".into(),
+        actor: actor("sue"),
+    });
+    assert!(told.contains("$95,000.00") && told.contains("nobody else holds that today"), "{told}");
+}

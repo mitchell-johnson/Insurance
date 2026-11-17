@@ -276,6 +276,10 @@ pub struct WorkDecision {
     pub signed: Vec<StaffId>,
     /// How many more signatures it needs.
     pub still_needed: usize,
+    /// Who could give the next signature, so a console offers Approve only
+    /// to them and says who to ask otherwise. Unknown for older proposals.
+    #[serde(default)]
+    pub signers: Option<Vec<StaffId>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -394,6 +398,7 @@ impl ClaimsState {
                 proposed_on: p.proposed_on,
                 signed: p.signed.clone(),
                 still_needed: p.needs.len(),
+                signers: self.signers(c),
             }),
             payee: c.payee.as_ref().map(|p| (p.party.clone(), p.kind)),
             interests: c.interests.iter().map(|i| (i.party.clone(), i.owed_minor - i.paid_minor)).collect(),

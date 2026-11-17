@@ -2180,3 +2180,41 @@ fn a_benefit_is_paid_to_the_payee_verified_and_their_own_account() {
     let payee = w.claim("t-1").payee.clone().expect("verified");
     assert_eq!((payee.name_check_ref.as_str(), payee.verified_by.as_str()), ("name-michael", "ana"));
 }
+
+/// Purpose: a run payment's reference always fits the bank's 35-character ISO 20022 end-to-end
+/// id with no spaces: the readable run/claim/period form when it fits, otherwise the period's
+/// date and a digest that differs for every run, claim and period.
+/// Why it matters: found by the scenario run's e2e suite (F2-X-1): claim ids such as
+/// `app-<uuid>` made `{run}/{claim}/{date}` longer than 35 characters, so payments refused to
+/// write the payment file and the customer's benefit never reached the bank.
+#[test]
+fn a_run_payment_reference_fits_the_bank_end_to_end_id() {
+    let item = |claim: &str, start: chrono::NaiveDate| ic_claims::RunItem {
+        claim: claim.to_string(),
+        period_start: start,
+        period_end: start,
+        gross_minor: 100,
+        offset: None,
+        payee: "party-1".to_string(),
+        tax_withheld_minor: 0,
+    };
+    assert_eq!(item("ip-1", d(2027, 3, 1)).payment_ref("run-1"), "run-1/ip-1/2027-03-01");
+    let long = "app-75f59801-390c-4c58-81f3-42f6f2645fef";
+    let first = item(long, d(2027, 11, 28)).payment_ref("RUN-20271115-76NKJ");
+    assert_eq!(first.len(), 35);
+    assert!(first.starts_with("20271128-") && first.chars().all(|c| c.is_ascii_graphic()), "{first}");
+    assert_eq!(
+        first,
+        item(long, d(2027, 11, 28)).payment_ref("RUN-20271115-76NKJ"),
+        "the same item, the same reference"
+    );
+    let others = [
+        item(long, d(2027, 12, 28)).payment_ref("RUN-20271115-76NKJ"),
+        item(long, d(2027, 11, 28)).payment_ref("RUN-20271115-QNRWF"),
+        item("ip-1", d(2027, 3, 1)).payment_ref("a run with spaces"),
+    ];
+    for other in &others {
+        assert_ne!(&first, other);
+        assert!(other.len() <= 35 && other.chars().all(|c| c.is_ascii_graphic()), "{other}");
+    }
+}

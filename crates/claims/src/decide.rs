@@ -687,11 +687,104 @@ impl ClaimsState {
                 return vec![Need::ConductOfficer, Need::Legal];
             }
         }
-        if two_signatures || !self.covers(profile, claim, request, plan) {
+        if !self.covers(profile, claim, request, plan) {
             vec![Need::Authority]
+        } else if two_signatures {
+            // The proposer's own authority covers it: the second signature is
+            // the four-eyes check, not a second limit as large as the first.
+            vec![Need::Peer]
         } else {
             vec![]
         }
+    }
+
+    /// The level at which a decision of this kind needs two signatures, which
+    /// a peer must be trusted to sign at themselves.
+    fn two_signature_level(&self, request: &Request) -> Option<i64> {
+        match request {
+            Request::Admit { .. } | Request::AdmitBuiltIn { .. } | Request::FuneralAdvance { .. } | Request::PermanentDisablement { .. } => {
+                Some(self.rules.two_signature_admission_minor)
+            }
+            Request::ExGratia { .. } => Some(self.rules.two_signature_ex_gratia_minor),
+            Request::WriteOff { .. } => Some(self.rules.two_signature_write_off_minor),
+            _ => None,
+        }
+    }
+
+    /// Whether a profile may give the four-eyes signature on a decision.
+    fn peers(&self, profile: &Profile, claim: &Claim, request: &Request) -> bool {
+        let level = self.two_signature_level(request).unwrap_or(0);
+        match request {
+            Request::WriteOff { .. } => profile.max_write_off_minor >= level,
+            _ if !profile.lines.contains(&claim.line()) => false,
+            Request::ExGratia { .. } => profile.max_ex_gratia_minor >= level,
+            Request::Decline => profile.may_decline,
+            Request::ReverseAdmission { .. } => profile.may_reverse_admission && profile.senior,
+            _ => profile.max_admission_minor.get(&claim.claim_type).copied().unwrap_or(0) >= level,
+        }
+    }
+
+    /// Whether this person meets one outstanding need.
+    fn meets(&self, staff: &str, need: Need, claim: &Claim, request: &Request, plan: &Plan) -> bool {
+        match need {
+            Need::Authority => self.authority.profile(staff).is_ok_and(|p| self.covers(p, claim, request, plan)),
+            Need::Peer => self.authority.profile(staff).is_ok_and(|p| self.peers(p, claim, request)),
+            Need::ConductOfficer => self.authority.has_role(staff, Role::ConductOfficer),
+            Need::Legal => self.authority.has_role(staff, Role::Legal),
+        }
+    }
+
+    /// Who could give the next signature a waiting decision needs: not the
+    /// proposer, nobody who signed, nobody conflicted on the claim.
+    fn able_to_sign(&self, claim: &Claim, pending: &Pending, need: Need, plan: &Plan) -> Vec<StaffId> {
+        self.authority
+            .staff
+            .keys()
+            .filter(|id| **id != pending.proposer && !pending.signed.contains(id) && !self.conflicted(id, claim))
+            .filter(|id| self.meets(id, need, claim, &pending.request, plan))
+            .cloned()
+            .collect()
+    }
+
+    /// The people who could give the next signature, as the work view shows
+    /// them. Unknown for a proposal recorded before its amount was kept.
+    pub(crate) fn signers(&self, claim: &Claim) -> Option<Vec<StaffId>> {
+        let pending = claim.pending.as_ref()?;
+        let plan = Plan {
+            amount_minor: pending.amount_minor?,
+            ..Plan::default()
+        };
+        let need = *pending.needs.first()?;
+        Some(self.able_to_sign(claim, pending, need, &plan))
+    }
+
+    /// The refusal for someone who cannot give any signature still needed:
+    /// what it needs, and who could give it.
+    fn cannot_sign(&self, claim: &Claim, pending: &Pending, plan: &Plan) -> Reject {
+        let Some(need) = pending.needs.first().copied() else {
+            return Reject::new("authority", "you cannot give any signature this decision still needs");
+        };
+        let what = match need {
+            Need::Authority => format!("someone whose own authority covers {}", ic_money::dollars(plan.amount_minor)),
+            Need::Peer => match self.two_signature_level(&pending.request) {
+                Some(level) => format!(
+                    "a second person accredited for this line who may themselves sign this kind of decision at {} or more",
+                    ic_money::dollars(level)
+                ),
+                None => "a second person accredited for this line who may themselves make this decision".to_string(),
+            },
+            Need::ConductOfficer => "the conduct officer".to_string(),
+            Need::Legal => "legal".to_string(),
+        };
+        let able = self.able_to_sign(claim, pending, need, plan);
+        let who = match able.as_slice() {
+            [] => "nobody else holds that today: the claims manager asks for the authority book to name someone, or refuses the proposal".to_string(),
+            some => format!("{} can give it", some.join(" or ")),
+        };
+        Reject::new(
+            "authority",
+            format!("this decision still needs a signature from {what}, which you cannot give: {who}"),
+        )
     }
 
     pub(crate) fn decide(&mut self, cx: &mut Cx<'_>, id: &str, request: Request, reasons: Vec<String>, actor: &Actor) -> Result<(), Reject> {
@@ -747,6 +840,7 @@ impl ClaimsState {
                 proposed_on: cx.today,
                 needs,
                 signed: vec![],
+                amount_minor: Some(plan.amount_minor),
             });
             cx.notify("decision_pending", id, &[("kind", format!("{kind:?}"))]);
         }
@@ -756,12 +850,8 @@ impl ClaimsState {
 
     /// Which outstanding signature this person can give, if any.
     fn can_sign(&self, staff: &str, claim: &Claim, pending: &Pending, plan: &Plan) -> Option<usize> {
-        let profile = self.authority.profile(staff).ok()?;
-        pending.needs.iter().position(|need| match need {
-            Need::Authority => self.covers(profile, claim, &pending.request, plan),
-            Need::ConductOfficer => self.authority.has_role(staff, Role::ConductOfficer),
-            Need::Legal => self.authority.has_role(staff, Role::Legal),
-        })
+        self.authority.profile(staff).ok()?;
+        pending.needs.iter().position(|need| self.meets(staff, *need, claim, &pending.request, plan))
     }
 
     pub(crate) fn approve(&mut self, cx: &mut Cx<'_>, id: &str, actor: &Actor) -> Result<(), Reject> {
@@ -775,7 +865,7 @@ impl ClaimsState {
         }
         let plan = self.plan(cx, &claim, &pending.request)?;
         let Some(position) = self.can_sign(&actor.staff, &claim, &pending, &plan) else {
-            return refuse("authority", "you cannot give any signature this decision still needs");
+            return Err(self.cannot_sign(&claim, &pending, &plan));
         };
         pending.needs.remove(position);
         pending.signed.push(actor.staff.clone());
