@@ -414,7 +414,7 @@ test({ id: "E2E-292", area: UW, persona: "ST1", story: "US-ST01-1", title: "A ju
   purpose: "Sign in to underwriting as a junior underwriter.",
   why: "The page must say who the module takes this person to be and the date their decisions carry, and must not offer what their grade cannot do." }, async (t) => {
   const s = await t.open("/underwriting", cast.st1);
-  await s.sees(`You are st1. You hold 0 open cases. Commands are made on ${t.stack.opening}.`, "#me");
+  await s.sees(`Signed in as st1. You hold 0 open cases. Commands are made on ${t.stack.opening}.`, "#me");
   await s.tab("Remedies and review");
   await s.sees("Waiting for a second senior");
   await s.never("Non-disclosure remedy");
@@ -424,7 +424,7 @@ test({ id: "E2E-293", area: UW, persona: "ST2", story: "US-ST02-1", title: "A se
   purpose: "Sign in as a senior underwriter and open Remedies and review.",
   why: "Remedies and peer review are senior work; the page must offer them to a senior, with the warning that a remedy changes someone's cover." }, async (t) => {
   const s = await t.open("/underwriting", cast.st2);
-  await s.sees("You are st2, a senior underwriter.", "#me");
+  await s.sees("Signed in as st2, a senior underwriter.", "#me");
   await s.tab("Remedies and review");
   await s.sees("Non-disclosure remedy");
   await s.sees("a second senior signs it before it is sent");
@@ -459,7 +459,8 @@ test({ id: "E2E-296", area: UW, persona: "ST2", story: "US-ST02-1", title: "The 
   await s.press("Show", "#m-form");
   await s.sees("Average hours to decide", "#report");
   const [row] = await s.rows("#report");
-  if (JSON.stringify(row) !== JSON.stringify(["0", "0", "0", "0", "0.00", "-"])) throw new Error(`the report row reads ${JSON.stringify(row)}`);
+  // Decisions, covers decided (F2-03-5), straight through, peer reviewed, peer disagreed, evidence cost in dollars (F2-02-6), average.
+  if (JSON.stringify(row) !== JSON.stringify(["0", "0", "0", "0", "0", "NZ$0.00", "-"])) throw new Error(`the report row reads ${JSON.stringify(row)}`);
 });
 
 test({ id: "E2E-297", area: UW, persona: "ST1", story: "US-ST01-1", title: "A junior underwriter cannot prepare a non-disclosure remedy or draw a peer review sample", matrix: ["UW-024"],

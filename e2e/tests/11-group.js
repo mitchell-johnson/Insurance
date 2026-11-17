@@ -24,6 +24,23 @@ const FOUNDER = ["E001", "Ana", "Founder", "01/05/1980", "staff", 60000, "akl"];
 
 /// A scheme of this test's own, with its founding member.
 const own = (t) => group.register(t.sys, t.ref("sch").toLowerCase());
+/// Wait for a member's automatic cover to come to rest. Cover over the retention on an underwritten-excess scheme
+/// is written first and then held back to the retention once the reinsurance module has said so (its driver sends
+/// `require_underwritten_excess` to group a moment later), so a screen read straight after a file may show the first.
+/// Gives up after thirty seconds and says what the member was left with.
+async function settled(t, scheme, employee, want) {
+  let last;
+  for (let n = 0; n < 120; n++) {
+    last = await t.does(cast.st7, "GET", `${G}member?scheme=${scheme.id}&employee=${employee}`, undefined, "reads a member");
+    if (last.covers && last.covers[0] && last.covers[0].automatic_minor === want.automatic) return last;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  throw new Error(`${employee}: automatic cover stayed at ${oracle.money(last.covers[0].automatic_minor)}; the calculator gives ${oracle.money(want.automatic)}`);
+}
+/// What the independent calculator gives for a new member (a person no other cover is held on) of a scheme on the
+/// shipped terms, whose excess path says what happens to cover over the retention.
+const member = (t, category, salaryMinor) => oracle.groupMember(category, salaryMinor,
+  { excessPath: JSON.parse(require("fs").readFileSync(require("path").join(t.stack.run, "shipped.json"), "utf8")).group.terms.excess_path });
 /// A person nobody else in the customer master resembles: the master matches on name and date of birth, so a
 /// name shared with another test's member would be put to staff as a possible match.
 function person(employee, category = "staff", salary = 60000, site = "wlg") {
@@ -122,14 +139,15 @@ test({ id: "E2E-305", area: A, persona: "ST7", story: "US-ST07-1", title: "Freez
 });
 
 test({ id: "E2E-306", area: A, persona: "ST7", story: "US-B24-2", title: "A member's cover is their category's multiple of salary, in place up to the automatic limit", matrix: ["GRP-009"],
-  purpose: "Apply a file with a staff member and an executive on 240,000, then show each member and compare cover with the independent calculator.",
+  purpose: "Apply a file with a staff member and an executive on 240,000, then show each member and compare cover with the independent calculator: the product's automatic limit, and on this scheme, which underwrites cover over the retention, the group treaty's retention on the life.",
   why: "Cover by formula is what the employer bought. The part above the automatic acceptance limit must wait for underwriting, and the member must be covered to the limit meanwhile." }, async (t) => {
   const scheme = await own(t);
   await group.applied(t.sys, scheme, "nov.csv", [FOUNDER, person("E002", "staff", 85000), person("E003", "executive", 240000)]);
   const s = await console_(t, scheme);
   await s.tab("Members");
   for (const [employee, category, salary] of [["E002", "staff", 85000], ["E003", "executive", 240000]]) {
-    const want = oracle.groupMember(category, salary * 100);
+    const want = member(t, category, salary * 100);
+    await settled(t, scheme, employee, want);
     await s.fill("#mb-emp", employee);
     await s.press("Show", "#mb-form");
     await s.sees(employee, "#mb");
@@ -137,8 +155,12 @@ test({ id: "E2E-306", area: A, persona: "ST7", story: "US-B24-2", title: "A memb
     const cover = (await tables.nth(1).locator("tbody tr").first().locator("td").allInnerTexts()).map((c) => c.trim());
     if (cover[2] !== oracle.money(want.formula) || cover[3] !== oracle.money(want.automatic)) throw new Error(`${employee}: the screen shows cover ${cover[2]} with ${cover[3]} automatic; the calculator gives ${oracle.money(want.formula)} and ${oracle.money(want.automatic)}`);
     if (want.above) {
-      const above = (await tables.nth(2).locator("tbody tr").first().locator("td").allInnerTexts()).map((c) => c.trim());
-      if (above[1] !== oracle.money(want.above) || above[2] !== "pending" || above[3] !== "0.00") throw new Error(`${employee}: cover above the limit reads ${JSON.stringify(above)}; the calculator gives ${oracle.money(want.above)} asked, pending, nothing in place`);
+      // What is above the automatic part is asked of underwriting: first what the product's limit leaves over, then
+      // what the retention held back once reinsurance said so. Together they are the whole excess, none of it in place.
+      const rows = [];
+      for (const tr of await tables.nth(2).locator("tbody tr").all()) rows.push((await tr.locator("td").allInnerTexts()).map((c) => c.trim()));
+      const asked = rows.reduce((sum, r) => sum + Math.round(Number(r[1].replace(/,/g, "")) * 100), 0);
+      if (asked !== want.above || rows.some((r) => r[2] !== "pending" || r[3] !== "0.00")) throw new Error(`${employee}: cover above the limit reads ${JSON.stringify(rows)}; the calculator gives ${oracle.money(want.above)} asked, pending, nothing in place`);
     } else if (await tables.count() > 2) throw new Error(`${employee} is shown cover above the automatic limit and has none`);
   }
 });
@@ -260,7 +282,7 @@ test({ id: "E2E-314", area: A, persona: "E1", story: "US-E01-1", title: "A membe
   await s.press("Show preview", "#preview");
   await s.done("#file-msg", "The file is applied.");
   // The first month's bill: every member's premium, founder included.
-  const owed = [["staff", 60000], ...joiners.map((j) => [j[4], j[5]])].reduce((sum, [category, salary]) => sum + oracle.groupMember(category, salary * 100).monthly, 0);
+  const owed = [["staff", 60000], ...joiners.map((j) => [j[4], j[5]])].reduce((sum, [category, salary]) => sum + member(t, category, salary * 100).monthly, 0);
   let after;
   for (let n = 0; n < 60; n++) { after = await standing(t, scheme); if (after.members === 3 && after.outstanding_minor === owed) break; await s.wait(250); }
   if (after.members !== 3) throw new Error(`the scheme has ${after.members} members after the file, expected 3`);
@@ -395,7 +417,8 @@ test({ id: "E2E-320", area: A, persona: "E1", story: "US-B02-2", title: "An empl
   why: "An employer pays for the scheme but has no right to a member's health, underwriting or identity record. The employer's view must be the narrower one, field by field." }, async (t) => {
   const scheme = await own(t);
   await group.applied(t.sys, scheme, "nov.csv", [FOUNDER, person("E003", "executive", 240000)]);
-  const want = oracle.groupMember("executive", 240000 * 100);
+  const want = member(t, "executive", 240000 * 100);
+  await settled(t, scheme, "E003", want);
   const s = await opened(t, scheme);
   await s.tab("Files and members");
   await s.fill("#employee", "E003");
@@ -403,7 +426,10 @@ test({ id: "E2E-320", area: A, persona: "E1", story: "US-B02-2", title: "An empl
   await s.sees("E003: executive", "#member-view");
   await s.sees("on cover", "#member-view");
   const digits = (await s.$("#member-view").innerText()).replace(/[^0-9.]/g, "");
-  for (const amount of [want.formula, want.automatic, want.above]) if (!digits.includes(oracle.money(amount))) throw new Error(`the member view does not show ${oracle.money(amount)}: ${(await s.$("#member-view").innerText()).slice(0, 300)}`);
+  const aboveRows = await s.rows(s.$("#member-view").locator("table").nth(1));
+  const asked = aboveRows.reduce((sum, r) => sum + Math.round(Number(String(r[1]).replace(/[^0-9.]/g, "")) * 100), 0);
+  if (asked !== want.above) throw new Error(`the member view asks ${oracle.money(asked)} above the automatic part (${JSON.stringify(aboveRows)}); the calculator gives ${oracle.money(want.above)}`);
+  for (const amount of [want.formula, want.automatic]) if (!digits.includes(oracle.money(amount))) throw new Error(`the member view does not show ${oracle.money(amount)}: ${(await s.$("#member-view").innerText()).slice(0, 300)}`);
   const theirs = (await t.does(cast.e1, "GET", `/employer/v1/schemes/${scheme.policy}/group/member?employee=E003`, undefined, "reads a member")), ours = (await t.does(cast.st7, "GET", `${G}member?scheme=${scheme.id}&employee=E003`, undefined, "reads a member"));
   for (const hidden of ["health", "occupation_class", "party", "loadings", "candidates"]) if (hidden in theirs) throw new Error(`the employer is given the member's ${hidden}`);
   const extra = Object.keys(theirs).filter((k) => !(k in ours));

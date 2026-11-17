@@ -30,7 +30,10 @@
 //     spread rounded down (`products/funds/*.star`, `docs/unit-pricing.md`);
 //   - a group life member's cover is a multiple of salary by category, in place
 //     up to the automatic acceptance limit, at an annual rate per thousand by
-//     category (`products/group_life.star`, `products/rates/group_life_standard.star`).
+//     category (`products/group_life.star`, `products/rates/group_life_standard.star`);
+//     on a scheme whose cover over the retention is underwritten, what is in
+//     place is also no more than the group treaty's retention left on the life
+//     (`treaties/group_life_surplus.star`, `docs/reinsurance.md`).
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -184,7 +187,13 @@ function prices(fundCode, nav, unitsMicro) {
 /// salary, capped at the category's maximum; what is in place without underwriting is that, up to the cover's
 /// automatic acceptance limit; and a month's premium is the category's annual rate per thousand of the cover in
 /// place, over twelve, rounded half-even to the cent. Amounts are whole cents.
-function groupMember(category, salaryMinor) {
+///
+/// Where the scheme's terms send cover over the insurer's retention to underwriting (`excessPath`
+/// "underwritten_excess"), a member known to the customer master is also kept to the group treaty's retention
+/// on their life, less what the insurer already retains on it elsewhere (`retainedMinor`): a membership file
+/// writes nothing over the retention without underwriting (`docs/reinsurance.md`, "Never silently
+/// over-retained"). With "facultative" the excess is ceded and the product's limit alone applies.
+function groupMember(category, salaryMinor, { excessPath = "facultative", retainedMinor = 0 } = {}) {
   const text = read("group_life.star");
   const c = new RegExp(`benefit_category\\("${category}", salary_multiple = "(\\d+)", max_sum_insured = dollars\\((\\d+)\\)`).exec(text);
   if (!c) throw new Error(`group_life.star has no category ${category}`);
@@ -192,10 +201,23 @@ function groupMember(category, salaryMinor) {
   const table = /group_unit_rate\("([^"]+)"\)/.exec(text)[1];
   const row = rateTable(table).find((r) => r.category === category);
   if (!row) throw new Error(`${table} has no rate for ${category}`);
-  const byFormula = BigInt(salaryMinor) * BigInt(c[1]), formula = byFormula > cap ? cap : byFormula, automatic = formula > limit ? limit : formula;
+  const byFormula = BigInt(salaryMinor) * BigInt(c[1]), formula = byFormula > cap ? cap : byFormula;
+  let automatic = formula > limit ? limit : formula;
+  if (excessPath === "underwritten_excess") {
+    const free = groupRetention() - BigInt(retainedMinor);
+    if (automatic > free) automatic = free > 0n ? free : 0n;
+  }
   // cents a month = cover in cents / 1000 x rate / 12
   const monthly = halfEven(automatic * row.rate.n, 1000n * 12n * 10n ** BigInt(row.rate.scale));
   return { formula: Number(formula), automatic: Number(automatic), above: Number(formula - automatic), monthly: Number(monthly) };
+}
+
+/// The insurer's retention per life under the group life treaty (`treaties/group_life_surplus.star`), in cents.
+function groupRetention() {
+  const text = fs.readFileSync(path.resolve(ROOT, "..", "treaties", "group_life_surplus.star"), "utf8");
+  const m = /basis = surplus\(retention = dollars\((\d+)\)/.exec(text);
+  if (!m) throw new Error("group_life_surplus.star names no surplus retention");
+  return BigInt(m[1]) * 100n;
 }
 
 const money = (cents) => (cents / 100).toFixed(2);

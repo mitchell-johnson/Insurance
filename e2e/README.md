@@ -61,7 +61,8 @@ It covers premiums (stepped and per-life rates, age last birthday, modal
 loading, multi-cover discount, policy fee, GST), billing periods, the days on
 which cover is suspended and a policy lapses, the arrears a reinstatement
 needs, what is payable on a claim after unpaid premium, a fund's buy and
-sell prices, and a group life member's cover and premium.
+sell prices, and a group life member's cover and premium (on a scheme that
+underwrites cover over the retention, kept to the group treaty's retention).
 
 ## Policy lifecycles and closing days
 
