@@ -1511,3 +1511,34 @@ fn an_approval_refusal_says_where_the_run_stands() {
     assert_eq!(over.code, "over_run_limit");
     assert!(over.message.contains("over its limit of $500,000.00"), "{}", over.message);
 }
+
+/// Purpose: "send what is unpaid again" refused says why: a run not yet approved names its
+/// state, a run whose items all went to the bank says nothing is left, and a run whose items
+/// the bank rejected names them and says how they are paid again.
+/// Why it matters: found by the scenario run (SCN-15, F-15-2). "Only an approved run with
+/// unpaid items is sent again" was given for an approved run with a rejected item, so the maker
+/// could not tell what to do with the payment the bank sent back.
+#[test]
+fn sending_again_says_why_nothing_goes() {
+    let mut desk = Desk::new();
+    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.prepare("r1", RunType::BenefitPayments, d(2027, 11, 15));
+    desk.add("r1", vec![pay("i1", "p1", 100_00)]);
+    let told = |desk: &mut Desk| {
+        let resubmit = Command::Resubmit {
+            run: run("r1"),
+            value_date: d(2027, 11, 15),
+        };
+        desk.send(&mia(), resubmit).unwrap_err().message
+    };
+    assert_eq!(told(&mut desk), "run r1 is prepared: only an approved run's unsent items are sent again");
+    let first = desk.approve("r1");
+    assert_eq!(told(&mut desk), "everything in run r1 has gone to the bank: nothing is left to send");
+    desk.deliver(&first);
+    desk.ok(&svc(), ack(&first, &[("i1", "account closed")]));
+    let message = told(&mut desk);
+    assert!(
+        message.starts_with("nothing in run r1 is left to send. i1 came back from the bank"),
+        "{message}"
+    );
+}

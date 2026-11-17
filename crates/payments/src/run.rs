@@ -76,7 +76,7 @@ impl PaymentsState {
     }
 
     /// The channel a run goes through and the bank account behind it.
-    fn route_of(&self, run_type: RunType, urgent: bool, fund: &str, currency: Currency) -> Result<(Id, Id), Reject> {
+    pub(crate) fn route_of(&self, run_type: RunType, urgent: bool, fund: &str, currency: Currency) -> Result<(Id, Id), Reject> {
         let cfg = self.cfg()?;
         let route = cfg
             .routes
@@ -798,8 +798,29 @@ impl PaymentsState {
     pub(crate) fn resubmit(&mut self, tx: &mut Tx<'_>, id: &str, value_date: NaiveDate) -> Result<(), Reject> {
         tx.need(Role::Maker)?;
         let run = self.run(id)?;
-        if run.status != RunStatus::Approved || !run.items.values().any(|i| i.status == ItemStatus::Pending) {
-            return Err(wrong_state("only an approved run with unpaid items is sent again"));
+        if run.status != RunStatus::Approved {
+            let status = format!("{:?}", run.status).to_lowercase();
+            return Err(wrong_state(&format!(
+                "run {id} is {status}: only an approved run's unsent items are sent again"
+            )));
+        }
+        if !run.items.values().any(|i| i.status == ItemStatus::Pending) {
+            // A rejected or returned item's reference is spent: it is paid again
+            // from where it came, never by sending the same item twice.
+            let spent: Vec<&str> = run
+                .items
+                .iter()
+                .filter(|(_, i)| matches!(i.status, ItemStatus::Rejected(_) | ItemStatus::Returned(_)))
+                .map(|(item, _)| item.as_str())
+                .collect();
+            let why = match spent.as_slice() {
+                [] => format!("everything in run {id} has gone to the bank: nothing is left to send"),
+                items => format!(
+                    "nothing in run {id} is left to send. {} came back from the bank, and a reference is never paid twice: a claim payment comes back to the waiting list when claims releases it again, and anything else is added to a new run",
+                    items.join(", ")
+                ),
+            };
+            return Err(wrong_state(&why));
         }
         if value_date < run.value_date {
             return Err(Reject::new("value_date_passed", "a run is never moved to an earlier date"));

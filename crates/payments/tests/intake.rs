@@ -682,13 +682,15 @@ fn claims_note(id: &str, kind: &str, claim: &str, detail: serde_json::Value) -> 
 
 /// Purpose: PAY-013. A claim admitted for at least the pre-advice threshold
 /// is flagged to treasury the moment claims admits it, once; the funding
-/// forecast carries admitted claims, payments waiting and runs by value
-/// date; a claim leaves the forecast when its payment is released or the
+/// forecast carries admitted claims, payments waiting, runs by value
+/// date, and each paying account with what it will hold and what it is short;
+/// a claim leaves the forecast when its payment is released or the
 /// claim closes; a periodic benefit admitted at nothing is not forecast.
 /// Why it matters: a $600,000 death claim paid from an account holding
 /// less is refused at approval, days after the money could have been
 /// moved. Treasury needs to hear when the claim is admitted, not when the
-/// run fails.
+/// run fails (and, found by the scenario run, F-SCN16-5: whether the money
+/// is there at all).
 #[test]
 fn a_large_admitted_claim_is_flagged_and_forecast() {
     let mut desk = Desk::new();
@@ -733,6 +735,15 @@ fn a_large_admitted_claim_is_flagged_and_forecast() {
         forecast["runs"],
         json!([{"value_date": "2027-11-16", "run_type": "commission", "fund": "sf1", "total_minor": 300_00}])
     );
+    // Whether the money is there: the account the run pays from, what it will hold, and what it is short
+    // (found by the scenario run, F-SCN16-5).
+    let account = &forecast["accounts"][0];
+    assert_eq!(
+        (&account["fund"], &account["needed_minor"], &account["short_minor"]),
+        (&json!("sf1"), &json!(300_00), &json!(0)),
+        "{forecast}"
+    );
+    assert!(account["available_minor"].as_i64().unwrap() > 300_00, "{forecast}");
 
     // Released for payment: it is waiting money now, not a forecast.
     let detail = json!({"policy": "pol-1", "payment_ref": "clm-big/1", "net_minor": "60000000", "payee": "p1"});
