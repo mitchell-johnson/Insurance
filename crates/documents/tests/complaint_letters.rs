@@ -133,6 +133,8 @@ impl World {
         for (id, kind, body) in templates {
             let mut t = template(id, *kind, body);
             t.alternate_formats = vec![AlternateFormat::LargePrint];
+            // A letter asked for by its id describes no product, as its shipped wording does.
+            t.products.clear();
             kit.activate(t, &letter_data());
         }
         let module = LocalModule::default();

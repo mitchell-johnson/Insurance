@@ -112,7 +112,9 @@ impl World {
         let now = kit.now;
         if wording {
             let data = json!({ "name": "Aroha", "reference": "claim-1", "amount": "1250.00", "repayment_reference": "OP123456" });
-            kit.activate(template("cl-overpayment-repayment", DocumentKind::GeneralCorrespondence, REPAY), &data);
+            let mut t = template("cl-overpayment-repayment", DocumentKind::GeneralCorrespondence, REPAY);
+            t.products.clear();
+            kit.activate(t, &data);
         }
         let module = LocalModule::default();
         for envelope in &kit.log {

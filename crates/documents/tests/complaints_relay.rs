@@ -279,7 +279,10 @@ async fn the_relay_reaches_the_module_over_the_cluster() {
     );
     assert!(matches!(module.propose(envelope("odd")).await, Err(DriverError::Answer(_))));
     assert_eq!(module.ask(Query::StateHash).await.unwrap(), json!("abc"));
-    assert_eq!(module.ask(Query::Queue { limit: 1, owner: None }).await, Err(DriverError::Answer("refused".into())));
+    assert_eq!(
+        module.ask(Query::Queue { limit: 1, owner: None }).await,
+        Err(DriverError::Answer("refused".into()))
+    );
 
     let nowhere = ClusterComplaints::new(ClusterClient::new(vec!["127.0.0.1:1".into()]), Duration::from_millis(50));
     assert!(matches!(nowhere.propose(envelope("tick:2")).await, Err(DriverError::Unavailable(m)) if m.contains("module complaints")));

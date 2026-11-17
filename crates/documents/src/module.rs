@@ -144,10 +144,86 @@ pub enum Query {
     },
     Settings,
     StateHash,
+    /// Documents a recipient of which could not be reached, newest first.
+    Undeliverable {
+        limit: usize,
+    },
+    /// The notices remediation asked to correct that have no correction
+    /// yet, as (defect, notice).
+    CorrectionsDue {
+        limit: usize,
+    },
+    /// A template version rendered for a synthetic persona: the text a
+    /// person approves, its SHA-256 for a rendering test, the fields the
+    /// template needs and the fields the data gives. Without data, it is
+    /// the data a product's document of the kind is given
+    /// (`supplied::sample`).
+    RenderSample {
+        template: TemplateRef,
+        #[serde(default)]
+        language: Option<String>,
+        #[serde(default)]
+        data: Option<Value>,
+    },
+    /// What a person writing a template picks from: every kind of
+    /// document and what it implies, the alternate formats, and the
+    /// shipped placeholder wordings to start from.
+    Authoring,
+}
+
+/// What [`Query::Authoring`] answers.
+fn authoring() -> Value {
+    let kinds: Vec<Value> = DocumentKind::ALL
+        .iter()
+        .map(|k| {
+            serde_json::json!({
+                "kind": k,
+                "words": k.words(),
+                "answers_events": crate::supplied::answers_events(*k),
+                "proven": k.requires_proof(),
+                "compliance": k.needs_compliance_approval(),
+                "fields": crate::supplied::fields(*k),
+            })
+        })
+        .collect();
+    let placeholders: Vec<Value> = crate::placeholders::PLACEHOLDERS
+        .iter()
+        .map(|p| serde_json::json!({ "id": p.id, "kind": p.kind, "title": p.title, "notice_days": p.notice_days, "body": p.body }))
+        .collect();
+    serde_json::json!({
+        "kinds": kinds,
+        "formats": ["large_print", "plain_text", "audio", "braille"],
+        "marker": crate::placeholders::MARKER,
+        "placeholders": placeholders,
+    })
 }
 
 fn json<T: Serialize>(value: T) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|e| e.to_string())
+}
+
+/// A template rendered for a sample: what [`Query::RenderSample`] answers.
+fn render_sample(state: &DocumentsState, template: &TemplateRef, language: Option<String>, data: Option<Value>) -> Result<Value, String> {
+    let record = state
+        .templates
+        .get(template)
+        .ok_or_else(|| format!("there is no template {} version {}", template.id, template.version))?;
+    let t = &record.template;
+    let language = language.unwrap_or_else(|| t.primary_language.clone());
+    let data = data
+        .or_else(|| crate::supplied::sample(t.kind))
+        .ok_or_else(|| format!("a {} is given what the module that asks for it sends: give the sample's data", t.kind.words()))?;
+    let text = t.render(&state.parts, &language, &data).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "template": template,
+        "language": language,
+        "text": text,
+        "sha256": crate::template::sha256_hex(text.as_bytes()),
+        "required_fields": record.required_fields,
+        "product_fields": crate::render::supplied(&data),
+        "reading_grade_x10": record.reading_grade_x10,
+        "data": data,
+    }))
 }
 
 /// Answer a question. A question that is not one of [`Query`] is refused.
@@ -188,6 +264,10 @@ pub fn answer(state: &DocumentsState, question: Value) -> Result<Value, String> 
         Query::OpenDefects { limit } => json(state.defects.values().filter(|d| d.closed.is_none()).take(cap(limit)).collect::<Vec<_>>()),
         Query::Settings => json(&state.settings),
         Query::StateHash => json(state.state_hash()),
+        Query::Undeliverable { limit } => json(state.undeliverable(cap(limit))),
+        Query::CorrectionsDue { limit } => json(state.corrections_due(cap(limit))),
+        Query::RenderSample { template, language, data } => render_sample(state, &template, language, data),
+        Query::Authoring => Ok(authoring()),
     }
 }
 

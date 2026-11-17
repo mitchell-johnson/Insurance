@@ -262,7 +262,10 @@ impl World {
         let mut kit = Kit::new();
         let now = kit.now;
         for (id, kind, body) in templates {
-            kit.activate(template(id, *kind, body), &letter_data());
+            // A letter asked for by its id describes no product, as its shipped wording does.
+            let mut t = template(id, *kind, body);
+            t.products.clear();
+            kit.activate(t, &letter_data());
         }
         let module = LocalModule::default();
         for envelope in &kit.log {

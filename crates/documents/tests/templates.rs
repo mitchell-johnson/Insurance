@@ -96,10 +96,12 @@ fn a_template_is_approved_tested_and_then_activated() {
     );
 }
 
-/// Purpose: an author cannot approve their own template, one person cannot give two approvals,
-/// and a template submitted under someone else's name is refused.
+/// Purpose: an author cannot approve their own template, and is told that another person who
+/// gives that approval does; one person cannot give two approvals; and a template submitted
+/// under someone else's name is refused.
 /// Why it matters: the design requires that an author cannot approve. Maker-checker enforced
-/// by convention is not a control.
+/// by convention is not a control. A refusal that did not say who approves left the author
+/// stuck (found by the scenario run, F2-10-8).
 #[test]
 fn approvals_are_by_people_other_than_the_author_and_each_other() {
     let mut kit = Kit::new();
@@ -108,6 +110,9 @@ fn approvals_are_by_people_other_than_the_author_and_each_other() {
     assert_eq!(kit.err("config", "someone-else", Command::SubmitTemplate(Box::new(t.clone()))), "invalid");
     kit.ok("config", "author", Command::SubmitTemplate(Box::new(t)));
     let approve = |role| Command::ApproveTemplate { template: r.clone(), role };
+    let refused = kit.send("config", "author", approve(ApprovalRole::Product)).result.unwrap_err();
+    assert_eq!(refused.code, "maker_checker");
+    assert!(refused.message.contains("another person who gives the product approval"), "{}", refused.message);
     assert_eq!(kit.err("config", "author", approve(ApprovalRole::Legal)), "maker_checker");
     kit.ok("config", "lee", approve(ApprovalRole::Legal));
     assert_eq!(kit.err("config", "lee", approve(ApprovalRole::Product)), "maker_checker");
@@ -372,9 +377,11 @@ fn a_template_is_composed_from_parts_and_hashed_with_them() {
 }
 
 /// Purpose: disabling an active template stops anything more being issued from it, needs a
-/// reason and a case, is idempotent, and a draft cannot be disabled.
+/// reason and a case, is idempotent, and a draft that will not be used is withdrawn the same
+/// way, after which it is never approved or activated.
 /// Why it matters: runbook eight's containment step is "disable the template version". After
-/// it, not one more wrong notice may go out.
+/// it, not one more wrong notice may go out. A draft nobody could withdraw stayed offered for
+/// approval and activation for ever (found by the scenario run, F2-10-9).
 #[test]
 fn a_disabled_template_issues_nothing_more() {
     let mut kit = Kit::ready();
@@ -409,23 +416,33 @@ fn a_disabled_template_issues_nothing_more() {
         "config_conflict"
     );
 
+    // A draft that will not be used is withdrawn the same way: it is never approved or activated.
     kit.ok(
         "config",
         "author",
         Command::SubmitTemplate(Box::new(template("draft", DocumentKind::Reminder, "Hello {{name}}."))),
     );
-    assert_eq!(
-        kit.err(
-            "config",
-            "ops",
-            Command::DisableTemplate {
-                template: tref("draft", 1),
-                reason: "r".into(),
-                case: "c".into()
-            }
-        ),
-        "not_active"
+    let events = kit.ok(
+        "config",
+        "ops",
+        Command::DisableTemplate {
+            template: tref("draft", 1),
+            reason: "withdrawn: a wrong field".into(),
+            case: "c".into(),
+        },
     );
+    assert!(matches!(&events[..], [Event::TemplateDisabled { .. }]));
+    assert_eq!(kit.state.templates[&tref("draft", 1)].status, TemplateStatus::Disabled);
+    let approve = Command::ApproveTemplate {
+        template: tref("draft", 1),
+        role: ApprovalRole::Legal,
+    };
+    assert_eq!(kit.err("config", "counsel", approve), "not_draft");
+    let activate = Command::ActivateTemplate {
+        template: tref("draft", 1),
+        effective_from: kit.today(),
+    };
+    assert_eq!(kit.err("config", "product", activate), "config_conflict");
 }
 
 /// Purpose: settings and retention schedules are versioned and immutable: the same version
@@ -761,4 +778,118 @@ fn a_translation_is_versioned_with_its_primary() {
         kit.issue(spec);
         assert_eq!(kit.state.documents[id].template, Some(r1.clone()));
     }
+}
+
+/// Purpose: a product's template of a kind the core's events ask for is refused at submission
+/// when it uses a field the policy does not give (a misspelt `policy.numbr`), and the refusal
+/// names the field and lists the fields there are; the same wording for no product, a kind the
+/// events never ask for, and a correct wording are accepted.
+/// Why it matters: a misspelt field was accepted as a draft and caught only at the rendering
+/// test, and only if the tester typed the product's fields right (found by the scenario run,
+/// F2-10-4). The documents those events require are given exactly the policy's data, so a field
+/// outside it can never render.
+#[test]
+fn a_products_notice_uses_only_the_fields_the_policy_gives() {
+    let mut kit = Kit::new();
+    let wrong = template("lapse", DocumentKind::LapseNotice, "Dear {{name}}. Policy {{policy.numbr}} is unpaid.");
+    let refused = kit
+        .send("config", "author", Command::SubmitTemplate(Box::new(wrong.clone())))
+        .result
+        .unwrap_err();
+    assert_eq!(refused.code, "invalid_template");
+    assert!(
+        refused.message.contains("`policy.numbr` is not a field a product's lapse notice is given"),
+        "{}",
+        refused.message
+    );
+    assert!(
+        refused.message.contains("oldest_unpaid_due") && refused.message.contains("name"),
+        "{}",
+        refused.message
+    );
+    // A receipt is also told the receipt; a lapse notice is not.
+    let receipt = template("receipt", DocumentKind::PremiumReceipt, "We received {{allocated|money}} as {{receipt}}.");
+    kit.ok("config", "author", Command::SubmitTemplate(Box::new(receipt)));
+    let mut lapse = template("lapse", DocumentKind::LapseNotice, "Dear {{name}}. We received {{allocated|money}}.");
+    assert_eq!(submit(&mut kit, lapse.clone()), "invalid_template");
+    // Bound to no product, or of a kind asked for by another module, its data is the asker's.
+    let mut unbound = wrong.clone();
+    unbound.products.clear();
+    kit.ok("config", "author", Command::SubmitTemplate(Box::new(unbound)));
+    let renewal = template("renewal", DocumentKind::RenewalNotice, "Dear {{name}}. Policy {{policy.numbr}}.");
+    kit.ok("config", "author", Command::SubmitTemplate(Box::new(renewal)));
+    lapse.id = "lapse-2".into();
+    lapse.bodies.insert(
+        "en".into(),
+        "Dear {{name}}. Policy {{policy}} is unpaid since {{oldest_unpaid_due|date}}.{{#each covers}} {{cover}}.{{/each}}".into(),
+    );
+    kit.ok("config", "author", Command::SubmitTemplate(Box::new(lapse)));
+}
+
+/// Purpose: a wording with one sentence longer than the setting allows is refused, naming the
+/// start of the sentence and its length, even when the whole letter's average grade passes; an
+/// accepted template keeps its reading grade, which the template list shows.
+/// Why it matters: the reading grade is an average, so a 90-word sentence among short ones
+/// passed it and would reach customers (found by the scenario run, F2-10-5); and the grade an
+/// accepted wording reads at was never shown to its approvers.
+#[test]
+fn one_long_sentence_is_refused_and_the_grade_is_kept() {
+    let mut kit = Kit::new();
+    let long = vec!["word"; 45].join(" ");
+    let body = format!("Dear {{{{name}}}}. Pay now. Call us. We can help. {long}. Thank you.");
+    let t = template("letter", DocumentKind::Reminder, &body);
+    let refused = kit.send("config", "author", Command::SubmitTemplate(Box::new(t))).result.unwrap_err();
+    assert_eq!(refused.code, "invalid_template");
+    assert!(
+        refused.message.contains("\"word word word") && refused.message.contains("has 45 words, above the limit of 40"),
+        "{}",
+        refused.message
+    );
+    let t = template(
+        "letter",
+        DocumentKind::Reminder,
+        "Dear {{name}}. Your insurance premium is overdue. Please pay it now.",
+    );
+    kit.ok("config", "author", Command::SubmitTemplate(Box::new(t)));
+    let grade = kit.state.templates[&tref("letter", 1)].reading_grade_x10;
+    assert!(grade > 0 && grade <= 120, "{grade}");
+    let listed = kit.state.template_list(10);
+    assert_eq!(listed[0]["reading_grade_x10"], json!(grade));
+    assert_eq!(ic_documents::render::longest_sentence(""), None);
+}
+
+/// Purpose: the template list says which versions answer the documents the core's events
+/// require: a lapse notice bound to a product does, one bound to none does not (it is used only
+/// where it is asked for by its id), and a kind the events never ask for is marked as such.
+/// Why it matters: a lapse notice with no product binding validated, passed, was approved and
+/// activated, and then served no policy, with nothing on screen to say so (found by the
+/// scenario run, F2-10-6).
+#[test]
+fn the_list_says_which_versions_answer_a_policys_documents() {
+    let mut kit = Kit::new();
+    kit.ok(
+        "config",
+        "author",
+        Command::SubmitTemplate(Box::new(template("bound", DocumentKind::LapseNotice, "Dear {{name}}."))),
+    );
+    let mut unbound = template("unbound", DocumentKind::LapseNotice, "Dear {{name}}.");
+    unbound.products.clear();
+    kit.ok("config", "author", Command::SubmitTemplate(Box::new(unbound)));
+    kit.ok(
+        "config",
+        "author",
+        Command::SubmitTemplate(Box::new(template("renewal", DocumentKind::RenewalNotice, "Dear {{name}}."))),
+    );
+    let listed = kit.state.template_list(10);
+    let row = |id: &str| listed.iter().find(|t| t["template"]["id"] == id).unwrap().clone();
+    assert_eq!(
+        (row("bound")["event_kind"].clone(), row("bound")["answers_events"].clone()),
+        (json!(true), json!(true))
+    );
+    assert_eq!(
+        (row("unbound")["event_kind"].clone(), row("unbound")["answers_events"].clone()),
+        (json!(true), json!(false))
+    );
+    assert_eq!(row("renewal")["event_kind"], json!(false));
+    assert_eq!(row("bound")["products"], json!([{ "code": "term-life", "version": 1 }]));
 }

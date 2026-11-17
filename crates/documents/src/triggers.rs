@@ -30,6 +30,7 @@ fn trigger(record: &EventRecord, policy: &ic_core::PolicyId, kind: DocumentKind,
         business_date: record.business_date,
         copy_to: vec![],
         detail: BTreeMap::new(),
+        waiting: None,
     }
 }
 

@@ -34,6 +34,7 @@ pub mod requested_letters;
 pub mod required_documents;
 pub mod service;
 pub mod state;
+pub mod supplied;
 pub mod template;
 pub mod triggers;
 pub mod vault;
