@@ -128,6 +128,123 @@ fn group(opening: chrono::NaiveDate) -> Result<Value, String> {
     Ok(json!({ "issue": issue, "product": product, "terms": terms, "mapping": mapping, "founder": member }))
 }
 
+/// One cover applied for on an AIA template: the cover's code, the sum insured (or the
+/// monthly benefit, or for health the largest annual benefit limit), and the named choices
+/// on its option menu (`axis=choice,...`); every other axis takes its first choice.
+type Applying = (&'static str, i64, &'static str);
+
+/// A shipped product as the seed and the scenarios need it: the version the nodes hold
+/// (its content hash, which a proposal's quote names) and each cover's type, which a
+/// proposal names beside the cover's code.
+fn product(file: &str, source: &str) -> Result<(ic_product::ProductDefinition, Value), String> {
+    let p = ic_product::load_product(file, source).map_err(|e| format!("{file}: {e}"))?;
+    let covers: serde_json::Map<String, Value> = p.covers.iter().map(|c| (c.code.clone(), json!(c.cover_type))).collect();
+    let about = json!({ "name": p.name, "version": p.version, "content_hash": p.content_hash, "covers": covers });
+    Ok((p, about))
+}
+
+/// An application for one of the AIA products on one life, in the API's own JSON: the life's
+/// age on the opening date, the occupation class where the product asks for one, and each
+/// cover's option resolved from the product's own menu, as the underwriting module's AIA
+/// journeys (`crates/underwriting/tests/aia_journeys.rs`) form them.
+fn aia(
+    n: u64,
+    definition: &ic_product::ProductDefinition,
+    opening: chrono::NaiveDate,
+    born: chrono::NaiveDate,
+    class: Option<&str>,
+    covers: &[Applying],
+) -> Result<ic_core::command::IssuePolicy, String> {
+    use ic_product::{Frequency, Sex};
+    let mut a = ic_sim::persona::term_life(n, opening, born, Sex::Female, false, 1, None, Frequency::Monthly, None);
+    a.product_code = definition.code.clone();
+    a.number = format!("AIA{n:08}");
+    a.lives[0].factors.occupation_class = class.map(str::to_string);
+    let life = a.lives[0].id.clone();
+    a.covers = covers
+        .iter()
+        .map(|(code, sum, named)| {
+            let spec = definition.cover(code).ok_or_else(|| format!("{} has no cover {code}", definition.code))?;
+            let named: Vec<(&str, &str)> = named.split(',').filter_map(|p| p.split_once('=')).collect();
+            let option = if spec.option_axes.is_empty() {
+                spec.excess_options.first().map(|e| e.code.clone())
+            } else {
+                let parts: Vec<(&str, &str)> = spec
+                    .option_axes
+                    .iter()
+                    .map(|axis| {
+                        let chosen = named.iter().find(|(a, _)| *a == axis.code).map(|(_, c)| *c);
+                        (axis.code.as_str(), chosen.unwrap_or(axis.choices[0].code.as_str()))
+                    })
+                    .collect();
+                Some(ic_product::option_code(&parts))
+            };
+            Ok(ic_core::command::CoverSpec {
+                excess_option: option,
+                code: code.to_string(),
+                life: Some(life.clone()),
+                sum_insured_minor: *sum,
+                loadings: vec![],
+                exclusions: vec![],
+            })
+        })
+        .collect::<Result<_, String>>()?;
+    Ok(a)
+}
+
+/// The retail products the scenarios apply for, with one application of each AIA product a
+/// person applies for alone. Ages and amounts are inside each product's limits
+/// (`docs/aia-products.md`); the seeding and the scenarios change the IDs, people and amounts.
+fn retail(opening: chrono::NaiveDate) -> Result<(Value, Value), String> {
+    use chrono::Datelike;
+    let aged = |years: i32| chrono::NaiveDate::from_ymd_opt(opening.year() - years, 1, 1).ok_or("a birth date");
+    let shipped: [(&str, &str, &str); 13] = [
+        ("term_life.star", "", include_str!("../../../products/term_life.star")),
+        ("income_protection.star", "", include_str!("../../../products/income_protection.star")),
+        ("health_plan.star", "", include_str!("../../../products/health_plan.star")),
+        ("invest_plan.star", "", include_str!("../../../products/invest_plan.star")),
+        ("aia_interim.star", "", include_str!("../../../products/aia_interim.star")),
+        ("aia_essentials_life.star", "aia_essentials_life", include_str!("../../../products/aia_essentials_life.star")),
+        ("aia_living.star", "aia_living", include_str!("../../../products/aia_living.star")),
+        ("aia_living_business.star", "aia_living_business", include_str!("../../../products/aia_living_business.star")),
+        ("aia_cover_for_life.star", "aia_cover_for_life", include_str!("../../../products/aia_cover_for_life.star")),
+        ("aia_starter.star", "aia_starter", include_str!("../../../products/aia_starter.star")),
+        ("aia_start_up_income.star", "aia_start_up_income", include_str!("../../../products/aia_start_up_income.star")),
+        ("aia_private_health.star", "aia_private_health", include_str!("../../../products/aia_private_health.star")),
+        ("aia_cancer_care.star", "aia_cancer_care", include_str!("../../../products/aia_cancer_care.star")),
+    ];
+    let (mut products, mut applications) = (serde_json::Map::new(), serde_json::Map::new());
+    for (n, (file, template, source)) in (10u64..).zip(shipped) {
+        let (definition, about) = product(file, source)?;
+        products.insert(definition.code.clone(), about);
+        let application = match template {
+            "" => continue,
+            "aia_essentials_life" => aia(n, &definition, opening, aged(41)?, None, &[("life", 400_000_00, "")])?,
+            "aia_living" => aia(
+                n,
+                &definition,
+                opening,
+                aged(40)?,
+                Some("2"),
+                &[
+                    ("life", 800_000_00, ""),
+                    ("critical-conditions", 200_000_00, ""),
+                    ("income-agreed-value", 4_000_00, "waiting=4w,period=to-65"),
+                ],
+            )?,
+            "aia_living_business" => aia(n, &definition, opening, aged(45)?, Some("1"), &[("life", 1_000_000_00, "")])?,
+            "aia_cover_for_life" => aia(n, &definition, opening, aged(60)?, None, &[("life", 50_000_00, "")])?,
+            "aia_starter" => aia(n, &definition, opening, aged(25)?, None, &[("life", 100_000_00, "")])?,
+            "aia_start_up_income" => aia(n, &definition, opening, aged(30)?, Some("2"), &[("start-up-income", 3_000_00, "")])?,
+            "aia_private_health" => aia(n, &definition, opening, aged(35)?, None, &[("private-health", 300_000_00, "")])?,
+            "aia_cancer_care" => aia(n, &definition, opening, aged(45)?, None, &[("cancer-care", 300_000_00, "")])?,
+            other => return Err(format!("no application is formed for {other}")),
+        };
+        applications.insert(template.to_string(), value(template, Ok::<_, String>(application))?);
+    }
+    Ok((Value::Object(products), Value::Object(applications)))
+}
+
 fn config() -> Result<Value, String> {
     let chart = ic_finance::Chart::load("chart.star", include_str!("../../../config/finance/chart.star")).map_err(|e| format!("chart.star: {e}"))?;
     let close = ic_finance::CloseConfig::load("close.star", include_str!("../../../config/finance/close.star")).map_err(|e| format!("close.star: {e}"))?;
@@ -141,7 +258,7 @@ fn config() -> Result<Value, String> {
     use ic_product::{Frequency, Sex};
     use ic_sim::persona;
     // One application of each shipped kind, in the API's own JSON. The seeding changes the IDs, people and amounts.
-    let applications = json!({
+    let mut applications = json!({
         "term_life": persona::term_life(1, opening, born, Sex::Female, false, 500_000_00, Some(100_000_00), Frequency::Monthly, None),
         "income_protection": persona::income_protection(2, opening, born, Sex::Male, false, 6_000_00, Frequency::Monthly),
         "health_family": persona::health_family(3, opening, &[born, day(1990, 1, 20)?, day(2015, 3, 9)?], Frequency::Monthly),
@@ -152,8 +269,13 @@ fn config() -> Result<Value, String> {
             persona::member("m-3", day(1969, 9, 9)?, "managers", 160_000_00),
         ]),
     });
+    let (products, aia) = retail(opening)?;
+    if let (Some(all), Value::Object(aia)) = (applications.as_object_mut(), aia) {
+        all.extend(aia);
+    }
     Ok(json!({
         "applications": applications,
+        "products": products,
         "group": group(opening)?,
         "finance": { "chart": chart, "close": close, "chart_id": chart_id, "close_id": close_id },
         "underwriting": {

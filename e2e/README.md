@@ -32,13 +32,14 @@ and a failing journey is a finding about the product to be read by a person.
 | Where | What |
 |---|---|
 | `stack/stack.js` | Starts the real binaries from `target/debug` and waits for them. |
-| `stack/seed.js` | Sets the insurer up. Each module's configuration (complaints timers, the finance chart, claims rules, payments banks and channels) is written as a set-up file and sent by the operator's tool, `ic-admin apply`; staff, the distribution structure and a group scheme go in through the portal's own routes. |
+| `stack/seed.js` | Sets the insurer up. Each module's configuration (complaints timers, the finance chart, claims rules, payments banks and channels, the underwriting libraries and underwriters' profiles, the reinsurance treaties) is written as a set-up file and sent by the operator's tool, `ic-admin apply`; staff, the distribution structure, commission books, rules and schedules, payees, collections' dunning sequences and the group schemes go in through the portal's own routes, as the people whose work they are. |
+| `stack/play.js` | The parts outside the insurer's screens a scenario operator plays: new business opening a proposal or issuing a policy and saying who advised it, and an evidence provider answering an order (see below). |
 | `lib/cast.js` | Who signs in: each persona, what they are and the roles the insurer gave them. |
 | `lib/suite.js` | The harness: a `Journey` (the set-up a test starts from) and a `Screen` (one signed-in browser page). |
 | `lib/oracle.js` | The independent calculator (see below). |
 | `lib/group.js` | A group scheme set up as the insurer sets one up, and a membership file taken through its steps. |
 | `tests/NN-area.js` | The tests. Each carries its persona, user story, the matrix rows it bears on, its purpose and why it is worth having. |
-| `seed/` | Two small Rust tools: `ic-e2e-config` turns the shipped Starlark configuration into JSON for the seed, and `ic-e2e-close` closes a business day. |
+| `seed/` | Two small Rust tools: `ic-e2e-config` turns the shipped Starlark configuration into JSON for the seed (with an application template for each retail product, the AIA range included, and each product's version and cover types), and `ic-e2e-close` closes a business day. |
 | `run.js` | Runs the tests four at a time, retries a failure once (a pass on retry is reported as flaky), and writes the report. |
 
 A matrix reference on a test means the test bears on that row of
@@ -111,6 +112,43 @@ one, a sign-in bound to it, and a phone enrolled after identity verification.
 Approving, changing details and taking a copy of one's record need a signing
 browser: the page makes the key, and the test signs it with the phone's key as
 the phone app would.
+
+## Playing new business and an evidence provider
+
+No channel opens a proposal yet (`docs/underwriting.md`): the new business
+officer can price an application (the `quote` route and MCP tool) but nothing
+on a screen keeps it, and the adviser portal has no application. A scenario
+therefore plays new business with `node e2e/stack/play.js`, which sends what
+new business's service sends, as that service, and prints what it did:
+
+```
+# a proposal for AIA Living from a shipped template, advised by Tessa Maddox under Harbourline
+node e2e/stack/play.js propose '{"ref":"SCN202-1","template":"aia_living","party":"<party>","born":"1986-04-02","adviser":"adv-d1","fap":"fap-d6"}'
+# what underwriting holds on it: each life's stage, cases, and the evidence requests a provider answers
+node e2e/stack/play.js proposal '{"proposal":"prop-scn202-1"}'
+# the provider acknowledges the GP report, then sends it with its cost
+node e2e/stack/play.js evidence '{"request":"<request>","outcome":"acknowledged","provider_ref":"GP-77"}'
+node e2e/stack/play.js evidence '{"request":"<request>","outcome":"received","report":"BP 150/95 on 3 Nov, 135/85 on 10 Nov","cost_minor":12500}'
+# a term life policy issued straight from the template, written by Tessa (commission is told who advised it)
+node e2e/stack/play.js issue '{"ref":"SCN221-1","template":"term_life","party":"<party>","adviser":"adv-d1","fap":"fap-d6"}'
+```
+
+`propose` takes the core's quote of the application (`POST /v1/quotes`) and
+sends `open_proposal` to the underwriting module on the ledger nodes as the
+caller `new-business`; AIA Interim Cover is written at once where the product
+has it, and the customer then answers and signs on `/customer`. `evidence`
+posts to the underwriting intake's `POST /v1/evidence` with a token for the
+stand-in provider (`ic-e2e-evidence-provider`, role `evidence`). `issue`
+posts the application to `POST /v1/policies` and, with an adviser, sends
+commission `advise_new_business` as new business does once a policy is
+issued; `advise` does the second part alone. Templates are under
+`applications` in `e2e/.run/shipped.json`: `term_life`, `income_protection`,
+`health_family`, `invest_plan`, `group_scheme`, and `aia_essentials_life`,
+`aia_living`, `aia_living_business`, `aia_cover_for_life`, `aia_starter`,
+`aia_start_up_income`, `aia_private_health`, `aia_cancer_care`. Amounts are
+in cents (`"covers":{"life":40000000}` is $400,000). The engagements are
+`adv-d1` and `adv-d2` under `fap-d6`, `adv-d9a` under `fap-d9`, and `adv-d4`
+and `adv-d5` under `fap-kowhai`, each with a commission book.
 
 ## What it does not cover
 

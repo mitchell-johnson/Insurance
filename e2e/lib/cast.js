@@ -12,11 +12,19 @@
 const O = "ordinary", P = "personal", F = "financial", S = "insurance_sensitive";
 const templates = [
   ["administrator", ["staff.manage", "staff.approve_grant", "service.approve_change"], [O]],
+  // Approves what an administrator asks for, an administrator's own requests included, and the profile uplifts a
+  // manager proposes: one person never both asks for and approves access.
+  ["access-approver", ["staff.approve_grant", "staff.approve_profile_uplift"], [O]],
   ["service", ["policy.view", "service.enter_change", "customers.find"], [O, P]],
-  ["service-lead", ["policy.view", "policy.core_view", "service.enter_change", "service.approve_change", "servicing.carry_out", "customers.find"], [O, P]],
-  ["collections", ["policy.view", "service.enter_change", "payments.collections", "payments.view", "customers.find"], [O, P, F]],
-  ["hardship", ["policy.view", "service.enter_change", "service.vulnerability_kind", "servicing.carry_out", "customers.find"], [O, P]],
+  // The lead reads a policy as the core holds it (`policy.core_view`), whose loadings and exclusions are
+  // insurance-sensitive, and the AIA Vitality members and discount on a policy (`wellness.view`).
+  ["service-lead", ["policy.view", "policy.core_view", "service.enter_change", "service.approve_change", "servicing.carry_out", "customers.find", "wellness.view"], [O, P, S]],
+  ["collections", ["policy.view", "service.enter_change", "payments.collections", "payments.view", "customers.find", "collections.officer"], [O, P, F]],
+  ["collections-lead", ["policy.view", "customers.find", "collections.team_lead"], [O, P, F]],
+  ["collections-configuration", ["collections.view", "collections.configuration"], [O]],
+  ["hardship", ["policy.view", "service.enter_change", "service.vulnerability_kind", "servicing.carry_out", "customers.find", "collections.hardship"], [O, P]],
   ["held-balance", ["held_balance.view", "held_balance.prepare", "held_balance.approve"], [O, F]],
+  ["held-balance-settings", ["held_balance.view", "held_balance.configure"], [O, F]],
   ["held-balance-legal", ["held_balance.view", "held_balance.approve", "held_balance.approve_legal"], [O, F]],
   ["conduct-officer", ["held_balance.view", "held_balance.approve_conduct", "complaints.conduct", "customers.find"], [O, P, F]],
   ["unit-pricing-maker", ["unit_pricing.view", "unit_pricing.prepare"], [O]],
@@ -52,6 +60,8 @@ const templates = [
   ["payments-maker", ["payments.maker"], [F]],
   ["payments-approver", ["payments.approver", "payments.treasury"], [F]],
   ["payee-maintainer", ["payments.payees"], [F]],
+  // Activates the banks' configuration and redirects a route to the second bank; never an approver of runs.
+  ["payments-connectivity", ["payments.connectivity", "payments.view"], [F]],
   ["payments-conflicted", ["payments.approver", "payments.payees"], [F]],
   ["payments-legal", ["payments.legal"], [F]],
   ["payments-reader", ["payments.view"], [F]],
@@ -82,6 +92,8 @@ const staff = [
   ["st5", "ST5", "Collections officer", ["collections"]],
   ["st5b", "ST5", "Service officer", ["service"]],
   ["st5l", "ST5", "Service team lead", ["service-lead"]],
+  ["st5t", "ST5", "Collections team lead", ["collections-lead"]],
+  ["st5c", "ST5", "Collections configuration (dunning sequences)", ["collections-configuration"]],
   ["st6", "ST6", "Hardship and vulnerable customer specialist", ["hardship"]],
   ["st7", "ST7", "Group administrator", ["group-admin"]],
   ["st7r", "ST7", "Group administrator (read only)", ["group-reader"]],
@@ -89,14 +101,15 @@ const staff = [
   ["st9", "ST9", "Unit pricing checker", ["unit-pricing-checker"]],
   ["st9l", "ST9", "Unit pricing lead", ["unit-pricing-lead"]],
   ["st10", "ST10", "Finance operator", ["ledger-operator", "payments-maker", "held-balance"]],
-  ["st10b", "ST10", "Finance approver", ["ledger-approver", "held-balance"]],
-  ["st11", "ST11", "Finance lead", ["ledger-lead", "held-balance"]],
+  ["st10b", "ST10", "Finance approver", ["ledger-approver", "held-balance", "held-balance-settings"]],
+  ["st11", "ST11", "Finance lead", ["ledger-lead", "held-balance", "held-balance-settings"]],
   ["st12", "ST12", "Appointed actuary", ["actuary"]],
   ["st13", "ST13", "Compliance and fraud investigator", ["payments-compliance", "commission-compliance", "claims", "documents-compliance"]],
   ["st14", "ST14", "Complaints reviewer", ["complaints-team"]],
   ["st14j", "ST14", "Complaints handler (junior)", ["complaints-junior"]],
   ["st15", "ST15", "Product owner", ["product-owner", "documents-product"]],
-  ["admin2", "Staff administrator", "Second staff administrator, who approves configuration", ["configuration-approver"]],
+  ["st15b", "ST15", "Product owner (second), who approves another's templates", ["documents-product"]],
+  ["admin2", "Staff administrator", "Second staff administrator, who approves configuration, grants and profile uplifts", ["configuration-approver", "access-approver"]],
   ["privacy", "Privacy", "Privacy officer", ["privacy-officer"]],
   ["nb", "New business", "New business officer", ["new-business"]],
   ["st17", "ST17", "Treasury and payment run approver", ["payments-approver"]],
@@ -113,6 +126,7 @@ const staff = [
   ["ri2", "Reinsurance", "Reinsurance lead", ["ri-lead"]],
   ["payee", "Payments", "Payee maintainer", ["payee-maintainer"]],
   ["payee2", "Payments", "Payee maintainer (second pair of eyes)", ["payee-maintainer"]],
+  ["paycon", "Payments", "Bank connectivity administrator", ["payments-connectivity"]],
   ["paybad", "Payments", "Approver who also maintains payees", ["payments-conflicted"]],
   ["recon", "Payments", "Bank reconciler", ["payments-reconciler"]],
 ];
@@ -122,6 +136,7 @@ const partners = [
   ["d1", "D1", "Tessa Maddox, adviser", "adv-d1"],
   ["d2", "D2", "Viliami Fifita, adviser", "adv-d2"],
   ["d4", "D4", "Anika Sharma, adviser at Kōwhai Financial", "adv-d4"],
+  ["d7", "D7", "Kōwhai Financial Ltd, advice provider", "fap-kowhai"],
   ["d5", "D5", "Joe Tane, adviser under investigation", "adv-d5"],
   ["d6", "D6", "Harbourline Advice Ltd, advice provider", "fap-d6"],
   ["d9", "D9", "Clearwater Advice Ltd, the provider that loses its licence", "fap-d9"],
@@ -134,12 +149,19 @@ const partners = [
   ["p1", "P1", "A retail customer", "cust-p1"],
 ];
 
+// Starters: a sign-in bound to a workforce directory ID that is nobody's staff record yet, for the staff
+// administrator to employ. [key, persona, who they are]. The seed binds them and employs nobody.
+const starters = [
+  ["newstarter", "Starter", "A new claims assessor starting Monday, not yet employed"],
+];
+
 const cast = {};
 for (const [key, persona, about, held] of staff) cast[key] = { key, subject: `sub-${key}`, party: key, persona, about, templates: held, staff: true };
 for (const [key, persona, about, party] of partners) cast[key] = { key, subject: `sub-${key}`, party, persona, about, staff: false };
+for (const [key, persona, about] of starters) cast[key] = { key, subject: `sub-${key}`, party: key, persona, about, staff: false };
 // The platform engineer is known only by the operations role on the token, and is nobody's staff record.
 cast.st16 = { key: "st16", subject: "sub-st16", roles: "operations", party: null, persona: "ST16", about: "Platform engineer and incident commander", staff: false };
 // Someone the insurer has never heard of.
 cast.stranger = { key: "stranger", subject: "sub-nobody", party: null, persona: "Anyone", about: "A sign-in the insurer does not know", staff: false };
 
-module.exports = { cast, templates, profiles, staff: staff.map(([key]) => cast[key]), partners: partners.map(([key]) => cast[key]) };
+module.exports = { cast, templates, profiles, staff: staff.map(([key]) => cast[key]), partners: partners.map(([key]) => cast[key]), starters: starters.map(([key]) => cast[key]) };

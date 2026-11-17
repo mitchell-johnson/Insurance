@@ -49,6 +49,9 @@ const roles = {
   "ic-payments": { [AUD.customers]: ["payments"] },
   // The suite's stand-in for new business opening a customer's record, as it does before a policy is issued.
   "ic-e2e-new-business": { [AUD.customers]: ["new-business"] },
+  // The suite's stand-in for an evidence provider's adapter (a GP report, a blood test), which reports an order
+  // acknowledged, received with its cost, or unobtainable to the underwriting intake (`e2e/stack/play.js evidence`).
+  "ic-e2e-evidence-provider": { [AUD.intake]: ["evidence"] },
   "e2e-seed": { [AUD.group]: ["group-admin", "employer-portal"], [AUD.customers]: ["portal", "group-admin", "identity", "staff", "new-business", "claims"], [AUD.documents]: ["portal", "staff"], [AUD.intake]: ["new-business", "underwriting-console"] },
 };
 
