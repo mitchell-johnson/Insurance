@@ -295,6 +295,9 @@ async function admin() {
 }
 // Someone with no staff record is refused at the door, not shown forms that will each refuse them.
 signIn(R).then(() => api(R, "GET", "/staff/v1/me")).then((me) => {
+  // Someone signed in but not on the staff directory is told so by the portal (an operations engineer's pages
+  // still open); this console holds customers' records, so it turns them away.
+  if (!me.staff) throw Object.assign(new Error("you hold no staff role on this platform: a staff administrator adds you to the staff directory"), { status: 403 });
   $("me").textContent = [me.team, (me.templates || []).map(words).join(", ")].filter(Boolean).join(" · ");
   if ((me.actions || []).includes("servicing.carry_out")) forPerson();
   vitality = (me.actions || []).includes("wellness.view");

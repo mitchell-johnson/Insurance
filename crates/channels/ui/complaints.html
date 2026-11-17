@@ -222,9 +222,15 @@ async function conduct() {
 }
 
 const loaders = { "record-a-complaint": async () => {}, "queue": async () => { if (has("complaints") || has("legal") || has("conduct")) await queue(); }, "register-and-report": async () => {}, "conduct-cases": async () => { if (has("conduct") || has("legal")) await conduct(); else say($("case-msg"), "bad", "Conduct cases are open to the conduct function and legal only."); } };
-portal.onView((key) => run($("msg"), loaders[key] || (async () => {}))());
+// A view chosen while the page signs the person in waits for their seats, then loads; and the page does not
+// move them off a view they picked themselves.
+let signedIn, picked = false;
+const ready = new Promise((resolve) => { signedIn = resolve; });
+document.addEventListener("click", (e) => { if (e.target.closest && e.target.closest('[role="tab"]')) picked = true; });
+portal.onView((key) => { ready.then(() => run($("msg"), loaders[key] || (async () => {}))()); });
 signIn(R).then(async () => {
   me = await ask("me");
+  signedIn();
   $("seats").textContent = `${me.seats.map(words).join(", ")}.${has("complaints") ? ` Authority level ${me.authority}.` : ""}${me.trained ? " Trained to work with vulnerable customers." : ""}`;
   const settings = await ask("settings");
   causes = (settings && settings.cause_codes) || []; limitMinor = (settings && settings.front_line_limit_minor) || 0;
@@ -243,6 +249,6 @@ signIn(R).then(async () => {
     if (sent.policies) $("i-policies").value = sent.policies;
   }
   if (sent.party) { $("of-party").value = sent.party; $("of-party").dataset.party = sent.party; await run($("of-msg"), () => complaintsOf(sent.party))(); }
-  else if (!sent.complainant && (has("complaints") || has("legal") || has("conduct"))) portal.view("queue");
+  else if (!sent.complainant && !picked && (has("complaints") || has("legal") || has("conduct"))) portal.view("queue");
 }).catch(portal.refuse);
 </script></body></html>

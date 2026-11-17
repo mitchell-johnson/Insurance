@@ -88,9 +88,12 @@ function read(prefix, spec, keepBlank) {
   return out;
 }
 put($("q"), Object.entries(QUESTIONS).map(([k, [label]]) => h("option", { value: k }, label)));
-const fresh = () => { draw($("q-fields"), "q-", QUESTIONS[$("q").value][1]); if ($("a").value) draw($("a-fields"), "a-", ACTIONS[$("a").value][1]); };
-$("q").addEventListener("change", () => draw($("q-fields"), "q-", QUESTIONS[$("q").value][1]));
-$("a").addEventListener("change", () => draw($("a-fields"), "a-", ACTIONS[$("a").value][1]));
+// Fields are drawn for the question or action chosen, and drawn again only when the choice changes, so what
+// someone typed while the page was signing them in is kept.
+const drawFor = (box, prefix, key, spec) => { if (box.dataset.for === key) return; box.dataset.for = key; draw(box, prefix, spec); };
+const fresh = () => { drawFor($("q-fields"), "q-", $("q").value, QUESTIONS[$("q").value][1]); if ($("a").value) drawFor($("a-fields"), "a-", $("a").value, ACTIONS[$("a").value][1]); };
+$("q").addEventListener("change", fresh);
+$("a").addEventListener("change", fresh);
 const partyHint = (p) => [words(p.kind), p.ceased ? `ceased ${p.ceased}` : "", p.licence ? `licence ${words(p.licence)} since ${p.licence_since}` : "", p.payment_hold ? `payments held: ${p.payment_hold}` : p.payee ? "payee" : ""].filter(Boolean).join(" · ");
 async function load() {
   const me = await api(R, "GET", BASE + "/me");
