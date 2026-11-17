@@ -10,7 +10,7 @@
 <form id="st-form"><div class="row"><div><label for="st-number">Statement number</label><input id="st-number" type="number" min="1" required></div><button>Show</button></div></form>
 <div id="st-msg" aria-live="polite"></div><div id="statement"></div></section>
 <section data-view="Your book"><h2>Your book</h2><div id="book"></div></section>
-<section data-view="Your book" id="practice-section" hidden><h2>Advisers under you</h2><p class="muted">The advisers engaged with your practice, or with a provider in your group, and the policies they look after. Health details and claims stay with the adviser and the customer.</p><div id="practice"></div></section>
+<section data-view="Your book" id="practice-section" hidden><h2>Advisers under you</h2><p class="muted">The advisers engaged with your practice, or with a provider in your group, and the policies they look after. Health details and claims stay with the adviser and the customer.</p><div id="practice"></div><div id="former-section" hidden><h3>Former advisers</h3><p class="muted">Advisers whose engagement with your practice has ended, with the policies they held for it up to the day they left.</p><div id="former"></div></div></section>
 <section data-view="Your book" id="detail" hidden><h2 id="detail-title"></h2><div id="rows"></div><h3>Claims</h3><p class="muted">Each claim's status only. What a claim is about stays between the customer and the claims team.</p><div id="claims"></div><h3>Investments</h3><div id="invest"></div><h3>Documents</h3><div id="docs"></div><div id="docs-msg" aria-live="polite"></div>
   <form id="change"><h2>Prepare a change for the customer to approve</h2>
   <div class="row"><div><label for="kind">Change</label><select id="kind"><option value="decline_indexation">Decline indexation</option><option value="change_frequency">Change payment frequency</option><option value="cancel_policy">Cancel policy</option></select></div>
@@ -68,7 +68,10 @@ async function load() {
   put($("book"), table(["Policy", "Product", "Status", "Engagement", ""], book.policies.map((p) => [p.number, p.product, p.ended ? `Ended (${String(p.status).replace(/_/g, " ")})` : String(p.status).replace(/_/g, " "), p.engagement,
     h("button", { class: "quiet", on: { click: run($("msg"), () => open(p, p.can_transact)) } }, "Open")])));
   const practice = await api(R, "GET", "/adviser/v1/practice");
-  $("practice-section").hidden = !practice.advisers.length;
+  const former = practice.former || [];
+  $("practice-section").hidden = !practice.advisers.length && !former.length;
+  $("former-section").hidden = !former.length;
+  put($("former"), table(["Adviser", "Provider", "From", "Left", "Policies held then"], former.map((a) => [a.adviser, a.fap, portal.born(a.from), portal.born(a.to), a.policies.map((p) => p.number).join("; ") || "None"])));
   put($("practice"), table(["Adviser", "Provider", "Standing", "Policies"], practice.advisers.map((a) => [a.adviser, a.fap, standing(a.standing),
     a.policies.map((p) => `${p.number} (${p.product}, ${String(p.status).replace(/_/g, " ")})`).join("; ")])));
   const matches = await api(R, "GET", "/adviser/v1/replacements");

@@ -176,7 +176,8 @@ async function open(p) {
   put($("docs"), portal.documents(R, view.rows, $("docs-msg")));
   const advisers = rows("adviser");
   put($("advisers"), advisers.length ? table(["Adviser", "State", ""], advisers.map((a) => [a.adviser, a.state === "available" ? "Available"
-    : `Cannot act for you${a.since ? ` since ${a.since}` : ""}: their adviser licence is not in force. Appoint another adviser below, or contact us and we will help.`,
+    : a.state === "ended" ? `Can no longer act for you from ${portal.born(a.since)}: they no longer work under the engagement you appointed them with. Ask them for their current reference, or appoint another adviser below, or contact us and we will help.`
+    : `Cannot act for you${a.since ? ` since ${portal.born(a.since)}` : ""}: ${a.licence === "provider" ? "the licence of the advice provider they work for" : "their adviser licence"} is not in force. Appoint another adviser below, or contact us and we will help.`,
     h("button", { type: "button", class: "quiet", on: { click: run($("ap-msg"), () => removeAdviser(a.adviser)) } }, "Remove")])) : h("p", { class: "muted" }, "No adviser on this policy."));
   return view;
 }

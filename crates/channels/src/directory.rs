@@ -379,6 +379,26 @@ impl Directory {
     /// it, or with any body linked below it on that date. A provider sees
     /// its advisers; a group sees every provider under it and theirs.
     pub fn practice(&self, party: &PartyId, on: NaiveDate) -> Vec<&Engagement> {
+        let bodies = self.bodies_under(party, on);
+        self.engagements
+            .values()
+            .filter(|e| bodies.contains(&e.fap) && in_window(e.from, e.to, on))
+            .collect()
+    }
+
+    /// The engagements with a body, or a body linked below it on a date,
+    /// that had ended by then: its former advisers, kept as its history up
+    /// to each end date (F2-20-6).
+    pub fn former(&self, party: &PartyId, on: NaiveDate) -> Vec<&Engagement> {
+        let bodies = self.bodies_under(party, on);
+        self.engagements
+            .values()
+            .filter(|e| bodies.contains(&e.fap) && e.to.is_some_and(|to| to <= on))
+            .collect()
+    }
+
+    /// A body and every body linked below it on a date.
+    fn bodies_under<'a>(&'a self, party: &'a PartyId, on: NaiveDate) -> BTreeSet<&'a PartyId> {
         let mut bodies: BTreeSet<&PartyId> = [party].into();
         for _ in 0..MAX_STRUCTURE_DEPTH {
             let before = bodies.len();
@@ -391,10 +411,7 @@ impl Directory {
                 break;
             }
         }
-        self.engagements
-            .values()
-            .filter(|e| bodies.contains(&e.fap) && in_window(e.from, e.to, on))
-            .collect()
+        bodies
     }
 
     /// The policies an adviser holds authority on under one engagement.
@@ -417,6 +434,12 @@ impl Directory {
 
     /// The servicing adviser on a policy, with their standing, as the
     /// customer needs to know it.
+    /// The engagement an adviser was appointed under on a policy.
+    pub fn engagement_of(&self, policy: &PolicyId, adviser: &PartyId) -> Option<&Engagement> {
+        let authority = self.authorities.get(policy)?.get(adviser)?;
+        self.engagements.get(&authority.engagement)
+    }
+
     pub fn advisers_on(&self, policy: &PolicyId, on: NaiveDate) -> Vec<(&PartyId, AdviserStanding)> {
         self.authorities
             .get(policy)
@@ -582,8 +605,9 @@ impl Directory {
         }
     }
 
-    /// Apply a command. A rejected command changes nothing.
-    pub fn apply(&mut self, actor: &Actor, at: At, view: &Projections, command: DirectoryCommand) -> Result<Touched, Reject> {
+    /// Apply a command, on the business date `on`. A rejected command
+    /// changes nothing.
+    pub fn apply(&mut self, actor: &Actor, at: At, on: NaiveDate, view: &Projections, command: DirectoryCommand) -> Result<Touched, Reject> {
         let mut touched = Touched::default();
         match command {
             DirectoryCommand::BindSubject { subject, party } => {
@@ -624,8 +648,21 @@ impl Directory {
             }
             DirectoryCommand::GrantAdviserAuthority { policy, adviser, engagement } => {
                 let granted_by = self.require_policyholder(actor, &policy)?;
-                if !self.engagements.get(&engagement).is_some_and(|e| e.adviser == adviser) {
+                let Some(e) = self.engagements.get(&engagement).filter(|e| e.adviser == adviser) else {
                     return Err(reject("unknown_engagement", "that adviser has no such engagement"));
+                };
+                // Appointed under an engagement that has ended, the adviser could
+                // never act, and the policy would show no adviser (F2-20-2). One
+                // that begins later may be appointed ahead, as a broker taking
+                // over a scheme is, and acts from its first day.
+                if let Some(to) = e.to.filter(|to| *to <= on) {
+                    return Err(reject(
+                        "engagement_ended",
+                        format!(
+                            "{adviser}'s engagement {engagement} ended on {}: ask them for the reference of the engagement they work under now",
+                            to.format("%d/%m/%Y")
+                        ),
+                    ));
                 }
                 self.authorities.entry(policy.clone()).or_default().insert(
                     adviser.clone(),
