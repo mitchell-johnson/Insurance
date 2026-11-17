@@ -112,8 +112,11 @@ pub fn question(name: &str, fields: &BTreeMap<String, String>, actor: &PartyId, 
                 _ => json!({ "open_conduct_cases": { "role": role } }),
             })
         }
+        // What a person picks from when recording or closing: anyone with a seat may ask.
+        "settings" => Ok(json!("current_timers")),
         _ if !works_cases => forbidden("the register is open to the complaints team, legal and the conduct function"),
-        "queue" => Ok(json!({ "queue": { "limit": 200 } })),
+        // A handler's own complaints are always listed, however long the queue.
+        "queue" => Ok(json!({ "queue": { "limit": 200, "owner": actor } })),
         "complaint" => Ok(json!({ "complaint": { "id": field(fields, "id")?, "actor": actor } })),
         "running" => Ok(json!({ "running": { "id": field(fields, "id")? } })),
         "subject_record" => Ok(json!({ "subject_record": { "id": field(fields, "id")? } })),
@@ -121,6 +124,17 @@ pub fn question(name: &str, fields: &BTreeMap<String, String>, actor: &PartyId, 
         "register" | "report" => Ok(json!({ name: { "from": day(fields, "from")?, "to": day(fields, "to")? } })),
         _ => bad(format!("{name} is not a question the workbench asks")),
     }
+}
+
+/// An answer as this person may see it. The count of open conduct cases in
+/// the report is for the conduct function and legal only.
+pub fn shown(name: &str, mut answer: Value, standing: &Value) -> Value {
+    if name == "report" && !["conduct", "legal"].iter().any(|seat| seated(standing, seat)) {
+        if let Some(report) = answer.as_object_mut() {
+            report.remove("open_conduct_cases");
+        }
+    }
+    answer
 }
 
 /// The name of a command and its fields, if it is one a person may send in
@@ -145,11 +159,15 @@ fn named<'a>(command: &'a mut Value, seat: &str, standing: &Value) -> Result<(St
 }
 
 /// The staff whose standing a command depends on: the handler a complaint
-/// is assigned to, or whoever authorises a remediation (the sender, unless
-/// the command names someone else).
+/// is assigned to, the colleague who reviewed a bundle for a forum, or
+/// whoever authorises a remediation (the sender, unless the command names
+/// someone else).
 pub fn depends_on(command: &Value, actor: &PartyId) -> Option<PartyId> {
     if let Some(handler) = command["assign"]["handler"].as_str() {
         return Some(PartyId::from(handler));
+    }
+    if let Some(reviewer) = command["release_bundle"]["reviewed_by"].as_str() {
+        return Some(PartyId::from(reviewer));
     }
     command
         .get("record_remediation")
@@ -184,7 +202,15 @@ pub fn envelope(
             body["authorised_by"] = json!(authoriser);
             body["authority"] = theirs["authority"].clone();
         }
-        ("assign" | "record_remediation", None) => return bad("the person the command names could not be looked up"),
+        // Whoever reviewed what a forum is sent is a colleague who may work the referral.
+        ("release_bundle", Some((reviewer, theirs))) => {
+            if !seated(theirs, "complaints") && !seated(theirs, "legal") {
+                return forbidden(format!(
+                    "{reviewer} is not a member of staff who works complaints or legal, so cannot be the bundle's reviewer; pick the colleague who reviewed it"
+                ));
+            }
+        }
+        ("assign" | "record_remediation" | "release_bundle", None) => return bad("the person the command names could not be looked up"),
         _ => {}
     }
     let when = DateTime::from_timestamp(at, 0).unwrap_or_default();

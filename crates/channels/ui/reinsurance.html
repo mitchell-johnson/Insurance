@@ -15,6 +15,7 @@
 <form id="tc"><div class="row"><div><label for="tc-what">Change</label><select id="tc-what"><option value="recapture">Recapture from the treaty</option><option value="move_treaty_version">Move to another version</option></select></div><div><label for="tc-treaty">Treaty</label><input id="tc-treaty" required></div><div><label for="tc-version">To version (moving only)</label><input id="tc-version" type="number" min="1"></div><div><label for="tc-from">From</label><input id="tc-from" type="date" required></div></div>
 <div><label for="tc-keys">Covers, one per line, as policy/cover/layer/life</label><textarea id="tc-keys" rows="4" required></textarea></div><div><label for="tc-reason">Why (for the person who signs)</label><input id="tc-reason" required size="40"></div><p><button>Prepare</button></p></form><div id="tc-msg" aria-live="polite"></div></section>
 <section data-view="Facultative and claims" class="operate" hidden><h2>Facultative offers, evidence and claim facts</h2><p class="muted">What a reinsurer offered or declined for a risk beyond the treaty, a record of evidence released to a reinsurer, and a claim fact the core's events did not carry. You are recorded as the person who sent each.</p><div id="acts"></div></section>
+<section data-view="Lives"><h2>A life's accumulation</h2><p class="muted">What the insurer keeps on one person's life on a date, across every policy that insures them.</p><form id="life"><div class="row"><div><label for="l-who">Person (find them by name and birth date)</label><input id="l-who" required size="32"></div><div><label for="l-on">On</label><input id="l-on" type="date" required></div><button>Show</button></div></form><div id="l-msg" aria-live="polite"></div><div id="l-out"></div></section>
 <section data-view="Month-end check"><h2>Month-end check</h2><form id="sweep"><div class="row"><div><label for="s-date">Period ending</label><input id="s-date" type="date" required></div><button>Check</button></div></form><div id="s-msg" aria-live="polite"></div><div id="s-out"></div></section>
 </main>
 <script src="/ui/app.js"></script>
@@ -39,6 +40,8 @@ function actionsFor(id) {
       ["Send the notice again", "retry_notice", [], () => ({ retry_notice: { seq } })],
       ["Abandon the notice", "abandon_notice", reason, (f) => ({ abandon_notice: { seq, reason: f.reason } }), "Claims will not hear of this notice. A second person signs before it goes."],
     ];
+    // The fix is a claim fact entered by hand, on its own tab.
+    case "claim_fact_not_taken": return [["Enter the claim fact by hand", null, null, () => { portal.view("facultative-and-claims"); return null; }]];
     case "delivery": return [
       ["Abandon the instruction", "abandon_instruction", reason, (f) => ({ abandon_instruction: { seq, reason: f.reason } }), "The core's ledger and the reinsurance ledger stay apart by this instruction's amount. A second person signs before it goes."],
     ];
@@ -73,6 +76,7 @@ function actionsFor(id) {
   }
 }
 function open(id, [label, , spec, build, warning]) {
+  if (!spec) { build(); return; }
   $("act").hidden = false; $("act-title").textContent = `${label}: ${id}`;
   $("act-warn").hidden = !warning; $("act-warn").textContent = warning || "";
   put($("act-fields"), spec.map(([key, text, kind]) => h("div", {}, h("label", { for: "a-" + key }, text), h("input", { id: "a-" + key, required: true, type: kind === "money" ? "number" : "text", step: kind === "money" ? "0.01" : null }))));
@@ -141,8 +145,9 @@ async function refresh() {
     me.operate ? h("span", {}, actionsFor(id).map((a) => h("button", { class: "quiet", type: "button", on: { click: () => open(id, a) } }, a[0]))) : ""])) : h("p", { class: "muted" }, "No exceptions are open."));
   const pending = me.pending || [];
   put($("pending"), pending.length ? table(["Prepared", "By", "Command", "Reason", ""], pending.map((p) => [p.id, p.by, cell(p.command), p.reason,
-    p.by === me.staff ? h("button", { class: "quiet", type: "button", on: { click: run($("p-msg"), async () => { await api(R, "POST", BASE + "withdraw/" + encodeURIComponent(p.id)); await refresh(); return "Withdrawn."; }) } }, "Withdraw")
-      : me.approve ? h("button", { class: "quiet", type: "button", on: { click: run($("p-msg"), async () => { await api(R, "POST", BASE + "sign/" + encodeURIComponent(p.id)); await refresh(); return "Signed and sent."; }) } }, "Sign and send") : ""]))
+    p.by === me.staff ? h("button", { class: "quiet", type: "button", on: { click: run($("p-msg"), async () => { await api(R, "POST", BASE + "withdraw/" + encodeURIComponent(p.id)); await refresh(); return `Withdrawn: ${p.id} was never sent, and nobody needs to sign it.`; }) } }, "Withdraw")
+      // A refused signature finishes the item too, so the list is read again either way.
+      : me.approve ? h("button", { class: "quiet", type: "button", on: { click: run($("p-msg"), async () => { try { await api(R, "POST", BASE + "sign/" + encodeURIComponent(p.id)); } finally { await refresh(); } return "Signed and sent."; }) } }, "Sign and send") : ""]))
     : h("p", { class: "muted" }, "Nothing is waiting."));
   const notices = await ask("notices");
   put($("notices"), notices.length ? table(["Notice", "What"], notices.map(([seq, n]) => [seq, cell(n)])) : h("p", { class: "muted" }, "None waiting."));
@@ -153,8 +158,15 @@ $("sweep").addEventListener("submit", run($("s-msg"), async () => {
   const check = await ask("sweep_check", { period_end: $("s-date").value });
   put($("s-out"), h("div", { class: check.green ? "banner ok" : "banner warn" }, check.green ? "Nothing stops the close." : "Stopping the close:"), check.green ? null : table(["Item"], (check.items || []).map((i) => [cell(i)])));
 }));
-// The month-end most likely meant: the last day of last month.
-$("s-date").value = portal.days(-1, portal.month(0) + "-01");
+// What the insurer keeps on one person's life, whichever policies insure them.
+portal.picker($("l-who"), portal.people, { label: true, onPick: (item) => { $("l-who").dataset.party = item.value; } });
+$("l-who").addEventListener("input", () => { delete $("l-who").dataset.party; });
+$("life").addEventListener("submit", run($("l-msg"), async () => {
+  const party = $("l-who").dataset.party;
+  if (!party) throw new Error("Find the person by name and birth date and pick them from the list.");
+  const kept = await ask("retained", { party, on: $("l-on").value });
+  put($("l-out"), h("p", {}, `The insurer keeps ${portal.money(kept)} of the risk on ${$("l-who").value} on ${$("l-on").value}, across every policy that insures them. What is ceded is under each reinsurer's exposure.`));
+}));
 const FAC = {
   record_facultative_terms: { label: "Record a reinsurer's facultative terms", fields: [["reservation", "Capacity reservation", "text"], ["reference", "Reinsurer's reference", "text"], ["reinsurer", "Reinsurer", "text"],
     ["amount_minor", "Amount reinsured", "money"], ["rate", "Annual rate per thousand", "text"], ["terms_ref", "Where the terms are filed", "text"], ["loading", "Loading code (optional)", "optional"], ["exclusions", "Exclusion codes, separated by commas", "list"]],
@@ -166,6 +178,9 @@ const FAC = {
 };
 signIn(R).then(async () => {
   await refresh();
+  // Dates start from the books: the month-end most likely meant is the last day of the month before the business date.
+  const on = me.today || portal.today();
+  $("s-date").value = portal.days(-1, on.slice(0, 7) + "-01"); $("l-on").value = on;
   if (!me.operate) for (const f of ["cut", "pc", "tc"]) $(f).hidden = true;
   document.querySelectorAll(".operate").forEach((e) => { e.hidden = !me.operate; });
   if (me.operate) portal.actions($("acts"), FAC, { id: "fa", send, after: () => refresh() });

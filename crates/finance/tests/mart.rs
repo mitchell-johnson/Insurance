@@ -222,7 +222,8 @@ fn a_rebuilt_mart_cuts_the_same_files() {
 /// exist is refused, and a period that ends before it starts is refused.
 /// Why it matters: an extract cut while one partition was still trading would be missing
 /// that partition's last movements and would still hash and register cleanly. The refusals
-/// are what stop a wrong file from being produced at all.
+/// are what stop a wrong file from being produced at all. The refusal is in a finance
+/// user's words, not the cluster's (found by the scenario run, SCN-17, F-SCN17-8).
 #[test]
 fn an_extract_is_cut_only_from_a_complete_closed_book() {
     let start = d(2027, 11, 15);
@@ -246,7 +247,10 @@ fn an_extract_is_cut_only_from_a_complete_closed_book() {
     let half = mart_of(2, &one);
     assert_eq!(half.closed_through(), None);
     assert_eq!(half.in_force(closed).unwrap_err(), MartError::NotClosed { partition: 1, date: closed });
-    assert_eq!(half.in_force(closed).unwrap_err().to_string(), "partition 1 has not closed 2027-11-16");
+    assert_eq!(
+        half.in_force(closed).unwrap_err().to_string(),
+        "the books are not yet fed to 2027-11-16: policy store 1 has not closed that day, and the extract can be made once it has"
+    );
 
     let mut mart = Mart::new(2);
     assert_eq!(mart.next_seq(0), Some(1));

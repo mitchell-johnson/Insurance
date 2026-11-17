@@ -132,9 +132,10 @@ fn the_update_timer_restarts_with_each_contact() {
 }
 
 /// Purpose: when the scheme's period ends without an outcome the complaint
-/// is deadlocked by the passing of time; the insurer can also declare it.
-/// Either way a notice is owed before the complaint can close, and an
-/// outcome can still be given afterwards.
+/// is deadlocked by the passing of time; the insurer declares it when the
+/// complainant rejects the outcome they were sent, never on the day the
+/// complaint arrives. Either way a notice is owed before the complaint can
+/// close, and after a deadlock by time an outcome can still be given.
 /// Why it matters: deadlock gives the complainant the right to go to the
 /// external scheme. If it depended on the insurer saying so, a complaint
 /// could be left open for ever to keep it away from the scheme.
@@ -144,6 +145,19 @@ fn deadlock_arrives_by_time_or_by_declaration_and_owes_a_notice() {
     kit.in_review("c1");
     kit.in_review("c2");
 
+    // Not on the day it arrives: a handler cannot pass a complaint to the scheme unhandled.
+    assert_eq!(
+        kit.err("complaints", "reviewer-1", Command::DeclareDeadlock { complaint: "c2".into() }),
+        "not_yet"
+    );
+    // A written outcome not yet delivered cannot have been rejected.
+    kit.decide("c2", OutcomeKind::NotUpheld);
+    assert_eq!(
+        kit.err("complaints", "reviewer-1", Command::DeclareDeadlock { complaint: "c2".into() }),
+        "not_delivered"
+    );
+    kit.delivered("c2");
+    // The complainant rejects the outcome: that is deadlock.
     assert_eq!(
         kit.ok("complaints", "reviewer-1", Command::DeclareDeadlock { complaint: "c2".into() }),
         vec![Event::DeadlockReached {
@@ -156,6 +170,20 @@ fn deadlock_arrives_by_time_or_by_declaration_and_owes_a_notice() {
         "not_open"
     );
     assert_eq!(kit.complaint("c2").status, Status::Deadlocked);
+    // After the complainant rejected its outcome, it is not decided again.
+    assert_eq!(
+        kit.err(
+            "complaints",
+            "reviewer-1",
+            Command::Decide {
+                complaint: "c2".into(),
+                outcome: OutcomeKind::Upheld,
+                reason_codes: vec!["r".into()],
+                document: Some("doc-2".into()),
+            }
+        ),
+        "already_decided"
+    );
 
     kit.advance_days(40);
     assert!(!kit.tick().contains(&Event::DeadlockReached {
@@ -217,13 +245,18 @@ fn deadlock_arrives_by_time_or_by_declaration_and_owes_a_notice() {
         ),
         "no_deadlock"
     );
-    // A deadlocked complaint without an outcome or a forum cannot close.
+    // Once the date to decide by has passed without an outcome, a person may
+    // declare deadlock; a deadlocked complaint without an outcome or a forum
+    // cannot close.
+    kit.in_review("c4");
+    kit.advance_days(timers().decide_days as i64 + 1);
+    kit.ok("complaints", "reviewer-1", Command::DeclareDeadlock { complaint: "c4".into() });
     assert_eq!(
         kit.err(
             "complaints",
             "reviewer-1",
             Command::Close {
-                complaint: "c2".into(),
+                complaint: "c4".into(),
                 detail: detail("delay")
             }
         ),

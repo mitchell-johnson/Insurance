@@ -29,6 +29,8 @@ fn answers_each_question() {
     assert_eq!(status["partitions"], 2);
     assert_eq!(status["state_hash"].as_str().map(str::len), Some(64));
     assert_eq!(ask(&h, json!({"q": "funds"}))[0]["fund"], "growth");
+    // The next date to price follows the latest price (found by the scenario run, SCN-18, F-SCN18-6).
+    assert_eq!(ask(&h, json!({"q": "funds"}))[0]["next"], "2026-11-03");
     assert_eq!(ask(&h, json!({"q": "price", "id": d2}))["status"], "active");
     let prices = ask(&h, json!({"q": "prices", "fund": "growth", "from": "2026-11-01", "to": "2026-11-30"}));
     assert_eq!(prices.as_array().map(Vec::len), Some(1));

@@ -642,7 +642,12 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             let decision = d.staff.authorise(state.staff_policy(), &request);
             json!({ "decision": decision, "explanation": decision.denied.map(crate::staff::Denial::explain) })
         }
-        Question::OwnAccess { staff, at } => d.staff.own_access(&staff, at),
+        Question::OwnAccess { staff, at } => {
+            let mut own = d.staff.own_access(&staff, at);
+            // The books' business date, which every page's dates start from.
+            own["business_date"] = json!(d.today);
+            own
+        }
         Question::StaffAct {
             staff,
             action,
@@ -897,6 +902,8 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
         Question::Status => json!({
             "business_date": d.today,
             "heard": d.directory.heard,
+            // The same moment for a person or an assistant to read.
+            "heard_at": chrono::DateTime::from_timestamp(d.directory.heard, 0).filter(|_| d.directory.heard > 0).map(|t| t.to_rfc3339()),
             "policies": d.view.directory().count(),
             "feeds": d.feeds.len(),
             "requests_pending": d.requests.values().filter(|r| r.status == crate::state::RequestStatus::Pending).count(),

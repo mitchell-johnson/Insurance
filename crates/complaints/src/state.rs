@@ -75,6 +75,21 @@ pub(crate) fn reject<T>(code: &str, message: impl Into<String>) -> Result<T, Rej
     Err(Reject::new(code, message))
 }
 
+/// An amount in whole cents as people read it: $1,234.50.
+pub(crate) fn dollars(minor: i64) -> String {
+    let sign = if minor < 0 { "-" } else { "" };
+    let cents = minor.unsigned_abs();
+    let whole = (cents / 100).to_string();
+    let mut grouped = String::new();
+    for (n, digit) in whole.chars().enumerate() {
+        if n > 0 && (whole.len() - n).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    format!("{sign}${grouped}.{:02}", cents % 100)
+}
+
 pub(crate) fn days(n: u32) -> Duration {
     Duration::days(n as i64)
 }
@@ -216,6 +231,15 @@ impl ComplaintsState {
                 let c = self.open_mut(&complaint)?;
                 c.vulnerable = vulnerable;
                 c.adjustments = adjustments;
+                // A complaint marked vulnerable is never left with someone
+                // untrained: it goes back to the queue for a trained handler.
+                if vulnerable && !c.owner_trained {
+                    if let Some(handler) = c.owner.take() {
+                        c.grants.remove(&handler);
+                        c.owner_authority = 0;
+                        ctx.events.push(Event::ComplaintReturnedToQueue { complaint, handler });
+                    }
+                }
                 Ok(())
             }
             Command::Assign {
@@ -453,6 +477,7 @@ impl ComplaintsState {
             timers_version: timers.version,
             owner: None,
             owner_authority: 0,
+            owner_trained: false,
             status: Status::Open,
             acknowledged_on: intake.acknowledged_on,
             acknowledgement: None,
@@ -580,6 +605,7 @@ impl ComplaintsState {
         );
         c.owner = Some(handler.clone());
         c.owner_authority = authority;
+        c.owner_trained = trained;
         ctx.events.push(Event::ComplaintAssigned {
             complaint: id.to_string(),
             handler,
@@ -680,7 +706,9 @@ impl ComplaintsState {
         let today = ctx.today;
         let actor = ctx.actor.clone();
         let c = self.owned_mut(id, &actor)?;
-        if !matches!(c.status, Status::Open | Status::Deadlocked) {
+        // After a deadlock by time an outcome may still be given; after the
+        // complainant rejected one, the matter is for the scheme.
+        if !matches!(c.status, Status::Open | Status::Deadlocked) || c.outcome.is_some() {
             return reject("already_decided", "the complaint already has its outcome or is with an external forum");
         }
         if reason_codes.is_empty() || reason_codes.iter().any(String::is_empty) {
@@ -766,7 +794,22 @@ impl ComplaintsState {
             // The highest limit at or below the authoriser's level.
             let limit = timers.ex_gratia_limits_minor.range(..=authority).next_back().map_or(0, |(_, v)| *v);
             if amount > limit {
-                return reject("over_authority", "the goodwill payment is above the authoriser's limit");
+                // Say who could authorise it: the lowest level whose limit covers it.
+                let who = timers
+                    .ex_gratia_limits_minor
+                    .iter()
+                    .find(|(_, v)| **v >= amount)
+                    .map_or("no authority level covers it".to_string(), |(level, _)| {
+                        format!("someone at authority level {level} or above may authorise it")
+                    });
+                return reject(
+                    "over_authority",
+                    format!(
+                        "the goodwill payment is above the authoriser's limit: {} against a limit of {} at authority level {authority}; {who}",
+                        dollars(amount),
+                        dollars(limit)
+                    ),
+                );
             }
         }
         c.remediation.push(Remediation {
@@ -788,11 +831,42 @@ impl ComplaintsState {
 
     // --- deadlock and the external forums ---
 
+    /// Deadlock ends the insurer's own process and opens the way to the
+    /// external scheme. It arrives on its own when the deadlock date passes
+    /// without an outcome. A person declares it in two cases only: the
+    /// complainant has the written outcome and rejects it, or the date to
+    /// decide by has passed without one. Never on the day a complaint
+    /// arrives, so it is not a way to pass a complaint on unhandled.
     fn deadlock(&mut self, id: &str, automatic: bool, ctx: &mut Ctx) -> Result<(), Reject> {
         let today = ctx.today;
+        let version = self.open_mut(id)?.timers_version;
+        let decide_by = self.complaints[id].received_on + days(self.timers[&version].decide_days);
         let c = self.open_mut(id)?;
-        if c.status != Status::Open {
-            return reject("not_open", "only a complaint without an outcome can be deadlocked");
+        let rejected_outcome = c
+            .outcome
+            .as_ref()
+            .is_some_and(|o| !o.front_line && o.kind != OutcomeKind::Withdrawn && o.delivered_on.is_some());
+        match (c.status, &c.outcome) {
+            (Status::Open, _) if automatic || today > decide_by => {}
+            (Status::Open, _) => {
+                return reject(
+                    "not_yet",
+                    format!("a complaint without an outcome is deadlocked only once the date to decide it by ({decide_by}) has passed; decide it, or it is deadlocked on its own when the deadlock date passes"),
+                )
+            }
+            (Status::Decided, Some(_)) if !automatic && rejected_outcome => {}
+            (Status::Decided, Some(o)) if !automatic && o.delivered_on.is_none() && o.document.is_some() => {
+                return reject(
+                    "not_delivered",
+                    "deadlock follows a written outcome the complainant has received and rejected; record the outcome's delivery first",
+                )
+            }
+            _ => {
+                return reject(
+                    "not_open",
+                    "this complaint cannot be deadlocked: it is already deadlocked, with an external forum, or its outcome was not one the complainant can reject",
+                )
+            }
         }
         c.status = Status::Deadlocked;
         c.deadlock = Some(Deadlock {

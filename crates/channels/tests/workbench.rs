@@ -1167,3 +1167,35 @@ async fn the_conduct_officers_signature_is_replayed() {
     assert_eq!(closed("k1")["code"], "needs_more_approval");
     assert_eq!(closed("k2")["code"], "approval_not_needed");
 }
+
+/// Purpose: a workbench refusal over the amount says what is held, what is already committed and how much can be acted on, in dollars;
+/// one in a currency with nothing held names the party and the currency.
+/// Why it matters: found by the scenario run, SCN-20 (F-20-5). Releasing $500 and writing off $999,999 both said only "more than the held
+/// balance not already committed", and the person had to go and look up what was held before trying again.
+#[test]
+fn a_refused_amount_says_what_is_held_and_committed() {
+    let mut w = staffed();
+    held(&mut w);
+    w.send(staff("fin-1"), prepare("a1", release(40_000_00))).unwrap();
+    let refused = w.send(staff("fin-2"), prepare("a2", release(40_000_01))).unwrap_err();
+    assert_eq!(
+        (refused.code.as_str(), refused.message.as_str()),
+        (
+            "exceeds_held",
+            "the amount, $40,000.01 NZD, is more than the held balance not already committed to another action: fap-1 has $80,000.00 held, $40,000.00 of it committed to other actions, so at most $40,000.00 can be acted on"
+        )
+    );
+    let other_currency = Command::Workbench(WorkbenchCommand::Prepare {
+        id: "x".into(),
+        party: p(FAP),
+        currency: "AUD".into(),
+        action: Action::HoldPending {
+            review_on: d(2027, 12, 1),
+            legal_reference: "L-1".into(),
+        },
+        reason_code: "r".into(),
+        document: "d".into(),
+    });
+    let refused = w.send(staff("fin-1"), other_currency).unwrap_err();
+    assert!(refused.message.starts_with("nothing is held for fap-1 in AUD;"), "{}", refused.message);
+}

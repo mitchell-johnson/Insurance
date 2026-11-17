@@ -437,6 +437,12 @@ pub enum Event {
         complaint: String,
         handler: String,
     },
+    /// A vulnerability marker was added while the complaint was with someone
+    /// not trained for it: it is back in the queue for a trained handler.
+    ComplaintReturnedToQueue {
+        complaint: String,
+        handler: String,
+    },
     /// A document is due to the complainant: the documents service issues it.
     AcknowledgementDue {
         complaint: String,

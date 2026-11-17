@@ -6,6 +6,7 @@
 <section data-view="Your policies"><h2>Policies</h2><div id="summary"></div><div id="policies"></div></section>
 <section data-view="Your policies" id="detail" hidden><h2 id="detail-title">Policy</h2><div id="standing"></div>
   <h3>Cover</h3><div id="covers"></div>
+  <h3>Your investments</h3><div id="invest"></div>
   <h3>What you pay</h3><div id="bills"></div>
   <h3>Claims</h3><div id="claims"></div>
   <h3>Documents</h3><div id="docs"></div><div id="docs-msg" aria-live="polite"></div>
@@ -133,6 +134,15 @@ async function open(p) {
   put($("covers"), table(["Cover", "Life insured", "Sum insured", "Held at", "In force"], covers.map((c) => [words(c.cover), c.life, money(c.sum_insured_minor),
     c.options ? Object.entries(c.options).map(([k, v]) => `${words(k)} ${words(v)}`).join(", ") : "", c.in_force ? "yes" : "no"])));
   put($("nc-cover"), covers.map((c) => h("option", { value: JSON.stringify({ cover: c.cover, layer: c.layer, life: c.life }) }, `${words(c.cover)} (${c.life})`)));
+  // Units held in each fund and what they are worth, always with the date of the price used.
+  const holdings = rows("holding"), orders = rows("unit_order");
+  const units = (micro) => (Number(micro) / 1e6).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 6 });
+  const amount = (a) => a.cash ? money(a.cash.minor) : a.units ? units(a.units.micro) + " units" : "all your units";
+  put($("invest"), holdings.length || orders.length ? [
+    holdings.length ? table(["Fund", "Units", "Unit price", "Value"], holdings.map((b) => [words(b.fund), units(b.units_micro), b.price_date ? `${b.price} on ${b.price_date}` : "no price yet",
+      b.price_date ? `${money(b.value_minor)} at the price of ${b.price_date}` : "shown once the fund is priced"])) : null,
+    orders.length ? [h("h4", {}, "Waiting for a price"), table(["Fund", "Buy or sell", "Amount", "Priced on"], orders.map((o) => [words(o.fund), words(o.direction), amount(o.amount || {}), o.pricing_date]))] : null,
+  ] : h("p", { class: "muted" }, "No units held yet. If this policy invests, units are bought once a payment is invested."));
   const bills = rows("billing");
   const owed = bills.find((b) => b.outstanding_minor !== undefined);
   put($("bills"), owed && owed.outstanding_minor > 0 ? h("div", { class: "banner warn", role: "status" }, `${money(owed.outstanding_minor)} is due, the oldest from ${owed.oldest_unpaid_due}.`) : h("p", { class: "muted" }, "Nothing is overdue."),

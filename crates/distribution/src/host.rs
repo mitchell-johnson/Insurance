@@ -110,6 +110,10 @@ pub enum Question {
     /// Every dated link in the structure: who sits under, is licensed by or
     /// is paid for whom, and from when to when.
     Relations,
+    /// Every party in the structure, with its kind, its own licence state on
+    /// the day, whether it has ceased, and whether it is a payee and its
+    /// payments are held: what a person picks a party from.
+    Parties,
     /// The oldest postings still to be carried to the core: what the host's
     /// outbox carrier asks.
     Outbox {
@@ -232,6 +236,28 @@ pub fn ask(state: &DistributionState, question: Question) -> Result<Value, Strin
             Ok(json!(rows))
         }
         Question::Relations => value(&state.config.structure.relations),
+        Question::Parties => {
+            let structure = &state.config.structure;
+            let today = state.today.unwrap_or_default();
+            let rows: Vec<Value> = structure
+                .parties
+                .iter()
+                .map(|(id, p)| {
+                    let licence = structure.own_licence(id, today);
+                    let payee = state.payees.get(id);
+                    json!({
+                        "party": id,
+                        "kind": p.kind,
+                        "licence": licence.map(|r| r.state),
+                        "licence_since": licence.map(|r| r.effective),
+                        "ceased": p.ceased.map(|(on, _)| on),
+                        "payee": payee.is_some(),
+                        "payment_hold": payee.and_then(|p| p.payment_hold.clone()),
+                    })
+                })
+                .collect();
+            Ok(json!(rows))
+        }
         Question::Outbox { limit } => value(&state.outbox(limit)),
         Question::ChangedParties { since } => {
             let parties: Vec<&PartyId> = state.changed.iter().filter(|(_, at)| **at > since).map(|(p, _)| p).collect();

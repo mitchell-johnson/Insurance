@@ -416,6 +416,21 @@ pub struct Workbench {
     pub settings: Settings,
 }
 
+/// An amount in whole cents as people read it: $1,234.50.
+fn dollars(minor: i64) -> String {
+    let sign = if minor < 0 { "-" } else { "" };
+    let cents = minor.unsigned_abs();
+    let whole = (cents / 100).to_string();
+    let mut grouped = String::new();
+    for (n, digit) in whole.chars().enumerate() {
+        if n > 0 && (whole.len() - n).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    format!("{sign}${grouped}.{:02}", cents % 100)
+}
+
 fn reject(code: &str, message: impl Into<String>) -> Reject {
     Reject::new(code, message)
 }
@@ -506,7 +521,13 @@ impl Workbench {
             } else if amount > held - committed {
                 Err(reject(
                     "exceeds_held",
-                    "the amount is more than the held balance not already committed to another action",
+                    format!(
+                        "the amount, {} {currency}, is more than the held balance not already committed to another action: {party} has {} held, {} of it committed to other actions, so at most {} can be acted on",
+                        dollars(amount),
+                        dollars(held),
+                        dollars(committed),
+                        dollars((held - committed).max(0))
+                    ),
                 ))
             } else {
                 Ok(())
@@ -639,10 +660,12 @@ impl Workbench {
                     .ok_or_else(|| reject("unknown_party", "no position is held for that party"))?;
                 self.validate(&party, position, &currency, &action)?;
                 authority.check(&maker, actions::PREPARE, &party, action.amount(), None, &id, at)?;
-                let module = position
-                    .owner(&currency)
-                    .cloned()
-                    .ok_or_else(|| reject("nothing_held", "nothing is held for that party in that currency"))?;
+                let module = position.owner(&currency).cloned().ok_or_else(|| {
+                    reject(
+                        "nothing_held",
+                        format!("nothing is held for {party} in {currency}; the party's position shows what is held for them, and in which currency"),
+                    )
+                })?;
                 let needs = self.needs(position, &action);
                 self.proposals.insert(
                     id.clone(),

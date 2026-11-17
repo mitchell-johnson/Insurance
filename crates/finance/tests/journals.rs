@@ -245,3 +245,27 @@ fn an_actuarial_journal_names_its_extract_and_is_signed_by_the_actuary() {
     b.console("olive", propose(accrual("j1"))).unwrap();
     assert_eq!(b.console_code("aroha", sign("j1")), "journal");
 }
+
+/// Purpose: a journal that does not balance is refused with the difference in dollars and
+/// cents, saying which side is heavier, and a part of a cent is shown rather than hidden.
+/// Why it matters: found by the scenario run, SCN-17 (F-SCN17-2). The refusal gave the
+/// difference in millionths of a cent, so a journal one cent out read "off by 1000000",
+/// which a finance operator cannot act on.
+#[test]
+fn an_unbalanced_journal_is_refused_in_dollars() {
+    let mut w = world();
+    let b = &mut w.books;
+    let message = |b: &mut Books, change: &dyn Fn(&mut JournalDraft)| {
+        let mut j = accrual("j");
+        change(&mut j);
+        b.console("olive", propose(j)).unwrap_err().message
+    };
+    assert_eq!(
+        message(b, &|j| j.lines[0].signed_fine += FINE_PER_MINOR),
+        "the journal does not balance: debits are more than credits by $0.01 NZD"
+    );
+    assert_eq!(
+        message(b, &|j| j.lines[1].signed_fine -= 123_456_78 * FINE_PER_MINOR + 500_000),
+        "the journal does not balance: credits are more than debits by $123,456.785 NZD"
+    );
+}

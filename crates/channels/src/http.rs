@@ -2063,7 +2063,7 @@ async fn complaints_question(
     if answer.is_null() {
         return Err(Problem::not_found());
     }
-    ok(answer)
+    ok(crate::complaints::shown(&name, answer, &standing))
 }
 
 #[derive(Deserialize)]
@@ -3874,10 +3874,20 @@ async fn ops_reconciliation(State(s): State<Shared>, headers: HeaderMap) -> Answ
 }
 
 /// The master's answer as it gave it, or why there is none. Its refusals
-/// are passed on with its own reason.
-fn desked(answer: Result<crate::customers::Answered, String>) -> Answer {
+/// are passed on with its own reason. The portal asks the master as itself,
+/// in `role`, so a sign-in the master refuses is the portal's own grant at
+/// fault, never the person's: that is said as such, as a fault of ours.
+fn desked(answer: Result<crate::customers::Answered, String>, role: &str) -> Answer {
     match answer {
         Ok((status, body)) if status < 300 => ok(body),
+        Ok((401 | 403, body)) => Err(Problem::new(
+            StatusCode::BAD_GATEWAY,
+            "customer_master_grant",
+            format!(
+                "the customer master refused the portal's own sign-in in the role {role} ({}). The portal's identity needs the {role} role on the customer master's app registration; ask the platform team to grant it. Nothing is wrong with your own sign-in.",
+                body["error"]["message"].as_str().or(body["detail"].as_str()).unwrap_or("no reason given")
+            ),
+        )),
         Ok((status, body)) => Err(Problem::new(
             StatusCode::from_u16(status)
                 .ok()
@@ -3888,7 +3898,11 @@ fn desked(answer: Result<crate::customers::Answered, String>) -> Answer {
             body["error"]["message"]
                 .as_str()
                 .or(body["detail"].as_str())
-                .unwrap_or("the customer master did not take it"),
+                .unwrap_or(if status == 422 {
+                    "the customer master could not read the request: a field it needs is missing or not in its form"
+                } else {
+                    "the customer master did not take it"
+                }),
         )),
         Err(e) => Err(Problem::new(StatusCode::SERVICE_UNAVAILABLE, "customer_master_unavailable", e)),
     }
@@ -3904,7 +3918,8 @@ async fn desk(s: &Shared, headers: &HeaderMap, method: &Method, uri: &Uri, body:
         None => "customers".to_string(),
     };
     s.may_act(&session, action, DataClass::Personal, record, desk.about().cloned(), why).await?;
-    desked(master.desk(&session.party, desk).await)
+    let (role, _) = desk.role();
+    desked(master.desk(&session.party, desk).await, role)
 }
 
 #[derive(Deserialize)]
@@ -4042,7 +4057,8 @@ async fn ops_desk(s: &Shared, headers: &HeaderMap, desk: crate::customers::Desk)
         return Err(Problem::forbidden("the operations console needs the operations role"));
     }
     let master = s.master()?;
-    desked(master.desk(&PartyId::from(caller.subject.as_str()), desk).await)
+    let (role, _) = desk.role();
+    desked(master.desk(&PartyId::from(caller.subject.as_str()), desk).await, role)
 }
 
 fn body_json(body: &[u8]) -> Result<Value, Problem> {
@@ -4203,13 +4219,27 @@ async fn ops_customers_verify(State(s): State<Shared>, headers: HeaderMap, Path(
     ops_desk(&s, &headers, crate::customers::Desk::Verify(PartyId::from(party.as_str()))).await
 }
 
+/// The fields an operations request to the master must carry, checked
+/// here so that a missing one is named rather than refused in general terms.
+fn needs(request: &Value, field: &str, what: &str) -> Result<(), Problem> {
+    match request[field].as_str().filter(|v| !v.trim().is_empty()) {
+        Some(_) => Ok(()),
+        None => Err(Problem::bad_request(format!("{field} is needed: {what}"))),
+    }
+}
+
 async fn ops_customers_rewrap(State(s): State<Shared>, headers: HeaderMap, body: Bytes) -> Answer {
     let request = body_json(&body)?;
+    needs(&request, "current_key_id", "the full key ID of the current key-encryption key version")?;
     ops_desk(&s, &headers, crate::customers::Desk::Rewrap(request)).await
 }
 
 async fn ops_customers_reshred(State(s): State<Shared>, headers: HeaderMap, body: Bytes) -> Answer {
     let request = body_json(&body)?;
+    needs(&request, "since", "the day the restored backup was taken, as 2027-11-15")?;
+    if request["since"].as_str().is_some_and(|d| d.parse::<chrono::NaiveDate>().is_err()) {
+        return Err(Problem::bad_request("since is a date, as 2027-11-15: the day the restored backup was taken"));
+    }
     ops_desk(&s, &headers, crate::customers::Desk::Reshred(request)).await
 }
 

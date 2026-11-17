@@ -2004,7 +2004,15 @@ impl FinanceState {
             *by_fund.entry((line.fund.as_deref(), line.currency)).or_insert(0) += line.signed_fine;
         }
         if let Some((currency, off)) = by_currency.iter().find(|(_, net)| **net != 0) {
-            return reject("unbalanced", format!("the journal is off by {off} in {currency}"));
+            let side = if *off > 0 {
+                "debits are more than credits"
+            } else {
+                "credits are more than debits"
+            };
+            return reject(
+                "unbalanced",
+                format!("the journal does not balance: {side} by {}", fine_words(off.unsigned_abs(), *currency)),
+            );
         }
         let funds: BTreeSet<Option<&str>> = journal.lines.iter().map(|l| l.fund.as_deref()).collect();
         // Money stays in its fund. Each fund's side of a journal balances on
@@ -2447,4 +2455,26 @@ impl StateMachine for FinanceState {
     fn apply(&mut self, index: u64, command: FinEnvelope) -> FinApplied {
         self.apply_envelope(index, command)
     }
+}
+
+/// An amount in fine units (millionths of a cent) as people read it, in
+/// dollars and cents: `$1,234.50 NZD`. A part of a cent is shown as far as
+/// it goes, so nothing is hidden by the words.
+pub(crate) fn fine_words(fine: u128, currency: Currency) -> String {
+    let per = FINE_PER_MINOR as u128;
+    let scale = 10u128.pow(currency.minor_digits());
+    let (minor, part) = (fine / per, fine % per);
+    let whole = (minor / scale).to_string();
+    let mut grouped = String::new();
+    for (n, digit) in whole.chars().enumerate() {
+        if n > 0 && (whole.len() - n).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    let mut cents = format!("{:0width$}", minor % scale, width = currency.minor_digits() as usize);
+    if part > 0 {
+        cents.push_str(format!("{part:06}").trim_end_matches('0'));
+    }
+    format!("${grouped}.{cents} {currency}")
 }

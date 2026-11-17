@@ -34,7 +34,11 @@ const today = portal.today;
 const seen = new Map();
 const saw = (id, fund, date, version) => { if (id) seen.set(id, { value: id, label: `${fund} ${date}${version ? " v" + version : ""}`, hint: id }); };
 let wrong = null;
-const isWrong = (id) => h("button", { class: "quiet", type: "button", on: { click: () => { wrong.add(id); portal.view("price-errors"); $("ecause").focus(); } } }, "It is wrong");
+const isWrong = (id) => h("button", { class: "quiet", type: "button", on: { click: () => { wrong.add(id, (seen.get(id) || {}).label); portal.view("price-errors"); $("ecause").focus(); } } }, "It is wrong");
+// The fund's name as people know it, and the open price error holding a fund, if any.
+let names = {}, holding = {};
+const fundName = (fund) => names[fund] || fund;
+const percentOf = (size) => size == null || size === "" ? "" : `${(Number(size) * 100).toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}%`;
 const failed = (p) => p.struck.checks.filter((c) => !c.passed);
 const button = (label, out, fn) => h("button", { class: "quiet", on: { click: run(out, fn) } }, label);
 
@@ -68,20 +72,29 @@ $("republish").addEventListener("click", run($("lookup-msg"), async () => { awai
 
 async function load() {
   const [work, funds, errors, late] = await Promise.all([ask("work"), ask("funds"), ask("errors"), ask("late", { as_at: today() })]);
-  for (const p of work.prices) saw(p.id, p.fund, p.pricing_date, p.version);
+  for (const f of funds) { const d = f.versions[f.versions.length - 1] || {}; if (d.name) names[f.fund] = d.name; }
+  holding = {};
+  for (const e of errors) if (!e.closed && Object.values(e.prices).some((c) => !c)) holding[e.fund] = e;
+  for (const p of work.prices) saw(p.id, fundName(p.fund), p.pricing_date, p.version);
+  const byId = Object.fromEntries(errors.map((e) => [e.id, e]));
+  const corrects = (p) => { const e = p.corrects && byId[p.corrects]; if (!p.corrects) return ""; const target = e && Object.keys(e.prices).find((w) => w.includes(":" + p.pricing_date));
+    return `Corrects ${target || "a wrong price"}${e ? `, for the price error raised on ${e.detected_on}` : ""}`; };
+  const heldBy = (p) => { const e = holding[p.fund]; return e && !p.corrects ? e : null; };
   put($("work"), work.prices.length ? null : portal.empty("No price is waiting for a person."));
-  if (work.prices.length) put($("work"), table(["Price", "Fund", "Pricing date", "Mid", "Buy", "Sell", "Status", "Failed checks", "Prepared by", ""], work.prices.map((p) => [p.id, p.fund, p.pricing_date, p.struck.mid, p.struck.buy, p.struck.sell, words(p.status),
-    failed(p).map((c) => `${words(c.kind)}: ${c.detail}`).join("; "), p.prepared_by,
+  if (work.prices.length) put($("work"), table(["Price", "Fund", "Pricing date", "Mid", "Buy", "Sell", "Status", "Failed checks", "Prepared by", ""], work.prices.map((p) => [[p.id, corrects(p) ? h("div", { class: "muted" }, corrects(p)) : null], fundName(p.fund), p.pricing_date, p.struck.mid, p.struck.buy, p.struck.sell, words(p.status),
+    [failed(p).map((c) => `${words(c.kind)}: ${c.detail}`).join("; "), heldBy(p) ? h("div", { class: "banner warn" }, `Held by the price error raised on ${heldBy(p).detected_on} against ${Object.keys(heldBy(p).prices).filter((w) => !heldBy(p).prices[w]).join(", ")}: approve its correction first.`) : null], p.prepared_by,
     h("span", {}, button("Details", $("work-msg"), () => detail(p.id)), " ",
-      can("approver") && p.status !== "blocked" ? button(p.status === "held" ? "Accept checks and approve" : "Approve", $("work-msg"), () => approve(p)) : null, " ",
+      can("approver") && p.status !== "blocked" && !heldBy(p) ? button(p.status === "held" ? "Accept checks and approve" : "Approve", $("work-msg"), () => approve(p)) : null, " ",
       can("approver") ? button("Reject", $("work-msg"), () => reject(p)) : null)])));
   put($("refused"), table(["File", "Why it was refused"], Object.entries(work.refused_files || {})));
-  put($("late"), table(["Fund", "Pricing date"], late.map(([fund, date]) => [fund, date])));
-  put($("funds"), table(["Fund", "Version", "Currency", "Suspensions"], funds.map((f) => { const d = f.versions[f.versions.length - 1] || {};
-    return [f.fund, d.version, d.currency, (f.suspensions || []).map((s) => `from ${s.from}${s.to ? " to " + s.to : ""}: ${s.reason} (${s.by})`).join("; ")]; })));
-  for (const id of ["pfund", "lfund", "sfund"]) { const keep = $(id).value; put($(id), funds.map((f) => h("option", { value: f.fund }, f.fund))); if (keep) $(id).value = keep; }
+  put($("late"), late.length ? table(["Fund", "Pricing date"], late.map(([fund, date]) => [fundName(fund), date])) : portal.empty("No price is overdue."));
+  put($("funds"), table(["Fund", "Version", "Currency", "Next to price", "Suspensions"], funds.map((f) => { const d = f.versions[f.versions.length - 1] || {};
+    return [fundName(f.fund), d.version, d.currency, f.next || "", (f.suspensions || []).map((s) => `from ${s.from}${s.to ? " to " + s.to : ""}: ${s.reason} (${s.by})`).join("; ")]; })));
+  nextOf = Object.fromEntries(funds.map((f) => [f.fund, f.next]));
+  for (const id of ["pfund", "lfund", "sfund"]) { const keep = $(id).value; put($(id), funds.map((f) => h("option", { value: f.fund }, fundName(f.fund)))); if (keep) $(id).value = keep; }
+  nextDate();
   put($("errors"), table(["Error", "Fund", "Cause", "Detected", "Wrong price and its correction", "Remediation", "State", ""], errors.map((e) => [e.id, e.fund, e.cause, e.detected_on,
-    Object.entries(e.prices).map(([wrong, c]) => `${wrong}: ${c ? `${c.price} (${c.material ? "material" : "immaterial"}, ${c.size})` : "not yet corrected"}`).join("; "),
+    Object.entries(e.prices).map(([wrong, c]) => `${wrong}: ${c ? `${c.price} (${c.material ? "material" : "immaterial"}, out by ${percentOf(c.size)})` : "not yet corrected"}`).join("; "),
     portal.details(e.remediation), e.closed ? `closed by ${e.closed[0]}: ${e.closed[2]}` : "open",
     !e.closed && can("lead") ? button("Close", $("error-msg"), async () => { const summary = await portal.ask({ title: "Close this price error", label: "Summary of what was done", confirm: "Close the error" }); if (!summary) return null; await send({ close_error: { error: e.id, summary } }); await load(); return "Closed."; }) : ""])));
   $("prepare").querySelector("button").disabled = !can("preparer");
@@ -90,7 +103,10 @@ async function load() {
 $("prepare").addEventListener("submit", run($("prepare-msg"), async () => {
   const done = await send({ prepare_price: { fund: $("pfund").value, pricing_date: $("pdate").value } }); await load();
   const p = done.output.prepared;
-  return p ? `Prepared ${p.price}: ${words(p.status)}. Someone else approves it.` : "Prepared.";
+  if (!p) return "Prepared.";
+  if (p.status === "blocked") return `Prepared ${p.price}: blocked. Nobody can approve it: the administrator's units on issue do not agree with the core's. Ask the administrator for a corrected valuation file, then prepare the price again.`;
+  if (p.status === "held") return `Prepared ${p.price}: held. A check failed: someone else approves it only by accepting each failed check with a reason, or rejects it.`;
+  return `Prepared ${p.price}. Someone else approves it.`;
 }));
 $("show-val").addEventListener("click", run($("prepare-msg"), async () => {
   const v = await ask("valuations", { fund: $("pfund").value, pricing_date: $("pdate").value });
@@ -114,10 +130,24 @@ $("raise").addEventListener("submit", run($("error-msg"), async () => {
   return "Raised. Prepare and approve the correction for each wrong price.";
 }));
 
-wrong = portal.pickMany($("eprices"), async () => [...seen.values()], { min: 0, label: true, empty: "Look up the fund's prices under Prices first; each one shown is offered here." });
+let lately = null;
+const recent = async () => {
+  lately = lately || Promise.all(Object.keys(nextOf).map(async (fund) => {
+    for (const p of await ask("prices", { fund, from: portal.days(-400), to: today() }).catch(() => [])) saw(p.price, fundName(fund), p.pricing_date, p.version);
+  }));
+  await lately;
+  return [...seen.values()];
+};
+wrong = portal.pickMany($("eprices"), recent, { min: 0, label: true, empty: "No price is in force for any fund in the last year." });
 $("eprices").required = false;
-$("pdate").value = $("lto").value = $("edate").value = $("sfrom").value = today(); $("lfrom").value = portal.days(-30);
+// The pricing date is the fund's next to price: prices are struck in order, so no other date can be prepared.
+let nextOf = {};
+const nextDate = () => { const next = nextOf[$("pfund").value]; if (next) $("pdate").value = next; };
+$("pfund").addEventListener("change", nextDate);
+// The buttons a role decides start disabled, and are enabled once the roles are known.
+for (const f of ["prepare", "suspend", "raise"]) $(f).querySelector("button").disabled = true;
 signIn(R).then(async () => {
+  $("pdate").value = $("lto").value = $("edate").value = $("sfrom").value = today(); $("lfrom").value = portal.days(-30);
   const me = await ask("me"); roles = me.roles;
   $("roles").textContent = roles.length ? roles.map((r) => words(r.replace("unit_pricing_", ""))).join(", ") : "View only.";
   await load();

@@ -78,9 +78,10 @@ fn cs(command: C) -> Command {
 }
 
 /// Purpose: only a person who may prepare does so, only a command of the module's that needs two people, with a reason,
-/// once per ID, and never from a module; a full store takes no more.
+/// once per ID and once per command, and never from a module; a full store takes no more.
 /// Why it matters: the store is what the second signature is checked against. Anything that slipped into it unchecked would
-/// be sent with an approver's name on it.
+/// be sent with an approver's name on it; a second copy of the same command only wastes the signer's time (found by the
+/// scenario run, SCN-22, F-SCN22-3).
 #[test]
 fn what_may_be_prepared() {
     let mut w = staffed();
@@ -101,8 +102,11 @@ fn what_may_be_prepared() {
     assert_eq!(code(w.send(staff("op-1"), other)), "unknown_module");
     w.send(staff("op-1"), prepare("x", abandon(1), "raised in error")).unwrap();
     assert_eq!(code(w.send(staff("op-2"), prepare("x", abandon(2), "r"))), "exists");
+    // The same abandonment again, under another reason or by someone else, is the one already waiting
+    // (found by the scenario run, SCN-22, F-SCN22-3).
+    assert_eq!(code(w.send(staff("op-2"), prepare("y", abandon(1), "another reason"))), "duplicate");
     for n in 1..MAX_OPEN {
-        w.send(staff("op-1"), prepare(&format!("fill-{n}"), abandon(n as u64), "r")).unwrap();
+        w.send(staff("op-1"), prepare(&format!("fill-{n}"), abandon(n as u64 + 100), "r")).unwrap();
     }
     assert_eq!(code(w.send(staff("op-1"), prepare("one-more", abandon(9), "r"))), "full");
     assert_eq!(w.ch.data.countersign.waiting("reinsurance").len(), MAX_OPEN);

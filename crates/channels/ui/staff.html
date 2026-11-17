@@ -28,7 +28,7 @@
 <div><label for="newacct">New account?</label><select id="newacct"><option value="false">No</option><option value="true">Yes</option></select></div>
 <div><label for="review">Review date</label><input id="review" type="date"></div>
 <div><label for="reason">Reason code</label><input id="reason" required></div>
-<div><label for="doc">Document on file it rests on</label><input id="doc" required></div><button>Prepare</button></div>
+<div><label for="doc">Document on file it rests on</label><input id="doc" list="doc-list" required><datalist id="doc-list"></datalist></div><button>Prepare</button></div>
 <p class="muted">Someone else approves it. Large amounts need two approvers and legal. While a conduct case is open on the party, the conduct officer signs too. A new account for a party in liquidation or deceased always needs legal.</p></form>
 <p><button class="quiet" id="proof">Proof of debt extract</button></p><div id="bench-msg" aria-live="polite"></div><div id="proof-out"></div></section></div>
 
@@ -216,7 +216,8 @@ $("care-form").addEventListener("submit", run($("care-one-msg"), async () => {
 }));
 async function bench() {
   const view = await api(R, "GET", "/staff/v1/workbench");
-  put($("control"), ...view.control.held.map((c) => h("div", {}, h("p", {}, h("strong", {}, c.currency), ": ", money(c.total_minor, c.currency), " held"), table(c.aged.map((a) => a.days + " days"), [c.aged.map((a) => money(a.minor, c.currency))]))),
+  // Nothing held is said, not left blank: the control is read every day.
+  put($("control"), view.control.held.length ? null : portal.empty(`Nothing is held: ${money(0)}.`), ...view.control.held.map((c) => h("div", {}, h("p", {}, h("strong", {}, c.currency), ": ", money(c.total_minor, c.currency), " held"), table(c.aged.map((a) => a.days + " days"), [c.aged.map((a) => money(a.minor, c.currency))]))),
     view.control.reviews_due.length ? h("div", { class: "banner warn" }, "Reviews due: " + view.control.reviews_due.map((r) => `${r.party} (${r.legal_reference})`).join(", ")) : null);
   put($("parties"), table(["Party", "Status", "Held", "Net position", "Open actions", ""], view.parties.map((p) => [p.party, words(p.status), amounts(p.held), amounts(p.net), p.open_actions, h("button", { class: "quiet", on: { click: run($("msg"), () => position(p.party)) } }, "Open")])));
 }
@@ -227,7 +228,9 @@ async function position(id) {
   put($("pos-summary"), h("p", {}, "Held: ", h("strong", {}, amounts(p.held)), ". Net position: ", h("strong", {}, amounts(p.net)), p.review ? `. Review due ${p.review.on} (${p.review.legal_reference}).` : ".",
     p.cases.length ? " Open cases: " + p.cases.join(", ") + "." : ""));
   put($("pos-items"), table(["Line", "Kind", "Period", "Book", "Amount", "Reason", "Since", "Owner"], p.items.map((x) => [x.item.id, words(x.item.kind), x.item.period || "", x.item.book || "", money(x.item.amount_minor, x.item.currency), words(x.item.reason), x.item.since, x.module])));
-  put($("pos-docs"), table(["Reference", "Kind", "Filed"], p.documents.map((d) => [d.reference, words(d.kind), d.filed])));
+  put($("pos-docs"), p.documents.length ? table(["Reference", "Kind", "Filed"], p.documents.map((d) => [d.reference, words(d.kind), d.filed])) : portal.empty("No document is on file for this party yet: an action rests on one, so file it first."));
+  // An action rests on a document on file: they are offered, not typed from memory.
+  put($("doc-list"), p.documents.map((d) => h("option", { value: d.reference }, `${words(d.kind)}, filed ${d.filed}`)));
   put($("pos-actions"), table(["ID", "Action", "Amount", "Reason", "Prepared by", "Needs", "Approved by", "State", ""], p.actions.map((a) => [a.id, words(a.action), a.amount_minor == null ? "" : money(a.amount_minor, a.currency), a.reason_code, a.maker,
     `${a.needs.approvers} approver(s)${a.needs.legal ? " + legal" : ""}${a.needs.conduct ? " + conduct officer" : ""}`, a.approvals.map((x) => x.by + (x.legal ? " (legal)" : x.conduct ? " (conduct officer)" : "")).join(", "), words(a.state),
     a.state === "awaiting_approval" ? h("span", {},

@@ -921,3 +921,78 @@ fn the_shipped_aia_schedules_activate_and_cover_every_aia_product() {
     w.activate("clear", vec![cleared]).unwrap();
     assert!(!w.dist.config.product_schedules.contains_key("aia-starter"));
 }
+
+/// Purpose: compliance holds and releases a payee's payments without touching any licence; a hold on a party that is not
+/// a payee says who its earnings are paid to, or that it must be registered first; a refusal for want of a role says in words
+/// what the action is and who does it; and the parties question lists every party with its kind, licence and hold.
+/// Why it matters: found by the scenario run, SCN-20 (F-20-3) and SCN-03 (F-SCN03-3, F-SCN03-5). Compliance could only stop an
+/// investigated adviser being paid by recording his licence as suspended, which misstated it and locked his book; the refusals said
+/// "none of your roles allows payee.manage" and "adv-d5 is not a registered payee", with no next step; and the console had no list
+/// of parties to pick from.
+#[test]
+fn compliance_holds_payments_and_refusals_say_who_may() {
+    let mut w = worked_example();
+    let hold = |who: &str, reason: Option<&str>| Command::SetPaymentHold {
+        party: party(who),
+        reason: reason.map(str::to_string),
+    };
+    w.send(compliance(), hold("a-co", Some("adviser under investigation"))).unwrap();
+    assert_eq!(
+        w.dist.position(&party("a-co"), w.today()).payment_hold.as_deref(),
+        Some("adviser under investigation")
+    );
+    let parties = ic_distribution::host::ask(&w.dist, ic_distribution::host::Question::Parties).unwrap();
+    let a_co = parties.as_array().unwrap().iter().find(|p| p["party"] == "a-co").unwrap();
+    assert_eq!(
+        (a_co["kind"].as_str(), a_co["payee"].as_bool(), a_co["payment_hold"].as_str()),
+        (Some("company"), Some(true), Some("adviser under investigation"))
+    );
+    let adviser = parties.as_array().unwrap().iter().find(|p| p["party"] == "adviser-a").unwrap();
+    assert_eq!((adviser["payee"].as_bool(), adviser["licence"].is_null()), (Some(false), true));
+    w.send(compliance(), hold("a-co", None)).unwrap();
+    assert_eq!(w.dist.position(&party("a-co"), w.today()).payment_hold, None);
+
+    // An adviser who is not a payee: say what to do instead.
+    let refused = w.send(compliance(), hold("adviser-a", Some("x"))).unwrap_err();
+    assert_eq!(
+        refused.message,
+        "adviser-a is not a registered payee: nothing is paid to adviser-a to hold; register adviser-a as a payee first, and its payments can then be held"
+    );
+    w.send(
+        admin(),
+        Command::Relate(Relation {
+            child: party("a-co"),
+            parent: party("adviser-a"),
+            kind: RelationKind::PayeeFor,
+            from: d(2020, 1, 1),
+            to: None,
+        }),
+    )
+    .unwrap();
+    let refused = w.send(compliance(), hold("adviser-a", Some("x"))).unwrap_err();
+    assert_eq!(
+        refused.message,
+        "adviser-a is not a registered payee: what adviser-a earns is paid to a-co; hold that payee's payments"
+    );
+
+    // Refusals in words, keeping the action's name.
+    let refused = w.send(ops(), hold("a-co", Some("x"))).unwrap_err();
+    assert_eq!(
+        refused.message,
+        "none of your roles allows payee.hold (holding or releasing a payee's payments): that is done by the distribution administrator or compliance"
+    );
+    let licence = Command::RecordLicence {
+        party: party("fap-one"),
+        state: ic_distribution::structure::LicenceState::Suspended,
+        effective: w.today(),
+        source_ref: "FSPR-1".into(),
+    };
+    let refused = w.send(ops(), licence).unwrap_err();
+    assert!(
+        refused
+            .message
+            .ends_with("(recording a licence state): that is done by compliance or the distribution administrator"),
+        "{}",
+        refused.message
+    );
+}
