@@ -322,7 +322,7 @@ fn retention_runs_from_issue_or_from_the_end_of_the_policy() {
 /// retention; releasing it lets the next tick destroy the document. Holds need a case, and
 /// releasing a hold that is not there is refused.
 /// Why it matters: "a legal hold blocks it". Destroying a document under a hold is
-/// destruction of evidence, and cannot be undone.
+/// destruction of evidence, and cannot be undone. A shred under a hold is refused as the hold even for someone with nothing held yet (found by the scenario run, SCN2-14, F2-14-1).
 #[test]
 fn a_legal_hold_blocks_destruction_until_released() {
     let mut kit = Kit::ready();
@@ -388,6 +388,10 @@ fn a_legal_hold_blocks_destruction_until_released() {
     kit.ok("legal", "counsel", hold(HoldScope::Party(party("aroha"))));
     assert!(kit.state.is_held("r4"));
     assert_eq!(kit.err("privacy", "officer", Command::ShredParty { party: party("aroha") }), "legal_hold");
+    // A hold on someone with nothing held yet is still said as the hold, so the officer is not told
+    // there is merely nothing to shred (found by the scenario run, SCN2-14, F2-14-1).
+    kit.ok("legal", "counsel", hold(HoldScope::Party(party("nobody"))));
+    assert_eq!(kit.err("privacy", "officer", Command::ShredParty { party: party("nobody") }), "legal_hold");
 }
 
 /// Purpose: shredding a party destroys their informational documents at once, keeps their

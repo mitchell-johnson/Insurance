@@ -352,3 +352,18 @@ The scenario run (op-b, SCN-05, SCN-07, SCN-09, SCN-19) found the employer's "As
 - **A scheme is pools or named members, not both** (F-SCN07-5). A pool and named staff for one employer are two schemes on two policies, each billed and renewed on its own terms. Mixing them would make every file and every declaration answer for members the other counts.
 
 Built in: `crates/group/src/state.rs` (`enter_changes`, `employer_limits`), `crates/group/src/work.rs` (pools), `crates/channels/src/http.rs` (`group_member_change`, `scheme_admins`, `second_administrator`), `crates/channels/src/directory.rs`, `crates/channels/ui/employer.html`. Docs: `docs/group.md`, `docs/channels.md`.
+
+## Staff access and the customer master (17 Nov 2026, scenario round 2)
+
+Decided while fixing SCN2-12, SCN2-13, SCN2-14, SCN2-23 and SCN2-24:
+
+- **A sign-in bound to a merged record sees nothing until it is re-linked.** After a merge the absorbed record resolves to the survivor for staff and services, but the person signed in on the absorbed record is refused `record_combined` for their record, history, hold and copy, and cannot change it. The identity service binds the sign-in to the survivor once the person's identity is checked again. The alternative, following the merge for the customer, shows one person another's details whenever a merge is wrong (F2-13-1). The survivor's own copy of everything held is their own record only; the privacy officer's copy holds both.
+- **A merge needs a reason; a pair judged apart needs a second look.** Someone who dismissed a duplicate review as two people cannot merge the same pair; someone else may, after looking again, and is shown who judged them apart, when and why (F2-13-5, F2-13-6). A blanket second-person approval on every merge was not chosen: most duplicates are clear and the merge can be undone; the risk sits where someone has already said "not the same person".
+- **Staff configuration and authority profiles take effect only on a second person's approval.** `approved_by` on the configuration commands is accepted as the name of the person asked (`approver`), never as an approval (F2-24-1). Giving someone an administering template on employment or assignment is still one person's act: a platform with one administrator could otherwise never appoint the second. That gap is left for the owner (see the round 2 fixes list).
+- **A role for a period is a grant kind** (`role`), approved like any grant, at most 31 days by default, so cover for leave ends by itself (F2-24-3).
+- **No manager named means an administrator recertifies**, other than the person themselves (F2-24-6).
+- **An access approver may remove a declared connection** as well as a staff administrator, with a reason, so the only administrator's own declaration is not stuck (F2-24-7, F2-24-9).
+- **Legal settles capacity through the portal as legal.** `settle_capacity` is asked of the customer master in the `legal` role under the staff action `customers.settle_capacity` (F2-23-6). The portal's identity needs the `legal` app role on the customer master.
+- **A record is not closed while the person has cover.** `exit` from the staff console is refused `cover_in_force`, naming the policies the core holds for the person that have not ended (F2-14-2).
+
+Built in: `crates/customers/src/service.rs` (`ask_about`, `merging`, `dismiss`), `crates/customers/src/store.rs` (`merge`, `dismiss_review`, `judged_apart`), `crates/channels/src/staff.rs` (`propose`, `decide_change`, `check_duties`, `SetManager`), `crates/channels/src/customers.rs` (`settles_capacity`), `crates/channels/src/http.rs` (`refuse_exit_with_cover`), `crates/channels/ui/records.html`.

@@ -1964,11 +1964,18 @@ impl DocumentsState {
     }
 
     fn shred_party(&mut self, party: PartyId, ctx: &mut Ctx) -> Result<(), Reject> {
-        if !self.party_keys.contains_key(&party) && !self.shredding.contains(&party) {
-            return reject("unknown_party", "the party has no key here");
+        // A hold is said first, with its case, whether or not anything is held yet.
+        if let Some(case) = self.holds.get(&HoldScope::Party(party.clone())) {
+            return reject(
+                "legal_hold",
+                format!("the party is under a legal hold ({case}): legal releases it before anything is shredded"),
+            );
         }
-        if self.holds.contains_key(&HoldScope::Party(party.clone())) {
-            return reject("legal_hold", "the party is under a legal hold");
+        if !self.party_keys.contains_key(&party) && !self.shredding.contains(&party) {
+            return reject(
+                "unknown_party",
+                "no document is held here for this person: none was ever issued to them, so there is nothing to shred",
+            );
         }
         if self.shredding.insert(party.clone()) {
             ctx.events.push(Event::PartyShredRequested { party: party.clone() });

@@ -120,7 +120,13 @@ pub fn reach_of(name: &str) -> Reach {
         "adviser_book" | "adviser_held_balance" | "adviser_practice" | "adviser_statement" | "adviser_replacements" | "dispute_replacement" => Reach::Adviser,
         "employer_schemes" | "set_scheme_admin" | "set_second_admin" | "scheme_command" | "upload_membership_file" | "scheme_question" => Reach::SchemeAdmin,
         "policy_claims" => Reach::AdviserOrAdmin,
-        "staff_admin" => Reach::Actions(&["staff.manage", "staff.approve_grant"]),
+        "staff_admin" => Reach::Actions(&[
+            "staff.manage",
+            "staff.approve_grant",
+            "staff.configure",
+            "staff.approve_configuration",
+            "staff.approve_profile_uplift",
+        ]),
         "staff_policy" => Reach::Actions(&["policy.view"]),
         "check_caller" => Reach::Actions(&["policy.view"]),
         "staff_document" => Reach::Actions(&["documents.download"]),
@@ -474,7 +480,7 @@ pub fn catalogue() -> Vec<Tool> {
         tool("staff_me", "My staff access", S, M::GET, "/staff/v1/me", "Your roles, reach, grants and recent access."),
         tool("staff_admin", "Staff administration", S, M::GET, "/staff/v1/admin", "For a staff administrator: grants, approvals waiting, alignment with the entitlement source."),
         tool("staff_access", "Change staff access", S, M::POST, "/staff/v1/access", "Request, approve or revoke a grant, break-glass, recertify, declare a personal connection, or administer staff.")
-            .json(r#"{"<command>": {...}} as the staff module takes it, e.g. {"request_grant": {...}}"#),
+            .json(crate::staff::PEOPLE_COMMANDS),
         tool("staff_policy", "Open a policy", S, M::GET, "/staff/v1/policies/{policy}", "A policy as your role and the case you work on let you see it. Every opening is in the access log.")
             .query("`case`: the case or task you work on (required for most roles); `scope`: comma-separated scope keys such as queue:claims-life."),
         tool("check_caller", "Check a caller", S, M::POST, "/staff/v1/policies/{policy}/caller", "Someone has phoned about a policy: whether to talk to them, and the words to use if not. The contact is logged.")
@@ -621,13 +627,14 @@ pub fn catalogue() -> Vec<Tool> {
             .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record."),
         tool("merge_customers", "Merge duplicates", S, M::POST, "/staff/v1/customers/merges", "Merge a duplicate record into the one that stays.")
             .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record.")
-            .json(r#"{"survivor": "<party that stays>", "absorbed": "<duplicate>", "review"?: "<review id>"}"#),
+            .json(r#"{"survivor": "<party that stays, usually the older record>", "absorbed": "<duplicate>", "review"?: "<review id>", "reason": "<why they are one person: the documents you checked>"}"#),
         tool("unmerge_customers", "Undo a merge", S, M::POST, "/staff/v1/customers/unmerges", "Separate two records merged in error.")
             .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record.")
             .json(r#"{"survivor", "absorbed"}"#),
         tool("duplicate_reviews", "Likely duplicates", S, M::GET, "/staff/v1/customers/reviews", "The open reviews of likely duplicate records.")
             .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record."),
-        tool("dismiss_review", "Not a duplicate", S, M::POST, "/staff/v1/customers/reviews/{review}/dismiss", "Close a duplicate review found not to be one.")
+        tool("dismiss_review", "Not a duplicate", S, M::POST, "/staff/v1/customers/reviews/{review}/dismiss", "Close a duplicate review found not to be one, saying why: a later merge of the same two records is shown it.")
+            .json(r#"{"reason": "why they are different people, such as different mothers' names on the birth certificates"}"#)
             .query("`case`: the case or task you work on; `scope`: comma-separated scope keys that reach the record."),
         // ---- Operations.
         tool("regions", "Regions and fail-over", O, M::GET, "/ops/v1/regions", "For operations: each region's nodes, which is serving, and the channel module's state."),
@@ -822,7 +829,7 @@ pub async fn endpoint(State(s): State<Arc<AppState>>, headers: HeaderMap, body: 
                     match call(&s, &headers, &tool, &arguments).await {
                         Ok(result) => rpc_result(id, result),
                         // Arguments that would not do are no news to someone the tool is not open to: say that first.
-                        Err(_) if !held.offers(&tool) => rpc_result(id, failed(NOT_YOURS)),
+                        Err(_) if !held.offers(&tool) => rpc_result(id, failed(&not_yours(tool.name))),
                         Err(problem) => rpc_result(id, failed(&problem)),
                     }
                 }
@@ -834,8 +841,15 @@ pub async fn endpoint(State(s): State<Arc<AppState>>, headers: HeaderMap, body: 
     Json(reply).into_response()
 }
 
-/// Said when a call's arguments would not do and the tool is not open to the caller anyway.
-const NOT_YOURS: &str = "this tool is not open to you: none of your roles or relationships reaches it, so ask whoever looks after your access if you need it";
+/// Said when a call's arguments would not do and the tool is not open to the caller anyway:
+/// for a staff tool, the actions that open it, so the person asks for the right one.
+fn not_yours(name: &str) -> String {
+    let base = "this tool is not open to you: none of your roles or relationships reaches it, so ask whoever looks after your access if you need it";
+    match reach_of(name) {
+        Reach::Actions(actions) => format!("{base}; it needs one of these actions: {}", actions.join(", ")),
+        _ => base.to_string(),
+    }
+}
 
 /// A tool result that says what went wrong, for the model to read.
 fn failed(text: &str) -> Value {

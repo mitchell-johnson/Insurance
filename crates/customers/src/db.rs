@@ -27,6 +27,7 @@ pub const MIGRATIONS: &[(i32, &str)] = &[
     (8, include_str!("../migrations/008_spending_holds.sql")),
     (9, include_str!("../migrations/009_owner_hold_relay.sql")),
     (10, include_str!("../migrations/010_alive_relay.sql")),
+    (11, include_str!("../migrations/011_review_reasons.sql")),
 ];
 
 #[derive(Clone)]

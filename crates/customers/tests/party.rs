@@ -381,19 +381,19 @@ fn merges_follow_the_rules() {
     let mut org = org;
     org.id = PartyId("pty_org".into());
     let code = |r: Result<(EventBody, EventBody), party::Reject>| r.unwrap_err().code;
-    assert_eq!(code(party::merge(&a, &Party::new(PartyId("none".into())))), "not_found");
-    assert_eq!(code(party::merge(&a, &a)), "invalid");
-    assert_eq!(code(party::merge(&a, &org)), "invalid");
+    assert_eq!(code(party::merge(&a, &Party::new(PartyId("none".into())), "same person")), "not_found");
+    assert_eq!(code(party::merge(&a, &a, "same person")), "invalid");
+    assert_eq!(code(party::merge(&a, &org, "same person")), "invalid");
     let mut absorbing = a.clone();
     absorbing.absorbed.insert(PartyId("pty_c".into()));
-    assert_eq!(code(party::merge(&b, &absorbing)), "invalid");
+    assert_eq!(code(party::merge(&b, &absorbing, "same person")), "invalid");
     let mut merged = b.clone();
     merged.merged_into = Some(a.id.clone());
-    assert_eq!(code(party::merge(&a, &merged)), "merged");
+    assert_eq!(code(party::merge(&a, &merged, "same person")), "merged");
     assert_eq!(merged.decide(&Change::Activate, "staff", now()).unwrap_err().code, "merged");
     let mut erased = b.clone();
     erased.shredded = true;
-    assert_eq!(code(party::merge(&a, &erased)), "shredded");
+    assert_eq!(code(party::merge(&a, &erased, "same person")), "shredded");
     assert_eq!(erased.decide(&Change::Activate, "staff", now()).unwrap_err().code, "shredded");
     assert_eq!(
         Party::new(PartyId("x".into())).decide(&Change::Activate, "staff", now()).unwrap_err().code,

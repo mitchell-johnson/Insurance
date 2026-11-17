@@ -375,7 +375,11 @@ fn portal_signed_in_by(
                     ],
                     &[DataClass::Ordinary, DataClass::Personal],
                 ),
-                template("privacy", &[staff_actions::AUDIT_CUSTOMERS], &[DataClass::Ordinary, DataClass::Personal]),
+                template(
+                    "privacy",
+                    &[staff_actions::AUDIT_CUSTOMERS, staff_actions::SETTLE_CAPACITY],
+                    &[DataClass::Ordinary, DataClass::Personal],
+                ),
                 template(
                     "conduct-officer",
                     &[workbench::actions::VIEW, workbench::actions::APPROVE_CONDUCT],
@@ -1268,6 +1272,17 @@ async fn the_staff_console_asks_the_four_questions() {
     // Administration.
     assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 51);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
+    // A profile change waits for its second person and is listed for the administrator (SCN2-24, F2-24-1),
+    // and a command that is not understood is answered with the commands there are (F2-24-4).
+    let profile = json!({ "set_profile": { "party": "sue", "profile": null, "approver": null } });
+    let (status, proposed) = portal.write("POST", "sub-alice", "/staff/v1/access", profile).await;
+    assert_eq!(status, StatusCode::OK, "{proposed}");
+    let admin = portal.get("sub-alice", "/staff/v1/admin").await.1;
+    assert_eq!(admin["pending_changes"][0]["proposed_by"], "alice", "{admin}");
+    assert_eq!(admin["changes_i_may_approve"], json!([]));
+    let (status, problem) = portal.write("POST", "sub-alice", "/staff/v1/access", json!({ "emply": {} })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(problem["detail"].as_str().unwrap().contains("- employ: "), "{problem}");
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
     assert_eq!(portal.write("POST", "sub-alice", "/staff/v1/access", path).await.0, StatusCode::OK);
@@ -5825,6 +5840,15 @@ async fn an_assistant_is_told_where_its_arguments_go() {
         not_hers["content"][0]["text"].as_str().unwrap().starts_with("this tool is not open to you"),
         "{not_hers}"
     );
+    // A staff tool names the actions that open it (SCN2-12, F2-12-6).
+    let not_his = call_tool(&portal, "sub-sue", "customer_export", json!({})).await;
+    assert!(
+        not_his["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .ends_with("it needs one of these actions: customers.export"),
+        "{not_his}"
+    );
     let hers = call_tool(&portal, "sub-hr", "set_scheme_admin", json!({ "policy": scheme })).await;
     assert_eq!(hers["content"][0]["text"], "party is required", "{hers}");
 }
@@ -6959,6 +6983,44 @@ async fn staff_work_in_the_customer_master() {
         (changed["path"].as_str(), changed["key"].as_str()),
         (Some("/v1/parties/kiri/commands"), Some("staff:chg-1"))
     );
+    // A record is not closed while the person has cover with us (SCN2-14, F2-14-2): Kiri owns a policy in force.
+    let exit = |key: &str| [("x-dev-subject", "sub-cd1".to_string()), ("idempotency-key", key.to_string())];
+    let (status, refused) = portal
+        .send(
+            "POST",
+            &format!("/staff/v1/customers/{KIRI}/commands?case=c-1"),
+            &exit("x-1"),
+            Some(json!({ "command": "exit" })),
+        )
+        .await;
+    assert_eq!((status, refused["title"].as_str()), (StatusCode::CONFLICT, Some("cover_in_force")), "{refused}");
+    assert!(refused["detail"].as_str().unwrap().contains("seven years"));
+    let closed = portal
+        .send(
+            "POST",
+            "/staff/v1/customers/kiri/commands?case=c-1",
+            &exit("x-2"),
+            Some(json!({ "command": "exit" })),
+        )
+        .await
+        .1;
+    assert_eq!(closed["path"], "/v1/parties/kiri/commands");
+    // Capacity is settled by someone holding that action, and asked of the master as legal (SCN2-23, F2-23-6).
+    let settle = json!({ "command": "settle_capacity", "outcome": "lacks_capacity" });
+    let (status, _) = portal
+        .send("POST", "/staff/v1/customers/kiri/commands?case=c-1", &exit("s-1"), Some(settle.clone()))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let legal = [("x-dev-subject", "sub-prv".to_string()), ("idempotency-key", "s-2".to_string())];
+    let settled = portal
+        .send("POST", "/staff/v1/customers/kiri/commands?case=legal-1", &legal, Some(settle))
+        .await
+        .1;
+    assert_eq!(
+        (settled["as"].as_str(), settled["purpose"].as_str()),
+        (Some("legal"), Some("capacity")),
+        "{settled}"
+    );
     let created = portal
         .write("POST", "sub-cd1", "/staff/v1/customers?case=c-1", json!({ "kind": "person", "facts": [] }))
         .await
@@ -7420,7 +7482,15 @@ async fn the_documents_console() {
         StatusCode::FORBIDDEN,
         "no privacy action"
     );
-    assert_eq!(tell("sub-docof", json!({ "type": "tick" })).await.0, StatusCode::BAD_REQUEST);
+    // A misspelt command is told the ones this person may send (SCN2-14, F2-14-5).
+    let (status, problem) = tell("sub-docof", json!({ "type": "tick" })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        problem["detail"].as_str().unwrap().contains("yours are: ") && problem["detail"].as_str().unwrap().contains("raise_notice_defect"),
+        "{problem}"
+    );
+    let (_, problem) = tell("sub-docview", json!({ "type": "tick" })).await;
+    assert!(problem["detail"].as_str().unwrap().ends_with("yours are: none"), "{problem}");
     assert_eq!(tell("sub-docof", json!("place_legal_hold")).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(portal.correspondence.received().len(), sent);
 }

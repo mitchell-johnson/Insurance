@@ -281,6 +281,20 @@ pub fn group_for(party: &PartyId) -> String {
 
 /// The events that create a party.
 pub fn create(id: &PartyId, kind: PartyKind, facts: &[FactInput], group: Option<String>, source: &str, now: DateTime<Utc>) -> Result<Vec<EventBody>, Reject> {
+    create_on(id, kind, facts, group, source, now, now.date_naive())
+}
+
+/// [`create`], with `today` the day facts may be stated up to: the books'
+/// business date where the caller works to one.
+pub fn create_on(
+    id: &PartyId,
+    kind: PartyKind,
+    facts: &[FactInput],
+    group: Option<String>,
+    source: &str,
+    now: DateTime<Utc>,
+    today: NaiveDate,
+) -> Result<Vec<EventBody>, Reject> {
     let source = token("source", source)?;
     let group = match group {
         Some(g) => token("group", &g)?,
@@ -291,7 +305,7 @@ pub fn create(id: &PartyId, kind: PartyKind, facts: &[FactInput], group: Option<
         kind: Some(kind),
         ..Party::default()
     };
-    let assertions = blank.assertions_for(facts, None, &source, SINCE_ALWAYS, now)?;
+    let assertions = blank.assertions_for(facts, None, &source, SINCE_ALWAYS, now, today)?;
     let needed: &[Field] = match kind {
         PartyKind::Person => &[Field::FamilyName],
         PartyKind::Organisation => &[Field::OrganisationName],
@@ -349,7 +363,7 @@ impl Party {
             }
             EventBody::Exited => self.lifecycle = Some(Lifecycle::Exited),
             EventBody::GroupAssigned { group } => self.group = group.clone(),
-            EventBody::MergedInto { survivor } => self.merged_into = Some(survivor.clone()),
+            EventBody::MergedInto { survivor, .. } => self.merged_into = Some(survivor.clone()),
             EventBody::Unmerged { .. } => self.merged_into = None,
             EventBody::Absorbed { other } => {
                 self.absorbed.insert(other.clone());
@@ -481,11 +495,11 @@ impl Party {
         source: &str,
         default_from: NaiveDate,
         now: DateTime<Utc>,
+        today: NaiveDate,
     ) -> Result<Vec<Assertion>, Reject> {
         if facts.is_empty() || facts.len() > 50 {
             return Err(reject("invalid", "between 1 and 50 facts at a time"));
         }
-        let today = now.date_naive();
         let reason = reason.map(|r| short_text("the reason", r)).transpose()?;
         let mut out = Vec::new();
         for f in facts {
@@ -549,6 +563,13 @@ impl Party {
     /// The events a command adds, or why it is refused. Commands that would
     /// change nothing (a repeat) return no events.
     pub fn decide(&self, change: &Change, source: &str, now: DateTime<Utc>) -> Result<Vec<EventBody>, Reject> {
+        self.decide_on(change, source, now, now.date_naive())
+    }
+
+    /// [`Party::decide`], with `today` the day the change is made on: the
+    /// books' business date where the caller works to one. A fact is stated
+    /// from it by default and never for a day after it.
+    pub fn decide_on(&self, change: &Change, source: &str, now: DateTime<Utc>, today: NaiveDate) -> Result<Vec<EventBody>, Reject> {
         if !self.exists() {
             return Err(reject("not_found", "no such party"));
         }
@@ -558,12 +579,11 @@ impl Party {
         if let Some(survivor) = &self.merged_into {
             return Err(reject("merged", format!("the party was merged into {survivor}; send it there")));
         }
-        let today = now.date_naive();
         let lifecycle = self.lifecycle.unwrap_or(Lifecycle::Prospect);
         let mut events = Vec::new();
         match change {
             Change::Record { facts, reason } => {
-                let assertions = self.assertions_for(facts, reason.as_deref(), &token("source", source)?, today, now)?;
+                let assertions = self.assertions_for(facts, reason.as_deref(), &token("source", source)?, today, now, today)?;
                 events.push(EventBody::Asserted { assertions });
             }
             Change::DeclineCorrection { field, statement } => events.push(EventBody::CorrectionDeclined(DeclinedCorrection {
@@ -884,7 +904,7 @@ impl Party {
 }
 
 /// The events of merging `absorbed` into `survivor`: one for each stream.
-pub fn merge(survivor: &Party, absorbed: &Party) -> Result<(EventBody, EventBody), Reject> {
+pub fn merge(survivor: &Party, absorbed: &Party, reason: &str) -> Result<(EventBody, EventBody), Reject> {
     for p in [survivor, absorbed] {
         if !p.exists() {
             return Err(reject("not_found", format!("no party {}", p.id)));
@@ -907,7 +927,10 @@ pub fn merge(survivor: &Party, absorbed: &Party) -> Result<(EventBody, EventBody
     }
     Ok((
         EventBody::Absorbed { other: absorbed.id.clone() },
-        EventBody::MergedInto { survivor: survivor.id.clone() },
+        EventBody::MergedInto {
+            survivor: survivor.id.clone(),
+            reason: Some(reason.to_string()),
+        },
     ))
 }
 

@@ -191,11 +191,18 @@ pub fn command(page: &Value, staff: &PartyId, callers: &[String], approvals: &[S
         }
         "config"
     } else {
-        let allowed = COMMANDS
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, c)| *c)
-            .ok_or_else(|| Refused::NotACommand(format!("{name} is not a command people send to documents")))?;
+        let allowed = COMMANDS.iter().find(|(n, _)| *n == name).map(|(_, c)| *c).ok_or_else(|| {
+            // Say what this person may send instead, so a slip of the keyboard is put right at once.
+            let yours: Vec<&str> = COMMANDS
+                .iter()
+                .filter(|(_, c)| c.iter().any(|c| callers.iter().any(|h| h == c)))
+                .map(|(n, _)| *n)
+                .collect();
+            Refused::NotACommand(format!(
+                "{name} is not a command people send to documents; yours are: {}",
+                if yours.is_empty() { "none".to_string() } else { yours.join(", ") }
+            ))
+        })?;
         allowed
             .iter()
             .find(|c| callers.iter().any(|h| h == *c))

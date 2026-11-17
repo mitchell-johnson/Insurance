@@ -27,6 +27,7 @@ fn staff() -> Who {
     Who {
         caller: "staff".into(),
         actor: "u1".into(),
+        today: None,
     }
 }
 
@@ -118,7 +119,7 @@ async fn erasure_destroys_the_key_and_keeps_the_chain() {
     let store = &w.app.store;
     let p = w.person("Erin", "Gone", "1940-04-04", &[("ird_number", json!("49091850"))]).await;
     let dup = w.person("Erin", "Gone", "1940-04-04", &[]).await;
-    let (status, _) = w.post("/v1/merges", "staff", json!({ "survivor": p, "absorbed": dup })).await;
+    let (status, _) = w.post("/v1/merges", "staff", json!({ "survivor": p, "absorbed": dup, "reason": "same" })).await;
     assert_eq!(status, StatusCode::OK);
     let id = PartyId(p.clone());
     // A hold stops erasure; so does a check that no longer holds.
@@ -179,7 +180,7 @@ async fn erasure_destroys_the_key_and_keeps_the_chain() {
     assert_eq!(records.len(), 1);
     // Merging into or out of an erased party is refused.
     let x = w.person("X", "Alive", "1970-01-01", &[]).await;
-    let (status, _) = w.post("/v1/merges", "staff", json!({ "survivor": x, "absorbed": p })).await;
+    let (status, _) = w.post("/v1/merges", "staff", json!({ "survivor": x, "absorbed": p, "reason": "same" })).await;
     assert_eq!(status, StatusCode::GONE);
 }
 
