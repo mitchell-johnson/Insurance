@@ -444,9 +444,17 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
                     },
                     Outbound::Reinsurance { key, notice } => self.peers.reinsurance(key, today, notice).await,
                     // Underwriting asks a person. Until the member is linked
-                    // to one the request waits, which is nobody's failure.
-                    Outbound::Underwriting { request, .. } if request.party.is_none() => {
+                    // to one the request waits, which is nobody's failure, but
+                    // staff are shown it waits (F2-22-3).
+                    Outbound::Underwriting { key, request } if request.party.is_none() => {
                         left += 1;
+                        let held = GroupCommand::UnderwritingHeld {
+                            key: key.clone(),
+                            code: "member_not_linked".to_string(),
+                        };
+                        self.send(format!("held:{key}:member_not_linked:{today}"), held)
+                            .await?
+                            .map_err(DriverError::Refused)?;
                         continue;
                     }
                     Outbound::Underwriting { key, request } => self.peers.underwriting(key, today, request).await,

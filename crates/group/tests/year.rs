@@ -73,7 +73,9 @@ fn agree(h: &mut Harness, t: SchemeTerms) -> Result<(), Reject> {
 fn agreed_terms_take_effect_on_the_renewal_date() {
     let mut h = with_members(short_year());
     let new_terms = next_year(&short_year());
-    assert_eq!(code(agree(&mut h, new_terms.clone())), "renewal_not_open");
+    let early = agree(&mut h, new_terms.clone()).unwrap_err();
+    assert_eq!(early.code, "renewal_not_open");
+    assert!(early.message.contains("opens on 02/01/2028"), "says when: {}", early.message);
     go_to(&mut h, d(2028, 1, 1));
     assert!(h.scheme().renewal.is_none());
     go_to(&mut h, d(2028, 1, 2));
@@ -97,6 +99,26 @@ fn agreed_terms_take_effect_on_the_renewal_date() {
     assert_eq!(h.notices.iter().filter(|n| matches!(n, ReinsuranceNotice::SetSchemeTerms { .. })).count(), 2);
     assert_eq!(h.scheme().status, SchemeStatus::Active);
     assert_eq!(h.core_lives().len(), 3);
+}
+
+/// Purpose: terms agreed on a day inside the renewal window open the renewal there and then,
+/// without waiting for the day's close to open it, and take effect on the renewal date.
+/// Why it matters: a scheme set up inside its lead time could not have its renewal agreed
+/// until a business day was closed, and the refusal did not say when it would open (found by
+/// the scenario run, F2-22-2).
+#[test]
+fn terms_agreed_inside_the_window_open_the_renewal() {
+    let mut t = short_year();
+    t.renewal_lead_days = 400;
+    let mut h = with_members(t.clone());
+    // As before the day's close has opened it: nothing open, nothing heard.
+    h.g.schemes.get_mut(SCHEME).unwrap().renewal = None;
+    h.published.clear();
+    agree(&mut h, next_year(&t)).unwrap();
+    assert!(h.saw(|e| matches!(e, GroupEvent::RenewalOpened { members: 3, .. })));
+    assert!(h.saw(|e| matches!(e, GroupEvent::RenewalAgreed { terms_version: 2, .. })));
+    go_to(&mut h, d(2028, 2, 1));
+    assert_eq!(h.scheme().terms, next_year(&t));
 }
 
 /// Purpose: while rates are guaranteed past the renewal date nobody can agree new terms
