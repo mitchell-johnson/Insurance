@@ -600,6 +600,54 @@ fn a_layer_split_between_books_pays_each_book_its_share() {
     w.assert_reconciled();
 }
 
+/// Purpose: an engagement started with no commission book of its own gives the distribution
+/// administrator an open task that says so, which a change set creating its book settles;
+/// an engagement started in the same change set as its book raises none.
+/// Why it matters: after an adviser moved provider, nothing he wrote earned commission, because
+/// books belong to engagements and nobody was told the new one had none (found by the scenario
+/// run, F2-20-8).
+#[test]
+fn an_engagement_without_a_book_is_a_task_until_it_has_one() {
+    let mut w = worked_example();
+    w.add_party("adviser-n", PartyKind::Adviser);
+    w.engage("eng-n", "adviser-n", "fap-one", d(2027, 11, 15));
+    let open = |w: &World| {
+        w.dist
+            .tasks
+            .values()
+            .filter(|t| t.kind == "needs_commission_book" && t.done.is_none())
+            .map(|t| (t.subject.clone(), t.detail.clone()))
+            .collect::<Vec<_>>()
+    };
+    let tasks = open(&w);
+    assert_eq!(tasks.len(), 1, "{tasks:?}");
+    assert_eq!(tasks[0].0, "eng-n");
+    assert!(tasks[0].1.contains("earns commission until a change set creates its book"), "{}", tasks[0].1);
+    let own_book = |id: &str, engagement: &str| Change::CreateBook {
+        id: BookId::from(id),
+        name: id.into(),
+        engagement: Some(EngagementId::from(engagement)),
+        owner: Some(party("fap-one")),
+        house: false,
+    };
+    w.activate("book-n", vec![own_book("book-n", "eng-n")]).unwrap();
+    assert!(open(&w).is_empty(), "settled by the book");
+
+    w.add_party("adviser-m", PartyKind::Adviser);
+    let start = Change::StartEngagement {
+        id: EngagementId::from("eng-m"),
+        engagement: Engagement {
+            adviser: party("adviser-m"),
+            with: party("fap-one"),
+            from: d(2027, 11, 15),
+            to: None,
+            accreditations: BTreeSet::from(["term-life".to_string()]),
+        },
+    };
+    w.activate("with-book", vec![start, own_book("book-m", "eng-m")]).unwrap();
+    assert!(open(&w).is_empty(), "started with its book");
+}
+
 /// Purpose: the structure commands are checked: parties and engagements are unique and of the
 /// right kind, relations cannot loop or duplicate, and only a structure manager may change
 /// them, with a migration feed allowed to load them.
@@ -690,7 +738,7 @@ fn the_structure_refuses_duplicates_loops_and_the_wrong_kind_of_party() {
         id: EngagementId::from("e"),
         on,
     };
-    assert_eq!(code(w.send(admin(), end_engagement(d(2020, 1, 1)))), "structure");
+    assert_eq!(code(w.send(admin(), end_engagement(d(2019, 12, 31)))), "structure");
     w.send(admin(), end_engagement(d(2028, 1, 1))).unwrap();
     assert_eq!(code(w.send(admin(), end_engagement(d(2029, 1, 1)))), "structure");
     assert_eq!(

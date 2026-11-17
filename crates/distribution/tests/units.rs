@@ -249,6 +249,52 @@ fn a_books_own_lines_replace_the_fragments_lines_for_the_same_component() {
     assert_eq!(Component::Base.label(), "base");
 }
 
+/// Purpose: a second engagement of the same adviser with the same provider over the same days
+/// is refused in words naming the one in force, while one with another provider, or one after
+/// the first ends, is taken; and an engagement ended on the day it began is withdrawn, never in
+/// force, so the adviser may be engaged there again that day, while ending one before it began
+/// is refused with the day it began.
+/// Why it matters: overlapping engagements were accepted without a word and listed the adviser
+/// twice, and one entered in error could not be withdrawn the same day; the refusal said it
+/// "ended before it began" (found by the scenario run, F2-20-3 and F2-20-4).
+#[test]
+fn engagements_do_not_overlap_and_one_entered_in_error_is_withdrawn() {
+    let mut s = Structure::default();
+    for (id, kind) in [("fap", PartyKind::Fap), ("other-fap", PartyKind::Fap), ("adviser", PartyKind::Adviser)] {
+        s.add_party(party(id), kind).unwrap();
+    }
+    let engage = |s: &mut Structure, id: &str, with: &str, from, to| {
+        s.start_engagement(
+            EngagementId::from(id),
+            Engagement {
+                adviser: party("adviser"),
+                with: party(with),
+                from,
+                to,
+                accreditations: BTreeSet::from(["term-life".to_string()]),
+            },
+        )
+    };
+    engage(&mut s, "e1", "fap", d(2027, 1, 1), None).unwrap();
+    let Err(StructureError::Invalid(why)) = engage(&mut s, "e2", "fap", d(2027, 11, 15), None) else {
+        panic!("an overlapping engagement was taken");
+    };
+    assert!(why.contains("already engaged with fap under e1 from 01/01/2027"), "{why}");
+    engage(&mut s, "e3", "other-fap", d(2027, 11, 15), None).unwrap();
+    // Withdrawn on the day it began: never in force, and the day is free again.
+    s.end_engagement(&EngagementId::from("e3"), d(2027, 11, 15)).unwrap();
+    assert!(!s.engagements[&EngagementId::from("e3")].on(d(2027, 11, 15)));
+    engage(&mut s, "e4", "other-fap", d(2027, 11, 15), None).unwrap();
+    let Err(StructureError::Invalid(why)) = s.end_engagement(&EngagementId::from("e4"), d(2027, 11, 14)) else {
+        panic!("an engagement ended before it began");
+    };
+    assert!(why.contains("began on 15/11/2027"), "{why}");
+    // After the first ends, the adviser may be engaged with that provider again.
+    s.end_engagement(&EngagementId::from("e1"), d(2027, 11, 15)).unwrap();
+    engage(&mut s, "e5", "fap", d(2027, 11, 15), None).unwrap();
+    assert!(engage(&mut s, "e6", "fap", d(2026, 1, 1), Some(d(2027, 2, 1))).is_err(), "inside the first");
+}
+
 /// Purpose: a licence problem anywhere up the chain reaches every engagement and payee that
 /// depends on it, on the dates it applies and no others, however many levels there are.
 /// Why it matters: addendum entry 4 makes licence status a cascading dated attribute. The

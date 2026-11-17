@@ -247,14 +247,36 @@ impl Structure {
         if engagement.to.is_some_and(|t| t <= engagement.from) {
             return Err(StructureError::Invalid("an engagement must last at least a day".into()));
         }
+        // One adviser, one provider, one engagement at a time: a second one
+        // over the same days is a mistake, and the provider's page would list
+        // the adviser twice (F2-20-3). Engagements with different providers
+        // may overlap, as an adviser may be engaged by more than one.
+        let overlaps = |e: &Engagement| e.from < engagement.to.unwrap_or(NaiveDate::MAX) && engagement.from < e.to.unwrap_or(NaiveDate::MAX);
+        if let Some((held, e)) = self
+            .engagements
+            .iter()
+            .find(|(_, e)| e.adviser == engagement.adviser && e.with == engagement.with && overlaps(e))
+        {
+            return Err(StructureError::Invalid(format!(
+                "{} is already engaged with {} under {held} from {}: end or withdraw that engagement first",
+                engagement.adviser,
+                engagement.with,
+                e.from.format("%d/%m/%Y")
+            )));
+        }
         self.engagements.insert(id, engagement);
         Ok(())
     }
 
+    /// End an engagement from a day. Ending it on the day it began withdraws
+    /// it: it was entered in error and was never in force (F2-20-4).
     pub fn end_engagement(&mut self, id: &EngagementId, on: NaiveDate) -> Result<(), StructureError> {
         let e = self.engagements.get_mut(id).ok_or_else(|| StructureError::UnknownEngagement(id.clone()))?;
-        if on <= e.from {
-            return Err(StructureError::Invalid("an engagement cannot end before it began".into()));
+        if on < e.from {
+            return Err(StructureError::Invalid(format!(
+                "an engagement cannot end before it began on {}; ending it on that day withdraws it",
+                e.from.format("%d/%m/%Y")
+            )));
         }
         if e.to.is_some_and(|t| t <= on) {
             return Err(StructureError::Invalid("the engagement has already ended".into()));

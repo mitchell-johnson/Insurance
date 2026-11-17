@@ -901,6 +901,35 @@ impl DistributionState {
         );
     }
 
+    /// An engagement started with no commission book earns nothing until a
+    /// change set gives it one: the distribution administrator is given a
+    /// task saying so (F2-20-8).
+    pub(crate) fn book_wanted(&mut self, ctx: &mut Ctx, id: &EngagementId) {
+        let Some(e) = self.config.structure.engagements.get(id) else { return };
+        if self.config.books.values().any(|b| b.engagement.as_ref() == Some(id)) {
+            return;
+        }
+        let detail = format!(
+            "{} is engaged with {} under {id} from {}, and no commission book belongs to that engagement: nothing written or serviced under it earns commission until a change set creates its book and activates its rules",
+            e.adviser,
+            e.with,
+            e.from.format("%d/%m/%Y")
+        );
+        let due = e.from;
+        self.task(ctx, "needs_commission_book", &id.0, due, detail);
+    }
+
+    /// A book made for an engagement settles the task its start raised.
+    pub(crate) fn book_made(&mut self, engagement: &EngagementId, book: &BookId) {
+        for t in self
+            .tasks
+            .values_mut()
+            .filter(|t| t.kind == "needs_commission_book" && t.subject == engagement.0 && t.done.is_none())
+        {
+            t.done = Some(format!("book {book} created"));
+        }
+    }
+
     /// Record a posting to ask of the core, and put it in the outbox.
     pub(crate) fn request(&mut self, ctx: &mut Ctx, partition: PartitionId, posting: CounterpartyPosting, owner: Option<String>) {
         self.requested.insert(
@@ -1023,8 +1052,9 @@ impl DistributionState {
                     with: engagement.with.clone(),
                     from: engagement.from,
                 };
-                structure(self.config.structure.start_engagement(id, engagement))?;
+                structure(self.config.structure.start_engagement(id.clone(), engagement))?;
                 ctx.emit(e);
+                self.book_wanted(ctx, &id);
                 Ok(())
             }
             Command::EndEngagement { id, on } => {
