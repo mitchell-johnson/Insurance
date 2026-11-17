@@ -32,7 +32,7 @@ const templates = [
   ["actuary", ["finance.view", "finance.actuary"], [F]],
   ["ledger-reader", ["finance.view"], [F]],
   ["claims", ["claims.work", "policy.view", "customers.find"], [O, P, S]],
-  ["ri-ops", ["reinsurance.operate"], [F]],
+  ["ri-ops", ["reinsurance.operate", "customers.find"], [F, P]],
   ["ri-lead", ["reinsurance.operate", "reinsurance.approve"], [F]],
   ["ri-reader", ["reinsurance.view"], [F]],
   ["records", ["documents.download", "policy.view"], [O]],
