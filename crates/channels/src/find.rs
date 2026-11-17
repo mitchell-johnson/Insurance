@@ -38,17 +38,30 @@ pub struct Wanted {
     pub hint: Option<&'static str>,
 }
 
-/// A birth date as people write it: 1984-03-07, 7/3/1984 or 7.3.1984 (day first, as in New Zealand).
+/// A birth date as people write it: 1984-03-07, 7/3/1984 or 7.3.1984 (day
+/// first, as in New Zealand), with the year in full or as two digits. Two
+/// digits are a year this century up to this year, else last century: a
+/// person is born in the past, so 84 is 1984 and 05 is 2005.
 fn date(word: &str) -> Option<NaiveDate> {
     if let Ok(d) = NaiveDate::parse_from_str(word, "%Y-%m-%d") {
         return Some(d);
     }
-    for format in ["%d/%m/%Y", "%d.%m.%Y", "%d-%m-%Y"] {
-        if let Ok(d) = NaiveDate::parse_from_str(word, format) {
-            return Some(d);
+    let parts: Vec<&str> = word.split(['/', '.', '-']).collect();
+    let [day, month, year] = parts[..] else { return None };
+    let year: i32 = match year.len() {
+        4 => year.parse().ok()?,
+        2 => {
+            let short: i32 = year.parse().ok()?;
+            let now = chrono::Datelike::year(&chrono::Utc::now().date_naive()) % 100;
+            if short <= now {
+                2000 + short
+            } else {
+                1900 + short
+            }
         }
-    }
-    None
+        _ => return None,
+    };
+    NaiveDate::from_ymd_opt(year, month.parse().ok()?, day.parse().ok()?)
 }
 
 fn is_name(word: &str) -> bool {
@@ -103,6 +116,10 @@ pub fn read(text: &str) -> Result<Wanted, String> {
         None if !probe.is_empty() => wanted.hint = Some("add the person's family name to search the customer master"),
         None => {}
     }
+    // A family name alone is shared by many people, and the master scores it too low to list anyone.
+    if wanted.probe.as_ref().is_some_and(|p| p.as_object().is_some_and(|o| o.len() == 1)) && !one_word {
+        wanted.hint = Some("a family name alone fits too many people: add a given name or the birth date");
+    }
     Ok(wanted)
 }
 
@@ -112,23 +129,33 @@ fn entry(view: &Projections, policy: &PolicyId, role: &str) -> Option<Value> {
     Some(json!({ "policy": e.policy, "number": e.number, "product": e.product_code, "status": e.status, "partition": e.partition, "as": role }))
 }
 
-/// Policies whose number (or reference) is the text or starts with it, best first.
+/// The fewest characters of the end of a policy number searched on: a
+/// caller often reads out only its last few.
+pub const SHORTEST_ENDING: usize = 3;
+
+/// Policies whose number (or reference) is the text, starts with it or
+/// (from three characters) ends with it, best first.
 pub fn numbered(view: &Projections, text: &str) -> Vec<Value> {
     let want = text.to_lowercase();
     let mut exact = Vec::new();
     let mut starting = Vec::new();
+    let mut ending = Vec::new();
     for e in view.directory() {
         let (number, id) = (e.number.to_lowercase(), e.policy.0.to_lowercase());
         if number == want || id == want {
             exact.push(e);
         } else if number.starts_with(&want) || id.starts_with(&want) {
             starting.push(e);
+        } else if want.chars().count() >= SHORTEST_ENDING && number.ends_with(&want) {
+            ending.push(e);
         }
     }
     starting.sort_by(|a, b| a.number.cmp(&b.number));
+    ending.sort_by(|a, b| a.number.cmp(&b.number));
     exact
         .into_iter()
         .chain(starting)
+        .chain(ending)
         .take(POLICIES)
         .filter_map(|e| entry(view, &e.policy, "number"))
         .collect()
@@ -181,7 +208,7 @@ mod tests {
     use super::*;
 
     /// Purpose: the words a member of staff types are read as the master's probe: last word the family name, a comma for family first, dates day first, digits as an IRD or phone number, an @ as an email.
-    /// Why it matters: a caller gives their name and birth date in whatever order they say it; read wrongly, the search finds nobody and the person is back to asking for a reference the caller never had.
+    /// Why it matters: a caller gives their name and birth date in whatever order they say it; read wrongly, the search finds nobody and the person is back to asking for a reference the caller never had. A year said as two digits, and a family name alone, were both met with silence (found by the scenario run, SCN-13).
     #[test]
     fn typed_words_become_a_probe() {
         let p = |t: &str| read(t).unwrap().probe.unwrap();
@@ -193,6 +220,22 @@ mod tests {
         );
         assert_eq!(p("Ngata 1984-03-07")["date_of_birth"], "1984-03-07");
         assert_eq!(p("Ngata 07.03.1984")["date_of_birth"], "1984-03-07");
+        assert_eq!(p("Ngata 07-03-1984")["date_of_birth"], "1984-03-07");
+        // A two-digit year is the last time it came round (found by the scenario run, SCN-13).
+        assert_eq!(p("Ngata 7/3/84")["date_of_birth"], "1984-03-07");
+        assert_eq!(p("Ngata 07/03/05")["date_of_birth"], "2005-03-07");
+        assert_eq!(p("Ngata 31/2/1984").get("date_of_birth"), None, "no such day");
+        assert_eq!(p("Ngata 7/3/984").get("date_of_birth"), None, "a three-digit year is no year");
+        assert_eq!(p("Ngata 7/3").get("date_of_birth"), None);
+        assert_eq!(p("Ngata 7/x/84").get("date_of_birth"), None);
+        assert_eq!(p("Ngata 7/3/x4").get("date_of_birth"), None);
+        assert_eq!(p("Ngata 7/3/x984").get("date_of_birth"), None);
+        // A family name alone is told to need more; one word is also tried as a policy number, so it is not.
+        assert_eq!(
+            read("Kiri, ").unwrap().hint,
+            Some("a family name alone fits too many people: add a given name or the birth date")
+        );
+        assert_eq!(read("Ngata").unwrap().hint, None);
         assert_eq!(p("O'Brien-Smith k@x.nz")["email"], "k@x.nz");
         assert_eq!(p("Ngata 021 555 1234")["family_name"], "Ngata");
         assert_eq!(p("Ngata 0215551234")["mobile_phone"], "0215551234");
