@@ -80,7 +80,7 @@ pub const MAKER_CHECKER: [&str; 2] = ["instruct_settlement", "resolve_dispute"];
 const KEEPS_REASON: [&str; 2] = ["abandon_notice", "abandon_instruction"];
 
 /// The console's questions: name, required text fields, required whole-number fields.
-const QUESTIONS: [(&str, &[&str], &[&str]); 11] = [
+const QUESTIONS: [(&str, &[&str], &[&str]); 12] = [
     ("exceptions", &[], &[]),
     ("notices", &[], &[]),
     ("abandoned", &[], &[]),
@@ -93,6 +93,8 @@ const QUESTIONS: [(&str, &[&str], &[&str]); 11] = [
     ("statements", &["reinsurer"], &[]),
     ("balance", &["treaty", "reinsurer"], &[]),
     ("consent_status", &["claim"], &[]),
+    // What the insurer keeps on one person's life on a date, across every policy on it.
+    ("retained", &["party", "on"], &[]),
 ];
 
 /// What this person may do in the console.
@@ -129,6 +131,13 @@ pub fn question(name: &str, fields: &BTreeMap<String, String>) -> Result<Value, 
         };
         let reinsurer = given("reinsurer").ok_or("statements needs reinsurer")?;
         return Ok(json!({ "statements": { "reinsurer": reinsurer, "after": after, "limit": 100 } }));
+    }
+    // A life is asked for by the person it is: their whole accumulation, whichever policies insure them.
+    if name == "retained" {
+        let party = given("party").ok_or("retained needs party: the person, found by name")?;
+        let on = given("on").ok_or("retained needs on, a date")?;
+        on.parse::<chrono::NaiveDate>().map_err(|_| "on is a date, as 2027-11-15".to_string())?;
+        return Ok(json!({ "retained": { "life": { "party": party }, "on": on } }));
     }
     let mut inner = Map::new();
     for field in *text {

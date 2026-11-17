@@ -12,10 +12,18 @@
 <div><label for="i-kind">Complainant is the</label><select id="i-kind"><option value="policyholder">Policyholder</option><option value="life_insured">Life insured</option><option value="claimant">Claimant</option><option value="beneficiary">Beneficiary</option><option value="scheme_member">Scheme member</option><option value="employer">Employer</option><option value="adviser">Adviser</option><option value="third_party">Third party</option></select></div>
 <div><label for="i-process">About</label><select id="i-process"><option value="service">Service</option><option value="claims">Claims</option><option value="underwriting">Underwriting</option><option value="billing">Billing</option><option value="sales">Sales</option><option value="privacy">Privacy</option><option value="adviser_conduct">Adviser conduct</option></select></div>
 <div><label for="i-policies">Policies it is about</label><input id="i-policies"></div>
+<div><label for="i-claims">Claims it is about (claim numbers, comma separated)</label><input id="i-claims"></div>
 <div><label for="i-doc">Summary document</label><input id="i-doc" required></div>
 <div><label for="i-vulnerable">Vulnerable?</label><select id="i-vulnerable"><option value="false">No</option><option value="true">Yes</option></select></div>
 <div><label for="i-adjust">Adjustments needed</label><input id="i-adjust"></div>
-<button>Record</button></div></form><div id="intake-msg" aria-live="polite"></div></section></div>
+</div>
+<details id="i-spot"><summary>Put it right on the spot (a service matter only)</summary><div class="row">
+<div><label for="i-outcome">Outcome</label><select id="i-outcome"><option value="">Not put right on the spot</option><option value="upheld">Upheld</option><option value="partly_upheld">Partly upheld</option><option value="resolved_by_agreement">Resolved by agreement</option><option value="not_upheld">Not upheld</option></select></div>
+<div><label for="i-reasons">Reasons (comma separated)</label><input id="i-reasons"></div>
+<div><label for="i-cause">Cause</label><select id="i-cause"></select></div>
+<div><label for="i-goodwill">Goodwill paid now, in dollars (optional)</label><input id="i-goodwill" type="number" step="0.01" min="0"></div>
+</div><p class="muted" id="i-limit">A complaint put right on the spot is recorded and closed at once.</p></details>
+<p><button>Record</button></p></form><div id="intake-msg" aria-live="polite"></div></section></div>
 
 <div data-view="Queue">
 <section><h2>Open complaints</h2><p class="muted">Vulnerable complainants first, then the nearest deadline.</p><div id="queue"></div></section>
@@ -49,34 +57,34 @@ const PROCESSES = ["service", "claims", "underwriting", "billing", "sales", "pri
 const C = ["complaint", "Complaint", "text"], K = ["case", "Conduct case", "text"];
 const ACTIONS = {
   complaints: {
-    assign: [C, ["handler", "Handler (staff reference)", "text"]],
+    assign: [C, ["handler", "Handler", "text"]],
     record_acknowledgement: [C, ["document", "Acknowledgement document", "text"]],
     record_update: [C, ["document", "Update document", "text"]],
-    refine_category: [C, ["category.process", "Process", "select", PROCESSES], ["category.product", "Product (optional)", "optional"], ["category.cause", "Cause code (optional)", "optional"]],
+    refine_category: [C, ["category.process", "Process", "select", PROCESSES], ["category.product", "Product (optional)", "optional"], ["category.cause", "Cause (optional)", "optcause"]],
     add_representative: [C, ["representative.party", "Representative (customer reference)", "text"], ["representative.relationship", "Relationship", "text"], ["representative.authority_document", "Authority document", "text"]],
     set_vulnerability: [C, ["vulnerable", "Vulnerable", "bool"], ["adjustments", "Adjustments (comma separated)", "list"]],
     ask_complainant: [C], record_complainant_response: [C],
-    grant_access: [C, ["to", "To (staff reference)", "text"], ["classes", "Data classes (personal, financial, insurance_sensitive, clinical)", "list"], ["purpose", "Purpose", "text"]],
-    revoke_access: [C, ["from", "From (staff reference)", "text"]],
+    grant_access: [C, ["to", "Colleague", "text"], ["classes", "Data classes (personal, financial, insurance_sensitive, clinical)", "list"], ["purpose", "Purpose", "text"]],
+    revoke_access: [C, ["from", "Colleague", "text"]],
     decide: [C, ["outcome", "Outcome", "select", OUTCOMES], ["reason_codes", "Reason codes (comma separated)", "list"], ["document", "Written outcome document", "optional"]],
     record_outcome_delivered: [C, ["on", "Delivered on", "date"]],
-    record_remediation: [C, ["kind", "Kind", "select", ["decision_reopened", "refund", "ex_gratia", "record_correction"]], ["reference", "Reference in the owning module", "text"], ["amount_minor", "Amount", "money"], ["authorised_by", "Authorised by (staff reference; blank for you)", "optional"]],
+    record_remediation: [C, ["kind", "Kind", "select", ["decision_reopened", "refund", "ex_gratia", "record_correction"]], ["reference", "Reference in the owning module", "text"], ["amount_minor", "Amount", "money"], ["authorised_by", "Authorised by (blank for you)", "optional"]],
     complete_remediation: [C, ["reference", "Reference", "text"]],
     record_systemic_finding: [C, ["remediation_case", "Remediation case", "text"]],
     declare_deadlock: [C], record_deadlock_notice: [C, ["document", "Deadlock notice document", "text"]],
-    close: [C, ["detail.cause", "Cause code", "text"], ["detail.product_version", "Product version (optional)", "optional"], ["detail.rule_version", "Rule version (optional)", "optional"], ["detail.template_version", "Template version (optional)", "optional"]],
+    close: [C, ["detail.cause", "Cause", "cause"], ["detail.product_version", "Product version (optional)", "optional"], ["detail.rule_version", "Rule version (optional)", "optional"], ["detail.template_version", "Template version (optional)", "optional"]],
     record_root_cause_review: [["month", "Month (YYYY-MM)", "text"], ["actions", "Actions, as JSON: [{\"kind\":\"training\",\"cause\":\"delay\",\"reference\":\"T-1\"}]", "json"]],
-    open_conduct_case: [K, ["kind", "Kind", "select", ["systemic_finding", "breach", "incident", "adviser_pattern"]], ["owner", "Owner (staff reference)", "text"], ["summary_document", "Summary document (optional)", "optional"], ["notify_regulator", "Regulator to be notified", "bool"]],
+    open_conduct_case: [K, ["kind", "Kind", "select", ["systemic_finding", "breach", "incident", "adviser_pattern"]], ["owner", "Owner", "text"], ["summary_document", "Summary document (optional)", "optional"], ["notify_regulator", "Regulator to be notified", "bool"]],
   },
   referral: {
     refer: [C, ["forum", "Forum", "select", ["scheme", "court", "privacy_regulator"]], ["reference", "Forum's reference", "text"], ["response_due", "Response due", "date"], ["documents_due", "Documents due (optional)", "optdate"]],
     record_forum_response: [C],
-    release_bundle: [C, ["bundle", "Bundle", "text"], ["documents", "Documents (comma separated)", "list"], ["reviewed_by", "Reviewed by (someone else)", "text"]],
+    release_bundle: [C, ["bundle", "Bundle", "text"], ["documents", "Documents (comma separated)", "list"], ["reviewed_by", "Reviewed by (a colleague, not you)", "text"]],
     record_forum_decision: [C, ["outcome", "Outcome", "select", OUTCOMES], ["binding", "Binding", "bool"], ["remediation_due", "Remediation due (optional)", "optdate"]],
     complete_forum_remediation: [C],
   },
   conduct: {
-    open_conduct_case: [K, ["kind", "Kind", "select", ["breach", "incident", "adviser_pattern", "systemic_finding"]], ["owner", "Owner (staff reference)", "text"], ["summary_document", "Summary document (optional)", "optional"], ["notify_regulator", "Regulator to be notified", "bool"]],
+    open_conduct_case: [K, ["kind", "Kind", "select", ["breach", "incident", "adviser_pattern", "systemic_finding"]], ["owner", "Owner", "text"], ["summary_document", "Summary document (optional)", "optional"], ["notify_regulator", "Regulator to be notified", "bool"]],
     record_customer_notified: [K, ["customer", "Customer", "text"], ["document", "Letter", "text"]],
     exclude_customer: [K, ["customer", "Customer", "text"], ["reason", "Reason", "text"]],
     draw_sample: [K, ["size", "Files to review", "int"]],
@@ -88,18 +96,27 @@ const ACTIONS = {
     close_conduct_case: [K, ["findings_document", "Findings document", "text"]],
   },
 };
-const forSeat = (seat) => seat === "complaints" ? { ...ACTIONS.complaints, ...ACTIONS.referral } : seat === "legal" ? { ...ACTIONS.referral, ...ACTIONS.conduct } : seat === "conduct" ? ACTIONS.conduct : {};
+const statusOf = (file) => file ? (typeof file.status === "string" ? file.status : Object.keys(file.status || {})[0]) : null;
+const fitting = (all) => {
+  const status = statusOf(openedFile);
+  if (!status) return all;
+  const referred = status === "referred";
+  return Object.fromEntries(Object.entries(all).filter(([name]) => !(name in ACTIONS.referral) || (name === "refer" ? !referred : referred)));
+};
+const forSeat = (seat) => fitting(seat === "complaints" ? { ...ACTIONS.complaints, ...ACTIONS.referral } : seat === "legal" ? { ...ACTIONS.referral, ...ACTIONS.conduct } : seat === "conduct" ? ACTIONS.conduct : {});
+let causes = [], limitMinor = 0;
 
 // What fields are filled from: the complaint or case open now, colleagues, and customers found by name.
-let opened = null, openCase = null, queued = [], cases = [];
-const STAFF_FIELDS = new Set(["handler", "to", "from", "owner", "reviewed_by", "authorised_by"]);
+let opened = null, openedFile = null, openCase = null, queued = [], cases = [];
+// Each colleague field offers the people who hold the action the work needs.
+const STAFF_FIELDS = { handler: "complaints.handle", to: "", from: "", owner: "complaints.conduct", reviewed_by: "", authorised_by: "complaints.handle" };
 function helpers(spec) {
   spec.forEach(([key], n) => {
     const input = $("f-" + n);
     if (!input || input.tagName !== "INPUT") return;
     if (key === "complaint") { input.value = opened || ""; portal.picker(input, () => Promise.resolve(queued.map((q) => ({ value: q.complaint, label: q.complaint, hint: [words(q.process), q.owner || "unassigned"].join(" · ") }))), { min: 0 }); }
     else if (key === "case") { input.value = openCase || ""; portal.picker(input, () => Promise.resolve(cases.map((c) => ({ value: c, label: c }))), { min: 0 }); }
-    else if (STAFF_FIELDS.has(key)) portal.picker(input, () => portal.colleagues(), { min: 0 });
+    else if (key in STAFF_FIELDS) portal.picker(input, () => portal.colleagues(STAFF_FIELDS[key] || undefined), { min: 0 });
     else if (key === "representative.party" || key === "customer") portal.picker(input, portal.people);
     else if (key === "month") input.value = portal.month(1);
   });
@@ -109,6 +126,7 @@ function fields() {
   put($("a-fields"), spec.map(([key, label, kind, options], n) => {
     const id = "f-" + n;
     const input = kind === "select" ? h("select", { id }, options.map((o) => h("option", { value: o }, words(o))))
+      : kind === "cause" || kind === "optcause" ? h("select", { id }, kind === "optcause" ? h("option", { value: "" }, "Not known yet") : null, causes.map((c) => h("option", { value: c }, words(c))))
       : kind === "bool" ? h("select", { id }, h("option", { value: "false" }, "No"), h("option", { value: "true" }, "Yes"))
       : h("input", { id, type: kind === "date" || kind === "optdate" ? "date" : kind === "int" || kind === "money" ? "number" : "text", step: kind === "money" ? "0.01" : null, min: kind === "int" || kind === "money" ? "0" : null,
           required: !["optional", "optdate", "list", "finding"].includes(kind) });
@@ -123,29 +141,32 @@ $("act").addEventListener("submit", run($("act-msg"), async () => {
   forSeat(seat)[name].forEach(([key, , kind], n) => {
     const raw = $("f-" + n).value;
     let value = kind === "bool" ? raw === "true" : kind === "list" ? list(raw) : kind === "int" ? Number(raw) : kind === "money" ? Math.round(Number(raw) * 100)
-      : kind === "json" ? JSON.parse(raw) : kind === "optional" || kind === "optdate" ? (raw.trim() || null) : raw;
+      : kind === "json" ? JSON.parse(raw) : kind === "optional" || kind === "optdate" || kind === "optcause" ? (raw.trim() || null) : raw;
     if (kind === "finding") { key = "finding"; value = raw.trim() ? { remediation_needed: { remediation_case: raw.trim() } } : "satisfactory"; }
     if (key === "authorised_by" && value === null) return;
     const path = key.split("."); let at = body;
     for (const part of path.slice(0, -1)) at = at[part] = at[part] || {};
     at[path[path.length - 1]] = value;
   });
-  await send(seat, { [name]: body });
+  const answer = await send(seat, { [name]: body });
   if (has("complaints") || has("legal") || has("conduct")) await queue();
+  // A vulnerability marker can take the complaint from a handler not trained for it.
+  if ((answer.events || []).some((e) => (e.event || e).complaint_returned_to_queue)) return `Done: ${words(name)}. It is back in the queue for a handler trained to work with vulnerable customers.`;
   return `Done: ${words(name)}.`;
 }));
 
 async function open(id) {
   const [file, timers] = await Promise.all([ask("complaint", { id }), ask("running", { id })]);
-  opened = id; fields();
-  $("o-id").value = id; $("file").hidden = false; $("file-title").textContent = `${id}: ${words(typeof file.status === "string" ? file.status : Object.keys(file.status || {})[0])}`;
+  opened = id; openedFile = file; commands();
+  $("o-id").value = id; $("file").hidden = false; $("file-title").textContent = `${id}: ${words(statusOf(file))}`;
   put($("file-timers"), table(["Timer", "Due"], (timers || []).map(([timer, due]) => [words(typeof timer === "string" ? timer : JSON.stringify(timer)), due])));
-  portal.put($("file-raw"), portal.details(file));
+  const claims = (file.links && file.links.cases) || [];
+  portal.put($("file-raw"), claims.length ? h("p", {}, "Claims: ", claims.map((c, n) => [n ? ", " : "", portal.link("claims", "", { claim: c }, c)])) : null, portal.details(file));
 }
 async function queue() {
   const rows = await ask("queue");
   queued = rows;
-  put($("queue"), table(["Complaint", "Owner", "About", "Adjustments", "Needs a trained handler", "Authority needed", "Next due", ""], rows.map((q) => [q.complaint, q.owner || "unassigned", words(q.process), (q.adjustments || []).join(", "), q.needs_trained_handler ? "yes" : "", q.authority_needed,
+  put($("queue"), table(["Complaint", "Owner", "About", "Adjustments", "Needs a trained handler", "Authority needed", "Next due", ""], rows.map((q) => [q.complaint, q.owner || "unassigned", words(q.process), (q.adjustments || []).map(words).join(", "), q.needs_trained_handler ? "yes" : "", q.authority_needed ? `level ${q.authority_needed}` : "any",
     q.next_due ? `${words(typeof q.next_due[0] === "string" ? q.next_due[0] : JSON.stringify(q.next_due[0]))} by ${q.next_due[1]}` : "",
     h("button", { class: "quiet", on: { click: run($("open-msg"), async () => { await open(q.complaint); $("file-title").scrollIntoView({ behavior: "smooth" }); }) } }, "Open")])));
 }
@@ -163,10 +184,19 @@ $("i-who").addEventListener("input", () => { delete $("i-who").dataset.party; th
 const policiesPicked = portal.pickMany($("i-policies"), () => Promise.resolve(theirs.map((p) => ({ value: p.policy, label: p.number || p.policy, hint: [p.product, p.as].join(" · ") }))), { min: 0, empty: "Find the complainant first to see their policies." });
 const adjustPicked = portal.pickMany($("i-adjust"), ADJUSTMENTS.map((a) => ({ value: a, label: words(a) })), { min: 0 });
 $("intake").addEventListener("submit", run($("intake-msg"), async () => {
-  await send("intake", { record_complaint: { complaint: $("i-id").value, channel: $("i-channel").value, complainant: $("i-who").dataset.party || $("i-who").value.trim(), complainant_kind: $("i-kind").value, links: { policies: policiesPicked.values() },
-    category: { process: $("i-process").value }, summary_document: $("i-doc").value, vulnerable: $("i-vulnerable").value === "true", adjustments: adjustPicked.values() } });
+  const party = $("i-who").dataset.party;
+  if (!party) throw new Error("Find the complainant and pick them from the list. Someone the search does not find is added under Customer records first.");
+  const outcome = $("i-outcome").value, goodwill = $("i-goodwill").value.trim();
+  let spot = null;
+  if (outcome) {
+    const cents = goodwill ? Math.round(Number(goodwill) * 100) : 0;
+    if (cents > limitMinor) throw new Error(`Goodwill on the spot is at most ${portal.money(limitMinor)}. Record the complaint without it and the complaints team can authorise more.`);
+    spot = { outcome, reason_codes: list($("i-reasons").value), cause: $("i-cause").value, put_right: cents > 0 ? [portal.reference("GOODWILL"), cents] : null };
+  }
+  await send("intake", { record_complaint: { complaint: $("i-id").value, channel: $("i-channel").value, complainant: party, complainant_kind: $("i-kind").value, links: { policies: policiesPicked.values(), cases: list($("i-claims").value) },
+    category: { process: $("i-process").value }, summary_document: $("i-doc").value, vulnerable: $("i-vulnerable").value === "true", adjustments: adjustPicked.values(), resolved_on_the_spot: spot } });
   const id = $("i-id").value; $("intake").reset(); policiesPicked.clear(); adjustPicked.clear(); delete $("i-who").dataset.party; fresh();
-  return `Recorded ${id}. The complaints team will acknowledge it.`;
+  return spot ? `Recorded ${id}, put right on the spot and closed.` : `Recorded ${id}. The complaints team will acknowledge it.`;
 }));
 $("period").addEventListener("submit", run($("period-msg"), async () => {
   const span = { from: $("p-from").value, to: $("p-to").value }, [rows, report] = await Promise.all([ask("register", span), ask("report", span)]);
@@ -195,11 +225,17 @@ const loaders = { "record-a-complaint": async () => {}, "queue": async () => { i
 portal.onView((key) => run($("msg"), loaders[key] || (async () => {}))());
 signIn(R).then(async () => {
   me = await ask("me");
-  $("seats").textContent = `${me.seats.map(words).join(", ")}. Authority level ${me.authority}${me.trained ? ", trained to work with vulnerable customers" : ""}.`;
+  $("seats").textContent = `${me.seats.map(words).join(", ")}.${has("complaints") ? ` Authority level ${me.authority}.` : ""}${me.trained ? " Trained to work with vulnerable customers." : ""}`;
+  const settings = await ask("settings");
+  causes = (settings && settings.cause_codes) || []; limitMinor = (settings && settings.front_line_limit_minor) || 0;
+  put($("i-cause"), causes.map((c) => h("option", { value: c }, words(c))));
+  $("i-limit").textContent = `A complaint put right on the spot is recorded and closed at once. Goodwill paid on the spot is at most ${portal.money(limitMinor)}.`;
   put($("a-seat"), me.seats.filter((s) => s !== "intake").map((s) => h("option", { value: s }, words(s)))); commands();
   // A reference someone typed while the page was signing them in is theirs to keep.
   if (!$("i-id").value) fresh();
-  $("p-from").value = portal.month() + "-01"; $("p-to").value = portal.today();
+  // Dates someone entered while the page was signing them in are theirs to keep.
+  if (!$("p-from").value) $("p-from").value = portal.month() + "-01";
+  if (!$("p-to").value) $("p-to").value = portal.today();
   // Opened from another console: a complaint from someone found there, or that person's complaints.
   const sent = portal.params();
   if (sent.complainant) {

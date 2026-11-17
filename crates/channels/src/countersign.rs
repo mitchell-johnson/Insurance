@@ -121,6 +121,25 @@ impl Countersign {
                 if self.open.contains_key(&id) {
                     return Err(reject("exists", format!("{id} is already waiting")));
                 }
+                // The same command twice would be pointless to the second person to sign it.
+                let essence = |c: &Value| {
+                    let mut c = c.clone();
+                    if let Some(fields) = c.get_mut(name).and_then(Value::as_object_mut) {
+                        fields.remove("reason");
+                        fields.remove("prepared_by");
+                    }
+                    c
+                };
+                let wanted = essence(&command);
+                if let Some(twin) = self.open.values().find(|p| p.module == module && essence(&p.command) == wanted) {
+                    return Err(reject(
+                        "duplicate",
+                        format!(
+                            "the same {name} is already waiting for a second person: {} prepared it as {}; sign or withdraw that one",
+                            twin.by, twin.id
+                        ),
+                    ));
+                }
                 if self.open.len() >= MAX_OPEN {
                     return Err(reject("full", "too many commands are waiting for a signature"));
                 }

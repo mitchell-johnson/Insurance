@@ -305,3 +305,19 @@ Mitchell asked for every declared AIA benefit to work. The calls made, and why:
 - **Guaranteed rates are chosen per layer.** Each layer keeps the rate table version in force when it was priced. An increase is priced on the table of its own day, which is what the wording says.
 - **Cover for Life is made paid up instead of lapsing** only where every paying cover qualifies. Otherwise it lapses as before. Premium for the days ahead is credited first, then what is unpaid for the days already covered is written off as at a lapse. This posts under its own kind (`paid_up_arrears`), so the conduct return does not count it as a lapse.
 - **Medical Advancements and Enhancement Pass Back are shown in the cover check.** The facts list the later definition version beside the bound one, and the assessor applies whichever is more favourable. The claims decision records both.
+
+
+## Back-office fixes from the scenario run (17 Nov 2026)
+
+The scenario run (SCN-17 to SCN-23, SCN-03) found the back-office consoles hard to use and some rules in the wrong order. The calls made, and why:
+
+- **A complaint is deadlocked by hand only after a decision or after its time.** A handler may record deadlock once a delivered outcome is rejected (not a front-line resolution or a withdrawal), or once the decide-by date has passed with no outcome. Before either, the complainant has not been given the insurer's final answer, so the scheme's deadlock letter would be premature. A complaint is decided once. (F-21-8; e2e E2E-049 and E2E-050 follow the old order and need their steps reordered.)
+- **A bundle's reviewer is a colleague seated in complaints or legal.** The portal refuses any other reviewer and offers only those colleagues. This is not a full maker-checker: the person who releases the bundle still must differ from the reviewer, as before. (F-21-7)
+- **Open conduct case counts stay with conduct and legal.** The complaints report drops `open_conduct_cases` for other seats. (F-21-12)
+- **A vulnerability marker takes the complaint from an untrained handler.** It goes back to the queue rather than staying with someone not trained for it. (F-21-4)
+- **A complainant is picked from the customer master.** A typed name is refused, so every complaint is about a known person. (F-21-1)
+- **Staff pages take their dates from the books.** Once a member of staff is signed in, `portal.today()` is the business date the portal last heard from the books (`/staff/v1/me` gives `business_date`), so month-ends and defaults match the ledger. Before sign-in, and for customers, it is New Zealand's date. (F-20-6, F-SCN22-2)
+- **Compliance holds a payee's payments.** A new Cedar action `payee.hold` (distribution administrator or compliance) covers `set_payment_hold`, so an adviser under investigation is not paid without recording a licence event that would misstate the licence and lock their book. (F-20-3)
+- **The commission console offers first what a person may do.** The rest is set apart under "Done by other roles", naming who does each, rather than hidden: the module still decides and records every attempt. (F-SCN03-5)
+- **A price for a fund held by an open price error is not offered for approval** until the error's correction is approved; the corrections themselves are. (F-SCN18)
+- **One open countersign item per command.** A second identical prepare is refused, naming who prepared the first. (F-SCN22-3)

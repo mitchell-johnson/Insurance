@@ -79,11 +79,23 @@ pub struct Tool {
     /// Query parameters, described. Empty for none.
     pub query: &'static str,
     pub body: Payload,
+    /// What the tool does to the system, where its method alone misleads:
+    /// a check sent as POST that changes nothing, or an erasure.
+    pub effect: Option<Effect>,
+}
+
+/// What a tool does, said to the assistant so it knows when to ask first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effect {
+    /// Reads or checks and changes nothing, whatever its method.
+    Reads,
+    /// Removes or erases something that cannot be had back.
+    Destroys,
 }
 
 impl Tool {
     fn writes(&self) -> bool {
-        self.method != Method::GET
+        self.method != Method::GET && self.effect != Some(Effect::Reads)
     }
 
     /// The path parameters, in order.
@@ -140,7 +152,7 @@ impl Tool {
             "annotations": {
                 "title": self.title,
                 "readOnlyHint": !self.writes(),
-                "destructiveHint": self.method == Method::DELETE,
+                "destructiveHint": self.method == Method::DELETE || self.effect == Some(Effect::Destroys),
                 "idempotentHint": self.method == Method::GET || self.method == Method::PUT,
                 "openWorldHint": false,
             },
@@ -159,6 +171,7 @@ fn tool(name: &'static str, title: &'static str, realm: Realm, method: Method, p
         choices: vec![],
         query: "",
         body: Payload::None,
+        effect: None,
     }
 }
 
@@ -167,6 +180,7 @@ trait With {
     fn json(self, about: &'static str) -> Self;
     fn file(self, about: &'static str) -> Self;
     fn choose(self, param: &'static str, values: Vec<&'static str>) -> Self;
+    fn effect(self, effect: Effect) -> Self;
 }
 
 impl With for Tool {
@@ -184,6 +198,10 @@ impl With for Tool {
     }
     fn choose(mut self, param: &'static str, values: Vec<&'static str>) -> Self {
         self.choices.push((param, values));
+        self
+    }
+    fn effect(mut self, effect: Effect) -> Self {
+        self.effect = Some(effect);
         self
     }
 }
@@ -399,9 +417,9 @@ pub fn catalogue() -> Vec<Tool> {
             .json("{}"),
         tool("read_disclosures", "Read a life's disclosure", S, M::POST, "/staff/v1/underwriting/disclosures", "The intake's record of a life's answers, for a purpose your role allows.")
             .json(r#"{"proposal", "life", "purpose"}"#),
-        tool("reinsurance_question", "Ask reinsurance", S, M::GET, "/staff/v1/reinsurance/{question}", "Exceptions, notices, abandonments, the sweep check, statements and notice retries.")
+        tool("reinsurance_question", "Ask reinsurance", S, M::GET, "/staff/v1/reinsurance/{question}", "Exceptions, notices, abandonments, the sweep check, statements, notice retries, what is owed to each reinsurer, and what the insurer keeps on one person's life. `exposure` names the reinsurers there is a balance with.")
             .choose("question", with_me(crate::reinsurance::question_names()))
-            .query("`period_end`, `number`, `seq` as the question needs."),
+            .query("As the question needs: `sweep_check` takes `period_end` (a date); `statement` takes `number`; `notice_retries` takes `seq`; `exposure` takes `on` (a date) and answers per reinsurer; `statements` takes `reinsurer` (and `after` for the next page); `balance` takes `treaty` and `reinsurer`; `consent_status` takes `claim`; `retained` takes `party` (the person) and `on` (a date)."),
         tool("reinsurance_command", "Act in reinsurance", S, M::POST, "/staff/v1/reinsurance/commands", "A command to reinsurance in its own JSON. An abandonment is prepared for a second person to sign.")
             .json(r#"{"<command>": {...}}"#),
         tool("reinsurance_decide", "Sign or withdraw a prepared abandonment", S, M::POST, "/staff/v1/reinsurance/{verb}/{id}", "Sign and send, or take back, a prepared abandonment.")
@@ -470,11 +488,13 @@ pub fn catalogue() -> Vec<Tool> {
         tool("regions", "Regions and fail-over", O, M::GET, "/ops/v1/regions", "For operations: each region's nodes, which is serving, and the channel module's state."),
         tool("reconciliation", "Reconciliation", O, M::GET, "/ops/v1/reconciliation", "For operations: the book's reconciliation across every partition, the checks the close makes, and how many policies the run has still to visit."),
         tool("customer_index", "Customer search index", O, M::GET, "/ops/v1/customers/index", "For operations: the customer master's search index and how far behind it is."),
-        tool("verify_customer", "Check a record's chain", O, M::POST, "/ops/v1/customers/{party}/verify", "For operations: check a person's record has an unbroken hash chain."),
+        tool("verify_customer", "Check a record's chain", O, M::POST, "/ops/v1/customers/{party}/verify", "For operations: check a person's record has an unbroken hash chain. It changes nothing.")
+            .effect(Effect::Reads),
         tool("rewrap_customers", "Re-encrypt records", O, M::POST, "/ops/v1/customers/rewrap", "For operations: re-encrypt records still under an old key, a batch at a time.")
             .json(r#"{"current_key_id", "limit"?: 1000}"#),
-        tool("reshred_customers", "Erase again after a restore", O, M::POST, "/ops/v1/customers/reshred", "For operations: after a restore from backup, erase again what had been shredded since.")
-            .json(r#"{"since": "YYYY-MM-DD, the day the restored backup was taken"}"#),
+        tool("reshred_customers", "Erase again after a restore", O, M::POST, "/ops/v1/customers/reshred", "For operations: after a restore from backup, erase again what had been shredded since. An erasure cannot be undone.")
+            .json(r#"{"since": "YYYY-MM-DD, the day the restored backup was taken"}"#)
+            .effect(Effect::Destroys),
     ]
 }
 
@@ -581,7 +601,10 @@ pub async fn endpoint(State(s): State<Arc<AppState>>, headers: HeaderMap, body: 
     }
     if let Some(version) = headers.get("mcp-protocol-version").and_then(|v| v.to_str().ok()) {
         if !VERSIONS.contains(&version) {
-            return refused(StatusCode::BAD_REQUEST, "this MCP protocol version is not supported");
+            return refused(
+                StatusCode::BAD_REQUEST,
+                &format!("this MCP protocol version is not supported; send one of {}", VERSIONS.join(", ")),
+            );
         }
     }
     let held = realms(&s, &headers).await;

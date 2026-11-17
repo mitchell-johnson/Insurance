@@ -15,7 +15,7 @@
   <form id="change"><h2>Prepare a change for the customer to approve</h2>
   <div class="row"><div><label for="kind">Change</label><select id="kind"><option value="decline_indexation">Decline indexation</option><option value="change_frequency">Change payment frequency</option><option value="cancel_policy">Cancel policy</option></select></div>
   <div><label for="freq">New payment frequency (for a change of frequency)</label><select id="freq"><option value="monthly">Monthly</option><option value="fortnightly">Fortnightly</option><option value="quarterly">Quarterly</option><option value="half_yearly">Half-yearly</option><option value="yearly">Yearly</option></select></div>
-  <div><label for="note">Details</label><input id="note" maxlength="200"></div><button id="send">Send to customer</button></div>
+  <div><label for="note">Details</label><input id="note" maxlength="200"></div><button id="send">Send to customer</button></div><p id="send-why" class="muted" hidden></p>
   <p class="muted">The customer approves in their app with their device. Nothing changes until they do.</p></form><div id="change-msg" aria-live="polite"></div></section>
 <section data-view="Your book"><h2>Requests you have made</h2><div id="requests"></div></section></main>
 <script src="/ui/app.js"></script>
@@ -26,6 +26,7 @@ const $ = (id) => document.getElementById(id);
 const R = "customers";
 let current = null;
 const standing = (s) => s.state === "active" ? "Active" : s.state === "ended" ? "Ended" : `Read-only since ${s.since}: licence of ${s.licence_of} is ${s.status}`;
+let why = "";
 async function open(policy, canTransact) {
   const view = await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(policy.policy));
   current = policy.policy;
@@ -50,12 +51,18 @@ async function open(policy, canTransact) {
   put($("claims"), claims.rows.length ? table(["Claim", "Status", "Notified", "Closed"], claims.rows.map((c) => [c.claim, String(c.status).replace(/_/g, " "), c.notified_on, c.closed_on || ""]))
     : h("p", { class: "muted" }, "No claims."));
   $("send").disabled = !canTransact;
+  // A disabled button says why, beside it.
+  $("send-why").hidden = canTransact;
+  $("send-why").textContent = canTransact ? "" : `You cannot send changes on this policy: ${why || "your engagement for it is not active"}.`;
   $("detail").scrollIntoView({ behavior: "smooth" });
 }
 async function load() {
   const book = await api(R, "GET", "/adviser/v1/book");
   clear($("readonly"));
-  if (book.read_only) $("readonly").append(h("div", { class: "banner warn", role: "status" }, h("strong", {}, "Your access is read-only. "), "You can see your book. Nothing can be quoted, submitted or changed until the licence your engagement depends on is restored or you move to another provider."));
+  // The banner names the licence and since when, so the adviser knows what to resolve.
+  const stopped = book.engagements.filter((e) => e.standing.state === "read_only").map((e) => `the licence of ${e.standing.licence_of} has been ${e.standing.status} since ${e.standing.since} (engagement ${e.engagement} with ${e.fap})`);
+  why = stopped.length ? stopped.join("; ") : "";
+  if (book.read_only) $("readonly").append(h("div", { class: "banner warn", role: "status" }, h("strong", {}, "Your access is read-only. "), `${why.replace(/^./, (c) => c.toUpperCase())}. You can see your book. Nothing can be quoted, submitted or changed until that licence is restored or you move to another provider.`));
   put($("engagements"), table(["Engagement", "Provider", "From", "To", "Standing"], book.engagements.map((e) => [e.engagement, e.fap, e.from, e.to || "", standing(e.standing)])));
   const totals = Object.entries(book.held.held || {});
   put($("held"), totals.length ? h("p", {}, "Total held: ", h("strong", {}, totals.map(([c, v]) => money(v, c)).join(", ")), ". It is released when the reason below is resolved.") : h("p", { class: "muted" }, "Nothing is being held from you."),

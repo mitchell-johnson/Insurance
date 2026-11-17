@@ -332,13 +332,16 @@ const portal = (() => {
     const draw = () => put(chosen, all().map((v) => h("span", { class: "pill" }, names[v] || v, h("button", { type: "button", class: "quiet", "aria-label": "Remove " + (names[v] || v), on: { click: () => { input.dataset.many = all().filter((x) => x !== v).join(","); draw(); } } }, "×"))));
     input.parentElement.append(chosen);
     picker(input, source, { ...opts, onPick: (item) => { names[item.value] = item.label || item.value; input.dataset.many = [...new Set([...all(), item.value])].join(","); input.value = ""; draw(); } });
-    return { values: () => [...all(), ...String(input.value).split(",").map((x) => x.trim()).filter(Boolean)], clear: () => { input.dataset.many = ""; input.value = ""; draw(); } };
+    const add = (value, label) => { names[value] = label || names[value] || value; input.dataset.many = [...new Set([...all(), value])].join(","); draw(); };
+    return { values: () => [...all(), ...String(input.value).split(",").map((x) => x.trim()).filter(Boolean)], add, clear: () => { input.dataset.many = ""; input.value = ""; draw(); } };
   }
 
   // ---- Defaults a person should not have to work out.
-  // Today and this month as New Zealand reckons them.
+  // Today and this month: the books' business date once a member of staff is signed in and the portal knows it,
+  // otherwise the date as New Zealand reckons it.
   const nzDate = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: "Pacific/Auckland", year: "numeric", month: "2-digit", day: "2-digit" }).format(d || new Date());
-  const today = () => nzDate();
+  let books = null;
+  const today = () => books || nzDate();
   const month = (back = 0) => { const [y, m] = today().split("-").map(Number); const t = new Date(Date.UTC(y, m - 1 - back, 1)); return t.toISOString().slice(0, 7); };
   const days = (n, from) => { const d = new Date((from || today()) + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
   // A new reference for something this person is creating: readable, dated and unique enough
@@ -428,8 +431,20 @@ const portal = (() => {
       if (dev) name = dev.subject;
       else { const claims = JSON.parse(atob(store.getItem("token:" + realm).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))); name = claims.name || claims.preferred_username || ""; }
     } catch { name = ""; }
-    if (name) { put(who, h("span", { class: "avatar", "aria-hidden": "true" }, name.replace(/^sub-/, "").slice(0, 2)), h("div", {}, h("strong", {}, name), h("span", {}, realm === "workforce" ? "Staff" : here() === "customer" ? "Customer" : "Partner"))); who.hidden = false; }
+    const show = (as) => { if (name) { put(who, h("span", { class: "avatar", "aria-hidden": "true" }, name.replace(/^sub-/, "").slice(0, 2)), h("div", {}, h("strong", {}, name), h("span", {}, as))); who.hidden = false; } };
+    show(realm === "workforce" ? "Signed in" : here() === "customer" ? "Customer" : "Partner");
     if (window.location.hash.length > 1) view(window.location.hash.slice(1).split("?")[0]);
+    if (realm === "workforce") return standing(show);
+  }
+  // A member of the workforce: on the staff directory or not, and the books' business date. Someone not on the
+  // directory (an operations engineer) is offered the platform pages only.
+  async function standing(show) {
+    let me = null;
+    try { me = await api("workforce", "GET", "/staff/v1/me"); } catch { me = null; }
+    if (me && me.business_date) books = me.business_date;
+    const staff = !!(me && me.staff);
+    show(staff ? "Staff" : "Not on the staff directory");
+    if (!staff) for (const a of document.querySelectorAll("aside.side nav [data-group]")) if (a.dataset.group !== "Platform") a.hidden = true;
   }
 
   // Views: a page's cards grouped under tabs, one group on screen at a time.
@@ -479,9 +494,9 @@ const portal = (() => {
     const app = h("div", { class: "app" + (kind === "workforce" ? "" : " top") });
     const skip = h("a", { class: "skip", href: "#content" }, "Skip to the page");
     if (kind === "workforce") {
-      const link = ([path, name, pic]) => h("a", { href: "/" + path, "aria-current": path === here ? "page" : null }, icon(pic), name);
+      const link = (group) => ([path, name, pic]) => h("a", { href: "/" + path, "data-group": group, "aria-current": path === here ? "page" : null }, icon(pic), name);
       const side = h("aside", { class: "side", id: "side" }, brand("/"),
-        h("nav", { "aria-label": "Consoles" }, NAV.map(([group, items]) => [h("h2", {}, group), items.map(link)])),
+        h("nav", { "aria-label": "Consoles" }, NAV.map(([group, items]) => [h("h2", { "data-group": group }, group), items.map(link(group))])),
         h("div", { class: "side-foot" }, who, h("div", { class: "tools" }, themeButton(), out)));
       const menu = h("button", { type: "button", "aria-label": "Menu", "aria-controls": "side", on: { click: () => app.classList.toggle("open") } }, icon("menu"));
       const scrim = h("button", { type: "button", class: "scrim", "aria-label": "Close the menu", on: { click: () => app.classList.remove("open") } });

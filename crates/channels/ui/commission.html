@@ -7,7 +7,7 @@
 <form id="ask"><div class="row"><div><label for="q">Show</label><select id="q"></select></div></div><div class="row" id="q-fields"></div><p><button>Show</button></p></form><div id="ask-msg" aria-live="polite"></div><div id="answer"></div></section>
 <section data-view="Change something"><h2>Change something</h2><p class="muted">The commission module decides whether your roles allow it, and records the decision with your reason. Held balance actions and replacement decisions have their own pages. A policy's adviser is appointed by its owner, in their app.</p>
 <form id="do"><div class="row"><div><label for="a">Action</label><select id="a"></select></div><div><label for="a-purpose">Why (recorded with the decision)</label><input id="a-purpose" required size="40"></div></div><div class="row" id="a-fields"></div><p><button>Do it</button></p></form><div id="do-msg" aria-live="polite"></div></section>
-<section data-view="Another command"><h2>Another command</h2><p class="muted">For the few commands with no form here (a new engagement, a relation, a proposed change to the rules): one command in the commission module's own JSON, for example <code>{"relate": {...}}</code>.</p>
+<section data-view="Another command"><h2>Another command</h2><p class="muted">For the few commands with no form here (a proposed change to the rules, an accrual hold, a payment instruction): one command in the commission module's own JSON, for example <code>{"relate": {...}}</code>.</p>
 <form id="send"><label for="cmd">Command</label><textarea id="cmd" rows="6" required></textarea>
 <div class="row"><div><label for="purpose">Why (recorded with the decision)</label><input id="purpose" required size="40"></div><button>Send</button></div></form><div id="send-msg" aria-live="polite"></div></section>
 </main>
@@ -21,7 +21,7 @@ const words = (s) => String(s).replace(/_/g, " ");
 // A field is [key, label, kind, options]. Kinds: text, date, int, bool, select, optional (blank is left out).
 const PARTY = ["party", "Party", "text"], ON = ["on", "On", "date"];
 const QUESTIONS = {
-  status: ["Status", []], open_tasks: ["Open tasks", []], conduct_cases: ["Conduct cases", []], relations: ["Relations", []], history: ["Configuration history", []], sweep_check: ["Sweep check", []],
+  status: ["Status", []], parties: ["Parties in the structure", []], open_tasks: ["Open tasks", []], conduct_cases: ["Conduct cases", []], relations: ["Relations", []], history: ["Configuration history", []], sweep_check: ["Sweep check", []],
   position: ["A party's position", [PARTY, ["as_at", "As at", "date"]]], proof_of_debt: ["Proof of debt", [PARTY, ["as_at", "As at", "date"]]],
   statement: ["A statement", [["payee", "Payee", "text"], ["number", "Statement number", "int"]]],
   held_control: ["Held control", [["date", "Date", "date"]]], month_end_blocks: ["Month-end blocks", [["date", "Date", "date"]]], clawback_exposure: ["Clawback exposure", [["date", "Date", "date"]]],
@@ -31,6 +31,8 @@ const ACTIONS = {
   add_party: ["Add an adviser, company or other party", [PARTY, ["kind", "Kind", "select", ["adviser", "company", "team", "authorised_body", "fap", "group", "referral_partner", "broker", "counterparty"]]]],
   record_licence: ["Record a licence state", [PARTY, ["state", "Licence is", "select", ["active", "suspended", "revoked", "lapsed"]], ["effective", "Effective", "date"], ["source_ref", "Source (register reference)", "text"]]],
   mark_ceased: ["Mark a party as ceased", [PARTY, ON, ["reason", "Reason", "select", ["deceased", "liquidation", "wound_up", "retired"]]]],
+  start_engagement: ["Engage an adviser with a provider", [["adviser", "Adviser", "text"], ["with", "Provider or authorised body", "text"], ["from", "From", "date"], ["to", "Until (optional, the first day it no longer holds)", "optdate"], ["accreditations", "Products accredited for (comma separated)", "text"]]],
+  relate: ["Put a party under, or licensed by, another", [["child", "Party", "text"], ["parent", "Under, licensed by or paid through", "text"], ["kind", "Relation", "select", ["under", "licensed_by", "payee_for"]], ["from", "From", "date"]]],
   end_engagement: ["End an engagement", [["id", "Engagement", "text"], ON]],
   end_relation: ["End a relation", [["child", "Party", "text"], ["parent", "Was under, licensed by or paid through", "text"], ["kind", "Relation", "select", ["under", "licensed_by", "payee_for"]], ON]],
   register_payee: ["Register a payee", [PARTY, ["agreement_ref", "Agreement reference", "text"], ["advance_recovery_ppm", "Advance recovery, parts per million of each payment", "int"]]],
@@ -41,21 +43,38 @@ const ACTIONS = {
   reject_change: ["Reject a proposed change to the rules", [["id", "Change", "text"], ["reason", "Reason", "text"]]],
   cut_statement: ["Cut a payee's statement now", [["payee", "Payee", "text"]]],
 };
+// The roles that may do each action, as the commission module's policy has it. Only the actions a person may do are offered.
+const MAY = { record_licence: ["distribution_admin", "compliance"], set_payment_hold: ["distribution_admin", "compliance"], approve_change: ["commission_approver", "compliance"],
+  reject_change: ["commission_ops"], cut_statement: ["commission_ops"] };
+const WHO = { distribution_admin: "the distribution administrator", compliance: "compliance", commission_approver: "a commission approver", commission_ops: "commission operations" };
+const may = (name, roles) => (MAY[name] || ["distribution_admin"]).some((r) => roles.includes(r));
+// A command as the module takes it: most are the fields as they are; a new engagement is given its reference here.
+const SHAPE = {
+  start_engagement: (f) => ({ id: portal.reference("ENG"), engagement: { adviser: f.adviser, with: f.with, from: f.from, to: f.to || null, accreditations: f.accreditations.split(",").map((x) => x.trim()).filter(Boolean) } }),
+  relate: (f) => ({ ...f, to: null }),
+};
+// What was recorded, repeated back in words.
+const said = (name, f, body) => {
+  const who = f.party || f.payee || f.child || f.adviser || f.id || "";
+  const rest = Object.entries(f).filter(([k, v]) => v != null && v !== "" && v !== who).map(([k, v]) => `${words(k)} ${words(v)}`).join(", ");
+  const made = name === "start_engagement" ? ` as ${body.id}` : "";
+  return `Done: ${ACTIONS[name][0].toLowerCase()}${who && who !== f.id ? ` for ${who}` : ""}${made}${rest ? ` (${rest})` : ""}.`;
+};
 // Draw a set of fields into a row, and read them back as an object.
 function draw(row, prefix, spec) {
   put(row, spec.map(([key, label, kind, options]) => {
     const id = prefix + key;
     const input = kind === "select" ? h("select", { id }, options.map((o) => h("option", { value: o }, words(o))))
       : kind === "bool" ? h("select", { id }, h("option", { value: "false" }, "No"), h("option", { value: "true" }, "Yes"))
-      : h("input", { id, type: kind === "date" ? "date" : kind === "int" ? "number" : "text", min: kind === "int" ? "0" : null, required: kind !== "optional" });
-    // A date starts at today; a party is picked from those the module has named.
+      : h("input", { id, type: kind === "date" || kind === "optdate" ? "date" : kind === "int" ? "number" : "text", min: kind === "int" ? "0" : null, required: kind !== "optional" && kind !== "optdate" });
+    // A date starts at the books' business date; a party is picked from those in the structure.
     if (kind === "date") input.value = portal.today();
     const holder = h("div", {}, h("label", { for: id }, label), input);
-    if (kind === "text" && PARTY_KEYS.has(key)) portal.picker(input, async () => [...parties.values()], { min: 0, empty: "Type the party's reference." });
+    if (kind === "text" && PARTY_KEYS.has(key)) portal.picker(input, async () => [...parties.values()], { min: 0, empty: "No party in the structure matches that. Parties are known here by their reference; add a new one with \u201cAdd an adviser, company or other party\u201d." });
     return holder;
   }));
 }
-const PARTY_KEYS = new Set(["party", "payee", "child", "parent"]);
+const PARTY_KEYS = new Set(["party", "payee", "child", "parent", "adviser", "with"]);
 // Every party the page has seen in the module's answers, with how it was seen.
 const parties = new Map();
 const met = (party, hint) => { if (party && !parties.has(party)) parties.set(party, { value: party, hint }); };
@@ -63,21 +82,28 @@ function read(prefix, spec, keepBlank) {
   const out = {};
   for (const [key, , kind] of spec) {
     const raw = $(prefix + key).value.trim();
-    if (kind === "optional") { if (raw) out[key] = raw; else if (keepBlank) out[key] = null; }
+    if (kind === "optional" || kind === "optdate") { if (raw) out[key] = raw; else if (keepBlank) out[key] = null; }
     else out[key] = kind === "bool" ? raw === "true" : kind === "int" ? Number(raw) : raw;
   }
   return out;
 }
 put($("q"), Object.entries(QUESTIONS).map(([k, [label]]) => h("option", { value: k }, label)));
-put($("a"), Object.entries(ACTIONS).map(([k, [label]]) => h("option", { value: k }, label)));
-const fresh = () => { draw($("q-fields"), "q-", QUESTIONS[$("q").value][1]); draw($("a-fields"), "a-", ACTIONS[$("a").value][1]); };
+const fresh = () => { draw($("q-fields"), "q-", QUESTIONS[$("q").value][1]); if ($("a").value) draw($("a-fields"), "a-", ACTIONS[$("a").value][1]); };
 $("q").addEventListener("change", () => draw($("q-fields"), "q-", QUESTIONS[$("q").value][1]));
 $("a").addEventListener("change", () => draw($("a-fields"), "a-", ACTIONS[$("a").value][1]));
-fresh();
+const partyHint = (p) => [words(p.kind), p.ceased ? `ceased ${p.ceased}` : "", p.licence ? `licence ${words(p.licence)} since ${p.licence_since}` : "", p.payment_hold ? `payments held: ${p.payment_hold}` : p.payee ? "payee" : ""].filter(Boolean).join(" · ");
 async function load() {
   const me = await api(R, "GET", BASE + "/me");
-  const [tasks, relations] = await Promise.all([api(R, "GET", BASE + "/open_tasks"), api(R, "GET", BASE + "/relations").catch(() => [])]);
-  for (const r of relations || []) { met(r.child, words(r.kind) + " " + r.parent); met(r.parent, ""); }
+  // What this person's roles may do comes first; the rest is set apart with who does it, so nobody is led to try it.
+  const keep = $("a").value, all = Object.entries(ACTIONS), mine = all.filter(([k]) => may(k, me.roles)), others = all.filter(([k]) => !may(k, me.roles));
+  const who = (k) => (MAY[k] || ["distribution_admin"]).map((r) => WHO[r]).join(" or ");
+  put($("a"), mine.map(([k, [label]]) => h("option", { value: k }, label)),
+    others.length ? h("optgroup", { label: "Done by other roles" }, others.map(([k, [label]]) => h("option", { value: k }, `${label} (${who(k)})`))) : null);
+  if (keep) $("a").value = keep;
+  put($("do-msg"), mine.length ? null : portal.empty("Your roles change nothing here: licences are recorded by compliance, the structure and payees by the distribution administrator, and rules and statements by commission operations."));
+  fresh();
+  const [tasks, known] = await Promise.all([api(R, "GET", BASE + "/open_tasks"), api(R, "GET", BASE + "/parties").catch(() => [])]);
+  for (const p of known || []) parties.set(p.party, { value: p.party, hint: partyHint(p) });
   const list = (tasks || []).slice().sort((a, b) => String(a.due).localeCompare(String(b.due)));
   put($("tasks"), list.length ? portal.table(["Task", "What", "About", "Due", "Detail"], list.map((t) => [t.id, words(t.kind), t.subject, t.due, t.detail])) : portal.empty("No task is waiting."));
   $("me").textContent = `${me.staff}: ` + (me.roles.length ? me.roles.map(words).join(", ") : "may look, holds no role that changes anything");
@@ -88,8 +114,10 @@ $("ask").addEventListener("submit", run($("ask-msg"), async () => {
 }));
 const done = (answer) => answer.duplicate ? "Already done." : "Done.";
 $("do").addEventListener("submit", run($("do-msg"), async () => {
-  const name = $("a").value;
-  return done(await api(R, "POST", BASE + "/commands", { command: { [name]: read("a-", ACTIONS[name][1], true) }, purpose: $("a-purpose").value }));
+  const name = $("a").value, fields = read("a-", ACTIONS[name][1], true), body = (SHAPE[name] || ((f) => f))(fields);
+  const answer = await api(R, "POST", BASE + "/commands", { command: { [name]: body }, purpose: $("a-purpose").value });
+  await load();
+  return answer.duplicate ? "Already done: nothing changed." : said(name, fields, body);
 }));
 $("send").addEventListener("submit", run($("send-msg"), async () => {
   let command;

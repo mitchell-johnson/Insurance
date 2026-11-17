@@ -112,6 +112,9 @@ async function dashboard() {
   const want = period, d = await ask("dashboard", { period, today: on });
   // Someone who picked another period while this one was being read sees the one they picked.
   if (want !== period) return;
+  shown = d;
+  $("sign-lead").disabled = !can("finance_lead") || !d.sign_offs_needed.includes("finance_lead");
+  $("sign-actuary").disabled = !can("appointed_actuary") || !d.sign_offs_needed.includes("appointed_actuary");
   checks.set(d.steps.filter((s) => s.status !== "green").map((s) => ({ value: s.id, label: s.name, hint: [words(s.status), s.blocking ? "blocking" : "", s.overdue ? "overdue" : ""].filter(Boolean).join(" · ") })));
   $("dash").hidden = false; $("dash-title").textContent = `${d.period}: ${words(cell(d.status)) || "not open"}`;
   put($("dash-summary"), h("p", {}, `${d.days_since_period_end < 0 ? `The period ends in ${-d.days_since_period_end} day(s).` : `${d.days_since_period_end} day(s) since the period ended.`} Journals: ${cell(d.journals)}.`),
@@ -136,8 +139,21 @@ let closingPeriods = [], agedKinds = [];
 let booksDate = null;
 const before = (date) => { const [y, m] = date.split("-").map(Number); return new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7); };
 const likely = () => closingPeriods[0] || (booksDate ? before(booksDate) : portal.month(1));
+const lastDay = (p) => { const [y, m] = p.slice(0, 7).split("-").map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); };
+const inPeriod = (date, p) => !!date && date.slice(0, 7) === p.slice(0, 7);
+// A journal's value date starts in its period: today if today is in it, else the period's last day.
+const valueDate = () => { const p = $("j-period").value; if (p && !inPeriod($("j-date").value, p)) $("j-date").value = inPeriod(today(), p) ? today() : lastDay(p); };
+$("j-period").addEventListener("change", valueDate);
+let shown = null;
 $("period").addEventListener("submit", run($("close-msg"), async () => { period = $("p-id").value; await dashboard(); }));
-const closing = (label, command, done) => run($("close-msg"), async () => { await send(command()); await dashboard(); await work(); return done; });
+const closing = (label, command, done) => run($("close-msg"), async () => {
+  try { await send(command()); } catch (e) {
+    const d = shown && shown.period === period ? shown : null;
+    if (d && (d.blockers.length || d.sign_offs_needed.length)) e.message += ` ${d.blockers.length ? "Still stopping the close: " + d.blockers.join("; ") + "." : ""}${d.sign_offs_needed.length ? " Sign-offs still needed: " + d.sign_offs_needed.map(words).join(", ") + "." : ""}`;
+    throw e;
+  }
+  await dashboard(); await work(); return done;
+});
 $("sign-lead").addEventListener("click", closing("lead", () => ({ sign_off: { period, capacity: "finance_lead" } }), "Signed off."));
 $("sign-actuary").addEventListener("click", closing("actuary", () => ({ sign_off: { period, capacity: "appointed_actuary" } }), "Signed off."));
 $("close-period").addEventListener("click", closing("close", () => ({ close_period: { period } }), "Closed."));
@@ -151,10 +167,18 @@ $("waive").addEventListener("submit", closing("waive", () => ({ waive_check: { p
 async function show(id) { journal = id; const j = await ask("journal", { id }); $("jview").hidden = false; portal.put($("j-raw"), portal.details(j)); }
 $("journal").addEventListener("submit", run($("journal-msg"), async () => {
   if (!$("j-lines").value.trim()) throw new Error("Give at least one line: account, amount, statutory fund.");
-  const lines = $("j-lines").value.split("\n").map((row) => row.split(",").map((s) => s.trim())).filter((row) => row[0]).map(([account, amount, fund]) => {
-    if (!/^-?\d+(\.\d{1,2})?$/.test(amount || "")) throw new Error(`"${amount}" is not an amount: use 250.00 or -250.00.`);
+  const rows = $("j-lines").value.split("\n").map((row) => row.trim()).filter(Boolean);
+  const lines = rows.map((row, n) => {
+    const parts = row.split(",").map((s) => s.trim());
+    if (parts.length > 3) throw new Error(`Line ${n + 1} ("${row}") has ${parts.length} parts. A line is account, amount, statutory fund: write the amount without thousands separators, as 12500.00.`);
+    const [account, amount, fund] = parts;
+    if (!/^-?\d+(\.\d{1,2})?$/.test(amount || "")) throw new Error(`Line ${n + 1}: "${amount || ""}" is not an amount: use 250.00 or -250.00.`);
+    if (fund && /^-?[\d.]+$/.test(fund)) throw new Error(`Line ${n + 1}: "${fund}" is not a statutory fund. A line is account, amount, statutory fund.`);
     return { account, currency: $("j-cur").value.toUpperCase(), signed_minor: Math.round(Number(amount) * 100), fund: fund || null };
   });
+  const net = lines.reduce((sum, l) => sum + l.signed_minor, 0);
+  if (net) throw new Error(`The journal does not balance: ${net > 0 ? "debits are more than credits" : "credits are more than debits"} by ${money(Math.abs(net))}.`);
+  if ($("j-period").value && !inPeriod($("j-date").value, $("j-period").value)) throw new Error(`The value date ${$("j-date").value} is not in ${$("j-period").value}. Pick a date in the period the journal is for.`);
   const id = $("j-id").value;
   await send({ propose_journal: { journal: { id, kind: $("j-kind").value, period: $("j-period").value, value_date: $("j-date").value, lines, reason: $("j-reason").value, evidence: $("j-evidence").value.split(",").map((s) => s.trim()).filter(Boolean) } } });
   $("jl-id").value = id; await show(id);
@@ -220,7 +244,12 @@ async function proposals() {
   put($("props"), rows.length ? table(["Proposal", "Kind", "Version", "Fingerprint", "Proposed by", ""], rows.map((r) => [r.id, words(r.kind), r.version, h("code", {}, cell(r.hash)), r.proposer,
     h("button", { class: "quiet", type: "button", disabled: !can("finance_lead"), on: { click: run($("other-msg"), async () => { await send({ approve_config: { id: r.id } }); await proposals(); return `Approved ${r.id}. It is in force.`; }) } }, "Approve")])) : portal.empty("Nothing is waiting for approval."));
 }
-$("aged").addEventListener("submit", run($("other-msg"), async () => { portal.put($("aged-out"), portal.details(await ask("aged_suspense", { as_at: $("ag-date").value }))); }));
+$("aged").addEventListener("submit", run($("other-msg"), async () => {
+  const a = await ask("aged_suspense", { as_at: $("ag-date").value });
+  portal.put($("aged-out"), a.fed_to ? h("p", { class: "muted" }, `As the books stand, fed to ${a.fed_to}. Receipts that matched no policy wait with payments, as unidentified receipts, until they are matched.`)
+    : h("div", { class: "banner warn", role: "status" }, "No day has been fed to the books yet, so nothing has been reported to suspense. This is not a clean suspense account: ask again once the core's close has run."),
+    portal.details({ as_at: a.as_at, items: a.items, total_minor: a.total_minor, count: a.count }));
+}));
 $("doc").addEventListener("submit", run($("other-msg"), async () => { await send({ document_aged_item: { kind: $("d-kind").value, party: $("d-party").value, since: $("d-since").value, action: $("d-action").value, owner: $("d-owner").value } }); return "Recorded."; }));
 const retry = (partition) => send({ retry_feed: { partition: Number(partition) } });
 $("retry").addEventListener("submit", run($("other-msg"), async () => { await retry($("r-part").value); return "The feed will be tried again."; }));
@@ -245,19 +274,22 @@ portal.picker($("d-owner"), () => portal.colleagues(), { min: 0 });
 portal.picker($("d-kind"), () => agedKinds.map((k) => ({ value: k, label: words(k) })), { min: 0, empty: "No aged item kind is waiting to be explained." });
 portal.picker($("p-id"), () => [...new Set([...closingPeriods, likely(), portal.month(1), portal.month(0)])].map((p) => ({ value: p, hint: closingPeriods.includes(p) ? "waiting to close" : "" })), { min: 0, none: "" });
 $("j-id").value = portal.reference("JNL"); $("ye-id").value = portal.reference("YE"); $("rf-id").value = portal.reference("RET");
-for (const id of ["j-date", "ag-date", "dr-date"]) $(id).value = today();
-$("w-due").value = portal.days(14);
+// Every button a role decides starts disabled, and is enabled only once the person's roles are known.
+const ROLE_BUTTONS = [["sign-lead", ["finance_lead"]], ["sign-actuary", ["appointed_actuary"]], ["close-period", ["finance_lead"]], ["j-approve", ["finance_approver"]], ["j-sign", ["appointed_actuary"]],
+  ["ag-classify", ["finance_operator", "finance_lead"]], ["co-send", ["finance_lead"]], ["rr-send", ["finance_lead"]], ["rf-send", ["finance_operator", "finance_lead"]], ["ye-send", ["finance_operator", "finance_lead"]]];
+for (const [id] of ROLE_BUTTONS) $(id).disabled = true;
 signIn(R).then(async () => {
+  for (const id of ["j-date", "ag-date", "dr-date"]) $(id).value = today();
+  $("w-due").value = portal.days(14);
   const me = await ask("me"); roles = me.roles;
-  $("ag-classify").disabled = !(can("finance_operator") || can("finance_lead"));
-  $("co-send").disabled = $("rr-send").disabled = !can("finance_lead");
-  $("rf-send").disabled = $("ye-send").disabled = !(can("finance_operator") || can("finance_lead"));
+  for (const [id, may] of ROLE_BUTTONS) $(id).disabled = !may.some((r) => can(r));
+  // A sign-off the period shown does not need stays disabled.
+  if (shown) for (const [id, role] of [["sign-lead", "finance_lead"], ["sign-actuary", "appointed_actuary"]]) $(id).disabled = !can(role) || !shown.sign_offs_needed.includes(role);
   definitions = (await ask("return_definitions")).rows;
   put($("rd-list"), definitions.length ? table(["Definition", "Title", "Currency", "Lines", "Used from", "Fingerprint"], definitions.map((d) => [d.name, d.title, d.currency, d.lines.length, d.effective_from || "the start", h("code", {}, d.hash)])) : portal.empty("No return definitions are loaded."));
   for (const id of ["rf-def", "rr-def"]) put($(id), definitions.map((d) => h("option", { value: d.name }, `${d.title} (${d.name})`)));
   await proposals();
   $("roles").textContent = roles.length ? roles.map(words).join(", ") : "View only.";
-  for (const [id, role] of [["sign-lead", "finance_lead"], ["sign-actuary", "appointed_actuary"], ["close-period", "finance_lead"], ["j-approve", "finance_approver"], ["j-sign", "appointed_actuary"]]) $(id).disabled = !can(role);
   const s = await ask("status");
   booksDate = typeof s.last_date === "string" ? s.last_date : null;
   const stalled = s.partitions.filter((p) => p.stalled), operator = can("finance_operator") || can("finance_lead");
@@ -269,6 +301,7 @@ signIn(R).then(async () => {
   await work();
   // The likely period is filled in everywhere one is asked, and its close is opened when one is waiting.
   for (const id of ["p-id", "j-period", "tb-period", "ex-period", "rf-period"]) if (!$(id).value) $(id).value = likely();
+  valueDate();
   if (closingPeriods.length && !period) { period = $("p-id").value; await dashboard(); }
   await groups();
 }).catch(portal.refuse);

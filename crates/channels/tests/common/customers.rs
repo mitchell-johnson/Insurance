@@ -250,6 +250,17 @@ impl Master for MasterDouble {
             if desk.about().is_some_and(|p| p.0 == "nobody") {
                 return Ok((404, json!({ "title": "not_found", "detail": "no such party" })));
             }
+            // As the master answers when the portal's own app registration lacks the role it asks in.
+            if desk.about().is_some_and(|p| p.0 == "ungranted") {
+                return Ok((
+                    401,
+                    json!({ "error": { "code": "unauthorised", "message": "invalid token: the token does not carry the role operations" } }),
+                ));
+            }
+            // As the master's framework answers a body it cannot read: no JSON at all.
+            if desk.about().is_some_and(|p| p.0 == "garbled") {
+                return Ok((422, Value::Null));
+            }
             let (method, path, key, body) = desk.request();
             let (role, purpose) = desk.role();
             let mut echo = json!({ "method": method.as_str(), "path": path, "key": key, "body": body, "as": role, "purpose": purpose });

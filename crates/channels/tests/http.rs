@@ -2033,6 +2033,63 @@ async fn the_unit_pricing_console() {
     }
 }
 
+/// Purpose: a bundle released to an external forum names as its reviewer a colleague who works complaints or legal, never a typed
+/// name that is nobody, nor a colleague outside those teams; and the report's count of open conduct cases is shown only to the
+/// conduct function and legal.
+/// Why it matters: found by the scenario run, SCN-21 (F-21-7, F-21-12). Legal released a bundle "reviewed by" a made-up name and it
+/// was accepted, so the second check on what a forum is sent proved nothing; and the complaints team saw a trace of conduct work.
+#[tokio::test]
+async fn a_bundle_is_reviewed_by_a_colleague_and_conduct_counts_stay_with_conduct() {
+    let portal = portal();
+    let tell = |who: &'static str, seat: &'static str, command: Value| {
+        let portal = &portal;
+        async move {
+            portal
+                .write("POST", who, "/staff/v1/complaints/commands", json!({ "as": seat, "command": command }))
+                .await
+        }
+    };
+    for (who, seat, command) in [
+        (
+            "sub-front",
+            "intake",
+            json!({ "record_complaint": { "complaint": "c-9", "channel": "call", "complainant": KIRI, "complainant_kind": "policyholder",
+                "category": { "process": "service" }, "summary_document": "doc-c-9", "vulnerable": false } }),
+        ),
+        ("sub-cmp2", "complaints", json!({ "assign": { "complaint": "c-9", "handler": "cmp-1" } })),
+        (
+            "sub-cmp1",
+            "complaints",
+            json!({ "refer": { "complaint": "c-9", "forum": "scheme", "reference": "IFSO-1", "response_due": "2099-01-01", "documents_due": null } }),
+        ),
+    ] {
+        let (status, done) = tell(who, seat, command).await;
+        assert_eq!(status, StatusCode::OK, "{done}");
+    }
+    let release =
+        |bundle: &str, reviewer: &str| json!({ "release_bundle": { "complaint": "c-9", "bundle": bundle, "documents": ["doc-c-9"], "reviewed_by": reviewer } });
+    for nobody in ["zz-nobody", "fin-1"] {
+        let (status, problem) = tell("sub-lex", "legal", release("b-1", nobody)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+        assert!(problem["detail"].as_str().unwrap().contains("pick the colleague who reviewed it"), "{problem}");
+    }
+    let (status, done) = tell("sub-lex", "legal", release("b-1", "cmp-2")).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+
+    let open = json!({ "open_conduct_case": { "case": "b-9", "kind": "breach", "owner": "con-1", "summary_document": null, "notify_regulator": false } });
+    assert_eq!(tell("sub-con", "conduct", open).await.0, StatusCode::OK);
+    let report = |who: &'static str| {
+        let portal = &portal;
+        async move { portal.get(who, "/staff/v1/complaints/report?from=2020-01-01&to=2099-12-31").await.1 }
+    };
+    let team = report("sub-cmp2").await;
+    assert!(team.get("open_conduct_cases").is_none() && team["received"] == 1, "{team}");
+    assert_eq!(report("sub-con").await["open_conduct_cases"], 1);
+    // Front-line staff read what they pick from: the cause codes and the limit for putting a matter right on the spot.
+    let settings = portal.get("sub-front", "/staff/v1/complaints/settings").await.1;
+    assert!(settings["cause_codes"].is_array() && settings["front_line_limit_minor"].is_i64(), "{settings}");
+}
+
 /// Purpose: the complaints and conduct workbench end to end against that module's own code: a seat follows from a person's staff
 /// actions; front-line staff record and nothing more; the complaints team reads the queue, the file, the register and the report;
 /// conduct cases are open only to the conduct function and legal; a handler's authority and training and a remediation's authority
@@ -2250,6 +2307,27 @@ async fn the_complaints_and_conduct_workbench() {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
         let problem: Value = serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
         assert_eq!(problem["title"], "complaints_unavailable");
+    }
+}
+
+/// Purpose: reinsurance asks what the insurer keeps on one person's life on a date, by the person, whatever policies insure them;
+/// the question needs the person and a real date, and the MCP tool's description names the fields each question takes.
+/// Why it matters: found by the scenario run, SCN-22 (F-SCN22-1, F-SCN22-5). A large life above the automatic limit could not be
+/// looked at by screen or by MCP: the console asked only per reinsurer, and an assistant was not told which fields any question needed.
+#[tokio::test]
+async fn reinsurance_reads_a_lifes_accumulation() {
+    let portal = portal();
+    let (status, kept) = portal.get("sub-riview", "/staff/v1/reinsurance/retained?party=anna&on=2027-11-15").await;
+    assert_eq!((status, kept.is_i64()), (StatusCode::OK, true), "{kept}");
+    for (bad, why) in [("retained?on=2027-11-15", "needs party"), ("retained?party=anna&on=soon", "is a date")] {
+        let (status, problem) = portal.get("sub-riview", &format!("/staff/v1/reinsurance/{bad}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+        assert!(problem["detail"].as_str().unwrap().contains(why), "{problem}");
+    }
+    let tools = ic_channels::mcp::catalogue();
+    let ask = tools.iter().find(|t| t.name == "reinsurance_question").unwrap();
+    for named in ["`period_end`", "`on`", "`reinsurer`", "`treaty`", "`claim`", "`party`"] {
+        assert!(ask.query.contains(named), "{named}");
     }
 }
 
@@ -6417,6 +6495,103 @@ async fn operations_work_in_the_customer_master() {
     assert_eq!(portal.get("sub-cd1", "/ops/v1/customers/index").await.0, StatusCode::FORBIDDEN);
     // Operations work has no staff action, so the staff desk refuses it outright.
     assert_eq!(ic_channels::customers::Desk::Index.action(), None);
+}
+
+/// Purpose: when the customer master refuses the portal's own sign-in, the operator is told it is the portal's grant on the master
+/// that is missing, as a fault of ours (502), not that their own token lacks a role; a body the master cannot read is said as such;
+/// and a re-encryption or erasure sent without the field it needs is refused here naming that field.
+/// Why it matters: found by the scenario run, SCN-23 (F-23-1, F-23-2). The engineer was told "the token does not carry the role
+/// operations" about his own sign-in when the portal's identity lacked the grant, and sent after the wrong problem; and `{}` gave
+/// only "the customer master did not take it".
+#[tokio::test]
+async fn customer_master_refusals_say_whose_fault_and_what_is_missing() {
+    let portal = portal();
+    let ops = [("x-dev-subject", "sub-ops".to_string()), ("x-dev-roles", "operations".to_string())];
+    let (status, problem) = portal.send("POST", "/ops/v1/customers/ungranted/verify", &ops, None).await;
+    assert_eq!(
+        (status, problem["title"].as_str()),
+        (StatusCode::BAD_GATEWAY, Some("customer_master_grant")),
+        "{problem}"
+    );
+    let detail = problem["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("portal's identity needs the operations role") && detail.contains("Nothing is wrong with your own sign-in"),
+        "{detail}"
+    );
+    let (status, problem) = portal.send("POST", "/ops/v1/customers/garbled/verify", &ops, None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{problem}");
+    assert!(problem["detail"].as_str().unwrap().contains("could not read the request"), "{problem}");
+    for (path, body, named) in [
+        ("/ops/v1/customers/rewrap", json!({}), "current_key_id is needed"),
+        ("/ops/v1/customers/reshred", json!({}), "since is needed"),
+        ("/ops/v1/customers/reshred", json!({ "since": "yesterday" }), "since is a date"),
+    ] {
+        let (status, problem) = portal.send("POST", path, &ops, Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
+        assert!(problem["detail"].as_str().unwrap().contains(named), "{problem}");
+    }
+}
+
+/// Purpose: a member of staff's own standing carries the books' business date, the same date the channel module reports, so every
+/// page's dates start from the books and not from the browser's clock.
+/// Why it matters: found by the scenario run, SCN-17, SCN-18 and SCN-20 (F-SCN17-3, F-SCN18-6, F-20-6). The finance, pricing and
+/// commission consoles filled every date from the browser, so a journal's value date fell outside its period and a suspension was
+/// recorded as effective a year before it was opened.
+#[tokio::test]
+async fn staff_pages_take_their_dates_from_the_books() {
+    let portal = portal();
+    let ops = [("x-dev-subject", "ops-1".to_string()), ("x-dev-roles", OPERATIONS.to_string())];
+    let books = portal.send("GET", "/ops/v1/regions", &ops, None).await.1["channels"]["business_date"].clone();
+    assert!(books.is_string(), "{books}");
+    assert_eq!(portal.get("sub-sue", "/staff/v1/me").await.1["business_date"], books);
+}
+
+/// Purpose: a tool's hints say what it does, not only what its method suggests: the record chain check changes nothing and takes
+/// no idempotency key, erasing again after a restore is destructive; the regions answer gives the moment last heard as a time a
+/// person can read; and a wrong protocol version is answered with the versions spoken.
+/// Why it matters: found by the scenario run, SCN-23 (F-23-3, F-23-5, F-23-6). An assistant asks before a destructive call only if
+/// told it is one, so an erasure marked harmless could be run unasked; and a raw epoch or an unexplained refusal leaves the operator
+/// to work out what the answer means.
+#[tokio::test]
+async fn operations_tools_say_what_they_do_and_answer_in_readable_terms() {
+    let portal = portal();
+    let ops = vec![("x-dev-subject", "ops-1".to_string()), ("x-dev-roles", OPERATIONS.to_string())];
+    let (_, listed) = mcp(&portal, &ops, json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" })).await;
+    let tool = |name: &str| {
+        listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == name)
+            .cloned()
+            .unwrap()
+    };
+    let verify = tool("verify_customer");
+    assert_eq!(verify["annotations"]["readOnlyHint"], true, "{verify}");
+    assert!(verify["inputSchema"]["properties"].get("idempotency_key").is_none(), "{verify}");
+    let reshred = tool("reshred_customers");
+    assert_eq!(
+        (&reshred["annotations"]["destructiveHint"], &reshred["annotations"]["readOnlyHint"]),
+        (&json!(true), &json!(false)),
+        "{reshred}"
+    );
+    assert_eq!(tool("rewrap_customers")["annotations"]["destructiveHint"], false);
+
+    let (_, console) = portal.send("GET", "/ops/v1/regions", &ops, None).await;
+    let heard = console["channels"]["heard"].as_i64().unwrap();
+    assert_eq!(
+        console["channels"]["heard_at"]
+            .as_str()
+            .map(|t| chrono::DateTime::parse_from_rfc3339(t).unwrap().timestamp()),
+        (heard > 0).then_some(heard),
+        "{console}"
+    );
+
+    let mut wrong = ops.clone();
+    wrong.push(("mcp-protocol-version", "1999-01-01".to_string()));
+    let (status, refused) = mcp(&portal, &wrong, json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(refused["detail"].as_str().unwrap().contains("2025-06-18"), "{refused}");
 }
 
 /// Purpose: a customer's "Tell us about a claim" is carried to claims as soon as it is filed and closed with the claim's reference;

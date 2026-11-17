@@ -67,8 +67,9 @@ type Field = (&'static str, bool);
 
 /// The questions the console may put, and the fields each must carry. The
 /// outbox and the driver's own questions are not people's.
-const QUESTIONS: [(&str, &[Field]); 15] = [
+const QUESTIONS: [(&str, &[Field]); 16] = [
     ("status", &[]),
+    ("parties", &[]),
     ("open_tasks", &[]),
     ("history", &[]),
     ("conduct_cases", &[]),

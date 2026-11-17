@@ -5,6 +5,8 @@
 <section><h2>Regions</h2><div id="summary"></div><div id="regions"></div></section>
 <section><h2>What customers are told</h2><div id="public"></div></section>
 <section><h2>Channel module</h2><div id="channels"></div></section>
+<section><h2>Last night's close</h2><p class="muted">Whether the book reconciled across every partition, as the close checks it.</p><div id="recon"></div><p><button type="button" class="quiet" id="recheck">Check again</button></p></section>
+<section><h2>Customer search</h2><p class="muted">The customer master's search index, and how far behind the records it is.</p><div id="index"></div></section>
 <p class="muted" id="checked"></p></main>
 <script src="/ui/app.js"></script>
 <script>
@@ -31,5 +33,17 @@ async function refresh() {
   } catch (e) { portal.refuse(e); }
   $("checked").textContent = "Last checked " + new Date().toLocaleTimeString() + ". Updates every 10 seconds.";
 }
-signIn("workforce").then(() => { refresh(); setInterval(refresh, 10000); }).catch(portal.refuse);
+// The close and the search index are asked once on arrival and on request: each asks every partition or the master.
+async function checks() {
+  const [recon, index] = await Promise.allSettled([api("workforce", "GET", "/ops/v1/reconciliation"), api("workforce", "GET", "/ops/v1/customers/index")]);
+  if (recon.status === "fulfilled") {
+    const r = recon.value;
+    put($("recon"), portal.stats([["Business date", r.business_date || "not yet fed", r.business_date ? "ok" : "warn"], ["Reconciled", r.clean ? "Yes" : "NO", r.clean ? "ok" : "bad"], ["Policies still to visit", String(r.unfinished || 0), r.unfinished ? "warn" : "ok"]]),
+      (r.breaks || []).length ? table(["Break"], r.breaks.map((b) => [typeof b === "string" ? b : portal.details(b)])) : portal.empty("No breaks."));
+  } else put($("recon"), h("div", { class: "banner bad" }, "The reconciliation could not be read: " + recon.reason.message));
+  if (index.status === "fulfilled") portal.put($("index"), portal.details(index.value));
+  else put($("index"), h("div", { class: "banner bad" }, "The search index could not be read: " + index.reason.message));
+}
+$("recheck").addEventListener("click", () => checks());
+signIn("workforce").then(() => { refresh(); checks(); setInterval(refresh, 10000); }).catch(portal.refuse);
 </script></body></html>
