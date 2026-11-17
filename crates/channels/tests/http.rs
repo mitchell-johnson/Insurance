@@ -1876,6 +1876,8 @@ async fn the_unit_pricing_console() {
     let day = common::pricing::first_day();
 
     // Who gets in.
+    // The refusal names the permission to ask for (F2-06-7).
+    assert!(ask("sub-sue", "work").await.1["detail"].as_str().unwrap().contains("unit_pricing.view"));
     for outsider in ["sub-kiri", "sub-sue", "sub-fin1"] {
         assert_eq!(ask(outsider, "work").await.0, StatusCode::FORBIDDEN, "{outsider}");
         assert_eq!(
@@ -1902,9 +1904,16 @@ async fn the_unit_pricing_console() {
     assert_eq!(valuation.0, StatusCode::OK, "{valuation:?}");
     assert_eq!(ask("sub-up1", "status").await.1["partitions"], 2);
     // Only the console's questions, each with its fields; something not there is not found.
-    for bad in ["outbox?limit=5", "events?after=0&limit=5", "price", "prices?fund=growth", "late?as_at="] {
+    for bad in ["outbox?limit=5", "events?after=0&limit=5", "price", "prices?fund=growth"] {
         assert_eq!(ask("sub-up1", bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
     }
+    // Late prices are as at the books' date unless another is asked for, one row per fund (F2-06-6).
+    let (status, late) = ask("sub-up1", "late?as_at=").await;
+    assert_eq!(status, StatusCode::OK, "{late}");
+    assert!(
+        late.as_array().unwrap().iter().all(|row| row["fund"].is_string() && row["days"].is_u64()),
+        "{late}"
+    );
     assert_eq!(ask("sub-up1", "price?id=nope").await.0, StatusCode::NOT_FOUND);
     // A question that module cannot read is its refusal, not an outage.
     let (status, problem) = ask("sub-up1", "valuations?fund=growth&pricing_date=never").await;
@@ -1932,6 +1941,10 @@ async fn the_unit_pricing_console() {
     assert_eq!(unkeyed.await.0, StatusCode::BAD_REQUEST);
     // A command that module cannot read is its refusal to take it, not a success.
     assert_eq!(tell("sub-up1", json!({ "prepare_price": { "fund": 7 } })).await.0, StatusCode::BAD_REQUEST);
+    // The console sends the books' date: a price for a day that has not come is refused before anything is prepared (F2-06-4).
+    let (status, problem) = tell("sub-up1", json!({ "prepare_price": { "fund": "growth", "pricing_date": d(2030, 1, 7) } })).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("not_yet")), "{problem}");
+    assert!(problem["detail"].as_str().unwrap().contains("the business date is"), "{problem}");
 
     // Prepare, with the same key twice: one price.
     let keyed = [("x-dev-subject", "sub-up1".to_string()), ("idempotency-key", "prep-1".to_string())];

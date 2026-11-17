@@ -385,6 +385,7 @@ fn definitions_and_partitions() {
         actor: "driver".into(),
         roles: vec![],
         at: h.at,
+        today: None,
         command: Command::RecordCoreUnits {
             fund: fund_id("growth"),
             partition: 0,

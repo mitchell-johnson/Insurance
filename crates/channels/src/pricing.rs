@@ -100,10 +100,11 @@ pub fn role_for(command: &Value) -> Option<(&'static str, &'static str)> {
 }
 
 /// The envelope that carries one person's command to the unit pricing
-/// module: who they are, the roles they hold, and when.
-pub fn envelope(key: &str, actor: &PartyId, roles: &Value, at: At, command: Value) -> Value {
+/// module: who they are, the roles they hold, when, and the books' business
+/// date, which that module prices no later than.
+pub fn envelope(key: &str, actor: &PartyId, roles: &Value, at: At, today: &str, command: Value) -> Value {
     let when = DateTime::from_timestamp(at, 0).unwrap_or_default();
-    json!({ "key": key, "caller": CALLER, "actor": actor, "roles": roles, "at": when, "command": command })
+    json!({ "key": key, "caller": CALLER, "actor": actor, "roles": roles, "at": when, "today": today, "command": command })
 }
 
 /// The questions this console forwards, by name, for the MCP tool that asks them.

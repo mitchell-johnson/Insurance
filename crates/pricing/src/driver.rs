@@ -109,6 +109,7 @@ fn envelope(key: String, at: DateTime<Utc>, command: Command) -> Envelope {
         actor: ACTOR.to_string(),
         roles: Vec::new(),
         at,
+        today: None,
         command,
     }
 }

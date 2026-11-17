@@ -13,7 +13,7 @@
 <div id="detail" hidden><h2 id="detail-title"></h2><div id="detail-checks"></div><div id="detail-deliveries"></div><p><button class="quiet" id="republish" hidden>Offer it again to the partitions that refused it</button></p><div id="detail-raw"></div></div></section>
 
 <section data-view="Funds"><h2>Funds</h2><div id="funds"></div>
-<form id="suspend"><div class="row"><div><label for="sfund">Fund</label><select id="sfund" required></select></div><div><label for="sdo">Action</label><select id="sdo"><option value="suspend_fund">Suspend pricing</option><option value="resume_fund">Resume pricing</option></select></div><div><label for="sfrom">From pricing date</label><input id="sfrom" type="date" required></div><div><label for="sreason">Reason</label><input id="sreason" required></div><button>Send</button></div><p class="muted">A suspended fund takes no approvals from that date until it is resumed.</p></form><div id="fund-msg" aria-live="polite"></div></section>
+<form id="suspend"><div class="row"><div><label for="sfund">Fund</label><select id="sfund" required></select></div><div><label for="sdo">Action</label><select id="sdo"><option value="suspend_fund">Suspend pricing</option><option value="resume_fund">Resume pricing</option></select></div><div><label for="sfrom">From pricing date</label><input id="sfrom" type="date" required></div><div><label for="sreason">Reason</label><input id="sreason" required></div><button>Send</button></div><p class="muted">A suspended fund takes no prices from that date until it is resumed. Resuming from the same day it was suspended from withdraws a suspension made by mistake.</p></form><div id="fund-msg" aria-live="polite"></div></section>
 
 <section data-view="Price errors"><h2>Price errors</h2><div id="errors"></div>
 <form id="raise"><div class="row"><div><label for="eprices">Wrong prices (pick, or press "It is wrong" on a price)</label><input id="eprices" required></div><div><label for="ecause">Cause</label><input id="ecause" required></div><div><label for="edate">Detected on</label><input id="edate" type="date" required></div><button>Raise a price error</button></div><p class="muted">Each wrong price is then prepared and approved again as a correction. No new date of the fund can be approved until every one is corrected.</p></form><div id="error-msg" aria-live="polite"></div></section>
@@ -40,6 +40,8 @@ let names = {}, holding = {};
 const fundName = (fund) => names[fund] || fund;
 const percentOf = (size) => size == null || size === "" ? "" : `${(Number(size) * 100).toFixed(4).replace(/0+$/, "").replace(/\.$/, "")}%`;
 const failed = (p) => p.struck.checks.filter((c) => !c.passed);
+// The partitions that refused an approved price, in words: it is on its way and waits for them.
+const refusals = (p) => Object.entries(p.deliveries || {}).filter(([, d]) => d !== "applied").map(([n, d]) => `Partition ${n} refused it: ${d.refused.message}`);
 const button = (label, out, fn) => h("button", { class: "quiet", on: { click: run(out, fn) } }, label);
 
 async function approve(p) {
@@ -82,14 +84,17 @@ async function load() {
   const heldBy = (p) => { const e = holding[p.fund]; return e && !p.corrects ? e : null; };
   put($("work"), work.prices.length ? null : portal.empty("No price is waiting for a person."));
   if (work.prices.length) put($("work"), table(["Price", "Fund", "Pricing date", "Mid", "Buy", "Sell", "Status", "Failed checks", "Prepared by", ""], work.prices.map((p) => [[p.id, corrects(p) ? h("div", { class: "muted" }, corrects(p)) : null], fundName(p.fund), p.pricing_date, p.struck.mid, p.struck.buy, p.struck.sell, words(p.status),
-    [failed(p).map((c) => `${words(c.kind)}: ${c.detail}`).join("; "), heldBy(p) ? h("div", { class: "banner warn" }, `Held by the price error raised on ${heldBy(p).detected_on} against ${Object.keys(heldBy(p).prices).filter((w) => !heldBy(p).prices[w]).join(", ")}: approve its correction first.`) : null], p.prepared_by,
+    [p.status === "activating" ? refusals(p).join("; ") : failed(p).map((c) => `${words(c.kind)}: ${c.detail}`).join("; "), heldBy(p) ? h("div", { class: "banner warn" }, `Held by the price error raised on ${heldBy(p).detected_on} against ${Object.keys(heldBy(p).prices).filter((w) => !heldBy(p).prices[w]).join(", ")}: approve its correction first.`) : null], p.prepared_by,
     h("span", {}, button("Details", $("work-msg"), () => detail(p.id)), " ",
-      can("approver") && p.status !== "blocked" && !heldBy(p) ? button(p.status === "held" ? "Accept checks and approve" : "Approve", $("work-msg"), () => approve(p)) : null, " ",
-      can("approver") ? button("Reject", $("work-msg"), () => reject(p)) : null)])));
+      can("approver") && !["blocked", "activating"].includes(p.status) && !heldBy(p) ? button(p.status === "held" ? "Accept checks and approve" : "Approve", $("work-msg"), () => approve(p)) : null, " ",
+      can("approver") && p.status !== "activating" ? button("Reject", $("work-msg"), () => reject(p)) : null, " ",
+      can("lead") && p.status === "activating" ? button("Offer it again", $("work-msg"), async () => { await send({ republish: { price: p.id } }); await load(); return "Offered again to the partitions that refused it."; }) : null)])));
   put($("refused"), table(["File", "Why it was refused"], Object.entries(work.refused_files || {})));
-  put($("late"), late.length ? table(["Fund", "Pricing date"], late.map(([fund, date]) => [fundName(fund), date])) : portal.empty("No price is overdue."));
+  // One row per fund: how many days it is behind, and from when to when.
+  put($("late"), late.length ? table(["Fund", "Days overdue", "From", "To"], late.map((l) => [fundName(l.fund), l.days, portal.day(l.first), portal.day(l.last)])) : portal.empty("No price is overdue."));
   put($("funds"), table(["Fund", "Version", "Currency", "Next to price", "Suspensions"], funds.map((f) => { const d = f.versions[f.versions.length - 1] || {};
-    return [fundName(f.fund), d.version, d.currency, f.next || "", (f.suspensions || []).map((s) => `from ${s.from}${s.to ? " to " + s.to : ""}: ${s.reason} (${s.by})`).join("; ")]; })));
+    return [fundName(f.fund), d.version, d.currency, f.next ? portal.day(f.next) : (f.suspensions || []).some((s) => !s.to) ? "Suspended" : "",
+      (f.suspensions || []).filter((s) => s.to !== s.from).map((s) => `from ${s.from}${s.to ? " to " + s.to : ""}: ${s.reason} (${s.by})`).join("; ")]; })));
   nextOf = Object.fromEntries(funds.map((f) => [f.fund, f.next]));
   for (const id of ["pfund", "lfund", "sfund"]) { const keep = $(id).value; put($(id), funds.map((f) => h("option", { value: f.fund }, fundName(f.fund)))); if (keep) $(id).value = keep; }
   nextDate();
@@ -120,7 +125,9 @@ $("lookup").addEventListener("submit", run($("lookup-msg"), async () => {
 }));
 $("suspend").addEventListener("submit", run($("fund-msg"), async () => {
   await send({ [$("sdo").value]: { fund: $("sfund").value, from: $("sfrom").value, reason: $("sreason").value } }); await load();
-  return $("sdo").value === "suspend_fund" ? "Suspended." : "Resumed.";
+  if ($("sdo").value === "suspend_fund") return "Suspended. Any price prepared for those days has been taken off the work list.";
+  const s = ((await ask("funds")).find((f) => f.fund === $("sfund").value) || {}).suspensions || [];
+  return s.length && s[s.length - 1].to === s[s.length - 1].from ? "The suspension is withdrawn: it covers no day." : "Resumed.";
 }));
 $("raise").addEventListener("submit", run($("error-msg"), async () => {
   const prices = wrong.values();

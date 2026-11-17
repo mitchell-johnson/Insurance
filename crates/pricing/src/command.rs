@@ -44,6 +44,11 @@ pub struct Envelope {
     pub roles: Vec<String>,
     /// The proposer's clock. Time moves only as commands carry it.
     pub at: DateTime<Utc>,
+    /// The books' business date where the sender knows it (the console
+    /// does): no price is prepared or approved for a date after it, because
+    /// the core refuses a price for a day that has not come.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub today: Option<NaiveDate>,
     pub command: Command,
 }
 
@@ -196,6 +201,7 @@ pub fn activation(fund: FundDefinition, at: DateTime<Utc>) -> Envelope {
         actor: "config".to_string(),
         roles: Vec::new(),
         at,
+        today: None,
         command: Command::ActivateFund(Box::new(fund)),
     }
 }

@@ -2359,7 +2359,9 @@ impl AppState {
             })
             .await?;
         if standing["view"] != true {
-            return Err(Problem::forbidden("your roles do not include unit pricing"));
+            return Err(Problem::forbidden(
+                "your roles do not include unit pricing: the console needs the action unit_pricing.view, or one to prepare, approve or lead; ask your manager to request it",
+            ));
         }
         Ok((session, standing))
     }
@@ -3826,9 +3828,14 @@ async fn pricing_question(
     Path(name): Path<String>,
     Query(fields): Query<std::collections::BTreeMap<String, String>>,
 ) -> Answer {
-    let (_, standing) = s.pricing_standing(&headers, &method, &uri, b"").await?;
+    let (session, standing) = s.pricing_standing(&headers, &method, &uri, b"").await?;
     if name == "me" {
         return ok(standing);
+    }
+    let mut fields = fields;
+    // Late as at the books' date unless another is asked for (F2-06-6).
+    if name == "late" && fields.get("as_at").is_none_or(|d| d.trim().is_empty()) {
+        fields.insert("as_at".into(), s.books_today(session.at).await);
     }
     let question = crate::pricing::question(&name, &fields).map_err(Problem::bad_request)?;
     let answer = s.pricing.ask(question).await.map_err(pricing_down)?;
@@ -3852,7 +3859,9 @@ async fn pricing_command(State(s): State<Shared>, headers: HeaderMap, method: Me
         return Err(Problem::forbidden(format!("{name} needs the role {role}")));
     }
     let key = key(&headers, &session.party.0)?;
-    let envelope = crate::pricing::envelope(&key, &session.party, &standing["roles"], session.at, command);
+    // The books' date goes with it: no price is struck for a day that has not come (F2-06-4).
+    let today = s.books_today(session.at).await;
+    let envelope = crate::pricing::envelope(&key, &session.party, &standing["roles"], session.at, &today, command);
     let output = s.pricing.tell(envelope).await.map_err(pricing_down)?;
     if let Some(refused) = output.get("refused") {
         return Err(module_refusal(

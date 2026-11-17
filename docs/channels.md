@@ -227,7 +227,7 @@ The portal service holds none of this. It passes the console's questions to the 
 | Route | What it does |
 | --- | --- |
 | `GET /staff/v1/unit-pricing/me` | Whether you may open the console, and your roles. |
-| `GET /staff/v1/unit-pricing/{question}` | One of `status`, `funds`, `work`, `errors`, `price?id=`, `error?id=`, `prices?fund=&from=&to=`, `valuations?fund=&pricing_date=`, `late?as_at=`. That module's other questions are not asked from here. |
+| `GET /staff/v1/unit-pricing/{question}` | One of `status`, `funds`, `work`, `errors`, `price?id=`, `error?id=`, `prices?fund=&from=&to=`, `valuations?fund=&pricing_date=`, `late?as_at=` (as at the books' date when left out). That module's other questions are not asked from here. |
 | `POST /staff/v1/unit-pricing/commands` | One of `prepare_price`, `approve_price`, `reject_price`, `suspend_fund`, `resume_fund`, `raise_price_error`, `close_error`, `republish`, in that module's own JSON, with an `Idempotency-Key`. |
 
 Someone without a unit pricing action is refused before anything reaches that module, and a command is refused here if the person lacks its role. That module checks the role again, enforces that an approver is never the preparer, and keeps who did what; its refusals come back as `409` with its own code (`403` for `unauthorised`). If it has no leader the console answers `503 unit_pricing_unavailable`. Valuation files arrive through the administrator's storage account, not the console. The two modules share no code; `tests/http.rs` runs the console against that module's own state machine.

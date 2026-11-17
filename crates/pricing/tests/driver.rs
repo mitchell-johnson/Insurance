@@ -133,6 +133,7 @@ fn setup(module: &FakeModule) {
         actor: "config".into(),
         roles: vec![],
         at: at(),
+        today: None,
         command: Command::ActivateFund(Box::new(fund())),
     };
     assert_eq!(module.state.lock().unwrap().apply_envelope(e), Output::Done);
