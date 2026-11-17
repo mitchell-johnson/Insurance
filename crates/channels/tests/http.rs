@@ -1432,11 +1432,9 @@ async fn staff_find_customers_and_policies_from_what_they_know() {
         (Some(true), json!([])),
         "{down}"
     );
+    // Kiri's policy is closed to Sue now, so the number finds it only as closed.
     let numbers = portal.get("sub-sue", &find(&part)).await.1;
-    assert!(
-        numbers["policies"].as_array().unwrap().iter().any(|p| p["policy"] == policy.0.as_str()),
-        "{numbers}"
-    );
+    assert!(numbers["policies"].as_array().unwrap().iter().any(|p| p["closed"] == true), "{numbers}");
 
     // Someone without the finding action is refused.
     assert_eq!(portal.get("sub-fin1", &find("Kiri Parata")).await.0, StatusCode::FORBIDDEN);
@@ -3194,6 +3192,11 @@ async fn a_person_keeps_their_own_customer_record() {
     let proved = portal.proof(&portal.phone, "GET", "/app/v1/profile/export", "");
     let (status, export) = portal.send("GET", "/app/v1/profile/export", &proved, None).await;
     assert_eq!((status, &export["party"]), (StatusCode::OK, &json!(KIRI)));
+    // A readable copy of everything held, not the master's event stream alone (found by the scenario run, SCN-08).
+    assert_eq!(export["your_details"]["party"], KIRI, "{export}");
+    assert!(export["history_of_your_details"].is_object(), "{export}");
+    assert_eq!(export["policies"][0]["policy"], json!(portal.retail.0), "{export}");
+    assert!(export["requests"].is_array() && export["devices"].is_array(), "{export}");
 
     // A hold on your own money going out: on at once, off only after a fresh identity check and the cooling-off period.
     assert_eq!(portal.get("sub-kiri", "/app/v1/profile/spending-hold").await.1["held"], false);
@@ -4315,7 +4318,10 @@ async fn an_employer_runs_the_scheme_membership() {
     let missing = json!({ "withdraw_file": { "file": "dec.csv" } });
     assert_eq!(
         portal.write("POST", "sub-hr", &at("commands"), missing).await,
-        (StatusCode::UNPROCESSABLE_ENTITY, json!({ "code": "unknown_file" }))
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({ "code": "unknown_file", "title": "unknown_file", "detail": "the group service refused this without saying why (422)" })
+        )
     );
     // Staff's commands, and anything that is not one command, are not sent at all.
     for bad in [
@@ -5643,8 +5649,40 @@ async fn an_adviser_and_their_group_read_their_own_statements() {
     assert_eq!(group["totals"], json!({ "override:group": 35_00, "fee:referral": 50_00 }));
     assert!(group.get("cut_seq").is_none(), "the module's bookkeeping stays inside it");
     // The payee is always the person signed in: there is no way to ask for another's.
-    assert_eq!(portal.get("sub-adv", "/adviser/v1/statements/2").await.0, StatusCode::NOT_FOUND);
-    assert_eq!(portal.get("sub-adv", "/adviser/v1/statements/x").await.0, StatusCode::BAD_REQUEST);
+    let (status, missing) = portal.get("sub-adv", "/adviser/v1/statements/2").await;
+    assert_eq!((status, &missing["title"]), (StatusCode::NOT_FOUND, &json!("no_such_statement")));
+    assert!(missing["detail"].as_str().unwrap().contains("no statement number 2"), "{missing}");
+    let (status, bad) = portal.get("sub-adv", "/adviser/v1/statements/x").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(bad["detail"].as_str().unwrap().contains("whole number"), "{bad}");
+    // Over MCP the number may be given as a number (found by the scenario run, SCN-02).
+    let by_number = call_tool(&portal, "sub-adv", "adviser_statement", json!({ "number": 1 })).await;
+    assert_eq!(by_number["isError"], json!(false), "{by_number}");
+}
+
+/// Purpose: an assistant that puts a query field at the top level is told it goes in the query, and one that calls a tool not
+/// open to it is told so before anything about its arguments.
+/// Why it matters: `case` at the top level was refused as "not an argument of quote" though the description named it, and an
+/// adviser calling an employer tool was told "party is required" before being told she may not act (found by the scenario run,
+/// SCN-02 and SCN-04).
+#[tokio::test]
+async fn an_assistant_is_told_where_its_arguments_go() {
+    let portal = portal();
+    let misplaced = call_tool(&portal, "sub-sue", "find_customers", json!({ "case": "CALL-1", "body": {} })).await;
+    assert_eq!(
+        misplaced["content"][0]["text"], r#"case goes in the query: {"query": {"case": "..."}}"#,
+        "{misplaced}"
+    );
+    let stray = call_tool(&portal, "sub-sue", "find_customers", json!({ "nonsense": 1 })).await;
+    assert_eq!(stray["content"][0]["text"], "nonsense is not an argument of find_customers");
+    let scheme = portal.scheme.to_string();
+    let not_hers = call_tool(&portal, "sub-adv", "set_scheme_admin", json!({ "policy": scheme })).await;
+    assert!(
+        not_hers["content"][0]["text"].as_str().unwrap().starts_with("this tool is not open to you"),
+        "{not_hers}"
+    );
+    let hers = call_tool(&portal, "sub-hr", "set_scheme_admin", json!({ "policy": scheme })).await;
+    assert_eq!(hers["content"][0]["text"], "party is required", "{hers}");
 }
 
 /// Purpose: what a write answers says only what concerns the person who wrote: their own feed's new version (so the app syncs to
@@ -5810,11 +5848,15 @@ async fn the_mcp_endpoint_speaks_the_protocol() {
     );
 }
 
-/// Purpose: each caller is offered the tools of the sign-ins they hold: a customer the app, adviser and employer tools and not the
-/// staff ones; a member of staff the staff tools; an operator the regions; every tool has a valid name, a title, a description and an
-/// input schema whose required arguments it declares; and the operator's tool works for them.
+/// Purpose: each caller is offered the tools of the sign-ins they hold and, within them, of what they are: a customer the app and not
+/// the adviser, employer or staff tools; an adviser and an advice provider theirs; a scheme's administrator the employer tools; a member
+/// of staff only the staff tools their templates' actions reach, never the customer app's; an operator the regions; every tool has a
+/// valid name, a title, a description and an input schema whose required arguments it declares; the hints say an erasure is
+/// destructive and a check read-only; and the operator's tool works for them.
 /// Why it matters: a model shown tools it can never use wastes the person's time and invites it to try; one that is not shown a tool
-/// the person may use cannot do that part of their job. A schema that does not match the call leaves the model guessing.
+/// the person may use cannot do that part of their job. A schema that does not match the call leaves the model guessing, and a hint
+/// that calls an erasure harmless lets it act without asking. Every staff member was offered 116 tools and every customer the adviser
+/// and employer ones (found by the scenario run, SCN-02, SCN-13, SCN-16 and SCN-23).
 #[tokio::test]
 async fn each_caller_is_offered_the_tools_of_their_sign_in() {
     let portal = portal();
@@ -5836,10 +5878,41 @@ async fn each_caller_is_offered_the_tools_of_their_sign_in() {
     let staff = list(as_subject("sub-sue")).await;
     let ops = list(vec![("x-dev-subject", "ops-1".to_string()), ("x-dev-roles", OPERATIONS.to_string())]).await;
     let (customer, staff, ops) = (names(&customer), names(&staff), names(&ops));
-    assert!(customer.contains("my_policy") && customer.contains("adviser_book") && customer.contains("employer_schemes"));
+    assert!(customer.contains("my_policy") && customer.contains("make_request") && customer.contains("my_proposals"));
     assert!(!customer.contains("staff_policy") && !customer.contains("finance_command") && !customer.contains("regions"));
-    assert!(staff.contains("staff_policy") && staff.contains("claims_command") && staff.contains("finance_question"));
-    assert!(!staff.contains("regions"));
+    // Within a sign-in, only what the person's relationships reach: a customer is not an adviser or an employer.
+    assert!(!customer.contains("adviser_book") && !customer.contains("employer_schemes") && !customer.contains("policy_claims"));
+    let adviser = names(&list(as_subject("sub-adv")).await);
+    assert!(adviser.contains("adviser_book") && adviser.contains("dispute_replacement") && adviser.contains("policy_claims"));
+    assert!(!adviser.contains("employer_schemes") && !adviser.contains("scheme_command"));
+    let provider = names(&list(as_subject("sub-fap")).await);
+    assert!(provider.contains("adviser_practice"), "an advice provider is offered its practice");
+    let employer = names(&list(as_subject("sub-hr")).await);
+    assert!(employer.contains("employer_schemes") && employer.contains("scheme_command") && employer.contains("policy_claims"));
+    assert!(!employer.contains("adviser_book"));
+    // A member of staff is offered the staff tools their roles reach, and none of the customer app's.
+    assert!(staff.contains("staff_policy") && staff.contains("find") && staff.contains("enter_change_for_customer") && staff.contains("staff_me"));
+    assert!(!staff.contains("claims_command") && !staff.contains("finance_question") && !staff.contains("merge_customers"));
+    assert!(!staff.contains("my_account") && !staff.contains("approve_request") && !staff.contains("regions"));
+    let claims = names(&list(as_subject("sub-cl1")).await);
+    assert!(claims.contains("claims_command") && claims.contains("claims_question") && !claims.contains("finance_command"));
+    let records = names(&list(as_subject("sub-rec")).await);
+    assert!(records.contains("staff_document") && !records.contains("staff_policy") && !records.contains("documents_command"));
+    let refused = call_tool(&portal, "sub-sue", "my_account", json!({})).await;
+    assert!(refused["content"][0]["text"].as_str().unwrap().contains("sign-in you do not hold"), "{refused}");
+    let annotations = |name: &str| {
+        ic_channels::mcp::catalogue()
+            .into_iter()
+            .find(|t| t.name == name)
+            .map(|t| t.listed()["annotations"].clone())
+            .unwrap()
+    };
+    assert_eq!(annotations("reshred_customers")["destructiveHint"], true, "an erasure is destructive");
+    assert_eq!(annotations("merge_customers")["destructiveHint"], true);
+    assert_eq!(annotations("verify_customer")["readOnlyHint"], true, "a check changes nothing");
+    assert_eq!(annotations("verify_customer")["idempotentHint"], true);
+    assert_eq!(annotations("quote")["readOnlyHint"], true);
+    assert_eq!(annotations("my_account")["destructiveHint"], false);
     assert_eq!(
         ops,
         [
@@ -5967,8 +6040,10 @@ async fn a_tool_call_passes_the_same_checks_as_the_screens() {
             "query case is a string",
         ),
     ] {
-        let subject = if name.starts_with("staff") || name.starts_with("claims") {
+        let subject = if name.starts_with("staff") {
             "sub-sue"
+        } else if name.starts_with("claims") {
+            "sub-cl1"
         } else {
             "sub-kiri"
         };
@@ -6093,6 +6168,355 @@ fn every_route_is_a_tool_or_left_out_for_a_reason() {
     assert!(missing.is_empty(), "routes with no tool and no reason: {missing:?}");
     let stale: Vec<_> = tools.iter().filter(|t| !served.contains(*t)).collect();
     assert!(stale.is_empty(), "tools for routes that are not served: {stale:?}");
+}
+
+/// Purpose: a refusal passed on from another service reaches the person in its own words: the customer master's `{"error": {code,
+/// message}}` gains the `title` and `detail` the pages and assistants read and keeps its own body; the group service's refusal of an
+/// employer likewise, with plain words where it gave none; a sign-in with no customer record is told what to do; and an MCP result
+/// reads either shape and never shows an empty reason.
+/// Why it matters: customers and employers saw "The request failed (422)." and assistants "Refused (422 ): " while the reason was in
+/// the body all along (found by the scenario run, SCN-05, SCN-07, SCN-08 and SCN-10).
+#[tokio::test]
+async fn a_refusal_from_another_service_is_said_in_its_own_words() {
+    let portal = portal();
+    let body = json!({ "command": "request_hold_removal" }).to_string();
+    let headers = portal.proof(&portal.phone, "POST", "/app/v1/profile/commands", &body);
+    let (status, refused) = portal
+        .send("POST", "/app/v1/profile/commands", &headers, Some(serde_json::from_str(&body).unwrap()))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(refused["title"], "verification_needed");
+    assert!(refused["detail"].as_str().unwrap().contains("identity check"), "{refused}");
+    assert_eq!(
+        refused["error"]["code"], "verification_needed",
+        "the service's own body is kept for callers that read it"
+    );
+
+    // The group service gave a code and no words: the employer is told it was refused, with the code.
+    let scheme = portal.scheme.to_string();
+    let (status, refused) = portal
+        .write(
+            "POST",
+            "sub-hr",
+            &format!("/employer/v1/schemes/{scheme}/group/commands"),
+            json!({ "approve_file": { "file": "never-sent.csv" } }),
+        )
+        .await;
+    assert_eq!(
+        (status, &refused["title"]),
+        (StatusCode::UNPROCESSABLE_ENTITY, &json!("unknown_file")),
+        "{refused}"
+    );
+    assert_eq!(refused["detail"], "the group service refused this without saying why (422)");
+    let tool = call_tool(
+        &portal,
+        "sub-hr",
+        "scheme_command",
+        json!({ "policy": scheme, "body": { "approve_file": { "file": "never-sent.csv" } } }),
+    )
+    .await;
+    assert_eq!(
+        tool["content"][0]["text"],
+        "Refused (422 unknown_file): the group service refused this without saying why (422)"
+    );
+
+    // Someone signed in with no customer record is told so, and what to do, on the page and over MCP.
+    let (status, problem) = portal.get("sub-adv", "/app/v1/profile").await;
+    assert_eq!((status, &problem["title"]), (StatusCode::NOT_FOUND, &json!("no_customer_record")), "{problem}");
+    let tool = call_tool(&portal, "sub-adv", "my_profile", json!({})).await;
+    assert!(tool["content"][0]["text"].as_str().unwrap().contains("call us"), "{tool}");
+
+    // An answer in another service's own shape, and one with nothing in it, read as words.
+    let my_policy = ic_channels::mcp::catalogue().into_iter().find(|t| t.name == "my_policy").unwrap();
+    let said = |status: StatusCode, body: &str| {
+        ic_channels::mcp::result(&my_policy, "/p", status, "application/json", body.as_bytes())["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(
+        said(
+            StatusCode::CONFLICT,
+            r#"{"error":{"code":"duplicate_file","message":"the same content was received as file a.csv"}}"#
+        ),
+        "Refused (409 duplicate_file): the same content was received as file a.csv"
+    );
+    assert_eq!(said(StatusCode::NOT_FOUND, "{}"), "Refused (404): the service refused this without saying why");
+    assert_eq!(said(StatusCode::CONFLICT, r#"{"error":"frozen"}"#), "Refused (409 frozen): frozen");
+}
+
+/// Purpose: every page is served with the books' business date in a meta tag that the shared script reads for `portal.today()`, and
+/// with none while the core has reported no day; the page's own script still runs under its policy.
+/// Why it matters: date fields, references and default periods came from the browser's clock, a year away from the books, so a run
+/// was dated before the policies it paid and a period was offered that the books had not reached (found by the scenario run, SCN-01,
+/// SCN-15, SCN-17 and SCN-20).
+#[tokio::test]
+async fn pages_are_told_the_books_business_date() {
+    let portal = portal();
+    let page = |path: &'static str| {
+        let app = portal.app.clone();
+        async move {
+            let response = app.oneshot(Request::builder().uri(path).body(Body::empty()).unwrap()).await.unwrap();
+            let csp = response.headers()["content-security-policy"].to_str().unwrap().to_string();
+            let body = String::from_utf8(response.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+            (csp, body)
+        }
+    };
+    let today = portal.local.with(|state| state.data.today).expect("the seeded books have a business date");
+    let (csp, body) = page("/finance").await;
+    assert!(
+        body.contains(&format!("<head><meta name=\"business-date\" content=\"{today}\">")),
+        "{}",
+        &body[..300]
+    );
+    assert_eq!(csp.matches("'sha256-").count(), 1, "the page's own script is still the one the policy names");
+    assert!(ic_channels::ui::SCRIPT.contains(r#"meta[name="business-date"]"#), "the shared script reads it");
+    portal.local.with(|state| state.data.today = None);
+    let (_, body) = page("/finance").await;
+    assert!(!body.contains("business-date"), "no day reported, no date claimed");
+}
+
+/// Purpose: what a customer approves and asks for is said in words with who prepared it: a servicing request's row carries its
+/// choices, who prepared it and whether it was declined; once the customer approves or declines a change someone else prepared, it
+/// stays in their own requests; each request names its policy's number; and the adviser who prepared one sees it declined, not
+/// merely cancelled, while one they withdrew themselves is not.
+/// Why it matters: customers approved "change frequency" without being told to what, then saw nothing of what they had approved,
+/// and advisers read a declined change as a cancelled policy (found by the scenario run, SCN-01 and SCN-13).
+#[tokio::test]
+async fn a_change_is_shown_in_words_to_whoever_approves_it_and_stays_in_view() {
+    let portal = portal();
+    let policy = portal.retail.to_string();
+    let appoint = json!({ "adviser": "adv-1", "engagement": "e1" });
+    assert_eq!(
+        portal
+            .write("POST", "sub-kiri", &format!("/app/v1/policies/{policy}/advisers"), appoint)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    for (id, kind, payload) in [
+        ("w1", "change_frequency", json!({ "frequency": "fortnightly", "note": "cheaper for you" })),
+        ("w2", "decline_indexation", json!({ "declined": true })),
+    ] {
+        let request = json!({ "id": id, "policy": policy, "kind": kind, "module": "policy-servicing", "payload": payload });
+        assert_eq!(portal.write("POST", "sub-adv", "/app/v1/requests", request).await.0, StatusCode::ACCEPTED);
+    }
+    let (_, view) = portal.get("sub-kiri", &format!("/app/v1/policies/{policy}")).await;
+    let row = |id: &str| view["rows"].as_array().unwrap().iter().find(|r| r["body"]["id"] == id).unwrap()["body"].clone();
+    assert_eq!(row("w1")["payload"]["frequency"], "fortnightly", "{view}");
+    assert_eq!((&row("w1")["prepared_by"], &row("w1")["declined"]), (&json!("adviser"), &json!(false)));
+
+    // Kiri approves the first, signed, and declines the second: both stay in her own list, and the adviser sees which was which.
+    let ask = json!({ "action": approval_action("w1") }).to_string();
+    let headers = portal.proof(&portal.phone, "POST", "/app/v1/challenges", &ask);
+    let (_, challenge) = portal
+        .send("POST", "/app/v1/challenges", &headers, Some(serde_json::from_str(&ask).unwrap()))
+        .await;
+    let message = format!(
+        "{}\n{}\n{}",
+        challenge["challenge"].as_str().unwrap(),
+        challenge["nonce"].as_str().unwrap(),
+        challenge["action_hash"].as_str().unwrap()
+    );
+    let signed = json!({ "signed": { "challenge": challenge["challenge"], "signature": portal.phone.sign(message.as_bytes()) } });
+    assert_eq!(
+        portal.write("POST", "sub-kiri", "/app/v1/requests/w1/approve", signed).await.0,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(portal.write("DELETE", "sub-kiri", "/app/v1/requests/w2", json!(null)).await.0, StatusCode::OK);
+    let (_, mine) = portal.get("sub-kiri", "/app/v1/requests").await;
+    let find = |list: &Value, id: &str| list.as_array().unwrap().iter().find(|r| r["id"] == id).cloned().unwrap_or(Value::Null);
+    assert_eq!(find(&mine, "w1")["approved_by"], KIRI, "{mine}");
+    assert_eq!(find(&mine, "w2")["declined_by"], KIRI, "{mine}");
+    let number = portal.local.with(|state| state.data.view.policy(&portal.retail).unwrap().number.clone());
+    assert_eq!(find(&mine, "w1")["number"], number.as_str());
+    let (_, theirs) = portal.get("sub-adv", "/app/v1/requests").await;
+    assert_eq!(
+        (&find(&theirs, "w2")["status"], &find(&theirs, "w2")["declined_by"]),
+        (&json!("cancelled"), &json!(KIRI))
+    );
+    // Withdrawn by the one who asked is not a decline.
+    let request = json!({ "id": "w3", "policy": policy, "kind": "decline_indexation", "module": "policy-servicing", "payload": {} });
+    portal.write("POST", "sub-adv", "/app/v1/requests", request).await;
+    assert_eq!(portal.write("DELETE", "sub-adv", "/app/v1/requests/w3", json!(null)).await.0, StatusCode::OK);
+    let (_, theirs) = portal.get("sub-adv", "/app/v1/requests").await;
+    assert_eq!(find(&theirs, "w3")["declined_by"], Value::Null);
+    assert_eq!(
+        find(&portal.get("sub-kiri", "/app/v1/requests").await.1, "w3"),
+        Value::Null,
+        "nothing of hers to show"
+    );
+}
+
+/// Purpose: staff open a policy, and check a caller on it, by the number the customer reads out in any case, and the access log
+/// names the policy by its reference; a search finds a policy by the end of its number; and a number search lists a policy closed
+/// to the searcher (their own, or a declared connection's) only as closed.
+/// Why it matters: a typed number opened nothing while the last policy stayed on screen, so a caller check was recorded on the wrong
+/// policy; callers read out the last digits; and a connection's policy must not be shown to the person connected (found by the
+/// scenario run, SCN-13).
+#[tokio::test]
+async fn staff_reach_a_policy_by_the_number_the_caller_reads_out() {
+    let portal = portal();
+    let number = portal.local.with(|state| state.data.view.policy(&portal.retail).unwrap().number.clone());
+    let (status, view) = portal
+        .get("sub-sue", &format!("/staff/v1/policies/{}?case=CALL-9", number.to_lowercase()))
+        .await;
+    assert_eq!((status, &view["policy"]), (StatusCode::OK, &json!(portal.retail.0)), "{view}");
+    let (status, checked) = portal
+        .write(
+            "POST",
+            "sub-sue",
+            &format!("/staff/v1/policies/{number}/caller"),
+            json!({ "caller": KIRI, "case": "CALL-9" }),
+        )
+        .await;
+    assert_eq!((status, &checked["outcome"]), (StatusCode::OK, &json!("discuss")), "{checked}");
+    let (_, me) = portal.get("sub-sue", "/staff/v1/me").await;
+    let caller = format!("policy:{}/caller", portal.retail.0);
+    assert!(
+        me["recent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l["record"].as_str().is_some_and(|r| r.starts_with(&caller))),
+        "the contact is logged against the policy's reference: {me}"
+    );
+
+    let find = |q: String| {
+        let portal = &portal;
+        async move { portal.get("sub-sue", &format!("/staff/v1/find?q={q}&case=CALL-9")).await.1 }
+    };
+    let ending: String = number.chars().rev().take(3).collect::<Vec<_>>().into_iter().rev().collect();
+    let found = find(ending.clone()).await;
+    assert!(
+        found["policies"].as_array().unwrap().iter().any(|p| p["number"] == number.as_str()),
+        "{ending}: {found}"
+    );
+    assert!(ic_channels::find::numbered(&ic_readmodel::Projections::default(), "ab").is_empty());
+
+    // Sue declares she knows Kiri: a search by the number says the policy is closed, and gives nothing of it.
+    portal.local.with(|state| {
+        state.data.staff.connections.entry(p("sue")).or_default().insert(p(KIRI));
+    });
+    let found = find(number.clone()).await;
+    assert_eq!(found["policies"], json!([{ "closed": true }]), "{found}");
+}
+
+/// Purpose: a one-off grant and a break-glass grant widen the staff tools a person is offered as they widen what the routes let them
+/// do, and a profile uplift (which gives no action) does not.
+/// Why it matters: a person given an action for one task must be able to see the tool for it, and one who holds none must not be
+/// shown tools that can only refuse them (found by the scenario run, SCN-13 and SCN-16).
+#[tokio::test]
+async fn grants_widen_the_tools_offered() {
+    use ic_channels::staff::{Grant, GrantKind, GrantState, Source};
+    let portal = portal();
+    let offered = |subject: &'static str| {
+        let portal = &portal;
+        async move {
+            let (_, reply) = mcp(portal, &as_subject(subject), json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" })).await;
+            reply["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["name"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        }
+    };
+    assert!(!offered("sub-sue").await.contains(&"claims_command".to_string()));
+    let now = portal.now();
+    let grant = |id: &str, kind: GrantKind| Grant {
+        id: id.into(),
+        holder: p("sue"),
+        kind,
+        reason: "covering the claims desk".into(),
+        requested_by: p("sue"),
+        requested_at: now - 10,
+        approver: Some(p("alice")),
+        from: now - 10,
+        to: now + 3600,
+        state: GrantState::Active,
+        source: Source::BuiltIn,
+        reviewed: None,
+    };
+    portal.local.with(|state| {
+        let g = grant(
+            "g-one",
+            GrantKind::OneOff {
+                action: "customers.export".into(),
+                record: "party:x".into(),
+            },
+        );
+        state.data.staff.grants.insert(g.id.clone(), g);
+        let g = grant("g-glass", GrantKind::BreakGlass { template: "claims".into() });
+        state.data.staff.grants.insert(g.id.clone(), g);
+        let g = grant("g-up", GrantKind::ProfileUplift { limits: Default::default() });
+        state.data.staff.grants.insert(g.id.clone(), g);
+    });
+    let now_offered = offered("sub-sue").await;
+    assert!(now_offered.contains(&"customer_export".to_string()), "{now_offered:?}");
+    assert!(now_offered.contains(&"claims_command".to_string()), "{now_offered:?}");
+    assert!(!now_offered.contains(&"finance_command".to_string()));
+}
+
+/// Purpose: an assistant is told each payments and reinsurance question's fields from the module's own list, the payments commands
+/// by name, the employer's scheme commands in the shape the route takes, that money is in cents, and what a missing body should
+/// hold; a misspelt payments command is told the commands there are.
+/// Why it matters: with `{...}` for a body and half the fields undescribed, an assistant guessed every field, sent commands in the
+/// wrong shape and read $1,650.50 as $165,050 (found by the scenario run, SCN-07, SCN-10, SCN-16 and SCN-22).
+#[tokio::test]
+async fn an_assistant_is_told_the_fields_the_commands_and_the_units() {
+    let portal = portal();
+    let listed = |name: &str| ic_channels::mcp::catalogue().into_iter().find(|t| t.name == name).unwrap().listed();
+    let query = |name: &str| listed(name)["inputSchema"]["properties"]["query"]["description"].as_str().unwrap().to_string();
+    let body = |name: &str| listed(name)["inputSchema"]["properties"]["body"]["description"].as_str().unwrap().to_string();
+    let payments = query("payments_question");
+    assert!(
+        payments.contains("control_totals: `run`") && payments.contains("funding_forecast: `from`, `to`"),
+        "{payments}"
+    );
+    let reinsurance = query("reinsurance_question");
+    assert!(
+        reinsurance.contains("exposure: `on`") && reinsurance.contains("balance: `treaty`, `reinsurer`"),
+        "{reinsurance}"
+    );
+    assert!(body("payments_command").contains("approve_run"));
+    assert!(listed("payments_question")["description"].as_str().unwrap().contains("cents"));
+    assert!(body("scheme_command").contains(r#"{"declare_pool": {"pool""#));
+    let (_, hello) = mcp(&portal, &as_subject("sub-kiri"), json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize" })).await;
+    assert!(hello["result"]["instructions"].as_str().unwrap().contains("cents"), "{hello}");
+    let missing = call_tool(&portal, "sub-kiri", "approve_request", json!({ "id": "r-1" })).await;
+    assert!(
+        missing["content"][0]["text"].as_str().unwrap().contains(r#"body is required: {"signed""#),
+        "{missing}"
+    );
+
+    let (status, refused) = portal
+        .write("POST", "sub-paymk", "/staff/v1/payments/commands", json!({ "type": "aprove_run" }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(refused["detail"].as_str().unwrap().contains("approve_run"), "{refused}");
+}
+
+/// Purpose: a signature over a challenge the device was never given is refused as a signature that did not check out, and a step that
+/// needs the device says where to do it.
+/// Why it matters: an assistant told "that is not yours to do" took a forgery for a missing permission, and one told only that a key
+/// was needed could not tell the person what to do (found by the scenario run, SCN-10).
+#[tokio::test]
+async fn a_device_refusal_says_what_to_do() {
+    let portal = portal();
+    let (status, problem) = portal.get("sub-kiri", "/app/v1/profile/export").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(problem["detail"].as_str().unwrap().contains("set up this browser under Signing"), "{problem}");
+    let appoint = json!({ "adviser": "adv-1", "engagement": "e1" });
+    portal
+        .write("POST", "sub-kiri", &format!("/app/v1/policies/{}/advisers", portal.retail), appoint)
+        .await;
+    let request = json!({ "id": "f1", "policy": portal.retail, "kind": "decline_indexation", "module": "policy-servicing", "payload": {} });
+    assert_eq!(portal.write("POST", "sub-adv", "/app/v1/requests", request).await.0, StatusCode::ACCEPTED);
+    let forged = json!({ "signed": { "challenge": "never-issued", "signature": "AAAA" } });
+    let (status, problem) = portal.write("POST", "sub-kiri", "/app/v1/requests/f1/approve", forged).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{problem}");
+    assert!(problem["detail"].as_str().unwrap().contains("sign it again on your phone"), "{problem}");
 }
 
 /// Purpose: with Entra sign-in the endpoint publishes its protected resource metadata, naming itself and both tenants' issuers and
@@ -7012,6 +7436,7 @@ async fn an_advisers_cancellation_is_attributed_to_their_engagement() {
         signed_by: Default::default(),
         route_to_person: false,
         assisted: None,
+        declined_by: None,
     };
     portal.local.with(|state| {
         state.data.directory.authorities.entry(policy.clone()).or_default().insert(
@@ -7183,7 +7608,8 @@ async fn customers_changes_are_carried_to_the_core() {
 /// missing what the core needs is refused with a code that says what: no policy, no change, a frequency or billing day that is
 /// not one.
 /// Why it matters: the customer reads these codes on their request; a malformed payload must never reach the core as a
-/// different change from the one the customer signed.
+/// different change from the one the customer signed. Reducing cover, the commonest service change, could not be asked for at all
+/// (found by the scenario run, SCN-13).
 #[test]
 fn servicing_requests_become_the_core_commands_they_name() {
     use ic_channels::servicing::{carried_by_sweep, command};
@@ -7202,6 +7628,29 @@ fn servicing_requests_become_the_core_commands_they_name() {
     assert_eq!(code(request("change_frequency", json!({ "frequency": 12 }))), "bad_frequency");
     assert_eq!(code(json!({ "id": "r", "kind": "cancel_policy" })), "no_policy");
     assert_eq!(code(request("surrender", json!({}))), "not_carried");
+    // Reducing cover names the cover, the life and what it keeps (found by the scenario run, SCN-13).
+    assert!(matches!(
+        command(&request("reduce_cover", json!({ "cover": "life", "life": "life-1", "sum_insured_minor": 25_000_000 }))),
+        Ok(Core::ReduceCover(r)) if r.cover == "life" && r.life.0 == "life-1" && r.sum_insured_minor == 25_000_000
+    ));
+    assert_eq!(
+        code(request("reduce_cover", json!({ "life": "life-1", "sum_insured_minor": 1 }))),
+        "nothing_to_reduce"
+    );
+    assert_eq!(
+        code(request("reduce_cover", json!({ "cover": "life", "sum_insured_minor": 1 }))),
+        "nothing_to_reduce"
+    );
+    assert_eq!(
+        code(request("reduce_cover", json!({ "cover": "life", "life": "life-1", "sum_insured_minor": -1 }))),
+        "bad_amount"
+    );
+    assert!(carried_by_sweep(&request("reduce_cover", json!({}))));
+    assert!(
+        ic_channels::servicing::ATTRIBUTED.contains(&"reduce_cover"),
+        "giving cover up may claw commission back"
+    );
+    assert!(ic_channels::state::needs_signature("reduce_cover"), "giving cover up is signed on the device");
     assert!(carried_by_sweep(&request("cancel_policy", json!({}))));
     let mut cared = request("cancel_policy", json!({}));
     cared["route_to_person"] = json!(true);

@@ -24,9 +24,9 @@ const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
 const send = (body) => api(R, "POST", BASE + "commands", body);
 const list = (text) => String(text || "").split(",").map((s) => s.trim()).filter(Boolean);
+// Shown in dollars; put into an amount field as the plain figure the field takes.
 const money = (minor) => minor == null ? "" : portal.money(minor);
-// An amount to put in a number field.
-const plain = (minor) => (Number(minor) / 100).toFixed(2);
+const amount = (minor) => (Number(minor) / 100).toFixed(2);
 
 const QUEUES = ["health", "lump_sum", "income_protection_new", "income_protection_ongoing", "group", "complex_large", "medical_officer", "rehabilitation", "recoveries", "quality_review"];
 const TASKS = ["non_disclosure_review", "claimant_conversation", "case_conference", "medical_opinion", "membership_evidence", "rehabilitation", "medical_review", "income_declaration", "return_to_work", "senior_review", "quality_review", "repayment_arrangement", "proof_of_life"];
@@ -192,9 +192,9 @@ function nextSteps(w) {
   for (const t of (w.tasks || []).filter((t) => !t.completed_on)) out.push(step(`Complete ${words(t.kind)}${t.overdue ? " (overdue)" : ""}`, "complete_task", { task: t.id }));
   for (const [e, kind] of (w.evidence || []).filter((e) => !e[4])) out.push(step(`Record ${kind} received`, "receive_evidence", { evidence: e }));
   if (open && w.admitted_minor === 0 && !w.waiting) out.push(step("Decide: admit", "decide_admit"), step("Decide: decline", "decide_decline"));
-  if (open && w.payable_minor > w.paid_minor && w.payee) out.push(step(`Pay ${money(w.payable_minor - w.paid_minor)}`, "pay", { amount_minor: plain(w.payable_minor - w.paid_minor) }));
+  if (open && w.payable_minor > w.paid_minor && w.payee) out.push(step(`Pay ${money(w.payable_minor - w.paid_minor)}`, "pay", { amount_minor: amount(w.payable_minor - w.paid_minor) }));
   if (open && w.payable_minor > 0 && !w.payee) out.push(step("Verify the payee", "verify_payee"));
-  for (const [o, owed] of (w.overpayments || []).filter((o) => o[1] > 0)) out.push(step(`Record a repayment on ${o}`, "record_repayment", { overpayment: o, amount_minor: plain(owed) }), step(`Ask for ${o} to be repaid`, "ask_repayment", { overpayment: o }), step(`Set how ${o} is recovered`, "decide_recovery_status", { "request.recovery_status.overpayment": o }));
+  for (const [o, owed] of (w.overpayments || []).filter((o) => o[1] > 0)) out.push(step(`Record a repayment on ${o}`, "record_repayment", { overpayment: o, amount_minor: amount(owed) }), step(`Ask for ${o} to be repaid`, "ask_repayment", { overpayment: o }), step(`Set how ${o} is recovered`, "decide_recovery_status", { "request.recovery_status.overpayment": o }));
   if (open && w.benefit) out.push(step("Suspend the benefit", "decide_suspend_benefit"), step("Resume the benefit", "decide_resume_benefit"));
   if (open && w.payee) out.push(step("Record the payee's tax rate", "set_withholding_rate"));
   if (w.closed_on) out.push(step("Reopen it", "reopen"));
@@ -275,7 +275,8 @@ $("w-filter").addEventListener("input", listed);
 const cell = (v) => v == null ? "" : typeof v === "object" ? portal.text(v) : v;
 portal.picker($("c-id"), async (text) => {
   const items = [];
-  const found = await portal.policies(text).catch(() => []);
+  // A finder that cannot search says why, such as no case named yet, rather than finding nothing.
+  const found = await portal.policies(text).catch((e) => { say($("c-msg"), "bad", e.message); return []; });
   for (const p of found.slice(0, 4)) {
     const { rows } = await ask("policy", { policy: p.value });
     for (const r of rows) items.push({ value: r.status.claim, label: r.status.claim, hint: `${p.label} · ${words(r.status.status)} · notified ${r.status.notified_on}` });

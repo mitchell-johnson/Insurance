@@ -325,8 +325,17 @@ The scenario run (SCN-17 to SCN-23, SCN-03) found the back-office consoles hard 
 - **Open conduct case counts stay with conduct and legal.** The complaints report drops `open_conduct_cases` for other seats. (F-21-12)
 - **A vulnerability marker takes the complaint from an untrained handler.** It goes back to the queue rather than staying with someone not trained for it. (F-21-4)
 - **A complainant is picked from the customer master.** A typed name is refused, so every complaint is about a known person. (F-21-1)
-- **Staff pages take their dates from the books.** Once a member of staff is signed in, `portal.today()` is the business date the portal last heard from the books (`/staff/v1/me` gives `business_date`), so month-ends and defaults match the ledger. Before sign-in, and for customers, it is New Zealand's date. (F-20-6, F-SCN22-2)
+- **Staff pages take their dates from the books.** `portal.today()` is the books' business date: the one the page was served with (a `business-date` meta tag), or for staff the one `/staff/v1/me` gives, so month-ends and defaults match the ledger. Only while the core has reported no date is it New Zealand's calendar date. (F-20-6, F-SCN22-2)
 - **Compliance holds a payee's payments.** A new Cedar action `payee.hold` (distribution administrator or compliance) covers `set_payment_hold`, so an adviser under investigation is not paid without recording a licence event that would misstate the licence and lock their book. (F-20-3)
 - **The commission console offers first what a person may do.** The rest is set apart under "Done by other roles", naming who does each, rather than hidden: the module still decides and records every attempt. (F-SCN03-5)
 - **A price for a fund held by an open price error is not offered for approval** until the error's correction is approved; the corrections themselves are. (F-SCN18)
 - **One open countersign item per command.** A second identical prepare is refused, naming who prepared the first. (F-SCN22-3)
+
+## What the portal offers and asks of people (17 Nov 2026)
+
+Decided while fixing the scenario run's portal findings (SCN-01, SCN-02, SCN-08, SCN-13, SCN-16):
+
+- **An assistant is offered only the tools it could use.** The MCP tool list is filtered by what the caller holds, not by which sign-in they used. Staff see a tool when one of their templates, or an active one-off or break-glass grant, gives an action the route checks. Customer-realm callers see adviser tools only with an engagement or practice, and employer tools only as a scheme administrator. A profile uplift changes limits, not actions, so it offers nothing new. The route still decides each call; the list is only so that an assistant is not shown tools that can only refuse it.
+- **A phone number written with a leading 0 is a New Zealand number.** `021 123 4567` is stored as `+64211234567`; spaces, dashes, brackets and dots are dropped. A number for another country must start with `+`. Customers are in New Zealand, and asking them to type `+64` was refused as an error they could not understand.
+- **Lifting a hold needs a person.** A customer cannot lift a hold on their record from the page: removing it needs an identity check passed in the last 24 hours, which a person on the phone does. The page says to call, rather than asking for a code the customer has never been given.
+- **A policy is reached by its number in any case, or by the last three digits in a search.** Callers read out numbers, often only the end. A search by number lists a policy closed to the searcher (their own, or a declared connection's) only as closed, with nothing of it shown.

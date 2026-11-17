@@ -135,7 +135,11 @@ impl Master for MasterDouble {
             match body["command"].as_str() {
                 Some("place_spending_hold") => *hold = json!({ "held": true, "placed_at": "2027-02-01T09:00:00Z", "removal": null }),
                 Some("request_hold_removal") if body["verification"].as_str().is_none() => {
-                    return Ok((422, json!({ "title": "verification_needed" })));
+                    // In the master's own error shape, as it answers every refusal.
+                    return Ok((
+                        422,
+                        json!({ "error": { "code": "verification_needed", "message": "removing the hold needs a passed identity check from the last 24 hours" } }),
+                    ));
                 }
                 Some("request_hold_removal") if hold["held"] == true => {
                     hold["removal"] = json!({ "requested_at": "2027-02-02T09:00:00Z", "ends_at": "2027-02-09T09:00:00Z" });

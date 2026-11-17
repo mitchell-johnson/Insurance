@@ -81,12 +81,41 @@ const portal = (() => {
     if (typeof v === "boolean") return v ? "yes" : "no";
     if (typeof v === "number" && /_minor$/.test(key || "")) return money(v);
     // A moment kept as seconds since 1970 reads as a date and time.
-    if (typeof v === "number" && v > 1e9 && v < 1e11 && /^(at|submitted|granted|issued|expires|since|.*_at)$/.test(key || "")) return new Date(v * 1000).toLocaleString();
+    if (typeof v === "number" && v > 1e9 && v < 1e11 && /^(at|submitted|granted|issued|expires|since|enrolled|.*_at)$/.test(key || "")) return when(v);
     if (Array.isArray(v)) return v.map((x) => text(x)).join(", ");
     if (typeof v === "object") return Object.entries(v).map(([k, x]) => `${phrase(k)}: ${text(x, k)}`).join("; ");
     // An enumeration value (in_force) reads as words; identifiers stay as they are.
     return /^[a-z]+(_[a-z]+)+$/.test(v) ? v.replace(/_/g, " ") : String(v);
   }
+  // A change asked for on a policy, in words: what it does, never its code.
+  const FREQUENCY = { weekly: "weekly", fortnightly: "fortnightly", monthly: "monthly", quarterly: "quarterly", half_yearly: "half-yearly", yearly: "yearly" };
+  function change(kind, payload) {
+    const p = payload || {};
+    switch (kind) {
+      case "change_frequency": return `Pay ${FREQUENCY[p.frequency] || String(p.frequency || "at a new frequency").replace(/_/g, " ")}${p.billing_day ? `, on day ${p.billing_day} of the month` : ""}`;
+      case "decline_indexation": return p.declined === false ? "Take this year's indexation increase" : "Decline this year's indexation increase";
+      case "cancel_policy": return "Cancel the policy";
+      case "reduce_cover": return `Reduce ${String(p.cover || "the cover").replace(/_/g, " ")} to ${p.sum_insured_minor != null ? money(p.sum_insured_minor) : "a lower amount"}`;
+      case "notify_claim": return "Tell us about a claim";
+      default: return String(kind).replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+    }
+  }
+  // Where a request stands, in words. `asker` is true for the person who asked for it.
+  function requestState(r, asker) {
+    const s = r.state || r;
+    switch (s.status) {
+      case "awaiting_approval": return s.from === "customer" ? (asker ? "Waiting for the customer to approve" : "Waiting for you to approve") : s.from === "second_staff" ? "Waiting for a second member of staff" : "Waiting for a second administrator";
+      case "pending": return r.approved_by && asker ? "Approved by the customer; being carried out" : "Being carried out";
+      case "applied": return r.approved_by && asker ? "Approved by the customer and done" : "Done";
+      case "rejected": return `Not done: ${s.message || String(s.code || "refused").replace(/_/g, " ")}`;
+      case "cancelled": return r.declined_by || r.declined ? (asker ? "Declined by the customer" : "You declined it") : (asker ? "Withdrawn by you" : "Withdrawn");
+      default: return String(s.status || "").replace(/_/g, " ");
+    }
+  }
+  // A moment kept as seconds since 1970 (or an RFC 3339 string), as New Zealand writes it: 17 Nov 2026, 4:26 pm.
+  function when(v) { const d = typeof v === "number" ? new Date(v * 1000) : new Date(v); return isNaN(d) ? String(v) : d.toLocaleString("en-NZ", { timeZone: "Pacific/Auckland", day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" }); }
+  // The day of such a moment: 17 Nov 2026.
+  function day(v) { const d = typeof v === "number" ? new Date(v * 1000) : new Date(v); return isNaN(d) ? String(v) : d.toLocaleDateString("en-NZ", { timeZone: "Pacific/Auckland", day: "numeric", month: "short", year: "numeric" }); }
   function details(v, key) {
     if (v == null || typeof v !== "object") return h("span", {}, text(v, key));
     if (Array.isArray(v)) {
@@ -109,7 +138,7 @@ const portal = (() => {
     const realm = document.body.dataset.realm;
     gate(h("section", { class: "gate refused" }, icon("lock"), h("h2", {}, "This page is not open to you"),
       banner("bad", words),
-      h("p", { class: "muted" }, "If you need it for your work, ask a staff administrator for the role. Nothing you did here was recorded against you."),
+      h("p", { class: "muted" }, (realm === "workforce" ? "If you need it for your work, ask a staff administrator for the role." : "If you think this is wrong, contact us.") + " Nothing you did here was recorded against you."),
       h("div", { class: "actions" }, h("a", { href: "/" }, "All portals"), realm ? h("button", { class: "quiet", type: "button", on: { click: () => signOut(realm) } }, "Sign in as someone else") : null)));
   }
   // What stands in front of a page: sign-in on a laptop, or a refusal. The page behind it is not shown.
@@ -123,13 +152,13 @@ const portal = (() => {
   function say(el, kind, text) { put(el, banner(kind, text)); }
   // A question that must be answered before an action goes ahead. Resolves to the
   // answer (or true when nothing is asked for), or null when the person backs out.
-  function ask({ title, text, label, confirm, danger, type }) {
+  function ask({ title, text, label, confirm, danger, type, keep }) {
     return new Promise((resolve) => {
       const input = label ? h("input", { id: "ask-input", type: type || "text", required: true, maxlength: 500, autocomplete: "off" }) : null;
       let answer = null;
       const box = h("dialog", { "aria-labelledby": "ask-title" }, h("form", { on: { submit: (ev) => { ev.preventDefault(); answer = input ? input.value.trim() : true; box.close(); } } },
         h("h2", { id: "ask-title" }, title), text ? h("p", {}, text) : null, input ? [h("label", { for: "ask-input" }, label), input] : null,
-        h("div", { class: "actions" }, h("button", { type: "button", class: "quiet", on: { click: () => box.close() } }, "Cancel"), h("button", { class: danger ? "danger" : null }, confirm || "Continue"))));
+        h("div", { class: "actions" }, h("button", { type: "button", class: "quiet", on: { click: () => box.close() } }, keep || "Cancel"), h("button", { class: danger ? "danger" : null }, confirm || "Continue"))));
       box.addEventListener("close", () => { box.remove(); resolve(answer); });
       document.body.append(box);
       box.showModal();
@@ -221,10 +250,12 @@ const portal = (() => {
     if (res.status === 401 && cfg.mode !== "dev") { store.removeItem("token:" + realm); throw new Error("Your sign-in has expired. Reload the page to sign in again."); }
     if (!res.ok) {
       // A reference nobody holds is most often a slip of the fingers: say so, and what to do.
-      const vague = res.status === 404 && (!data || !data.detail || /^no such resource$/i.test(data.detail));
+      // The portal's own refusals carry `detail`; another service's body passed on carries `error.message`.
+      const said = data && (data.detail || (data.error && data.error.message) || data.message);
+      const vague = res.status === 404 && (!said || /^no such (resource|party)$/i.test(said));
       // A role named as the code spells it (PayeeMaintainer) reads as words.
-      const detail = data && data.detail && String(data.detail).replace(/\b([A-Z][a-z]+)((?:[A-Z][a-z]+)+)\b/g, (w) => w.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase());
-      const e = new Error(vague ? "Nothing was found with that reference. Check it for a slip and try again; if it is right, it may not be open to you." : detail || "The request failed (" + res.status + ")."); e.status = res.status; e.code = data && data.title; e.reference = headers.traceparent.split("-")[1]; throw e;
+      const detail = said && String(said).replace(/\b([A-Z][a-z]+)((?:[A-Z][a-z]+)+)\b/g, (w) => w.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase());
+      const e = new Error(vague ? "Nothing was found with that reference. Check it for a slip and try again; if it is right, it may not be open to you." : detail || "The request failed (" + res.status + ")."); e.status = res.status; e.code = data && (data.title || (data.error && data.error.code)); e.reference = headers.traceparent.split("-")[1]; throw e;
     }
     return data;
   }
@@ -235,7 +266,7 @@ const portal = (() => {
     if (prover) Object.assign(headers, await prover("GET", path.split("?")[0], ""));
     const res = await fetch(path, { headers });
     if (res.status === 404) throw new Error("That document is not available to you.");
-    if (!res.ok) { const data = await res.json().catch(() => null); throw new Error((data && data.detail) || "The download failed (" + res.status + ")."); }
+    if (!res.ok) { const data = await res.json().catch(() => null); throw new Error((data && (data.detail || (data.error && data.error.message))) || "The download failed (" + res.status + ")."); }
     const url = URL.createObjectURL(await res.blob());
     const a = h("a", { href: url, download: name });
     document.body.append(a); a.click(); a.remove();
@@ -337,11 +368,13 @@ const portal = (() => {
   }
 
   // ---- Defaults a person should not have to work out.
-  // Today and this month: the books' business date once a member of staff is signed in and the portal knows it,
-  // otherwise the date as New Zealand reckons it.
+  // Today and this month as the books reckon them: the business date the page was served with,
+  // and New Zealand's calendar only while the core has reported none.
   const nzDate = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: "Pacific/Auckland", year: "numeric", month: "2-digit", day: "2-digit" }).format(d || new Date());
+  const booksDay = ((document.querySelector('meta[name="business-date"]') || {}).content || "").match(/^\d{4}-\d{2}-\d{2}$/) ? document.querySelector('meta[name="business-date"]').content : null;
+  // A signed-in member of staff also hears it from /staff/v1/me.
   let books = null;
-  const today = () => books || nzDate();
+  const today = () => booksDay || books || nzDate();
   const month = (back = 0) => { const [y, m] = today().split("-").map(Number); const t = new Date(Date.UTC(y, m - 1 - back, 1)); return t.toISOString().slice(0, 7); };
   const days = (n, from) => { const d = new Date((from || today()) + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
   // A new reference for something this person is creating: readable, dated and unique enough
@@ -382,7 +415,7 @@ const portal = (() => {
     const q = new URLSearchParams({ q: text, case: working() });
     return api("workforce", "GET", "/staff/v1/find?" + q);
   }
-  const born = (d) => d ? new Date(d + "T00:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : "";
+  const born = (d) => d ? new Date(d + "T00:00:00Z").toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : "";
   // Picker sources over find: people (value is the party) and policies (value is the policy).
   async function people(text) {
     const r = await find(text);
@@ -393,7 +426,7 @@ const portal = (() => {
   }
   async function policies(text) {
     const r = await find(text), out = [], seen = new Set();
-    const add = (p, who) => { if (seen.has(p.policy)) return; seen.add(p.policy); out.push({ value: p.policy, label: p.number || p.policy, hint: [who, p.product, String(p.status || "").replace(/_/g, " ")].filter(Boolean).join(" · "), policy: p }); };
+    const add = (p, who) => { if (p.closed || seen.has(p.policy)) return; seen.add(p.policy); out.push({ value: p.policy, label: p.number || p.policy, hint: [who, p.product, String(p.status || "").replace(/_/g, " ")].filter(Boolean).join(" · "), policy: p }); };
     for (const p of r.policies) add(p, "");
     for (const person of r.people) for (const p of person.policies || []) add(p, `${person.name || person.party}${p.as === "owner" ? "" : " (" + p.as + ")"}`);
     if (!out.length && r.hint) throw new Error(r.hint.replace(/^./, (c) => c.toUpperCase()) + ".");
@@ -569,5 +602,5 @@ const portal = (() => {
   }
   frame();
   return { h, clear, put, money, table, text, details, say, refuse, signIn, signOut, api, run, loadConfig, download, documents, icon, pill, stats, empty, ask, view, onView: (fn) => listeners.push(fn), launcher, prove: (fn) => { prover = fn; },
-    picker, pickMany, actions, today, month, days, reference, working, workOn, onWork: (fn) => workers.push(fn), go, link, params, once, colleagues, find, people, policies, born };
+    picker, pickMany, actions, today, month, days, reference, working, workOn, onWork: (fn) => workers.push(fn), go, link, params, once, colleagues, find, people, policies, born, when, day, change, requestState };
 })();

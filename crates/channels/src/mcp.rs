@@ -54,6 +54,106 @@ pub enum Realm {
     Operations,
 }
 
+/// Who, among those holding a tool's sign-in, its route can serve. A
+/// person is offered the tools they can use, not every tool of their
+/// sign-in; each call is still decided by the route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    /// Everyone with the sign-in.
+    Everyone,
+    /// An adviser or advice provider.
+    Adviser,
+    /// A scheme's administrator.
+    SchemeAdmin,
+    /// An adviser or a scheme's administrator.
+    AdviserOrAdmin,
+    /// A member of staff holding one of these actions; one ending in `.`
+    /// stands for every action of that module.
+    Actions(&'static [&'static str]),
+}
+
+/// What a person holds, for the tools they are offered.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Held {
+    pub realms: Vec<Realm>,
+    pub adviser: bool,
+    pub scheme_admin: bool,
+    pub actions: Vec<String>,
+}
+
+impl Held {
+    /// Whether this tool is one the person can use.
+    pub fn offers(&self, tool: &Tool) -> bool {
+        if !self.realms.contains(&tool.realm) {
+            return false;
+        }
+        match tool.reach {
+            Reach::Everyone => true,
+            Reach::Adviser => self.adviser,
+            Reach::SchemeAdmin => self.scheme_admin,
+            Reach::AdviserOrAdmin => self.adviser || self.scheme_admin,
+            Reach::Actions(needs) => self
+                .actions
+                .iter()
+                .any(|held| needs.iter().any(|need| held == need || (need.ends_with('.') && held.starts_with(need)))),
+        }
+    }
+}
+
+/// The staff actions behind each staff tool's route, and the customer
+/// relationship behind each partner tool. A tool not named here is for
+/// everyone with its sign-in.
+pub fn reach_of(name: &str) -> Reach {
+    const DOCUMENTS: &[&str] = &[
+        "documents.view",
+        "documents.legal",
+        "documents.remediation",
+        "documents.privacy",
+        "documents.triggers",
+        "documents.delivery",
+        "documents.configuration",
+        "documents.approve_product",
+        "documents.approve_legal",
+        "documents.approve_compliance",
+    ];
+    match name {
+        "adviser_book" | "adviser_held_balance" | "adviser_practice" | "adviser_statement" | "adviser_replacements" | "dispute_replacement" => Reach::Adviser,
+        "employer_schemes" | "set_scheme_admin" | "set_second_admin" | "scheme_command" | "upload_membership_file" | "scheme_question" => Reach::SchemeAdmin,
+        "policy_claims" => Reach::AdviserOrAdmin,
+        "staff_admin" => Reach::Actions(&["staff.manage", "staff.approve_grant"]),
+        "staff_policy" => Reach::Actions(&["policy.view"]),
+        "check_caller" => Reach::Actions(&["policy.view"]),
+        "staff_document" => Reach::Actions(&["documents.download"]),
+        "enter_change_for_customer" => Reach::Actions(&["service.enter_change"]),
+        "second_approval" | "changes_for_second_approval" => Reach::Actions(&["service.approve_change"]),
+        "find" | "find_customers" | "match_customer" => Reach::Actions(&["customers.find"]),
+        "marker_reviews" | "decide_marker_review" => Reach::Actions(&["service.vulnerability_kind"]),
+        "workbench" | "workbench_party" | "proof_of_debt" | "workbench_action" | "replacements" | "decide_replacement" => Reach::Actions(&["held_balance."]),
+        "complaints_question" | "complaints_command" => Reach::Actions(&["complaints."]),
+        "claims_question" | "claims_definition" | "claims_command" => Reach::Actions(&["claims."]),
+        "commission_question" | "commission_command" => Reach::Actions(&["commission."]),
+        "payments_question" | "payments_command" => Reach::Actions(&["payments."]),
+        "servicing_waiting" | "servicing_carry_out" | "servicing_decline" => Reach::Actions(&["servicing.carry_out"]),
+        "collections_question" | "collections_command" => Reach::Actions(&["collections."]),
+        "documents_question" | "documents_command" => Reach::Actions(DOCUMENTS),
+        "wellness_question" => Reach::Actions(&["wellness."]),
+        "group_question" | "group_command" | "group_reoffer" | "try_mapping" | "first_scheme_admin" => Reach::Actions(&["group."]),
+        "underwriting_question" | "underwriting_command" | "underwriting_decide" | "read_disclosures" => Reach::Actions(&["underwriting."]),
+        "reinsurance_question" | "reinsurance_command" | "reinsurance_decide" => Reach::Actions(&["reinsurance."]),
+        "finance_question" | "finance_command" | "rate_table_dry_run" => Reach::Actions(&["finance."]),
+        "pricing_question" | "pricing_command" => Reach::Actions(&["unit_pricing."]),
+        "quote" => Reach::Actions(&["new_business.quote"]),
+        "core_policy" => Reach::Actions(&["policy.core_view"]),
+        "create_customer" => Reach::Actions(&["customers.create"]),
+        "customer" | "customer_history" | "customer_relationships" | "customer_due_diligence" => Reach::Actions(&["customers.view"]),
+        "change_customer" => Reach::Actions(&["customers.change"]),
+        "customer_export" => Reach::Actions(&["customers.export"]),
+        "customer_audit" | "actions_by" => Reach::Actions(&["customers.audit"]),
+        "merge_customers" | "unmerge_customers" | "duplicate_reviews" | "dismiss_review" => Reach::Actions(&["customers.merge"]),
+        _ => Reach::Everyone,
+    }
+}
+
 /// What a tool sends as the request body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Payload {
@@ -79,23 +179,46 @@ pub struct Tool {
     /// Query parameters, described. Empty for none.
     pub query: &'static str,
     pub body: Payload,
-    /// What the tool does to the system, where its method alone misleads:
-    /// a check sent as POST that changes nothing, or an erasure.
-    pub effect: Option<Effect>,
+    /// Who among those with the sign-in the route serves.
+    pub reach: Reach,
 }
 
-/// What a tool does, said to the assistant so it knows when to ask first.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Effect {
-    /// Reads or checks and changes nothing, whatever its method.
-    Reads,
-    /// Removes or erases something that cannot be had back.
-    Destroys,
-}
+/// Tools sent as a POST that change nothing: a check, a price, a search,
+/// a dry run. An assistant may call them without asking first.
+const READS_BY_POST: [&str; 7] = [
+    "verify_customer",
+    "quote",
+    "rate_table_dry_run",
+    "try_mapping",
+    "find_customers",
+    "read_disclosures",
+    "disclosure_to_sign",
+];
+
+/// Tools that can end or erase something beyond a DELETE: erasing again
+/// after a restore, merging records, shredding a party's documents, and a
+/// change that may cancel a policy. An assistant asks before calling them.
+const DESTRUCTIVE: [&str; 5] = [
+    "reshred_customers",
+    "merge_customers",
+    "documents_command",
+    "make_request",
+    "enter_change_for_customer",
+];
 
 impl Tool {
+    /// Sent with an idempotency key: any route that is not a GET.
+    fn keyed(&self) -> bool {
+        self.method != Method::GET
+    }
+
+    /// Changes something.
     fn writes(&self) -> bool {
-        self.method != Method::GET && self.effect != Some(Effect::Reads)
+        self.keyed() && !READS_BY_POST.contains(&self.name)
+    }
+
+    fn destructive(&self) -> bool {
+        self.method == Method::DELETE || DESTRUCTIVE.contains(&self.name)
     }
 
     /// The path parameters, in order.
@@ -152,8 +275,8 @@ impl Tool {
             "annotations": {
                 "title": self.title,
                 "readOnlyHint": !self.writes(),
-                "destructiveHint": self.method == Method::DELETE || self.effect == Some(Effect::Destroys),
-                "idempotentHint": self.method == Method::GET || self.method == Method::PUT,
+                "destructiveHint": self.destructive(),
+                "idempotentHint": !self.writes() || self.method == Method::PUT,
                 "openWorldHint": false,
             },
         })
@@ -171,7 +294,7 @@ fn tool(name: &'static str, title: &'static str, realm: Realm, method: Method, p
         choices: vec![],
         query: "",
         body: Payload::None,
-        effect: None,
+        reach: reach_of(name),
     }
 }
 
@@ -180,7 +303,6 @@ trait With {
     fn json(self, about: &'static str) -> Self;
     fn file(self, about: &'static str) -> Self;
     fn choose(self, param: &'static str, values: Vec<&'static str>) -> Self;
-    fn effect(self, effect: Effect) -> Self;
 }
 
 impl With for Tool {
@@ -198,10 +320,6 @@ impl With for Tool {
     }
     fn choose(mut self, param: &'static str, values: Vec<&'static str>) -> Self {
         self.choices.push((param, values));
-        self
-    }
-    fn effect(mut self, effect: Effect) -> Self {
-        self.effect = Some(effect);
         self
     }
 }
@@ -251,6 +369,28 @@ pub const EXCLUDED: [(&str, &str, &str); 29] = [
     ("GET", "/ui/*", "the pages' scripts, styles, font and sign-in settings"),
     ("*", "/mcp, /.well-known/*", "this endpoint and its sign-in discovery"),
 ];
+
+static PAYMENTS_QUERY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static PAYMENTS_COMMANDS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static REINSURANCE_QUERY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// A description made once from a module's own lists, so it never drifts from them.
+fn once(cell: &'static std::sync::OnceLock<String>, make: impl FnOnce() -> String) -> &'static str {
+    cell.get_or_init(make).as_str()
+}
+
+/// What each question needs in the query, from the module's own list: `run` for control_totals; ...
+pub fn fields_needed(questions: &[(&'static str, Vec<&'static str>)]) -> String {
+    let needing: Vec<String> = questions
+        .iter()
+        .filter(|(_, fields)| !fields.is_empty())
+        .map(|(name, fields)| format!("{name}: {}", fields.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", ")))
+        .collect();
+    format!(
+        "Each question's fields, as strings (dates YYYY-MM-DD); the others need none. {}.",
+        needing.join("; ")
+    )
+}
 
 /// Every function, as a tool.
 pub fn catalogue() -> Vec<Tool> {
@@ -321,7 +461,7 @@ pub fn catalogue() -> Vec<Tool> {
         tool("set_second_admin", "Changes needing a second administrator", C, M::PUT, "/employer/v1/schemes/{policy}/second-admin", "Choose which kinds of change on your scheme need a second administrator to approve.")
             .json(r#"{"changes": ["remove_member", ...]}"#),
         tool("scheme_command", "Act on my scheme's membership", C, M::POST, "/employer/v1/schemes/{policy}/group/commands", "Approve or withdraw an uploaded membership file, or declare a pool's aggregate.")
-            .json(r#"{"command": "approve_file" | "withdraw_file" | "declare_pool", ...}"#),
+            .json(r#"One object naming the command: {"approve_file": {"file": "<the uploaded file's name>"}} | {"withdraw_file": {"file": "<name>"}} | {"declare_pool": {"pool": "<pool>", "category": "<category>", "effective": "YYYY-MM-DD", "headcount": <people>, "total_salary_minor": <the pool's total yearly salary in cents: $784,000.00 is 78400000>}} | {"choose_health_plan": {"employee_id", "plan", "tier", "effective": "YYYY-MM-DD", "dependants"?: [...]}}. The scheme is the one on the path."#),
         tool("upload_membership_file", "Upload a membership file", C, M::POST, "/employer/v1/schemes/{policy}/group/files/{file}", "Upload a membership file (CSV) to quarantine. Approve it with scheme_command after checking its preview.")
             .file("The file's bytes, base64. At most 32 MB."),
         tool("scheme_question", "Ask about my scheme", C, M::GET, "/employer/v1/schemes/{policy}/group/{question}", "Your scheme on the group service: the scheme, its invoices, an uploaded file's preview, or one member's record.")
@@ -373,11 +513,13 @@ pub fn catalogue() -> Vec<Tool> {
             .query("As the question needs: `party`, `as_at`, `payee`, `number`, `period`."),
         tool("commission_command", "Act in commission", S, M::POST, "/staff/v1/commission/commands", "A command to the commission module.")
             .json(r#"{"purpose": "<why>", "command": {"<name>": {...}}}"#),
-        tool("payments_question", "Ask the payments module", S, M::GET, "/staff/v1/payments/{question}", "Runs, exceptions, matches to approve, a party's authorities, holds, submissions, control totals and compliance cases.")
+        tool("payments_question", "Ask the payments module", S, M::GET, "/staff/v1/payments/{question}", "Runs, exceptions, matches to approve, a party's authorities, holds, submissions, control totals and compliance cases. Every amount in the answers is in cents of New Zealand dollars, whether or not its name ends in _minor: 165050 is $1,650.50.")
             .choose("question", with_me(crate::payments::question_names()))
-            .query("As the question needs: `account`, `exception`, `party`, `run`, `submission`, `case`."),
-        tool("payments_command", "Act in payments", S, M::POST, "/staff/v1/payments/commands", "A command to the payments module in its own JSON.")
-            .json(r#"{"type": "<command>", ...}"#),
+            .query(once(&PAYMENTS_QUERY, || fields_needed(&crate::payments::question_fields()))),
+        tool("payments_command", "Act in payments", S, M::POST, "/staff/v1/payments/commands", "A command to the payments module in its own JSON. Amounts are in cents.")
+            .json(once(&PAYMENTS_COMMANDS, || {
+                format!(r#"{{"type": "<command>", ...that command's fields}}, where the command is one of: {}"#, crate::payments::COMMANDS.join(", "))
+            })),
         tool("servicing_waiting", "Customers' requests waiting for a person", S, M::GET, "/staff/v1/servicing/waiting", "Changes customers asked for that the customer master sent to a trained person first: who asked and what for, never why."),
         tool("servicing_carry_out", "Carry out a customer's request", S, M::POST, "/staff/v1/servicing/{id}/carry-out", "Having spoken with the customer, send their change to the core and close it with the core's answer.")
             .json(r#"{"conversation"?: "<the call or case reference>"}"#),
@@ -419,7 +561,7 @@ pub fn catalogue() -> Vec<Tool> {
             .json(r#"{"proposal", "life", "purpose"}"#),
         tool("reinsurance_question", "Ask reinsurance", S, M::GET, "/staff/v1/reinsurance/{question}", "Exceptions, notices, abandonments, the sweep check, statements, notice retries, what is owed to each reinsurer, and what the insurer keeps on one person's life. `exposure` names the reinsurers there is a balance with.")
             .choose("question", with_me(crate::reinsurance::question_names()))
-            .query("As the question needs: `sweep_check` takes `period_end` (a date); `statement` takes `number`; `notice_retries` takes `seq`; `exposure` takes `on` (a date) and answers per reinsurer; `statements` takes `reinsurer` (and `after` for the next page); `balance` takes `treaty` and `reinsurer`; `consent_status` takes `claim`; `retained` takes `party` (the person) and `on` (a date)."),
+            .query(once(&REINSURANCE_QUERY, || fields_needed(&crate::reinsurance::question_fields()))),
         tool("reinsurance_command", "Act in reinsurance", S, M::POST, "/staff/v1/reinsurance/commands", "A command to reinsurance in its own JSON. An abandonment is prepared for a second person to sign.")
             .json(r#"{"<command>": {...}}"#),
         tool("reinsurance_decide", "Sign or withdraw a prepared abandonment", S, M::POST, "/staff/v1/reinsurance/{verb}/{id}", "Sign and send, or take back, a prepared abandonment.")
@@ -488,32 +630,57 @@ pub fn catalogue() -> Vec<Tool> {
         tool("regions", "Regions and fail-over", O, M::GET, "/ops/v1/regions", "For operations: each region's nodes, which is serving, and the channel module's state."),
         tool("reconciliation", "Reconciliation", O, M::GET, "/ops/v1/reconciliation", "For operations: the book's reconciliation across every partition, the checks the close makes, and how many policies the run has still to visit."),
         tool("customer_index", "Customer search index", O, M::GET, "/ops/v1/customers/index", "For operations: the customer master's search index and how far behind it is."),
-        tool("verify_customer", "Check a record's chain", O, M::POST, "/ops/v1/customers/{party}/verify", "For operations: check a person's record has an unbroken hash chain. It changes nothing.")
-            .effect(Effect::Reads),
+        tool("verify_customer", "Check a record's chain", O, M::POST, "/ops/v1/customers/{party}/verify", "For operations: check a person's record has an unbroken hash chain. It changes nothing."),
         tool("rewrap_customers", "Re-encrypt records", O, M::POST, "/ops/v1/customers/rewrap", "For operations: re-encrypt records still under an old key, a batch at a time.")
             .json(r#"{"current_key_id", "limit"?: 1000}"#),
         tool("reshred_customers", "Erase again after a restore", O, M::POST, "/ops/v1/customers/reshred", "For operations: after a restore from backup, erase again what had been shredded since. An erasure cannot be undone.")
-            .json(r#"{"since": "YYYY-MM-DD, the day the restored backup was taken"}"#)
-            .effect(Effect::Destroys),
+            .json(r#"{"since": "YYYY-MM-DD, the day the restored backup was taken"}"#),
     ]
 }
 
-/// What the person may reach: the sign-ins their token holds.
-async fn realms(s: &AppState, headers: &HeaderMap) -> Vec<Realm> {
-    let mut held = vec![Realm::Public];
+/// What the person may reach: the sign-ins their token holds, and within
+/// them the relationships and staff actions they hold today. A member of
+/// staff is offered the staff tools, not the customer app's: a customer
+/// sign-in that is a registered member of staff is staff here.
+async fn holdings(s: &AppState, headers: &HeaderMap) -> Held {
+    let mut held = Held {
+        realms: vec![Realm::Public],
+        ..Held::default()
+    };
     let uri = Uri::from_static("/mcp");
-    if s.session(&s.customers, headers, &Method::POST, &uri, b"").await.is_ok() {
-        held.push(Realm::Customer);
+    let reach = |session: crate::http::Session| async move {
+        s.channel
+            .ask(crate::query::Question::Reach {
+                party: session.party,
+                at: session.at,
+            })
+            .await
+            .unwrap_or_default()
+    };
+    if let Ok((_, session)) = s.session(&s.customers, headers, &Method::POST, &uri, b"").await {
+        if !session.staff {
+            held.realms.push(Realm::Customer);
+            let facts = reach(session).await;
+            held.adviser = facts["adviser"] == true;
+            held.scheme_admin = facts["scheme_admin"] == true;
+        }
     }
     if let Ok(caller) = s.workforce.authenticate(headers).await {
         if caller.has_role(OPERATIONS) {
-            held.push(Realm::Operations);
+            held.realms.push(Realm::Operations);
         }
-        if s.session(&s.workforce, headers, &Method::POST, &uri, b"")
-            .await
-            .is_ok_and(|(_, session)| session.staff)
-        {
-            held.push(Realm::Staff);
+        if let Ok((_, session)) = s.session(&s.workforce, headers, &Method::POST, &uri, b"").await {
+            if session.staff {
+                held.realms.push(Realm::Staff);
+                let facts = reach(session).await;
+                held.actions = facts["actions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect();
+            }
         }
     }
     held
@@ -607,8 +774,8 @@ pub async fn endpoint(State(s): State<Arc<AppState>>, headers: HeaderMap, body: 
             );
         }
     }
-    let held = realms(&s, &headers).await;
-    if held == [Realm::Public] {
+    let held = holdings(&s, &headers).await;
+    if held.realms == [Realm::Public] {
         return unauthorised(&s);
     }
     let message: Value = match serde_json::from_slice(&body) {
@@ -633,24 +800,26 @@ pub async fn endpoint(State(s): State<Arc<AppState>>, headers: HeaderMap, body: 
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": false } },
                     "serverInfo": { "name": "insurance-core", "title": "Insurance core", "version": env!("CARGO_PKG_VERSION") },
-                    "instructions": "Every tool is one function of the insurance system, done as you: the same checks as the web pages apply to each call, and what you may not do is refused. Writes take an idempotency_key; send the same key to retry safely. Steps the customer must sign on their enrolled phone are refused here.",
+                    "instructions": "Every tool is one function of the insurance system, done as you: the same checks as the web pages apply to each call, and what you may not do is refused. Writes take an idempotency_key; send the same key to retry safely. Steps the customer must sign on their enrolled phone are refused here. Money is in cents of New Zealand dollars wherever a field ends in _minor and in the module answers' totals: 165050 is $1,650.50; say it to the person in dollars. Dates are YYYY-MM-DD; a moment is seconds since 1970. Codes such as lump_sum_claims are words joined by underscores.",
                 }),
             )
         }
         Some("ping") => rpc_result(id, json!({})),
         Some("tools/list") => {
-            let tools: Vec<Value> = catalogue().iter().filter(|t| held.contains(&t.realm)).map(Tool::listed).collect();
+            let tools: Vec<Value> = catalogue().iter().filter(|t| held.offers(t)).map(Tool::listed).collect();
             rpc_result(id, json!({ "tools": tools }))
         }
         Some("tools/call") => {
             let name = params["name"].as_str().unwrap_or_default();
             match catalogue().into_iter().find(|t| t.name == name) {
                 None => rpc_error(id, -32602, &format!("there is no tool {name:?}")),
-                Some(tool) if !held.contains(&tool.realm) => rpc_result(id, failed("this tool needs a sign-in you do not hold")),
+                Some(tool) if !held.realms.contains(&tool.realm) => rpc_result(id, failed("this tool needs a sign-in you do not hold")),
                 Some(tool) => {
                     let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
                     match call(&s, &headers, &tool, &arguments).await {
                         Ok(result) => rpc_result(id, result),
+                        // Arguments that would not do are no news to someone the tool is not open to: say that first.
+                        Err(_) if !held.offers(&tool) => rpc_result(id, failed(NOT_YOURS)),
                         Err(problem) => rpc_result(id, failed(&problem)),
                     }
                 }
@@ -661,6 +830,9 @@ pub async fn endpoint(State(s): State<Arc<AppState>>, headers: HeaderMap, body: 
     };
     Json(reply).into_response()
 }
+
+/// Said when a call's arguments would not do and the tool is not open to the caller anyway.
+const NOT_YOURS: &str = "this tool is not open to you: none of your roles or relationships reaches it, so ask whoever looks after your access if you need it";
 
 /// A tool result that says what went wrong, for the model to read.
 fn failed(text: &str) -> Value {
@@ -689,15 +861,23 @@ pub fn request_for(tool: &Tool, arguments: &Value) -> Result<(String, Vec<u8>), 
         .chain(["query", "body", "content_base64", "idempotency_key"])
         .collect();
     if let Some(stray) = arguments.keys().find(|k| !known.contains(&k.as_str())) {
+        // A field the query names, put at the top level: say where it goes.
+        if tool.query.contains(&format!("`{stray}`")) {
+            return Err(format!(r#"{stray} goes in the query: {{"query": {{"{stray}": "..."}}}}"#));
+        }
         return Err(format!("{stray} is not an argument of {}", tool.name));
     }
     let mut path = tool.path.to_string();
     for param in tool.params() {
-        let value = arguments
-            .get(param)
-            .and_then(Value::as_str)
-            .filter(|v| !v.is_empty())
-            .ok_or_else(|| format!("{param} is required"))?;
+        // A number is as good as its digits: a statement number given as 7 is "7".
+        let value = match arguments.get(param) {
+            Some(Value::Number(n)) => n.to_string(),
+            other => other.and_then(Value::as_str).unwrap_or_default().to_string(),
+        };
+        if value.is_empty() {
+            return Err(format!("{param} is required"));
+        }
+        let value = value.as_str();
         if let Some((_, values)) = tool.choices.iter().find(|(name, _)| *name == param) {
             if !values.contains(&value) {
                 return Err(format!("{param} is one of {}", values.join(", ")));
@@ -726,8 +906,8 @@ pub fn request_for(tool: &Tool, arguments: &Value) -> Result<(String, Vec<u8>), 
     }
     let body = match tool.body {
         Payload::None => Vec::new(),
-        Payload::Json(_) => {
-            let body = arguments.get("body").ok_or("body is required")?;
+        Payload::Json(about) => {
+            let body = arguments.get("body").ok_or_else(|| format!("body is required: {about}"))?;
             serde_json::to_vec(body).map_err(|e| e.to_string())?
         }
         Payload::File(_) => {
@@ -754,7 +934,7 @@ async fn call(s: &Arc<AppState>, headers: &HeaderMap, tool: &Tool, arguments: &V
     if matches!(tool.body, Payload::Json(_)) {
         request = request.header("content-type", "application/json");
     }
-    if tool.writes() {
+    if tool.keyed() {
         let key = match arguments.get("idempotency_key").and_then(Value::as_str) {
             Some(k) if !k.trim().is_empty() && k.len() <= 100 => format!("mcp:{k}"),
             Some(_) => return Err("idempotency_key is 1 to 100 characters".to_string()),
@@ -794,9 +974,15 @@ pub fn result(tool: &Tool, path: &str, status: StatusCode, content_type: &str, b
             serde_json::from_slice(bytes).unwrap_or(Value::Null)
         };
         let text = if error {
-            let detail = value["detail"].as_str().or(value["title"].as_str()).unwrap_or_default();
-            let code = value["title"].as_str().or(value["code"].as_str()).unwrap_or_default();
-            format!("Refused ({} {code}): {detail}", status.as_u16())
+            // The portal's own problems carry `detail`; another service's own body `error.message`.
+            let error = &value["error"];
+            let code = value["title"].as_str().or(value["code"].as_str()).or(error["code"].as_str()).or(error.as_str());
+            let detail = value["detail"].as_str().or(error["message"].as_str()).or(value["message"].as_str()).or(code);
+            let said = detail.unwrap_or("the service refused this without saying why");
+            match code {
+                Some(code) => format!("Refused ({} {code}): {said}", status.as_u16()),
+                None => format!("Refused ({}): {said}", status.as_u16()),
+            }
         } else {
             serde_json::to_string_pretty(&value).unwrap_or_default()
         };

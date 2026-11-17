@@ -11,7 +11,7 @@
 <section><h2>Open a policy you have the number of</h2><form id="lookup"><div class="row"><div><label for="pol">Policy</label><input id="pol" required></div><div><label for="scope">Queue or team it reaches you through (optional)</label><input id="scope"></div><button>Open</button></div></form><div id="lookup-msg" aria-live="polite"></div></section>
 <section id="pol-view" hidden><h2 id="pol-title" tabindex="-1">Policy</h2><div id="approach"></div><div id="pol-next" class="next"></div><div id="withheld"></div><div id="pol-rows"></div><h2>Advisers</h2><div id="pol-advisers"></div><div id="vitality" hidden><h2>AIA Vitality</h2><p class="muted">Who on the policy is a member, the status they have earned, and the discount it gives on eligible cover. The programme tells us; nothing here changes it.</p><div id="vit-members"></div><details><summary>Discount changes the core refused</summary><div id="vit-refused"></div></details></div>
 <h2>Someone has phoned about this policy</h2><p class="muted">Check before you say anything, including whether a policy exists. Find the caller by the name and birth date they give you; leave it empty if they are not a customer or you cannot identify them. The contact is recorded either way.</p><form id="caller-form"><div class="row"><div><label for="caller-ref">Who is calling</label><input id="caller-ref" size="36"></div><button>Check the caller</button></div></form><div id="caller-msg" aria-live="polite"></div>
-<h2>Make a request for the customer</h2><form id="for-customer"><div class="row"><div><label for="ckind">Change</label><select id="ckind"><option value="change_frequency">Change payment frequency</option><option value="decline_indexation">Decline indexation</option><option value="cancel_policy">Cancel policy</option></select></div><div><label for="cfreq">New payment frequency (for a change of frequency)</label><select id="cfreq"><option value="monthly">Monthly</option><option value="fortnightly">Fortnightly</option><option value="quarterly">Quarterly</option><option value="half_yearly">Half-yearly</option><option value="yearly">Yearly</option></select></div><div><label for="cnote">Details</label><input id="cnote"></div><div><label for="creason">Why (recorded with your name and the case)</label><input id="creason" required></div><div><label for="ceffective">Effective from (optional)</label><input id="ceffective" type="date"></div><div><label for="camount">Amount it moves, in dollars (optional)</label><input id="camount" type="number" min="0" step="0.01"></div><button>Send to customer's app</button></div><p class="muted">The customer approves it in their app. You cannot approve it for them. A change above your limit, or dated in the past, goes to a second member of staff first.</p></form><div id="cust-msg" aria-live="polite"></div></section></div>
+<h2>Make a request for the customer</h2><form id="for-customer"><div class="row"><div><label for="ckind">Change</label><select id="ckind"><option value="change_frequency">Change payment frequency</option><option value="decline_indexation">Decline indexation</option><option value="cancel_policy">Cancel policy</option><option value="reduce_cover">Reduce cover</option></select></div><div id="ccover-box" hidden><label for="ccover">Cover to reduce</label><select id="ccover"></select></div><div id="csum-box" hidden><label for="csum">Cover it keeps, in dollars (0 gives it up)</label><input id="csum" type="number" min="0" step="1"></div><div><label for="cfreq">New payment frequency (for a change of frequency)</label><select id="cfreq"><option value="monthly">Monthly</option><option value="fortnightly">Fortnightly</option><option value="quarterly">Quarterly</option><option value="half_yearly">Half-yearly</option><option value="yearly">Yearly</option></select></div><div><label for="cnote">Details</label><input id="cnote"></div><div><label for="creason">Why (recorded with your name and the case)</label><input id="creason" required></div><div><label for="ceffective">Effective from (optional)</label><input id="ceffective" type="date"></div><div><label for="camount">Amount it moves, in dollars (optional)</label><input id="camount" type="number" min="0" step="0.01"></div><button>Send to customer's app</button></div><p class="muted">The customer approves it in their app. You cannot approve it for them. A change above your limit, or dated in the past, goes to a second member of staff first.</p></form><div id="cust-msg" aria-live="polite"></div></section></div>
 <section data-view="Second approvals"><h2>Changes waiting for a second person</h2><p class="muted">A change a colleague entered for a customer that is above their limit, or dated in the past, needs someone else to agree it before it goes to the customer. Oldest first.</p><div id="waiting"></div>
 <div id="person-section" hidden><h2>Customers' changes waiting for a trained person</h2><p class="muted">The customer's record says their requests go to a person first. Speak with them, then carry the change out or decline it in words they will read. Why they need a person is not shown here.</p><div id="person"></div><div id="person-msg" aria-live="polite"></div></div>
 <details><summary>Agree one by its request reference</summary><form id="second"><div class="row"><div><label for="second-id">Request</label><input id="second-id" required></div><button>Agree it</button></div></form></details><div id="second-msg" aria-live="polite"></div></section>
@@ -69,17 +69,20 @@ $("find").addEventListener("submit", run($("find-msg"), async () => {
   needCase();
   const r = await portal.find($("find-q").value);
   const cards = [];
+  // A look-alike is said to be one: a name that is not the one typed, even when the birth date matches.
+  const typed = $("find-q").value.toLowerCase().split(/[\s,]+/).filter((w) => /^[\p{L}'’-]+$/u.test(w));
+  const otherName = (person) => person.name && typed.some((w) => !person.name.toLowerCase().split(/\s+/).includes(w));
   for (const person of r.people) {
     if (person.closed) { cards.push(h("article", { class: "result" }, h("header", {}, h("strong", {}, "A record closed to you"), h("span", {}, "You, or someone you have declared a connection with. Pass the call to a colleague.")))); continue; }
-    cards.push(h("article", { class: "result" }, h("header", {}, h("strong", {}, person.name || "Name not held"), h("span", {}, [person.born ? "Born " + portal.born(person.born) : "", person.died ? "Died " + portal.born(person.died) : "", person.strong ? "Strong match" : ""].filter(Boolean).join(" · "))),
+    cards.push(h("article", { class: "result" }, h("header", {}, h("strong", {}, person.name || "Name not held"), h("span", {}, [person.born ? "Born " + portal.born(person.born) : "", person.died ? "Died " + portal.born(person.died) : "", otherName(person) ? "Not the name you typed" : "", person.strong ? "Strong match" : "Not a strong match: check the name and birth date with the caller"].filter(Boolean).join(" · "))),
       person.policies.length ? table(["Policy", "Product", "As", "Status", ""], person.policies.map((p) => [p.number || p.policy, p.product, p.as, statusOf(p), policyButton(p, "Open")]))
         : h("p", { class: "muted" }, "No policies in their name or on their life."),
       h("p", { class: "actions" }, portal.link("complaints", "record-a-complaint", { complainant: person.party }, "Record a complaint from them"), " ", portal.link("complaints", "register-and-report", { party: person.party }, "Their complaints"))));
   }
-  if (r.policies.length) cards.push(h("article", { class: "result" }, h("header", {}, h("strong", {}, "Policies with that number")), table(["Policy", "Product", "Status", ""], r.policies.map((p) => [p.number || p.policy, p.product, statusOf(p), policyButton(p, "Open")]))));
+  if (r.policies.length) cards.push(h("article", { class: "result" }, h("header", {}, h("strong", {}, "Policies with that number")), table(["Policy", "Product", "Status", ""], r.policies.map((p) => p.closed ? ["A policy closed to you", "", "Yours, or someone's you are connected to. Pass the call to a colleague.", ""] : [p.number || p.policy, p.product, statusOf(p), policyButton(p, "Open")]))));
   if (r.customer_master_unavailable) cards.unshift(h("div", { class: "banner warn" }, "The customer records cannot be reached just now, so only policy numbers were searched. Try a name again in a minute."));
   if (r.hint) cards.unshift(h("div", { class: "banner" }, r.hint.replace(/^./, (c) => c.toUpperCase()) + "."));
-  put($("found"), cards.length ? cards : portal.empty("Nobody and no policy matches that. Check the spelling, or add the birth date; a policy number can be typed in part."));
+  put($("found"), cards.length ? cards : portal.empty("Nobody and no policy matches that. Check the spelling, or add a given name and the birth date; a policy number can be typed from its start or its end."));
 }));
 async function openPolicy(id, number) { $("pol").value = number || id; $("pol").dataset.policy = id; await show(id); }
 portal.picker($("pol"), async (text) => { needCase(); return portal.policies(text); }, { onPick: (item) => { $("pol").dataset.policy = item.value; } });
@@ -87,8 +90,11 @@ $("pol").addEventListener("input", () => { delete $("pol").dataset.policy; });
 $("lookup").addEventListener("submit", run($("lookup-msg"), () => show($("pol").dataset.policy || $("pol").value.trim())));
 async function show(id) {
   needCase();
+  // Nothing is left on screen from the last policy while another is looked up: a check or change must never land on the wrong one.
+  policy = null; $("pol-view").hidden = true;
   const q = new URLSearchParams({ case: $("case").value.trim() }); if ($("scope").value) q.set("scope", $("scope").value);
   const view = await api(R, "GET", `/staff/v1/policies/${encodeURIComponent(id)}?${q}`);
+  id = view.policy || id;
   policy = id; $("pol-view").hidden = false; clear($("lookup-msg")); clear($("cust-msg")); clear($("caller-msg"));
   $("pol-title").textContent = `Policy ${$("pol").value || id}`;
   // The next things people do from a policy, in the consoles that do them.
@@ -103,6 +109,13 @@ async function show(id) {
     : h("div", { class: "banner" }, `Serve this customer with: ${a.adjustments.map(words).join(", ") || "care"}.` + (a.review_on ? ` Reviewed ${a.review_on}.` : "") + (a.kind ? ` Reason: ${words(a.kind)}.` : "")));
   put($("withheld"), view.withheld ? h("div", { class: "banner warn" }, `${view.withheld} item(s) are withheld because your role does not include that class of data.`) : null);
   put($("pol-rows"), table(["What", "About", "Details"], view.rows.map((r) => [r.kind + (r.sensitive ? " (sensitive)" : ""), r.subject || "", portal.details(r.body)])));
+  // One choice per cover and life, with the cover of all its layers together: a reduction takes the newest layers first.
+  const held = {};
+  for (const c of view.rows.filter((r) => r.kind === "cover" && r.body.in_force).map((r) => r.body)) {
+    const k = `${c.cover}/${c.life}`; held[k] = held[k] || { cover: c.cover, life: c.life, sum_insured_minor: 0 }; held[k].sum_insured_minor += c.sum_insured_minor;
+  }
+  put($("ccover"), Object.values(held).map((c) => h("option", { value: JSON.stringify({ cover: c.cover, life: c.life, sum: c.sum_insured_minor }) }, `${words(c.cover)} on ${c.life}: ${money(c.sum_insured_minor)} now`)));
+  reducing();
   put($("pol-advisers"), table(["Adviser", "Standing"], view.advisers.map((a) => [a.adviser, a.standing.state === "read_only" ? `Read-only since ${a.standing.since} (${words(a.standing.status)} licence of ${a.standing.licence_of})` : words(a.standing.state)])));
   if (vitality) await showVitality(id);
 }
@@ -128,11 +141,21 @@ $("caller-form").addEventListener("submit", run($("caller-msg"), async () => {
   put($("caller-msg"), h("div", { class: "banner " + (r.outcome === "discuss" ? "ok" : "warn"), role: "status" }, h("span", {}, h("strong", {}, head), " ", r.say,
     r.checked ? "" : " The customer records could not be reached to check for an authority. Try again shortly if the caller says they hold one.")));
 }));
+// Reducing cover: the cover is picked from the policy's own, and the amount it keeps is typed in dollars.
+const reducing = () => { const on = $("ckind").value === "reduce_cover"; $("ccover-box").hidden = $("csum-box").hidden = !on; $("csum").required = on; };
+$("ckind").addEventListener("change", reducing);
 $("for-customer").addEventListener("submit", run($("cust-msg"), async () => {
   const payload = { note: $("cnote").value };
   // What the core needs to carry the change out once the customer approves it.
   if ($("ckind").value === "change_frequency") payload.frequency = $("cfreq").value;
   if ($("ckind").value === "decline_indexation") payload.declined = true;
+  if ($("ckind").value === "reduce_cover") {
+    const { cover, life, sum } = JSON.parse($("ccover").value || "{}");
+    const keeps = Math.round(Number($("csum").value) * 100);
+    if (!cover) throw new Error("This policy has no cover in force to reduce.");
+    if (!(keeps < sum)) throw new Error(`The cover it keeps must be less than it has now, ${money(sum)}.`);
+    Object.assign(payload, { cover, life, sum_insured_minor: keeps });
+  }
   if ($("ceffective").value) payload.effective = $("ceffective").value;
   if ($("camount").value) payload.amount_minor = Math.round(Number($("camount").value) * 100);
   const id = crypto.randomUUID();
@@ -145,7 +168,7 @@ async function forPerson() {
   let r;
   try { r = await api(R, "GET", "/staff/v1/servicing/waiting"); } catch (e) { $("person-section").hidden = false; portal.say(out, "bad", e.message); return; }
   $("person-section").hidden = false;
-  const what = (x) => [x.kind.replace(/_/g, " "), x.payload && x.payload.frequency ? "to " + x.payload.frequency.replace(/_/g, " ") : ""].filter(Boolean).join(" ");
+  const what = (x) => portal.change(x.kind, x.payload);
   portal.put($("person"), r.rows.length ? portal.table(["Request", "Customer", "Policy", "Change", ""], r.rows.map((x) => [x.id, x.party, x.policy || "", what(x),
     portal.h("span", {}, portal.h("button", { class: "quiet", type: "button", on: { click: run(out, async () => { const a = await api(R, "POST", "/staff/v1/servicing/" + encodeURIComponent(x.id) + "/carry-out", { conversation: $("case").value.trim() }); await forPerson(); return a.applied ? "Carried out." : `The core refused it: ${a.message}`; }) } }, "Carry it out"),
       portal.h("button", { class: "quiet", type: "button", on: { click: run(out, async () => { const reason = await portal.ask({ title: "Decline the change", text: "The customer reads this.", label: "Why", confirm: "Decline" }); if (!reason) return null; await api(R, "POST", "/staff/v1/servicing/" + encodeURIComponent(x.id) + "/decline", { reason }); await forPerson(); return "Declined."; }) } }, "Decline"))]))
@@ -158,12 +181,12 @@ const agree = (id) => run($("second-msg"), async () => {
   await waiting().catch(() => {});
   return "Agreed. It now waits for the customer's approval in their app.";
 });
-const what = (r) => [words(r.kind), r.payload && r.payload.note, r.payload && r.payload.amount_minor != null ? money(r.payload.amount_minor) : "", r.payload && r.payload.effective ? "from " + r.payload.effective : ""].filter(Boolean).join(", ");
+const what = (r) => [portal.change(r.kind, r.payload), r.payload && r.payload.note, r.payload && r.payload.amount_minor != null ? money(r.payload.amount_minor) : "", r.payload && r.payload.effective ? "from " + r.payload.effective : ""].filter(Boolean).join(", ");
 async function waiting() {
   const w = await api(R, "GET", "/staff/v1/requests");
   queued = w.rows;
   put($("waiting"), !w.may_approve ? portal.empty("Agreeing a colleague's change is for team leads and others whose roles include it. Yours do not.")
-    : w.rows.length ? table(["Request", "Policy", "Change", "Why", "Entered by", "Needs a second person because", ""], w.rows.map((r) => [r.id, r.policy || "", what(r), r.reason || "", `${r.entered_by}, ${new Date(r.entered_at * 1000).toLocaleString()}`,
+    : w.rows.length ? table(["Entered", "Policy", "Change", "Why", "Entered by", "Needs a second person because", ""], w.rows.map((r) => [portal.day(r.entered_at), r.number || r.policy || "", what(r), r.reason || "", `${r.entered_by}, ${portal.when(r.entered_at)}`,
       [r.above_limit ? "above their limit" : "", r.backdated ? "dated in the past" : ""].filter(Boolean).join(" and ") || "",
       h("span", {}, h("button", { class: "quiet", type: "button", on: { click: agree(r.id) } }, "Agree"), " ", r.policy ? h("button", { class: "quiet", type: "button", on: { click: run($("second-msg"), async () => { portal.view("policies"); await openPolicy(r.policy); }) } }, "See the policy") : null)]))
     : portal.empty("Nothing is waiting for a second person."));
@@ -250,9 +273,9 @@ $("proof").addEventListener("click", run($("bench-msg"), async () => { portal.pu
 
 async function access() {
   const me = await api(R, "GET", "/staff/v1/me");
-  put($("mine"), table(["Team", "Roles", "Authority profile", "Reach", "Recertification due"], [[me.team || "", (me.templates || []).join(", "), me.profile ? `${me.profile.id} v${me.profile.version}` : "", (me.paths || []).join(", "), me.recertification_due ? new Date(me.recertification_due * 1000).toLocaleDateString() : ""]]),
+  put($("mine"), table(["Team", "Roles", "Authority profile", "Reach", "Recertification due"], [[me.team || "", (me.templates || []).join(", "), me.profile ? `${me.profile.id} v${me.profile.version}` : "", (me.paths || []).join(", "), me.recertification_due ? portal.day(me.recertification_due) : ""]]),
     h("h2", {}, "Grants"), table(["Grant", "Kind", "State"], (me.grants || []).map((g) => [g.id, words(Object.keys(g.kind || {})[0] || g.kind), words(g.state)])));
-  put($("recent"), table(["When", "Action", "Record", "Allowed", "Flagged"], (me.recent || []).map((r) => [new Date(r.at * 1000).toLocaleString(), r.action, r.record || "", r.decision.allowed ? "yes" : "no: " + words(r.decision.denied), r.flag ? words(r.flag) : ""])));
+  put($("recent"), table(["When", "Action", "Record", "Allowed", "Flagged"], (me.recent || []).map((r) => [portal.when(r.at), r.action, r.record || "", r.decision.allowed ? "yes" : "no: " + words(r.decision.denied), r.flag ? words(r.flag) : ""])));
   put($("connections"), table(["Customer"], (me.connections || []).map((c) => [c])));
 }
 // A connection is declared by finding the person, never by typing their reference. Searching for

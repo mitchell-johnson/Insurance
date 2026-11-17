@@ -247,3 +247,8 @@ pub fn envelope(key: &str, staff: &PartyId, roles: &[String], at: At, command: V
 pub fn question_names() -> Vec<&'static str> {
     QUESTIONS.iter().map(|q| q.0).collect()
 }
+
+/// Each question with the fields it needs, for the MCP tool's description.
+pub fn question_fields() -> Vec<(&'static str, Vec<&'static str>)> {
+    QUESTIONS.iter().map(|(name, fields)| (*name, fields.to_vec())).collect()
+}

@@ -290,6 +290,13 @@ pub enum Question {
         number: Option<String>,
         parties: Vec<PartyId>,
     },
+    /// Which of these policies are closed to a member of staff: their own,
+    /// or one of someone they declared a personal connection with.
+    ClosedTo {
+        staff: PartyId,
+        policies: Vec<PolicyId>,
+        at: At,
+    },
     /// The people on the staff directory who may be picked for work: who
     /// holds `action` today, or everyone current when none is named. A
     /// person is never offered work they could not take.
@@ -305,6 +312,28 @@ pub enum Question {
     },
     /// How current the module is, for health checks and the operations console.
     Status,
+    /// The books' business date: the latest the core has reported, if any.
+    BusinessDate,
+    /// What a sign-in may reach, for the tools it is offered: whether it is
+    /// an adviser or advice provider, a scheme administrator, and the staff
+    /// actions its templates, break-glass and one-off grants hold today.
+    Reach {
+        party: PartyId,
+        at: At,
+    },
+}
+
+/// A policy by its ID, or by its number typed in any case.
+fn known_policy(state: &ChannelState, policy: PolicyId) -> PolicyId {
+    if state.data.view.policy(&policy).is_some() {
+        return policy;
+    }
+    state
+        .data
+        .view
+        .directory()
+        .find(|e| e.number.eq_ignore_ascii_case(&policy.0))
+        .map_or(policy, |e| e.policy.clone())
 }
 
 fn fresh(state: &ChannelState, at: At) -> bool {
@@ -537,7 +566,18 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 "held": d.workbench.own_held(&adviser),
             })
         }
-        Question::Requests { party } => json!(d.requests.values().filter(|r| r.party == party).collect::<Vec<_>>()),
+        // Their own, and the changes others prepared that they approved or declined, so the outcome stays in view.
+        Question::Requests { party } => json!(d
+            .requests
+            .values()
+            .filter(|r| r.party == party || r.approved_by.as_ref() == Some(&party) || r.declined_by.as_ref() == Some(&party))
+            .map(|r| {
+                // The policy's number, which the person knows it by, even after it has left their view.
+                let mut row = json!(r);
+                row["number"] = json!(r.policy.as_ref().and_then(|p| d.view.policy(p)).map(|e| e.number.clone()));
+                row
+            })
+            .collect::<Vec<_>>()),
         Question::Pending { module } => json!(state.pending_for(&module)),
         Question::AdviserEngagement { policy, adviser } => {
             json!(d.directory.authorities.get(&policy).and_then(|a| a.get(&adviser)).map(|a| a.engagement.clone()))
@@ -676,6 +716,8 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             purpose,
             at,
         } => {
+            // Staff may type the policy's number as the customer reads it out.
+            let policy = known_policy(state, policy);
             let (request, mut decision) = staff_check(
                 state,
                 &staff,
@@ -722,6 +764,7 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 .field("request", DataClass::Ordinary, &request)
                 .field("decision", DataClass::Ordinary, &decision)
                 .field("found", DataClass::Ordinary, state.data.view.policy(&policy).is_some())
+                .field("policy", DataClass::Ordinary, &policy)
                 // Rows about the policy and its people; health-implying rows are kept to those holding that class above.
                 .field("rows", DataClass::Personal, shown)
                 // The person is told that something was withheld, never what.
@@ -858,6 +901,15 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             "policies": number.as_deref().map(|n| crate::find::numbered(&d.view, n)).unwrap_or_default(),
             "parties": crate::find::policies_of(&d.view, &d.directory, &parties),
         }),
+        Question::ClosedTo { staff, policies, at } => {
+            let on = state.today(at);
+            let related = |who: &PartyId, policy: &PolicyId| !d.directory.relationships(&d.view, who, policy, on).is_empty();
+            let connected = d.staff.connections.get(&staff);
+            json!(policies
+                .into_iter()
+                .filter(|policy| related(&staff, policy) || connected.is_some_and(|c| c.iter().any(|who| related(who, policy))))
+                .collect::<Vec<_>>())
+        }
         Question::Colleagues { action, at } => {
             let people: Vec<Value> = d
                 .staff
@@ -892,12 +944,36 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 .into_iter()
                 .map(|r| {
                     let why = r.assisted.as_ref();
-                    json!({ "id": r.id, "policy": r.policy, "kind": r.kind, "payload": r.payload, "entered_by": r.party, "entered_at": r.submitted,
+                    let number = r.policy.as_ref().and_then(|p| d.view.policy(p)).map(|e| e.number.clone());
+                    json!({ "id": r.id, "policy": r.policy, "number": number, "kind": r.kind, "payload": r.payload, "entered_by": r.party, "entered_at": r.submitted,
                         "reason": why.map(|a| a.reason.clone()), "case": why.map(|a| a.case.clone()),
                         "backdated": why.is_some_and(|a| a.backdated), "above_limit": why.is_some_and(|a| a.above_limit) })
                 })
                 .collect();
             json!({ "may_approve": true, "rows": rows })
+        }
+        Question::BusinessDate => json!({ "today": d.today }),
+        Question::Reach { party, at } => {
+            let on = state.today(at);
+            let adviser = d.directory.engagements.values().any(|e| e.adviser == party) || !d.directory.practice(&party, on).is_empty();
+            let administers = related(state, &party).iter().any(|policy| {
+                d.directory
+                    .relationships(&d.view, &party, policy, on)
+                    .contains(&ic_readmodel::scope::Relationship::EmployerAdmin)
+            });
+            let mut actions: BTreeSet<String> = d.staff.templates_of(&party, at).iter().flat_map(|t| t.actions.iter().cloned()).collect();
+            for grant in d.staff.active_grants(&party, at) {
+                match &grant.kind {
+                    crate::staff::GrantKind::OneOff { action, .. } => {
+                        actions.insert(action.clone());
+                    }
+                    crate::staff::GrantKind::BreakGlass { template } => {
+                        actions.extend(d.staff.templates.get(template).into_iter().flat_map(|t| t.actions.iter().cloned()))
+                    }
+                    _ => {}
+                }
+            }
+            json!({ "adviser": adviser, "scheme_admin": administers, "actions": actions })
         }
         Question::Status => json!({
             "business_date": d.today,

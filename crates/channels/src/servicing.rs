@@ -24,7 +24,7 @@ use serde_json::Value;
 pub const MODULE: &str = "policy-servicing";
 
 /// The kinds of request this carries, with what each needs in its payload.
-pub const KINDS: [(&str, &str); 3] = [
+pub const KINDS: [(&str, &str); 4] = [
     (
         "decline_indexation",
         "`declined`: true to decline indexation, false to take it again (true if left out)",
@@ -34,13 +34,17 @@ pub const KINDS: [(&str, &str); 3] = [
         "`frequency` (fortnightly, monthly, quarterly, half_yearly, yearly) and optionally `billing_day` (1 to 28)",
     ),
     ("cancel_policy", "nothing more"),
+    (
+        "reduce_cover",
+        "`cover` and `life` as the policy names them (term_life, life-1) and `sum_insured_minor`: the cover the life keeps, in cents, less than now (0 gives it up)",
+    ),
 ];
 
 /// Kinds that give up cover, so that commission clawed back for them may
 /// fall on whoever submitted them. Before the core is asked, the commission
 /// module is told which engagement an adviser submitted one under
 /// (`attribution`).
-pub const ATTRIBUTED: [&str; 1] = ["cancel_policy"];
+pub const ATTRIBUTED: [&str; 2] = ["cancel_policy", "reduce_cover"];
 
 /// The commission module's envelope saying which adviser engagement
 /// submitted this request's alteration, sent as `policy-servicing` on the
@@ -83,6 +87,26 @@ pub fn command(request: &Value) -> Result<Command, Refusal> {
             declined: payload["declined"].as_bool().unwrap_or(true),
         }),
         "cancel_policy" => Ok(Command::CancelPolicy { policy }),
+        "reduce_cover" => {
+            let named = |field: &str| {
+                payload[field]
+                    .as_str()
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_string)
+                    .ok_or_else(|| refuse("nothing_to_reduce", format!("say the {field} to reduce")))
+            };
+            let (cover, life) = (named("cover")?, named("life")?);
+            let sum_insured_minor = payload["sum_insured_minor"]
+                .as_i64()
+                .filter(|s| *s >= 0)
+                .ok_or_else(|| refuse("bad_amount", "say the cover the life keeps, in cents, 0 or more"))?;
+            Ok(Command::ReduceCover(Box::new(ic_core::command::ReduceCover {
+                policy,
+                cover,
+                life: ic_core::LifeId::from(life.as_str()),
+                sum_insured_minor,
+            })))
+        }
         "change_frequency" => {
             let frequency: Option<Frequency> = match &payload["frequency"] {
                 Value::Null => None,

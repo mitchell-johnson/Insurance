@@ -171,7 +171,7 @@ const sees = async (page, text) => {
     await sees(p, "$61.84 is due");
     await sees(p, "Policy schedule");
     await tab(p, "To approve");
-    await sees(p, "decline indexation");
+    await sees(p, "Decline this year's indexation increase");
     await p.click("#approve-req-cover");
     await sees(p, "Approving needs your signature");
     await tab(p, "Signing");
@@ -192,7 +192,7 @@ const sees = async (page, text) => {
     await sees(p, "Approved: withdrawal");
     await p.click("#decline-req-cover");
     await p.click("dialog button.danger");
-    await sees(p, "Declined: decline indexation");
+    await sees(p, "Declined: Decline this year's indexation increase");
     await sees(p, "Nothing is waiting for you");
     await say(p, "The product changed before her cover started: she sees the new price and accepts it, signed");
     await p.click("#requote-prop-1-L1");

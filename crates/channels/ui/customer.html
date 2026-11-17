@@ -58,6 +58,17 @@ const { h, put, money, table, say, signIn, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "customers";
 const words = (v) => String(v == null ? "" : v).replace(/_/g, " ");
+// A product or cover code (income-protection) as words: Income protection.
+const named = (v) => words(v).replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase());
+const PAYS = { weekly: "Weekly", fortnightly: "Fortnightly", monthly: "Monthly", quarterly: "Quarterly", half_yearly: "Half-yearly", yearly: "Yearly" };
+// How often a policy is paid for: as the owner last changed it, else from the length of its latest bill.
+function pays(head, bills) {
+  if (head.frequency) return `${PAYS[head.frequency.frequency] || words(head.frequency.frequency)} from ${head.frequency.from}`;
+  const last = bills.filter((b) => b.period_start && b.period_end).pop();
+  if (!last) return "–";
+  const days = Math.round((new Date(last.period_end) - new Date(last.period_start)) / 864e5);
+  return days <= 8 ? "Weekly" : days <= 16 ? "Fortnightly" : days <= 32 ? "Monthly" : days <= 93 ? "Quarterly" : days <= 185 ? "Half-yearly" : "Yearly";
+}
 let me = null, skew = 0, current = null, record = null;
 
 // ---- This browser's signing key: made here, kept in IndexedDB, the private half never exported.
@@ -93,7 +104,7 @@ async function devices() {
   const list = await api(R, "GET", "/app/v1/devices");
   enrolled = !!key && list.some((d) => d.id === key.device && !d.revoked);
   put($("devices"), table(["Device", "Kind", "Set up", "State"], list.map((d) => [d.id === (key && key.device) ? d.id + " (this browser)" : d.id,
-    d.hardware_backed ? "Phone with a hardware key" : "Browser", new Date(d.enrolled * 1000).toLocaleDateString(), d.revoked ? "Revoked" : "Active"])));
+    d.hardware_backed ? "Phone with a hardware key" : "Browser", portal.day(d.enrolled), d.revoked ? "Revoked" : "Active"])));
   put($("sign-state"), enrolled ? h("div", { class: "banner ok", role: "status" }, "This browser can sign for you.")
     : key ? h("div", { class: "banner warn", role: "status" }, "This browser has a key but is not set up yet.")
     : h("p", { class: "muted" }, "This browser is not set up for signing."));
@@ -121,7 +132,6 @@ $("sg-forget").addEventListener("click", run($("sg-msg"), async () => {
 }));
 
 // ---- Policies.
-const state = (s) => typeof s === "object" && s ? (s.status === "awaiting_approval" ? "waiting for " + words(s.from) : words(s.status)) : words(s);
 async function open(p) {
   const view = await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(p.policy));
   current = p.policy;
@@ -129,22 +139,30 @@ async function open(p) {
   const head = rows("policy")[0] || {};
   $("detail").hidden = false;
   $("detail-title").textContent = `Policy ${p.number}`;
-  put($("standing"), portal.stats([["Status", words(head.status || p.status)], ["Payments", words(head.standing || "–")], ["Product", words(p.product)], ["You are", p.relationships.map(words).join(", ")]]));
+  const bills = rows("billing");
+  const owed = bills.find((b) => b.outstanding_minor !== undefined);
+  // A premium that has fallen due and is not yet paid is due, whatever the standing says.
+  const paying = owed && owed.outstanding_minor > 0 && (!head.standing || head.standing === "paid") ? "Due" : words(head.standing || "–");
+  put($("standing"), portal.stats([["Status", words(head.status || p.status)], ["Payments", paying], ["Pays", pays(head, bills)], ["Product", named(p.product)], ["You are", p.relationships.map(words).join(", ")]]));
+  // The life insured is named "You" when it is the person signed in; another life keeps its place on the policy.
+  const coverRows = view.rows.filter((r) => r.kind === "cover");
+  const life = (c) => { const row = coverRows.find((r) => r.body === c); return row && row.subject === me.party ? "You" : c.life.replace(/^life-(\d+)$/, "Life $1"); };
   const covers = rows("cover");
-  put($("covers"), table(["Cover", "Life insured", "Sum insured", "Held at", "In force"], covers.map((c) => [words(c.cover), c.life, money(c.sum_insured_minor),
+  // Income cover pays a monthly benefit; the amount is a month's.
+  const amount = (c) => money(c.sum_insured_minor) + (/income/.test(`${c.type || ""} ${c.cover}`) ? " a month" : "");
+  put($("covers"), table(["Cover", "Life insured", "Cover amount", "Held at", "In force"], covers.map((c) => [named(c.cover), life(c), amount(c),
     c.options ? Object.entries(c.options).map(([k, v]) => `${words(k)} ${words(v)}`).join(", ") : "", c.in_force ? "yes" : "no"])));
-  put($("nc-cover"), covers.map((c) => h("option", { value: JSON.stringify({ cover: c.cover, layer: c.layer, life: c.life }) }, `${words(c.cover)} (${c.life})`)));
+  put($("nc-cover"), covers.map((c) => h("option", { value: JSON.stringify({ cover: c.cover, layer: c.layer, life: c.life }) }, `${named(c.cover)} (${life(c)})`)));
+  $("nc-date").max = portal.today();
   // Units held in each fund and what they are worth, always with the date of the price used.
   const holdings = rows("holding"), orders = rows("unit_order");
   const units = (micro) => (Number(micro) / 1e6).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 6 });
-  const amount = (a) => a.cash ? money(a.cash.minor) : a.units ? units(a.units.micro) + " units" : "all your units";
+  const ordered = (a) => a.cash ? money(a.cash.minor) : a.units ? units(a.units.micro) + " units" : "all your units";
   put($("invest"), holdings.length || orders.length ? [
     holdings.length ? table(["Fund", "Units", "Unit price", "Value"], holdings.map((b) => [words(b.fund), units(b.units_micro), b.price_date ? `${b.price} on ${b.price_date}` : "no price yet",
       b.price_date ? `${money(b.value_minor)} at the price of ${b.price_date}` : "shown once the fund is priced"])) : null,
-    orders.length ? [h("h4", {}, "Waiting for a price"), table(["Fund", "Buy or sell", "Amount", "Priced on"], orders.map((o) => [words(o.fund), words(o.direction), amount(o.amount || {}), o.pricing_date]))] : null,
+    orders.length ? [h("h4", {}, "Waiting for a price"), table(["Fund", "Buy or sell", "Amount", "Priced on"], orders.map((o) => [words(o.fund), words(o.direction), ordered(o.amount || {}), o.pricing_date]))] : null,
   ] : h("p", { class: "muted" }, "No units held yet. If this policy invests, units are bought once a payment is invested."));
-  const bills = rows("billing");
-  const owed = bills.find((b) => b.outstanding_minor !== undefined);
   put($("bills"), owed && owed.outstanding_minor > 0 ? h("div", { class: "banner warn", role: "status" }, `${money(owed.outstanding_minor)} is due, the oldest from ${owed.oldest_unpaid_due}.`) : h("p", { class: "muted" }, "Nothing is overdue."),
     table(["From", "To", "Amount"], bills.filter((b) => b.period_start).map((b) => [b.period_start, b.period_end, money(b.total_minor)])));
   const claims = await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(p.policy) + "/claims");
@@ -155,7 +173,8 @@ async function open(p) {
   put($("claims"), claims.rows.length ? table(["Claim", "Status", "Told us", "Closed"], claims.rows.map((c) => [c.claim, CLAIM_WORDS[c.status] || words(c.status), c.notified_on, c.closed_on || ""])) : h("p", { class: "muted" }, "No claims."));
   put($("docs"), portal.documents(R, view.rows, $("docs-msg")));
   const advisers = rows("adviser");
-  put($("advisers"), advisers.length ? table(["Adviser", "State", ""], advisers.map((a) => [a.adviser, a.state === "available" ? "Available" : "Not available: contact us",
+  put($("advisers"), advisers.length ? table(["Adviser", "State", ""], advisers.map((a) => [a.adviser, a.state === "available" ? "Available"
+    : `Cannot act for you${a.since ? ` since ${a.since}` : ""}: their adviser licence is not in force. Appoint another adviser below, or contact us and we will help.`,
     h("button", { type: "button", class: "quiet", on: { click: run($("ap-msg"), () => removeAdviser(a.adviser)) } }, "Remove")])) : h("p", { class: "muted" }, "No adviser on this policy."));
   return view;
 }
@@ -181,7 +200,7 @@ $("notify").addEventListener("submit", run($("nc-msg"), async () => {
   await waiting();
   // The portal carries it to claims straight away; say what claims said.
   const mine = (await api(R, "GET", "/app/v1/requests")).find((r) => r.id === id) || {};
-  if (mine.status === "rejected") throw new Error("Claims could not take this: " + (mine.message || words(mine.code || "refused")) + ". Please call us.");
+  if (mine.status === "rejected") throw new Error("Claims could not take this: " + (mine.message || words(mine.code || "refused")) + (/date/.test(mine.message || "") ? ". Choose the day it happened, on or before today." : ". Please call us."));
   if (mine.status === "applied") await open(me.policies.find((p) => p.policy === current));
   return "Thank you. The claims team will be in touch, usually within two working days.";
 }));
@@ -190,13 +209,17 @@ $("notify").addEventListener("submit", run($("nc-msg"), async () => {
 async function waiting() {
   const views = await Promise.all(me.policies.map(async (p) => [p, await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(p.policy))]));
   const open = views.flatMap(([p, v]) => v.rows.filter((r) => r.kind === "request" && r.body.state && r.body.state.status === "awaiting_approval" && r.body.state.from === "customer").map((r) => [p, r.body]));
-  put($("waiting"), open.length ? table(["Policy", "Change", "Asked", ""], open.map(([p, r]) => [p.number, words(r.kind), new Date(r.submitted * 1000).toLocaleDateString(),
+  const by = { adviser: "Prepared by your adviser", staff: "Prepared by our staff when you called", owner: "Asked by another owner", support: "Prepared by your support person" };
+  put($("waiting"), open.length ? table(["Policy", "Change", "Asked", ""], open.map(([p, r]) => [p.number,
+    h("div", {}, h("strong", {}, portal.change(r.kind, r.payload)), by[r.prepared_by] ? h("div", { class: "muted" }, by[r.prepared_by] + (r.payload && r.payload.note ? `: "${r.payload.note}"` : ".")) : null),
+    portal.day(r.submitted),
     h("div", { class: "actions" },
       h("button", { type: "button", id: "approve-" + r.id, on: { click: run($("wait-msg"), () => approve(r)) } }, "Approve"),
       h("button", { type: "button", class: "quiet", id: "decline-" + r.id, on: { click: run($("wait-msg"), () => decline(r)) } }, "Decline"))]))
     : h("p", { class: "muted" }, "Nothing is waiting for you."));
   const mine = await api(R, "GET", "/app/v1/requests");
-  put($("requests"), table(["Request", "Policy", "Change", "State"], mine.map((r) => [r.id.slice(0, 8), (me.policies.find((p) => p.policy === r.policy) || {}).number || r.policy || "", words(r.kind), state(r)])));
+  put($("requests"), mine.length ? table(["Asked", "Policy", "Change", "Where it stands"], mine.map((r) => [portal.day(r.submitted), (me.policies.find((p) => p.policy === r.policy) || {}).number || r.policy || "",
+    portal.change(r.kind, r.payload), portal.requestState(r, r.party === me.party)])) : portal.empty("You have asked for nothing, and approved nothing, yet."));
   return open.length;
 }
 // ---- Applications, and an answer to an offer of terms, signed over underwriting's own message.
@@ -265,13 +288,14 @@ async function approve(r) {
   if (!enrolled) throw new Error("Approving needs your signature. Set up this browser under Signing, or approve it on your phone.");
   await api(R, "POST", "/app/v1/requests/" + encodeURIComponent(r.id) + "/approve", { signed: await signed({ action: "approve_request", id: r.id }) });
   await waiting();
-  return `Approved: ${words(r.kind)}.`;
+  return `Approved: ${portal.change(r.kind, r.payload)}. It shows under Your requests as it is carried out.`;
 }
 async function decline(r) {
-  if (!(await portal.ask({ title: "Decline this change?", text: `${words(r.kind)} will not go ahead. Whoever prepared it is told.`, confirm: "Decline", danger: true }))) return;
+  const what = portal.change(r.kind, r.payload);
+  if (!(await portal.ask({ title: "Decline this change?", text: `${what}: this will not go ahead. ${r.prepared_by === "adviser" ? "Your adviser sees that you declined it." : "Whoever prepared it sees that you declined it."}`, confirm: "Decline the change", keep: "Keep it waiting", danger: true }))) return;
   await api(R, "DELETE", "/app/v1/requests/" + encodeURIComponent(r.id));
   await waiting();
-  return `Declined: ${words(r.kind)}.`;
+  return `Declined: ${what}.`;
 }
 
 // ---- The customer's own record in the customer master.
@@ -287,7 +311,7 @@ async function details() {
   } catch (e) { say($("record"), "warn", "Your details cannot be shown just now. " + e.message); }
   try {
     const hold = await api(R, "GET", "/app/v1/profile/spending-hold");
-    put($("hold"), hold.held ? h("div", { class: "banner ok", role: "status" }, hold.removal ? `A hold is on. You asked to lift it; it lifts on ${new Date(hold.removal.ends_at).toLocaleDateString()}.` : "A hold is on.")
+    put($("hold"), hold.held ? h("div", { class: "banner ok", role: "status" }, hold.removal ? `A hold is on. You asked to lift it; it lifts on ${portal.day(hold.removal.ends_at)}.` : "A hold is on.")
       : h("p", {}, "No hold is on."));
     $("hold-on").hidden = !!hold.held; $("hold-off").hidden = !hold.held || !!hold.removal; $("hold-keep").hidden = !hold.removal;
   } catch (e) { say($("hold"), "warn", e.message); }
@@ -298,6 +322,8 @@ async function change(command) {
   await api(R, "POST", "/app/v1/profile/commands", command);
   await details();
 }
+// A message about the last save no longer applies once the person types again.
+$("contact").addEventListener("input", () => put($("ct-msg"), null));
 $("contact").addEventListener("submit", run($("ct-msg"), async () => {
   const facts = [["email", $("ct-email").value.trim()], ["mobile_phone", $("ct-phone").value.trim()]].filter(([f, v]) => v && v !== (record && record.values[f])).map(([field, value]) => ({ field, value }));
   if (!facts.length) return "Nothing has changed.";
@@ -306,11 +332,10 @@ $("contact").addEventListener("submit", run($("ct-msg"), async () => {
 }));
 $("hold-on").addEventListener("click", run($("hold-msg"), async () => { await change({ command: "place_spending_hold" }); return "A hold is on."; }));
 $("hold-keep").addEventListener("click", run($("hold-msg"), async () => { await change({ command: "cancel_hold_removal" }); return "The hold stays on."; }));
+// Lifting a hold is never done from a sign-in alone: someone pressing the customer could be holding it. A person checks it is them first.
 $("hold-off").addEventListener("click", run($("hold-msg"), async () => {
-  const code = await portal.ask({ title: "Lift the hold", text: "We check it is you first. Enter the code we sent to your phone.", label: "Code", confirm: "Ask to lift it" });
-  if (!code) return;
-  await change({ command: "request_hold_removal", verification: code });
-  return "The hold lifts in a week, unless you keep it.";
+  await portal.ask({ title: "Lift the hold", text: "To lift the hold, call us. We check it is you, then the hold lifts a week later. You can keep it on at any time before then, here or on the phone.", confirm: "I'll call", keep: "Close" });
+  return "Call us to lift the hold. Once we have checked it is you, it lifts a week later, and the date shows here.";
 }));
 $("export").addEventListener("click", run($("ex-msg"), async () => {
   signature("A copy of your record");
@@ -329,7 +354,7 @@ async function load() {
   await devices();
   const owed = me.policies.filter((p) => !p.ended);
   put($("summary"), portal.stats([["Policies in force", String(owed.filter((p) => p.status === "in_force").length)], ["Ended", String(me.policies.length - owed.length)]]));
-  put($("policies"), table(["Policy", "Product", "Status", "You are", ""], me.policies.map((p) => [p.number, words(p.product), words(p.status), p.relationships.map(words).join(", "),
+  put($("policies"), table(["Policy", "Product", "Status", "You are", ""], me.policies.map((p) => [p.number, named(p.product), words(p.status), p.relationships.map(words).join(", "),
     h("button", { type: "button", class: "quiet", id: "open-" + p.number, on: { click: run($("msg"), () => open(p)) } }, "Open")])));
   if (me.policies.length === 1) await open(me.policies[0]);
   const count = (await waiting()) + (await applications().catch(() => 0));
