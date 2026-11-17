@@ -76,11 +76,16 @@ pub fn email(text: &str) -> Result<String, Problem> {
 }
 
 /// The normal form of a mobile number: `+` and digits, in international form.
+/// A number written the way New Zealanders dial it at home (021 123 4567)
+/// is read as a New Zealand number, as the group file reader reads it.
 pub fn phone(text: &str) -> Result<String, Problem> {
-    let digits: String = text.chars().filter(|c| !matches!(c, ' ' | '-' | '(' | ')')).collect();
+    let mut digits: String = text.chars().filter(|c| !matches!(c, ' ' | '-' | '(' | ')' | '.')).collect();
+    if let Some(national) = digits.strip_prefix('0').filter(|n| !n.starts_with('0')) {
+        digits = format!("+64{national}");
+    }
     match digits.strip_prefix('+') {
         Some(rest) if (8..=15).contains(&rest.len()) && rest.chars().all(|c| c.is_ascii_digit()) && !rest.starts_with('0') => Ok(digits),
-        _ => Err("must be a phone number in international form, such as +64211234567".into()),
+        _ => Err("must be a phone number, such as 021 123 4567 or +64 21 123 4567".into()),
     }
 }
 
@@ -356,7 +361,8 @@ mod tests {
     /// Purpose: every field accepts its well formed values in normal form and refuses
     /// malformed ones with a reason.
     /// Why it matters: the record must only ever hold well formed facts, because notices,
-    /// tax files and matching all read them without re-checking.
+    /// tax files and matching all read them without re-checking. A mobile typed the way New
+    /// Zealanders dial it at home must be taken, not refused (found by the scenario run, SCN-08).
     #[test]
     fn fields_are_normalised_and_checked() {
         let ok = |f: Field, v: Value| normalise(f, &v).unwrap();
@@ -375,7 +381,10 @@ mod tests {
         bad(Field::Email, json!(format!("{}@b.nz", "a".repeat(260))));
         bad(Field::Email, json!(1));
         assert_eq!(ok(Field::MobilePhone, json!("+64 21 123-4567")), json!("+64211234567"));
-        for p in ["021 123 4567", "+0211234567", "+64", "+64a1234567"] {
+        // Dialled at home, a New Zealand number reads as one (found by the scenario run, SCN-08).
+        assert_eq!(ok(Field::MobilePhone, json!("021 555 0123")), json!("+64215550123"));
+        assert_eq!(ok(Field::MobilePhone, json!("(021) 555.0123")), json!("+64215550123"));
+        for p in ["0021 123 4567", "0", "+0211234567", "+64", "+64a1234567"] {
             bad(Field::MobilePhone, json!(p));
         }
         bad(Field::MobilePhone, json!(5));
