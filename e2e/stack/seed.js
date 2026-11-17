@@ -72,9 +72,12 @@ async function seed(stack) {
 
   // Claims: the rules and the authority book, on every partition.
   const all = ["reserve", "admit", "decline", "withdraw", "end_benefit"];
+  // The decisions a claim can make with an ordinary reason: what an assessor records on a funeral advance, a built-in
+  // benefit, an ex gratia payment, a benefit suspended in custody and resumed, a write-off and a recovery's status.
+  const ordinary = [...all, "funeral_advance", "admit_built_in", "ex_gratia", "suspend_benefit", "resume_benefit", "write_off", "recovery_status", "permanent_disablement"];
   const rules = {
     version: 1, escalation_days: [1, 3, 7], large_claim_minor: 1_000_000_00, two_signature_admission_minor: 250_000_00, two_signature_ex_gratia_minor: 5_000_00, two_signature_write_off_minor: 1_000_00,
-    sharp_reserve_move_pct: 50, reason_codes: { "R-OK": all, "R-EVID": all, "R-EXCL": ["decline"], "R-NDISC": ["decline"], "R-WDRAW": ["withdraw"], "R-RECOV": ["end_benefit"] },
+    sharp_reserve_move_pct: 50, reason_codes: { "R-OK": ordinary, "R-EVID": ordinary, "R-EXCL": ["decline"], "R-NDISC": ["decline", "reverse_admission"], "R-WDRAW": ["withdraw"], "R-RECOV": ["end_benefit"] },
     cause_codes: { "CC-0003": ["cancer.skin"], "CC-0101": ["cardiovascular.heart_attack"], "CC-0204": ["musculoskeletal.back"], "CC-0900": ["injury.accident"] },
     medical_review_months: 6, income_declaration_months: 3, review_grace_days: 14, max_offset_pct: 25, partitions: stack.partitions, late_death_days: 30, early_claim_days: 7,
     funeral_advance_max_minor: 15_000_00, late_interest: { annual_rate_bps: 500, free_days: 30 }, estate_simplified_max_minor: 15_000_00, pre_approval_days: 90, recurrence_days: 180,
@@ -148,7 +151,8 @@ async function seed(stack) {
     // A party or engagement already in the structure (the seed run again on a live stack) is as wanted.
     if (!r.ok && r.status !== 409) throw new Error(`${what}: ${r.status} ${JSON.stringify(r.data)}`);
   };
-  for (const [provider, register, advisers] of [[cast.d6, "FSPR-6", [cast.d1, cast.d2]], [cast.d9, "FSPR-9", [cast.d9a]]]) {
+  const kowhai = { key: "kowhai", party: "fap-kowhai" };
+  for (const [provider, register, advisers] of [[cast.d6, "FSPR-6", [cast.d1, cast.d2]], [cast.d9, "FSPR-9", [cast.d9a]], [kowhai, "FSPR-12", [cast.d4, cast.d5]]]) {
     await structured({ add_party: { party: provider.party, kind: "fap" } }, `provider ${provider.key}`);
     await structured({ record_licence: { party: provider.party, state: "active", effective: "2020-01-01", source_ref: register } }, `licence of ${provider.key}`);
     for (const adviser of advisers) {
@@ -156,13 +160,17 @@ async function seed(stack) {
       await structured({ start_engagement: { id: `eng-${adviser.key}`, engagement: { adviser: adviser.party, with: provider.party, from: "2025-01-01", to: null, accreditations: ["life"] } } }, `engagement of ${adviser.key}`);
     }
   }
-  log("two advice providers licensed, three advisers engaged");
+  // Northlight is a dealer group above Harbourline: it sees its providers' books, and none of its own.
+  await structured({ add_party: { party: cast.d10.party, kind: "group" } }, "dealer group d10");
+  await structured({ relate: { child: cast.d6.party, parent: cast.d10.party, kind: "under", from: "2025-01-01", to: null } }, "Harbourline under Northlight");
+  log("three advice providers licensed, five advisers engaged, Harbourline under the Northlight dealer group");
 
   // --- Group schemes: one standing scheme for Kai Fresh Supermarkets, registered by group administration, with
   // its founding member and its first administrator. The tests that change a scheme register their own.
   if (stack.group) {
     await require("../lib/group").register(sys, "kaifresh");
-    log("the Kai Fresh scheme is registered with its file layout and its administrator");
+    await require("../lib/group").register(sys, "southline", { employer: cast.e3 });
+    log("the Kai Fresh and Southline Labour Hire schemes are registered with their file layouts and administrators");
   }
 }
 

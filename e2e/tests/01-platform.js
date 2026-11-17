@@ -6,8 +6,8 @@ const { cast } = require("../lib/cast");
 
 const A = "Platform and access";
 const CONSOLES = [
-  ["staff", "Staff console"], ["claims", "Claims console"], ["underwriting", "Underwriting"], ["group", "Group schemes"], ["complaints", "Complaints and conduct"],
-  ["payments", "Payments"], ["finance", "Finance console"], ["pricing", "Unit pricing console"], ["commission", "Commission console"], ["replacements", "Replacement matches"],
+  ["staff", "Staff console"], ["records", "Customer records"], ["claims", "Claims console"], ["underwriting", "Underwriting"], ["group", "Group schemes"], ["complaints", "Complaints and conduct"],
+  ["documents", "Documents"], ["payments", "Payments"], ["collections", "Collections"], ["finance", "Finance console"], ["pricing", "Unit pricing console"], ["commission", "Commission console"], ["replacements", "Replacement matches"],
   ["reinsurance", "Reinsurance exceptions"], ["ops", "Operations console"],
 ];
 
@@ -18,7 +18,7 @@ test({ id: "E2E-001", area: A, persona: "Anyone", story: "US-ST16-1", title: "Th
   for (const group of ["Partners", "Customers", "Money", "Platform"]) await s.sees(group, "#launch");
   for (const [, name] of [...CONSOLES, ["customer", "Your policies"], ["adviser", "Adviser portal"], ["employer", "Employer portal"], ["status", "Service status"]]) await s.sees(name, "#launch");
   const links = await s.page.locator("#launch a").count();
-  if (links !== 16) throw new Error(`the launcher has ${links} cards, expected 16`);
+  if (links !== CONSOLES.length + 4) throw new Error(`the launcher has ${links} cards, expected ${CONSOLES.length + 4}`);
 });
 
 test({ id: "E2E-002", area: A, persona: "Anyone", story: "US-ST16-1", title: "A launcher card takes a person to the page it names",
@@ -94,9 +94,11 @@ test({ id: "E2E-008", area: A, persona: "Anyone", story: "US-ST16-1", title: "An
 
 // A person the insurer does not know is refused by every console, with only the refusal on screen.
 const HIDDEN = { staff: "Look up a policy", claims: "Work queues", underwriting: "Queues", group: "Exception queue", complaints: "Register", payments: "Runs", finance: "Close", pricing: "Valuations", commission: "Advisers", replacements: "Disputed", reinsurance: "Cessions" };
-let n = 9;
+// The first eleven consoles keep the IDs they were given (E2E-009 to 019); consoles added later are numbered from E2E-340.
+const LATER = ["records", "documents", "collections"];
+let n = 9, later = 340;
 for (const [page, name] of CONSOLES.filter(([p]) => p !== "ops")) {
-  test({ id: `E2E-${String(n++).padStart(3, "0")}`, area: A, persona: "Anyone", story: "US-ST15-1", title: `An unknown sign-in is refused at ${name}`, matrix: ["SEC-001"],
+  test({ id: `E2E-${String(LATER.includes(page) ? later++ : n++).padStart(3, "0")}`, area: A, persona: "Anyone", story: "US-ST15-1", title: `An unknown sign-in is refused at ${name}`, matrix: ["SEC-001"],
     purpose: `Sign in to ${name} with a subject that is bound to no staff record and no partner.`,
     why: "Every console holds customer or financial records; a sign-in the insurer never registered must see a refusal and nothing behind it." }, async (t) => {
     const s = await t.open("/" + page, cast.stranger, 403);
@@ -109,12 +111,13 @@ for (const [page, name] of CONSOLES.filter(([p]) => p !== "ops")) {
 }
 
 test({ id: "E2E-020", area: A, persona: "ST5", story: "US-ST05-1", title: "The side navigation lists every console and marks the one in use",
-  purpose: "Open the staff console and read the side navigation: three groups, thirteen links, the current page marked.",
+  purpose: "Open the staff console and read the side navigation: three groups, a link to every console and the status page, the current page marked.",
   why: "Staff move between consoles all day; the navigation is the one map of the system and must be the same on every page." }, async (t) => {
   const s = await t.open("/staff", cast.st5);
   for (const group of ["Customers", "Money", "Platform"]) await s.sees(group, "#side nav");
   const links = await s.page.locator("#side nav a").allInnerTexts();
-  if (links.length !== 13) throw new Error(`the navigation has ${links.length} links: ${links.join(", ")}`);
+  if (links.length !== CONSOLES.length + 1) throw new Error(`the navigation has ${links.length} links: ${links.join(", ")}`);
+  for (const [, name] of CONSOLES) if (!links.some((l) => l.trim() === name)) throw new Error(`the navigation has no ${name}: ${links.join(", ")}`);
   const current = await s.page.locator('#side nav a[aria-current="page"]').allInnerTexts();
   if (current.length !== 1 || current[0].trim() !== "Staff console") throw new Error(`marked as current: ${JSON.stringify(current)}`);
 });

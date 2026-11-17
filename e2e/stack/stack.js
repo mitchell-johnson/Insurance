@@ -4,8 +4,9 @@
 //   three ledger nodes (every partition and every module, replicated with
 //   Raft), the API, the portal, the group service, the customer master with
 //   its PostgreSQL, the documents service, the underwriting intake, and the
-//   drivers that carry work between modules (underwriting, reinsurance, unit
-//   pricing, payments). Azure is the stand-in in `azure.js`.
+//   drivers that carry work between modules (underwriting, reinsurance). The
+//   unit pricing driver and the bank pump are not run: tests play their part.
+//   Azure is the stand-in in `azure.js`.
 //
 //   node e2e/stack/stack.js            start, seed, then wait until stopped
 //   node e2e/stack/stack.js --no-seed  start only
@@ -40,7 +41,9 @@ const NODES = ports.nodes.map(local).join(",");
 // same way it would there.
 const AUD = { group: "api://ic-group", customers: "api://ic-customers", documents: "api://ic-documents", intake: "api://ic-underwriting-intake" };
 const roles = {
-  "ic-portal": { [AUD.group]: ["employer-portal", "group-admin"], [AUD.customers]: ["portal", "staff"], [AUD.documents]: ["portal", "staff"], [AUD.intake]: ["new-business", "underwriting-console"] },
+  // The portal's roles on the customer master are those `docs/operations.md` assigns it: the customer page, staff
+  // work, the privacy officer's, and operations' (the search index and the record chain check).
+  "ic-portal": { [AUD.group]: ["employer-portal", "group-admin", "member-portal"], [AUD.customers]: ["portal", "staff", "privacy", "operations"], [AUD.documents]: ["portal", "staff"], [AUD.intake]: ["new-business", "underwriting-console"] },
   "ic-group": { [AUD.customers]: ["group-admin"] },
   "ic-documents": { [AUD.customers]: ["documents"] },
   "ic-payments": { [AUD.customers]: ["payments"] },
@@ -160,13 +163,33 @@ async function up() {
     IC_PORTAL_HEARTBEAT_SECS: "5", IC_PORTAL_FORWARD_SECS: "2",
     // The portal takes plain http only from a host on this machine, which it knows by name.
     IC_GROUP_URL: `http://localhost:${ports.group}`, IC_GROUP_SCOPE: `${AUD.group}/.default`, IC_CUSTOMERS_URL: `http://localhost:${ports.customers}`, IC_CUSTOMERS_SCOPE: `${AUD.customers}/.default`,
+    IC_DOCUMENTS_URL: `http://localhost:${ports.documents}`, IC_DOCUMENTS_SCOPE: `${AUD.documents}/.default`,
+    IC_UNDERWRITING_INTAKE_URL: `http://localhost:${ports.intake}`, IC_UNDERWRITING_INTAKE_SCOPE: `${AUD.intake}/.default`,
   });
+  // The documents service: letters, notices and the vault, composed by the built-in renderer.
+  start("documents", "ic-documents", {
+    ...cluster, ...identity("ic-documents"), IC_DOCUMENTS_WEBHOOK_KEY: "e2e-only-webhook-key-0123456789abcdefghij", IC_DOCUMENTS_VAULT_ENDPOINT: az.base,
+    IC_DOCUMENTS_KEY_VAULT: az.base, IC_COMMUNICATION_ENDPOINT: az.base, IC_DOCUMENTS_EMAIL_FROM: "letters@insurer.test", IC_DOCUMENTS_SMS_FROM: "+6421000000",
+    IC_CUSTOMER_MASTER_URL: `http://localhost:${ports.customers}`, IC_CUSTOMER_MASTER_SCOPE: `${AUD.customers}/.default`, IC_EVENT_HUBS_NAMESPACE: az.base,
+    IC_DOCUMENTS_LISTEN: local(ports.documents), IC_ENTRA_TENANT: TENANT, IC_DOCUMENTS_AUDIENCE: AUD.documents, IC_ENTRA_AUTHORITY: az.base, IC_DOCUMENTS_CYCLE_SECONDS: "1",
+  });
+  // New business and underwriting: the intake that takes proposals and clinical evidence, and the driver that carries
+  // underwriting's decisions to the core and its notices to the other modules.
+  start("intake", "ic-underwriting-intake", {
+    ...cluster, ...identity("ic-underwriting-intake"), IC_UNDERWRITING_INTAKE_LISTEN: local(ports.intake), IC_ENTRA_AUTHORITY: az.base, IC_ENTRA_TENANT_ID: TENANT,
+    IC_UNDERWRITING_INTAKE_AUDIENCE: AUD.intake, IC_CLINICAL_BLOB_ENDPOINT: az.base, IC_CLINICAL_KEY_VAULT_URL: az.base, IC_CLINICAL_WRAPPING_KEY: "clinical-kek",
+  });
+  start("underwriting", "ic-underwriting", { ...cluster, ...identity("ic-underwriting"), IC_EVENT_HUBS_ENDPOINT: az.base, IC_UNDERWRITING_CYCLE_MS: "1000" });
+  // The reinsurance driver: cessions and notices to the core, records filed write-once.
+  start("reinsurance", "ic-reinsurance", { ...cluster, ...identity("ic-reinsurance"), IC_BLOB_ENDPOINT: az.base, IC_EVENT_HUBS_ENDPOINT: az.base, IC_REINSURANCE_CYCLE_MS: "1000" });
   await until("the API", () => ok(url(ports.api) + "/readyz"));
   await until("the customer master", () => ok(url(ports.customers) + "/readyz"));
   await until("the group service", () => ok(url(ports.group) + "/readyz"));
   await until("the portal", () => ok(url(ports.portal) + "/readyz"));
+  await until("the documents service", () => ok(url(ports.documents) + "/healthz"));
+  await until("the underwriting intake", () => ok(url(ports.intake) + "/healthz"));
 
-  const stack = { portal: url(ports.portal), api: url(ports.api), group: url(ports.group), customers: url(ports.customers), azure: az.base, nodes: ports.nodes.map(url), token: TOKEN, tenant: TENANT, partitions: PARTITIONS, opening: OPENING, audiences: AUD, run };
+  const stack = { portal: url(ports.portal), api: url(ports.api), group: url(ports.group), customers: url(ports.customers), documents: url(ports.documents), intake: url(ports.intake), azure: az.base, nodes: ports.nodes.map(url), token: TOKEN, tenant: TENANT, partitions: PARTITIONS, opening: OPENING, audiences: AUD, run };
   fs.writeFileSync(path.join(run, "stack.json"), JSON.stringify(stack, null, 2));
   return { stack, az };
 }

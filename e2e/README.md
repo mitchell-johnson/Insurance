@@ -122,10 +122,14 @@ the phone app would.
 - Group schemes beyond one product and one set of terms: pools, health menus,
   renewal, takeover, scheme split and billing over time are covered by the
   group module's own tests, not here.
-- The underwriting intake, the document service, and the drivers that carry
-  instructions between modules (reinsurance, unit pricing, the bank pump).
-  Tests in those areas cover the consoles and their rules and say where a
-  driver's part is missing.
+- The unit pricing driver and the bank pump. The stack runs the documents
+  service, the underwriting intake and the underwriting and reinsurance
+  drivers (added 17 November 2026 after the scenario run found whole consoles
+  that could not work without them); the unit pricing file reader and the
+  bank are played by the tests where they are needed, which say so.
+- The finance end-of-day feed before a day closes: the books have no period
+  until the first business day closes, so journals and the close are tried
+  only by tests that close a day.
 
 ## Reading a failure
 
