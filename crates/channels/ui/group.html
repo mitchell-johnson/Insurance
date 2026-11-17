@@ -77,7 +77,7 @@ async function showExceptions() {
 // Every scheme the page has seen, offered wherever a scheme is asked for.
 const schemes = new Set();
 const known = (list) => { for (const s of list) if (s) schemes.add(s); };
-const FILE_KINDS = new Set(["file_held", "file_stale", "row_refused"]);
+const FILE_KINDS = new Set(["file_held", "file_stale", "row_refused", "joiner_held_for_review"]);
 // Each item of work opens where it is worked, with the scheme and the file or member filled in.
 function opener(e) {
   const go = async () => {
@@ -117,8 +117,10 @@ async function showScheme() {
   }
   if (!scheme) throw new Error("Give a scheme or its policy.");
   const s = await ask("scheme", { scheme });
-  const { terms, ...rest } = s;
+  const { terms, cover_minor, ...rest } = s;
   rest.outstanding_minor = money(rest.outstanding_minor);
+  // Cover in force by cover, as money.
+  rest.cover_in_force = Object.entries(cover_minor || {}).map(([c, minor]) => `${words(c)} ${money(minor)}`).join(", ");
   known([scheme]);
   put($("sc"), pairs(rest), h("details", {}, h("summary", {}, "Terms"), portal.details(terms)));
   for (const id of ["fi-scheme", "mb-scheme", "rm-scheme", "ri-scheme", "ux-scheme", "mp-scheme", "tm-scheme"]) $(id).value = scheme;
@@ -131,8 +133,13 @@ $("sc-resume").addEventListener("click", onScheme(() => ({ resume: { scheme: val
 
 async function showFile() {
   const f = await ask("file", { scheme: val("fi-scheme"), file: val("fi-id") });
-  put($("fi"), h("p", {}, `${f.file}: ${words(f.status)}${f.code ? ` (${words(f.code)})` : ""}, received ${f.received || ""}.`),
+  const s = f.summary || {};
+  const share = s.members_before ? Math.round((s.leavers * 100) / s.members_before) : 0;
+  put($("fi"), h("p", {}, `${f.file}: ${words(f.status)}${f.code ? ` (${words(f.code)})` : ""}, received ${f.received || ""}, sent by ${f.uploaded_by || "–"}.`),
+    f.status === "held" ? h("div", { class: "banner warn", role: "status" }, `This file would take ${s.leavers} of ${s.members_before} members off the scheme (${share}%). Confirm it only once the employer has said they have all left.`) : "",
     h("h3", {}, "Summary"), pairs(f.summary),
+    (f.changes || []).length ? [h("h3", {}, "What it changes"), table(["Member", "What happens", "From", "Fields"], f.changes.map((c) => [c.employee, words(c.change), c.effective, c.previously ? `previously ${c.previously}` : (c.fields || []).map(words).join(", ")]))] : "",
+    (f.ambiguities || []).length ? [h("h3", {}, "To check with the employer"), portal.details(f.ambiguities)] : "",
     (f.rejected || []).length ? [h("h3", {}, "Rows refused when read"), table(["Row", "Why"], f.rejected.map((r) => [r.row, words(r.code)]))] : "",
     (f.refused || []).length ? [h("h3", {}, "Rows the core refused"), portal.details(f.refused)] : "");
 }
@@ -146,8 +153,11 @@ $("fi-back-no").addEventListener("click", onFile("decide_backdating", { approve:
 
 $("mb-form").addEventListener("submit", run($("mb-msg"), async () => {
   const m = await ask("member", { scheme: val("mb-scheme"), employee: val("mb-emp") });
-  const { covers, above_automatic, ...rest } = m;
-  put($("mb"), pairs(rest),
+  const { covers, above_automatic, continuation, salary_minor, hours_hundredths, ...rest } = m;
+  // Salary as money and hours as hours a week, not the units they are kept in.
+  const shown = { ...rest, salary: salary_minor == null ? null : portal.money(salary_minor), hours_a_week: hours_hundredths == null ? null : (hours_hundredths / 100).toFixed(2) };
+  put($("mb"), pairs(shown),
+    (continuation || []).length ? [h("h3", {}, "Continuation on leaving"), table(["Offer", "Left", "Until", "Up to", "Status"], continuation.map((o) => [o.offer, o.left, o.expires, portal.money(o.max_sum_insured_minor), words(o.status)]))] : "",
     table(["Cover", "Type", "By formula", "Automatic"], (covers || []).map((c) => [c.cover, words(c.cover_type), money(c.formula_minor), money(c.automatic_minor)])),
     (above_automatic || []).length ? table(["Above automatic", "Asked", "State", "In place", "From"], above_automatic.map((a) => [a.cover, money(a.asked_minor), words(a.state), money(a.in_place_minor), a.from || ""])) : "");
 }));
@@ -158,10 +168,14 @@ $("fa-form").addEventListener("submit", run($("fa-msg"), async () => {
 }));
 // The people the customer master found the member might be: pick one, or say they are someone new.
 $("rm-find").addEventListener("click", run($("rm-msg"), async () => {
-  const found = await ask("possible_match", { scheme: val("rm-scheme"), employee: val("rm-emp") });
-  const list = Array.isArray(found) ? found : (found && found.candidates) || [];
-  put($("rm-found"), list.length ? table(["Might be", "", ""], list.map((c) => { const party = typeof c === "string" ? c : c.party; return [party, typeof c === "string" ? "" : portal.text(Object.fromEntries(Object.entries(c).filter(([k]) => k !== "party"))),
-    h("button", { class: "quiet", type: "button", on: { click: () => { $("rm-party").value = party; $("rm-decision").value = "same_person"; say($("rm-msg"), "ok", `Press Record to link them to ${party}.`); } } }, "It is this person")]; })) : portal.empty("No candidates are held for this member."));
+  // Reading who they might be is recorded against the match being decided.
+  if (!portal.working()) portal.workOn(`Deciding the possible match for ${val("rm-emp")} on scheme ${val("rm-scheme")}`);
+  const found = await ask("possible_match", { scheme: val("rm-scheme"), employee: val("rm-emp"), case: portal.working() });
+  const list = (found && found.candidates) || [];
+  const who = (c) => c.closed ? "Closed to you" : c.name || c.party;
+  put($("rm-found"), h("p", {}, `${found.employee}, born ${found.date_of_birth ? portal.born(found.date_of_birth) : "(not given)"}, joined ${found.joined || "–"}, might be:`),
+    list.length ? table(["Name", "Born", "Reference", ""], list.map((c) => [who(c), c.born ? portal.born(c.born) : "", c.party,
+      h("button", { class: "quiet", type: "button", on: { click: () => { $("rm-party").value = c.party; $("rm-decision").value = "same_person"; say($("rm-msg"), "ok", `Press Record to link them to ${who(c)}.`); } } }, "It is this person")])) : portal.empty("No candidates are held for this member."));
 }));
 $("rm-form").addEventListener("submit", run($("rm-msg"), async () => {
   await send({ resolve_match: { scheme: val("rm-scheme"), employee_id: val("rm-emp"), decision: { decision: $("rm-decision").value, party: $("rm-party").dataset.party || val("rm-party") } } });
@@ -178,11 +192,23 @@ $("ux-form").addEventListener("submit", run($("ux-msg"), async () => {
   return "Sent to underwriting.";
 }));
 
-const mapping = () => { try { return JSON.parse($("mp-json").value); } catch { throw new Error("The mapping is not valid JSON."); } };
+const mapping = () => {
+  if (!$("mp-json").value.trim()) throw new Error("Show the mappings in use first: the layout in use, or a starting layout for a new scheme, is put in the box to adjust.");
+  try { const m = JSON.parse($("mp-json").value); delete m.content_hash; return m; } catch { throw new Error("The mapping is not valid JSON: check the commas and quotes."); }
+};
+// A layout to start from for a scheme with none: the columns are named as the employer's file heads them.
+const STARTER = (scheme) => ({ id: `${scheme}-full`, version: 1, kind: "full", delimiter: ",", date_format: "%d/%m/%Y", salary_unit: "major", salary_period: "annual",
+  columns: { employee_id: "Employee ID", given_name: "First name", family_name: "Last name", date_of_birth: "Date of birth", category: "Category", salary: "Salary", billing_group: "Site" }, categories: {} });
 $("mp-form").addEventListener("submit", run($("mp-msg"), async () => {
   const m = await ask("mapping", { scheme: val("mp-scheme") });
-  if (m.mapping && !$("mp-json").value.trim()) $("mp-json").value = JSON.stringify(m.mapping, null, 2);
+  if (!$("mp-json").value.trim()) {
+    // The version to set is the next one; the service works out the content hash when it is set.
+    const next = m.mapping ? { ...m.mapping, version: m.mapping.version + 1 } : STARTER(val("mp-scheme"));
+    delete next.content_hash;
+    $("mp-json").value = JSON.stringify(next, null, 2);
+  }
   put($("mp"), portal.details(m));
+  return m.mapping ? "The layout in use is shown below; the box holds its next version to adjust." : "This scheme has no layout yet. The box holds one to start from: name the columns as the employer's file heads them.";
 }));
 $("mp-try").addEventListener("click", run($("mp-msg"), async () => {
   const answer = await api(R, "POST", BASE + "schemes/" + encodeURIComponent(val("mp-scheme")) + "/mappings/try", { mapping: mapping(), sample: $("mp-sample").value });

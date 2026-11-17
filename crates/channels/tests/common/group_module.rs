@@ -54,10 +54,17 @@ impl GroupModule {
     /// As the service's command route: the caller's key scoped by its name,
     /// a file received only by upload, a refusal 422 with its code.
     fn apply(&self, who: &str, key: &str, actor: &str, command: Value) -> Answered {
-        let command: GroupCommand = match serde_json::from_value(command) {
+        let mut command: GroupCommand = match serde_json::from_value(command) {
             Ok(c) => c,
             Err(e) => return refused(400, "invalid_command", &e.to_string()),
         };
+        // The service seals a mapping as it takes it.
+        if let GroupCommand::SetMapping { mapping, .. } = &mut command {
+            match mapping.as_ref().clone().seal() {
+                Ok(sealed) => **mapping = sealed,
+                Err(e) => return refused(422, "invalid_mapping", &e.to_string()),
+            }
+        }
         if matches!(command, GroupCommand::ReceiveFile { .. }) {
             return refused(400, "use_upload", "a file is received by uploading it");
         }
@@ -195,6 +202,40 @@ impl ic_channels::group::Group for Listing {
         if question["ask"] == "loadings_in_total" {
             let listed = json!({ "cases": [{ "case": 7, "employee": "E005", "cover": "life", "proposal": "grp-uw:harbour:3" }] });
             return Box::pin(async move { Ok((200, listed)) });
+        }
+        self.0.ask(question)
+    }
+
+    fn staff_command(&self, key: &str, actor: &str, command: Value) -> Asked<'_> {
+        self.0.staff_command(key, actor, command)
+    }
+
+    fn try_mapping(&self, scheme: &str, trial: Value) -> Asked<'_> {
+        self.0.try_mapping(scheme, trial)
+    }
+
+    fn member_command(&self, key: &str, actor: &str, command: Value) -> Asked<'_> {
+        self.0.member_command(key, actor, command)
+    }
+}
+
+/// The group module behind the employer portal: the portal's scheme
+/// policy is the module's scheme `harbour`, and everything else is the
+/// module's own answer.
+pub struct ForEmployer(pub std::sync::Arc<GroupModule>);
+
+impl Group for ForEmployer {
+    fn upload(&self, scheme: &str, file: &str, actor: &str, bytes: Vec<u8>) -> Asked<'_> {
+        self.0.upload(scheme, file, actor, bytes)
+    }
+
+    fn command(&self, key: &str, actor: &str, command: Value) -> Asked<'_> {
+        self.0.command(key, actor, command)
+    }
+
+    fn ask(&self, question: Value) -> Asked<'_> {
+        if question["ask"] == "scheme_of" {
+            return Box::pin(async { Ok((200, json!({ "schemes": [harness::SCHEME] }))) });
         }
         self.0.ask(question)
     }

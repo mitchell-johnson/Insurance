@@ -1154,7 +1154,7 @@ async fn a_relative_is_let_in_to_look_and_no_more() {
 }
 
 /// Purpose: an employer administrator sees their schemes and manages the scheme's administrators and its second-administrator rule; nobody else can.
-/// Why it matters: the employer portal is run by the employer's own staff; a member or an outsider changing who administers a scheme could alter everyone's cover.
+/// Why it matters: the employer portal is run by the employer's own staff; a member or an outsider changing who administers a scheme could alter everyone's cover. A change to the members sent as a request is refused, since nothing acts on one (found by the scenario run, SCN-05, F-SCN05-5).
 #[tokio::test]
 async fn the_employer_portal_serves_administrators() {
     let portal = portal();
@@ -1211,13 +1211,12 @@ async fn the_employer_portal_serves_administrators() {
             .0,
         StatusCode::FORBIDDEN
     );
+    // A change to the members goes to the group service, not into a request
+    // nobody acts on (found by the scenario run, SCN-05, F-SCN05-5).
     let request = json!({ "id": "r1", "policy": scheme, "kind": "remove_member", "module": "group-admin" });
     let (status, result) = portal.write("POST", "sub-hr", "/app/v1/requests", request).await;
-    assert_eq!(
-        (status, result["effects"].as_array().unwrap().len()),
-        (StatusCode::ACCEPTED, 0),
-        "it waits for the second administrator"
-    );
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(result["detail"].as_str().unwrap().contains("Changes to members"), "{result}");
 }
 
 /// Purpose: the staff console is for staff, shows a policy only for a stated case, explains a refusal, and passes staff access commands to the module under the caller's own identity.
@@ -4087,7 +4086,7 @@ async fn a_vulnerable_customers_request_goes_to_a_person() {
     assert!(mine[0].get("kind_of_marker").is_none() && mine[0].get("adjustments").is_none());
     assert!(portal.master.calls.lock().unwrap().iter().any(|c| c.what == "routing" && c.party == KIRI));
 
-    let other = json!({ "id": "r-h1", "policy": portal.scheme, "kind": "remove_member", "module": "group-admin" });
+    let other = json!({ "id": "r-h1", "policy": portal.scheme, "kind": "claim_evidence", "module": "claims" });
     assert_eq!(portal.write("POST", "sub-hr", "/app/v1/requests", other).await.0, StatusCode::ACCEPTED);
     assert!(portal.get("sub-hr", "/app/v1/requests").await.1[0].get("route_to_person").is_none());
 
@@ -4272,6 +4271,105 @@ async fn an_employer_runs_the_scheme_membership() {
         .body(Body::empty())
         .unwrap();
     assert_eq!(bare.oneshot(request).await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// Purpose: an administrator sees who administers the scheme and their own reference, names only a colleague who has
+/// signed in, and removes a member or changes a salary by hand as a change file the group service checks; a kind of change
+/// the employer asked a second administrator for waits for a colleague, and the person who entered it cannot approve it.
+/// Why it matters: found by the scenario run, SCN-05 (F-SCN05-1, F-SCN05-5): a hand change was stored as a request nothing
+/// acted on, the second-administrator rule was never applied to files, a wrong employee ID was accepted, and an administrator
+/// had to type a colleague's internal reference, any text being taken.
+#[tokio::test]
+async fn an_administrator_changes_a_member_by_hand() {
+    use common::group_module::harness::{attrs, row, terms, Harness};
+    use ic_group::mapping::FileKind;
+    let mut h = Harness::new(terms());
+    h.apply(
+        "f0",
+        FileKind::Full,
+        vec![
+            row(1, "E001", attrs("staff", 60_000_00, "akl")),
+            row(2, "E002", attrs("staff", 50_000_00, "akl")),
+        ],
+    );
+    let today = h.today().to_string();
+    let module = Arc::new(common::group_module::GroupModule(std::sync::Mutex::new(h)));
+    let inner = module.clone();
+    let portal = &portal_with(move |_| Arc::new(common::group_module::ForEmployer(inner)));
+    let scheme = &portal.scheme;
+    let at = |rest: &str| format!("/employer/v1/schemes/{scheme}/{rest}");
+    let change = |who: &'static str, sent: Value| {
+        let path = at("group/changes");
+        async move { portal.write("POST", who, &path, sent).await }
+    };
+
+    // Who administers the scheme, and the reference to give a colleague.
+    let (status, admins) = portal.get("sub-hr", &at("admins")).await;
+    assert_eq!(
+        (status, &admins["you"], &admins["second_admin"]),
+        (StatusCode::OK, &json!("hr-1"), &json!([])),
+        "{admins}"
+    );
+    assert!(admins["admins"].as_array().unwrap().iter().any(|a| a == "hr-1"), "{admins}");
+    assert_eq!(portal.get("sub-kiri", &at("admins")).await.0, StatusCode::NOT_FOUND);
+    // Only someone who has signed in can be named.
+    let (status, refused) = portal.write("PUT", "sub-hr", &at("admins/hr-9"), json!({ "admin": true })).await;
+    assert_ne!(status, StatusCode::OK);
+    assert_eq!(refused["title"], "unknown_person", "{refused}");
+    assert_eq!(
+        portal.write("PUT", "sub-hr", &at("admins/hr-2"), json!({ "admin": true })).await.0,
+        StatusCode::OK
+    );
+    let set = json!({ "changes": ["remove_member"] });
+    assert_eq!(portal.write("PUT", "sub-hr", &at("second-admin"), set).await.0, StatusCode::OK);
+
+    // What cannot be a hand change is refused before anything is sent.
+    for bad in [
+        json!({ "kind": "add_member", "employee_id": "E003", "effective": today }),
+        json!({ "kind": "change_salary", "employee_id": "E001", "effective": today }),
+        json!({ "kind": "remove_member", "employee_id": "E001", "effective": "soon" }),
+        json!({ "kind": "remove_member", "employee_id": "E/1", "effective": today }),
+    ] {
+        assert_eq!(change("sub-hr", bad).await.0, StatusCode::BAD_REQUEST);
+    }
+    // A wrong employee ID is the group service's refusal, naming the member.
+    let (status, refused) = change("sub-hr", json!({ "kind": "remove_member", "employee_id": "E0O2", "effective": today })).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(refused.to_string().contains("E0O2 is not a member"), "{refused}");
+
+    // A removal waits for a colleague: the person who entered it cannot approve it.
+    let (status, sent) = change("sub-hr", json!({ "kind": "remove_member", "employee_id": "E002", "effective": today })).await;
+    assert_eq!((status, &sent["status"]), (StatusCode::OK, &json!("awaiting_approval")), "{sent}");
+    assert!(sent["why"].as_str().unwrap().contains("removing a member"), "{sent}");
+    let file = sent["file"].as_str().unwrap().to_string();
+    let approve = json!({ "approve_file": { "file": file } });
+    let (status, refused) = portal.write("POST", "sub-hr", &at("group/commands"), approve.clone()).await;
+    assert_eq!((status, &refused["title"]), (StatusCode::CONFLICT, &json!("second_administrator")), "{refused}");
+    assert_eq!(portal.write("POST", "sub-hr2", &at("group/commands"), approve).await.0, StatusCode::OK);
+    let (_, member) = portal.get("sub-hr", &at("group/member?employee=E002")).await;
+    assert_ne!(member["in_force"], true, "{member}");
+    // An unknown file is the group service's to answer.
+    let nope = json!({ "approve_file": { "file": "nope" } });
+    assert_eq!(
+        portal.write("POST", "sub-hr", &at("group/commands"), nope).await.0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    // A salary change the employer did not ask a second administrator for is approved at once.
+    let salary = |n: i64| json!({ "kind": "change_salary", "employee_id": "E001", "effective": today, "salary_minor": n });
+    let (status, sent) = change("sub-hr", salary(70_000_00)).await;
+    assert_eq!((status, &sent["status"]), (StatusCode::OK, &json!("approved")), "{sent}");
+
+    // Where the scheme's own terms want a second approver for every file, it waits and says why.
+    module.0.lock().unwrap().g.schemes.get_mut("harbour").unwrap().terms.second_approver = true;
+    let (status, sent) = change("sub-hr", salary(75_000_00)).await;
+    assert_eq!((status, &sent["status"]), (StatusCode::OK, &json!("awaiting_approval")), "{sent}");
+    assert!(sent["why"].as_str().unwrap().contains("another administrator"), "{sent}");
+    // The employer's own rule does not cover salaries, so the group service is the one to refuse its sender.
+    let approve = json!({ "approve_file": { "file": sent["file"] } });
+    let (status, refused) = portal.write("POST", "sub-hr", &at("group/commands"), approve).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(refused.to_string().contains("another administrator must approve this"), "{refused}");
 }
 
 /// Purpose: every action and question the commission page offers is one the console route accepts.
@@ -5186,7 +5284,8 @@ async fn the_life_gives_their_own_consents() {
 /// to it, and only an offer open to them.
 /// Why it matters: the group module took both commands from the member's app, and nothing sent them, so a leaver could not
 /// use the continuation option the scheme gives them. A membership claimed on an employee ID alone would let anyone who
-/// learned a colleague's ID act on their cover.
+/// learned a colleague's ID act on their cover. A member knows the scheme by its policy number, not an internal code (found by
+/// the scenario run, SCN-09, F-SCN09-2, F-SCN09-4).
 #[tokio::test]
 async fn a_member_claims_their_membership_and_keeps_cover_on_leaving() {
     use common::group_module::harness::{attrs, change};
@@ -5244,7 +5343,15 @@ async fn a_member_claims_their_membership_and_keeps_cover_on_leaving() {
     // A scheme the group module does not know is its own answer, passed on.
     let unknown = json!({ "scheme": "nope", "employee_id": "E009" });
     assert_eq!(signed("/app/v1/memberships", unknown).await.0, StatusCode::NOT_FOUND);
-    let (status, claimed) = signed("/app/v1/memberships", claim("E009")).await;
+    // A member knows the scheme by its number, as their employer gives it, not the group service's own name; another
+    // policy's number is no scheme (found by the scenario run, SCN-09, F-SCN09-2).
+    let retail = portal.get("sub-kiri", &format!("/app/v1/policies/{}", portal.retail)).await.1;
+    let retail_number = retail["number"].as_str().unwrap_or(&portal.retail.0).to_string();
+    let not_a_scheme = json!({ "scheme": retail_number, "employee_id": "E009" });
+    assert_eq!(signed("/app/v1/memberships", not_a_scheme).await.0, StatusCode::NOT_FOUND);
+    let number = portal.get("sub-hr", "/employer/v1/schemes").await.1[0]["number"].clone();
+    let by_number = json!({ "scheme": number, "employee_id": "E009" });
+    let (status, claimed) = signed("/app/v1/memberships", by_number).await;
     assert_eq!((status, &claimed), (StatusCode::OK, &json!({ "claimed": true, "already": false })), "{claimed}");
     module.0.lock().unwrap().settle();
     assert_eq!(
@@ -5262,10 +5369,16 @@ async fn a_member_claims_their_membership_and_keeps_cover_on_leaving() {
         let today = h.today();
         h.apply("f-left", FileKind::Changes, vec![change(1, "E009", RowChange::Leave, today, kiri)]);
     }
+    // The scheme is shown on the portal's group policy, which the member knows by its number.
+    let held = std::mem::replace(
+        &mut module.0.lock().unwrap().g.schemes.get_mut("harbour").unwrap().policy,
+        portal.scheme.clone(),
+    );
     let (status, open) = portal.get("sub-kiri", "/app/v1/memberships/continuations").await;
+    module.0.lock().unwrap().g.schemes.get_mut("harbour").unwrap().policy = held;
     assert_eq!(status, StatusCode::OK, "{open}");
     let offer = open[0].clone();
-    assert_eq!(offer["scheme"], "harbour", "{open}");
+    assert_eq!((&offer["scheme"], &offer["number"]), (&json!("harbour"), &number), "{open}");
     assert_eq!(portal.get("sub-adv", "/app/v1/memberships/continuations").await.1, json!([]));
     let path: &'static str = Box::leak(format!("/app/v1/memberships/continuations/harbour/{}", offer["offer"]).into_boxed_str());
     let product = offer["products"][0].clone();
@@ -5297,7 +5410,9 @@ async fn a_member_claims_their_membership_and_keeps_cover_on_leaving() {
 /// module refusal comes back as 409 with its code.
 /// Why it matters: the group service trusts the portal's caller name for staff. If the console let a reader act, let a page
 /// send the driver's commands (results from the core, scans, the customer master's answers), or hid the module's refusal,
-/// staff could change membership nobody had the right to change, or think a change was made that was not.
+/// staff could change membership nobody had the right to change, or think a change was made that was not. Staff also need the
+/// scheme by its policy number and the people a possible match might be by name and birth date (found by the scenario run,
+/// SCN-19, F-SCN19-2, and SCN-05, F-SCN05-4).
 #[tokio::test]
 async fn the_group_console() {
     let module = Arc::new(common::group_module::seeded());
@@ -5329,6 +5444,28 @@ async fn the_group_console() {
     let policy = module.0.lock().unwrap().policy.0.clone();
     let (status, found) = ask("sub-grpview", &format!("scheme_of?policy={policy}")).await;
     assert_eq!((status, &found["schemes"]), (StatusCode::OK, &json!(["harbour"])));
+    // Staff know a policy by its number: the scheme is found from that too, in any case
+    // (found by the scenario run, SCN-19, F-SCN19-2).
+    module.0.lock().unwrap().g.by_policy.insert(portal.scheme.clone(), "harbour".to_string());
+    let number = portal.get("sub-hr", "/employer/v1/schemes").await.1[0]["number"]
+        .as_str()
+        .unwrap()
+        .to_lowercase();
+    let (status, found) = ask("sub-grpview", &format!("scheme_of?policy={number}")).await;
+    assert_eq!((status, &found["schemes"]), (StatusCode::OK, &json!(["harbour"])), "{found}");
+    // The people a possible match might be, by name and birth date, for those who may find
+    // customers under the case in hand (found by the scenario run, SCN-05, F-SCN05-4).
+    let (status, possible) = ask("sub-grp1", "possible_match?scheme=harbour&employee=E002&case=GRP-1").await;
+    assert_eq!(status, StatusCode::OK, "{possible}");
+    let candidate = &possible["candidates"][0];
+    assert_eq!((&candidate["party"], candidate.get("closed")), (&json!("party-x"), None), "{possible}");
+    assert!(candidate.get("name").is_some(), "{possible}");
+    let (_, closed) = ask("sub-grpview", "possible_match?scheme=harbour&employee=E002").await;
+    assert_eq!(closed["candidates"][0], json!({ "party": "party-x", "closed": true }), "{closed}");
+    portal.master.down.store(true, Ordering::SeqCst);
+    let (_, unread) = ask("sub-grp1", "possible_match?scheme=harbour&employee=E002&case=GRP-1").await;
+    assert_eq!(unread["candidates"][0], json!({ "party": "party-x" }), "{unread}");
+    portal.master.down.store(false, Ordering::SeqCst);
     let (status, scheme) = ask("sub-grpview", "scheme?scheme=harbour").await;
     assert_eq!((status, scheme["possible_matches"].as_u64()), (StatusCode::OK, Some(1)), "{scheme}");
     assert_eq!(ask("sub-grpview", "file?scheme=harbour&file=f1").await.1["file"], "f1");

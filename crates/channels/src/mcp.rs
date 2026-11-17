@@ -302,8 +302,11 @@ pub fn catalogue() -> Vec<Tool> {
             .json(r#"{"admin": true | false}"#),
         tool("set_second_admin", "Changes needing a second administrator", C, M::PUT, "/employer/v1/schemes/{policy}/second-admin", "Choose which kinds of change on your scheme need a second administrator to approve.")
             .json(r#"{"changes": ["remove_member", ...]}"#),
-        tool("scheme_command", "Act on my scheme's membership", C, M::POST, "/employer/v1/schemes/{policy}/group/commands", "Approve or withdraw an uploaded membership file, or declare a pool's aggregate.")
-            .json(r#"{"command": "approve_file" | "withdraw_file" | "declare_pool", ...}"#),
+        tool("scheme_admins", "My scheme's administrators", C, M::GET, "/employer/v1/schemes/{policy}/admins", "Who administers your scheme, your own reference, and which kinds of change need a second administrator."),
+        tool("scheme_member_change", "Remove a member or change a salary", C, M::POST, "/employer/v1/schemes/{policy}/group/changes", "Remove one member from a date, or change one member's salary from a date. It is applied at once, or waits for another administrator where your scheme asks for one. Joiners come in the membership file.")
+            .json(r#"{"kind": "remove_member" | "change_salary", "employee_id": "<their employee ID>", "effective": "<YYYY-MM-DD>", "salary_minor"?: <new annual salary in cents, for change_salary>}"#),
+        tool("scheme_command", "Act on my scheme's membership", C, M::POST, "/employer/v1/schemes/{policy}/group/commands", "Approve or withdraw a membership file (after reading its preview with scheme_question file), or declare a pool's headcount and total annual salary. The body is one object named by the command. A pool must be one of the scheme's own; a headcount and salary of 0 end a pool declared by mistake.")
+            .json(r#"{"approve_file": {"file": "<file name>"}} | {"withdraw_file": {"file": "<file name>"}} | {"declare_pool": {"pool": "<pool name>", "category": "<category>", "effective": "<YYYY-MM-DD>", "headcount": <people>, "total_salary_minor": <total annual salary in cents>}}"#),
         tool("upload_membership_file", "Upload a membership file", C, M::POST, "/employer/v1/schemes/{policy}/group/files/{file}", "Upload a membership file (CSV) to quarantine. Approve it with scheme_command after checking its preview.")
             .file("The file's bytes, base64. At most 32 MB."),
         tool("scheme_question", "Ask about my scheme", C, M::GET, "/employer/v1/schemes/{policy}/group/{question}", "Your scheme on the group service: the scheme, its invoices, an uploaded file's preview, or one member's record.")

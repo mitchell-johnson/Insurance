@@ -819,7 +819,7 @@ fn a_member_of_a_large_scheme_holds_their_own_cover_only() {
 }
 
 /// Purpose: on a group scheme a member's phone holds only that member's cover, the employer is served by the portal with scheme-level rows, and a change to one member touches one feed.
-/// Why it matters: a scheme can hold tens of thousands of members; nobody may see a colleague's cover, and one member's change must not rebuild every feed.
+/// Why it matters: a scheme can hold tens of thousands of members; nobody may see a colleague's cover, and one member's change must not rebuild every feed. An administrator names only a colleague who has signed in (found by the scenario run, SCN-05, F-SCN05-1).
 #[test]
 fn scheme_members_and_the_employer() {
     let mut w = World::new();
@@ -864,6 +864,15 @@ fn scheme_members_and_the_employer() {
 
     // Administrators manage their own list, and a scheme keeps at least one.
     assert_eq!(code(w.dir(party("hr-1"), admin("hr-1", false))), "last_admin");
+    // A colleague is named only once they have signed in (found by the scenario run, SCN-05, F-SCN05-1).
+    assert_eq!(code(w.dir(party("hr-1"), admin("hr-2", true))), "unknown_person");
+    for (subject, who) in [("sub-hr1", "hr-1"), ("sub-hr2", "hr-2")] {
+        let signed_in = DirectoryCommand::BindSubject {
+            subject: subject.into(),
+            party: p(who),
+        };
+        w.dir(module("identity"), signed_in).unwrap();
+    }
     w.dir(party("hr-1"), admin("hr-2", true)).unwrap();
     let effects = w.dir(party("hr-2"), admin("hr-1", false)).unwrap();
     assert_eq!(revoked(&effects), ["hr-1".to_string()].into());

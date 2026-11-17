@@ -64,6 +64,16 @@ pub enum Question {
     SchemeAdmins {
         policy: PolicyId,
     },
+    /// Who administers an employer's scheme, and which kinds of change
+    /// need a second administrator.
+    SchemeAdministration {
+        policy: PolicyId,
+    },
+    /// The policy a person named, by its number or its reference, with
+    /// both: `{policy, number}`, or null when no policy is called that.
+    PolicyNamed {
+        text: String,
+    },
     /// Whether this party is the life on an underwriting proposal, and the
     /// enrolled key of the device they proved, if it stands.
     DisclosureSigner {
@@ -555,6 +565,18 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
         Question::DocumentsStaff { staff, at } => json!(d.staff.holds_action(&staff, crate::documents::actions::DOWNLOAD, at)),
         Question::CareStaff { staff, at } => json!(d.staff.holds_action(&staff, crate::staff::actions::VULNERABILITY_KIND, at)),
         Question::SchemeAdmins { policy } => json!(d.directory.employer_admins.get(&policy).map_or(0, |admins| admins.len())),
+        Question::SchemeAdministration { policy } => json!({
+            "admins": d.directory.employer_admins.get(&policy).cloned().unwrap_or_default(),
+            "second_admin": d.directory.second_admin.get(&policy).cloned().unwrap_or_default(),
+        }),
+        Question::PolicyNamed { text } => {
+            let want = text.trim().to_lowercase();
+            json!(d
+                .view
+                .directory()
+                .find(|e| e.number.to_lowercase() == want || e.policy.0.to_lowercase() == want)
+                .map(|e| json!({ "policy": e.policy, "number": e.number })))
+        }
         Question::DisclosureSigner { party, device, proposal, life } => {
             let is_life = d.published.values().flat_map(|rows| rows.values()).any(|r| {
                 r.kind == "proposal_life" && r.subject.as_ref() == Some(&party) && r.body["proposal"] == proposal.as_str() && r.body["life"] == life.as_str()

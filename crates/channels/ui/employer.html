@@ -4,15 +4,18 @@
 <main data-views="Scheme,Files and members,Changes and administrators"><header class="page"><div><h1>Employer portal</h1><p>Your scheme, its members, its files and its administrators.</p></div></header><div id="msg" aria-live="polite"></div>
 <section data-view="Scheme"><h2>Your schemes</h2><div id="schemes"></div></section>
 <section data-view="Scheme" id="detail" hidden><h2 id="title"></h2><div id="summary"></div><h2>Members</h2><div id="members"></div><h2>Billing</h2><div id="billing"></div><h3>Claims</h3><p class="muted">Each claim's status only. What a claim is about stays between the member and the claims team.</p><div id="claims"></div></section>
-<section data-view="Changes and administrators" id="manage" hidden><h2>Ask for a change</h2>
-  <form id="change"><div class="row"><div><label for="kind">Change</label><select id="kind"><option value="add_member">Add a member</option><option value="remove_member">Remove a member</option><option value="change_salary">Change a member's salary</option></select></div>
-  <div><label for="member">Member reference</label><input id="member" required maxlength="64"></div><div><label for="effective">Effective date</label><input id="effective" type="date" required></div><button>Send</button></div></form>
+<section data-view="Changes and administrators" id="manage" hidden><h2>Change a member</h2>
+  <p class="muted">Take one member off the scheme, or change one member's salary, from a date. Joiners come in the membership file, which says who they are.</p>
+  <form id="change"><div class="row"><div><label for="kind">Change</label><select id="kind"><option value="remove_member">Remove a member</option><option value="change_salary">Change a member's salary</option></select></div>
+  <div><label for="member">Employee ID</label><input id="member" required maxlength="64"></div><div><label for="effective">From</label><input id="effective" type="date" required></div>
+  <div id="salary-field" hidden><label for="salary">New annual salary ($)</label><input id="salary" type="number" step="0.01" min="0"></div><button>Send</button></div></form>
   <div id="change-msg" aria-live="polite"></div>
-  <h2>Approve a colleague's change</h2><p class="muted">Changes waiting for you have an Approve button under Your requests.</p><form id="approve"><div class="row"><div><label for="rid">Or a request by its reference</label><input id="rid" required></div><button>Approve</button></div></form><div id="approve-msg" aria-live="polite"></div>
-  <h2>Administrators</h2><form id="admin"><div class="row"><div><label for="who">Person</label><input id="who" required></div><div><label for="is">Access</label><select id="is"><option value="true">Administrator</option><option value="false">Remove</option></select></div><button>Save</button></div></form>
+  <h2>Waiting for approval</h2><div id="waiting"></div><div id="approve-msg" aria-live="polite"></div>
+  <h2>Administrators</h2><p id="you" class="muted"></p><div id="admins"></div>
+  <form id="admin"><div class="row"><div><label for="who">A colleague's reference (shown to them on this page once they have signed in)</label><input id="who" required></div><div><label for="is">Access</label><select id="is"><option value="true">Administrator</option><option value="false">Remove</option></select></div><button>Save</button></div></form>
   <form id="second"><fieldset><legend>Changes that need a second administrator</legend><div class="choices" id="kinds"><label><input type="checkbox" value="add_member"> Adding a member</label><label><input type="checkbox" value="remove_member"> Removing a member</label><label><input type="checkbox" value="change_salary"> Changing a salary</label></div></fieldset><p><button>Save</button></p></form><div id="admin-msg" aria-live="polite"></div></section>
 <section data-view="Files and members" id="group" hidden><h2>Membership files</h2>
-  <p class="muted">Send the scheme's membership file. It is checked for viruses before anything reads it; then its preview shows who joins, leaves and changes, and you approve it.</p>
+  <p class="muted">Each file lists everyone who should be covered: every current member, with joiners added. Anyone missing from it is taken off the scheme from the file's date. It is checked for viruses before anything reads it; then its preview shows who joins, leaves and changes, and you approve it.</p>
   <div id="standing"></div>
   <form id="upload"><div class="row"><div><label for="file">File</label><input id="file" type="file" accept=".csv,text/csv" required></div><button>Upload</button></div></form>
   <form id="preview"><div class="row"><div><label for="fname">File name</label><input id="fname" required maxlength="64"></div><button class="quiet">Show preview</button><button type="button" id="approve-file">Approve</button><button type="button" class="quiet" id="withdraw-file">Withdraw</button></div></form>
@@ -25,28 +28,42 @@
   <div><label for="pl-tier">Who it covers</label><select id="pl-tier"><option value="single">The member</option><option value="couple">The member and a partner</option><option value="family">The member and family</option></select></div>
   <div><label for="pl-from">From</label><input id="pl-from" type="date" required></div><div><label for="pl-deps">Others covered, one per line: name, birth date</label><textarea id="pl-deps" rows="2" placeholder="Aroha, 2015-03-01"></textarea></div><button>Record</button></div></form>
   <div id="plan-msg" aria-live="polite"></div>
-  <h2>Declare an unnamed pool</h2><p class="muted">For a scheme that covers a category by headcount and total salary rather than by name.</p>
+  <h2>Declare an unnamed pool</h2><p class="muted">For a scheme that covers a category by headcount and total salary rather than by name. A headcount and salary of 0 end a pool declared by mistake.</p>
   <form id="pool"><div class="row"><div><label for="po-pool">Pool</label><input id="po-pool" required></div><div><label for="po-cat">Category</label><input id="po-cat" required></div><div><label for="po-from">Effective</label><input id="po-from" type="date" required></div>
-  <div><label for="po-count">Headcount</label><input id="po-count" type="number" min="0" required></div><div><label for="po-salary">Total salary ($)</label><input id="po-salary" type="number" step="0.01" min="0" required></div><button>Declare</button></div></form>
+  <div><label for="po-count">Headcount</label><input id="po-count" type="number" min="0" required></div><div><label for="po-salary">Total annual salary ($)</label><input id="po-salary" type="number" step="0.01" min="0" required></div><button>Declare</button></div></form>
   <div id="pool-msg" aria-live="polite"></div>
-  <h2>Invoices</h2><div id="invoices"></div></section>
-<section data-view="Changes and administrators"><h2>Your requests</h2><div id="requests"></div></section></main>
+  <h2>Invoices</h2><div id="invoices"></div></section></main>
 <script src="/ui/app.js"></script>
 <script>
 "use strict";
-const { h, clear, put, money, table, say, signIn, signOut, api, run } = portal;
+const { h, put, money, table, say, signIn, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "customers";
-let scheme = null;
-async function requests() {
-  const list = await api(R, "GET", "/app/v1/requests");
-  const words = (v) => String(v || "").replace(/_/g, " ");
-  // A colleague's change waiting for a second administrator is approved from its row.
-  const waiting = (r) => /await/.test(String(r.status)) && /second/.test(String(r.from || ""));
-  put($("requests"), list.length ? table(["Request", "Change", "State", "Approved by", ""], list.map((r) => [r.id, words(r.kind), words(r.status) + (r.from ? " from a " + words(r.from) : ""), r.approved_by || "",
-    waiting(r) ? h("button", { class: "quiet", type: "button", on: { click: run($("approve-msg"), async () => { await api(R, "POST", `/app/v1/requests/${encodeURIComponent(r.id)}/approve`, {}); await requests(); return "Approved."; }) } }, "Approve") : ""]))
-    : portal.empty("You have asked for no changes."));
-}
+let scheme = null, me = null, standing = {};
+const words = (v) => String(v == null ? "" : v).replace(/[_-]/g, " ");
+// A product code (group-life) as the employer reads it.
+const product = (code) => words(code).replace(/^./, (c) => c.toUpperCase());
+const G = (rest) => `/employer/v1/schemes/${encodeURIComponent(scheme)}/group/${rest}`;
+
+// Why a row of a file was not used, in words, and what to do about it.
+const REFUSED = {
+  bad_date: "the date could not be read; give it as the file's other dates are", bad_number: "the number could not be read; give digits only, such as 60000",
+  bad_boolean: "give yes or no", missing_value: "a value the scheme needs is empty", missing_employee_id: "the employee ID is empty", unknown_value: "the value is not one the scheme has",
+  duplicate_employee_id: "this employee ID is on more than one row, so none of those rows was used; a current member with this ID stays on cover as they were",
+  held_for_review: "this joiner has the same name and birth date as someone already on the scheme, so they were not added. Group administration will contact you; if it is the same person under a new ID, say so in the previous employee ID column",
+  unknown_member: "nobody on the scheme has this employee ID", already_member: "this person is already a member", no_change: "nothing on the row differs from what is held",
+  before_joining: "the date is before the member joined", before_inception: "the date is before the scheme started", backdating_limit: "the date is further back than the scheme allows; group administration can decide it",
+  backdating_declined: "group administration did not accept a change dated this far back", under_age: "too young for the scheme", over_age: "too old for the scheme",
+  insufficient_hours: "works fewer hours than the scheme needs", waiting_period: "still in the scheme's waiting period", not_actively_at_work: "not actively at work",
+  joiners_suspended: "joiners are paused until the scheme's unpaid invoices are paid", unknown_previous_id: "nobody on the scheme has the previous employee ID given",
+};
+const AMBIGUOUS = {
+  duplicate_id: (a) => `${a.employee_id} is on more than one row.`,
+  possible_id_change: (a) => `${a.employee_id} looks like ${a.other} under a new ID; neither was changed.`,
+  likely_duplicate: (a) => `${a.employee_id} looks like ${a.other} (same name and birth date); ${a.employee_id} was not added.`,
+};
+const CHANGES = { join: "joins", leave: "leaves", change: "changes", absence_start: "starts leave", absence_end: "is back from leave", rekey: "has a new employee ID" };
+
 async function open(s) {
   scheme = s.policy;
   const view = await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(scheme));
@@ -55,53 +72,106 @@ async function open(s) {
   $("title").textContent = `Scheme ${s.number}`;
   const sum = of("scheme")[0];
   put($("summary"), sum ? h("p", {}, `${sum.body.members} ${sum.body.members === 1 ? "member" : "members"}, total cover ${money(sum.body.sum_insured_minor)}.`) : null);
-  const held = (o) => o ? Object.entries(o).map(([k, v]) => `${String(k).replace(/[_-]/g, " ")} ${String(v).replace(/[_-]/g, " ")}`).join(", ") : "";
-  put($("members"), table(["Member", "Cover", "Held at", "Sum insured", "In force"], of("member").map((r) => [r.body.life, r.body.cover, held(r.body.options), money(r.body.sum_insured_minor), r.body.in_force ? "yes" : "no"])));
-  put($("billing"), table(["Item", "Details"], of("billing").map((r) => [r.key.split("/").slice(1).join(" "), portal.details(r.body)])));
+  put($("members"), table(["Member", "Cover", "Sum insured", "In force"], of("member").map((r) => [r.body.life, product(r.body.cover), money(r.body.sum_insured_minor), r.body.in_force ? "yes" : "no"])));
+  put($("billing"), table(["Notice", "Details"], of("billing").map((r) => [words(r.key.split("/").slice(1).join(" ")), portal.details(r.body)])));
   const claims = await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(scheme) + "/claims");
-  put($("claims"), claims.rows.length ? table(["Claim", "Status", "Notified", "Closed"], claims.rows.map((c) => [c.claim, String(c.status).replace(/_/g, " "), c.notified_on, c.closed_on || ""]))
+  put($("claims"), claims.rows.length ? table(["Claim", "Status", "Notified", "Closed"], claims.rows.map((c) => [c.claim, words(c.status), c.notified_on, c.closed_on || ""]))
     : h("p", { class: "muted" }, "No claims."));
+  await administrators();
   await group();
 }
-const G = (rest) => `/employer/v1/schemes/${encodeURIComponent(scheme)}/group/${rest}`;
+
+// --- the group service: standing, files, members, invoices.
 async function group() {
   try {
-    const s = await api(R, "GET", G("scheme"));
+    standing = await api(R, "GET", G("scheme"));
     $("group").hidden = false;
-    put($("standing"), h("p", {}, `${s.members} ${s.members === 1 ? "member" : "members"} on the group service's record` + (s.outstanding_minor ? `, ${money(s.outstanding_minor)} outstanding.` : ".")));
+    const s = standing;
+    put($("standing"), h("p", {}, `${s.members} ${s.members === 1 ? "member" : "members"} on the group service's record` + (s.outstanding_minor ? `, ${money(s.outstanding_minor)} owed now.` : ".")),
+      s.frozen ? h("div", { class: "banner warn", role: "status" }, `Your scheme is on hold while group administration looks into something (${s.frozen}). Files and changes cannot be sent until they lift the hold.`) : null,
+      s.open_file ? h("p", {}, `File ${s.open_file} is open; the next file or change can be sent once it is approved or withdrawn.`) : null);
     const inv = await api(R, "GET", G("invoices"));
-    put($("invoices"), inv.invoices.length ? portal.details(inv.invoices) : h("p", { class: "muted" }, "No invoices yet."));
+    put($("invoices"), inv.invoices.length
+      ? table(["Period", "Members", "This period", "Brought forward", "Asked"], inv.invoices.map((i) => [i.period_index, i.members, money(i.total_minor), money(i.brought_forward_minor), money(i.amount_due_minor)]))
+      : h("p", { class: "muted" }, s.outstanding_minor ? `No invoice has been issued yet. The ${money(s.outstanding_minor)} owed now is the premium due since the scheme started.` : "No invoices yet."));
+    await waiting();
   } catch (e) { if (e.status === 404) { $("group").hidden = true; return; } throw e; }
+}
+const pct = (part, whole) => whole ? Math.round((part * 100) / whole) : 0;
+function render(f) {
+  const s = f.summary || {};
+  const parts = [];
+  if (f.status === "quarantined") parts.push(h("p", {}, "It is being checked for viruses. Show the preview again in a minute."));
+  else if (f.status === "scanned") parts.push(h("p", {}, "It passed the virus check and is being read. Show the preview again in a moment."));
+  else if (f.status === "refused") parts.push(h("p", {}, `It was refused${f.code ? " (" + words(f.code) + ")" : ""} and nothing in it was used. Put it right and send it again under a new name.`));
+  else {
+    if (f.status === "held") parts.push(h("div", { class: "banner warn", role: "status" }, `This file would take ${s.leavers} of ${s.members_before} members off the scheme (${pct(s.leavers, s.members_before)}%). Each file must list every current member. It is held until group administration checks it with you; if people are missing by mistake, withdraw it and send the full list.`));
+    parts.push(portal.stats([["Joiners", s.joiners], ["Leavers", s.leavers], ["Changes", s.changes], ["Rows not used", s.rejected], ["Members before", s.members_before]]));
+    if ((f.changes || []).length) parts.push(table(["Member", "What happens", "From", "What changes"], f.changes.map((c) => [c.employee, CHANGES[c.change] || words(c.change), c.effective, c.previously ? `previously ${c.previously}` : (c.fields || []).map(words).join(", ")])));
+    if ((f.rejected || []).length) parts.push(h("h3", {}, "Rows not used"), table(["Line", "Employee ID", "Why"], f.rejected.map((r) => [r.row ? r.row + 1 : "", r.employee_id || "", (REFUSED[r.code] || words(r.code)) + (r.field && !REFUSED[r.code] ? ` (${words(r.field)})` : "")])),
+      h("p", { class: "muted" }, "Line is the line of the spreadsheet, counting the heading as line 1. A member not used here keeps the cover they had."));
+    if ((f.ambiguities || []).length) parts.push(h("h3", {}, "To check"), h("ul", {}, f.ambiguities.map((a) => h("li", {}, (AMBIGUOUS[a.kind] || ((x) => words(x.kind)))(a)))));
+  }
+  return parts;
 }
 async function preview() {
   const f = await api(R, "GET", G("file?file=" + encodeURIComponent($("fname").value)));
-  put($("file-view"), portal.details(f));
-  return `The file is ${String(f.status).replace(/_/g, " ")}.`;
+  put($("file-view"), render(f));
+  return `The file is ${words(f.status)}.`;
 }
-async function fileCommand(name) {
-  await api(R, "POST", G("commands"), { [name]: { file: $("fname").value } });
+async function fileCommand(name, file) {
+  await api(R, "POST", G("commands"), { [name]: { file: file || $("fname").value } });
+  if (file) $("fname").value = file;
+  await group();
   return preview();
+}
+// A change or file a colleague sent that waits for another administrator, with Approve and Withdraw.
+async function waiting() {
+  const open = standing.open_file;
+  if (!open) return put($("waiting"), portal.empty("Nothing is waiting for approval."));
+  const f = await api(R, "GET", G("file?file=" + encodeURIComponent(open)));
+  if (f.status !== "awaiting_approval") return put($("waiting"), portal.empty("Nothing is waiting for approval."));
+  const mine = me && f.uploaded_by === me.you;
+  const act = (label, name, quiet) => h("button", { type: "button", class: quiet ? "quiet" : null, on: { click: run($("approve-msg"), async () => { await fileCommand(name, open); await waiting(); return name === "approve_file" ? "Approved." : "Withdrawn."; }) } }, label);
+  put($("waiting"), h("p", {}, `${open}, sent by ${mine ? "you" : f.uploaded_by}${f.second_approver && mine ? "; another administrator must approve it" : ""}.`), render(f),
+    h("p", {}, mine && f.second_approver ? null : act("Approve", "approve_file"), " ", act("Withdraw", "withdraw_file", true)));
+}
+async function administrators() {
+  me = await api(R, "GET", `/employer/v1/schemes/${encodeURIComponent(scheme)}/admins`);
+  $("you").textContent = `Your reference, for a colleague who names you an administrator: ${me.you}.`;
+  const remove = (party) => h("button", { type: "button", class: "quiet", on: { click: run($("admin-msg"), async () => { await setAdmin(party, false); return "Removed."; }) } }, "Remove");
+  put($("admins"), table(["Administrator", ""], me.admins.map((p) => [p === me.you ? `${p} (you)` : p, me.admins.length > 1 ? remove(p) : ""])));
+  for (const box of $("kinds").querySelectorAll("input")) box.checked = me.second_admin.includes(box.value);
+}
+async function setAdmin(party, admin) {
+  await api(R, "PUT", `/employer/v1/schemes/${encodeURIComponent(scheme)}/admins/${encodeURIComponent(party)}`, { admin });
+  await administrators();
 }
 async function load() {
   const schemes = await api(R, "GET", "/employer/v1/schemes");
-  put($("schemes"), table(["Scheme", "Product", "Status", ""], schemes.map((s) => [s.number, s.product, s.status, h("button", { class: "quiet", on: { click: run($("msg"), () => open(s)) } }, "Open")])));
-  await requests();
+  put($("schemes"), table(["Scheme", "Product", "Status", ""], schemes.map((s) => [s.number, product(s.product), words(s.status), h("button", { class: "quiet", on: { click: run($("msg"), () => open(s)) } }, "Open")])));
   // Most employers have one scheme: it opens on arrival.
   if (schemes.length === 1) await open(schemes[0]);
 }
+$("kind").addEventListener("change", () => { const salary = $("kind").value === "change_salary"; $("salary-field").hidden = !salary; $("salary").required = salary; });
 $("change").addEventListener("submit", run($("change-msg"), async () => {
-  const sent = await api(R, "POST", "/app/v1/requests", { id: crypto.randomUUID(), policy: scheme, kind: $("kind").value, module: "group-admin", payload: { member: $("member").value, effective: $("effective").value } });
-  await requests();
-  return sent.effects.length ? "Sent." : "Sent. A second administrator needs to approve it before it goes ahead.";
+  const body = { kind: $("kind").value, employee_id: $("member").value.trim(), effective: $("effective").value };
+  if (body.kind === "change_salary") body.salary_minor = Math.round(Number($("salary").value) * 100);
+  const sent = await api(R, "POST", G("changes"), body);
+  await group();
+  return sent.status === "approved" ? `Done: ${body.employee_id} ${body.kind === "remove_member" ? "comes off the scheme" : "has the new salary"} from ${body.effective}.`
+    : `Sent, not yet approved: ${sent.why || "it needs approving"}. It is under Waiting for approval until it goes ahead.`;
 }));
-$("approve").addEventListener("submit", run($("approve-msg"), async () => { await api(R, "POST", `/app/v1/requests/${encodeURIComponent($("rid").value)}/approve`, {}); await requests(); return "Approved."; }));
-$("admin").addEventListener("submit", run($("admin-msg"), async () => { await api(R, "PUT", `/employer/v1/schemes/${encodeURIComponent(scheme)}/admins/${encodeURIComponent($("who").value)}`, { admin: $("is").value === "true" }); return "Saved."; }));
-$("second").addEventListener("submit", run($("admin-msg"), async () => { await api(R, "PUT", `/employer/v1/schemes/${encodeURIComponent(scheme)}/second-admin`, { changes: [...$("kinds").querySelectorAll("input:checked")].map((c) => c.value) }); return "Saved."; }));
+$("admin").addEventListener("submit", run($("admin-msg"), async () => { await setAdmin($("who").value.trim(), $("is").value === "true"); return "Saved."; }));
+$("second").addEventListener("submit", run($("admin-msg"), async () => { await api(R, "PUT", `/employer/v1/schemes/${encodeURIComponent(scheme)}/second-admin`, { changes: [...$("kinds").querySelectorAll("input:checked")].map((c) => c.value) }); await administrators(); return "Saved."; }));
 $("upload").addEventListener("submit", run($("file-msg"), async () => {
   const file = $("file").files[0];
   const name = file.name.replace(/[^A-Za-z0-9._-]/g, "_");
-  await api(R, "POST", G("files/" + encodeURIComponent(name)), file);
+  const sent = await api(R, "POST", G("files/" + encodeURIComponent(name)), file);
   $("fname").value = name;
+  await group();
+  // The same file sent again under its own name is the one already received.
+  if (sent && sent.status && sent.status !== "quarantined") { await preview(); return `This file was already received and is ${words(sent.status)}; nothing new was sent.`; }
   return "Uploaded. It is being checked; show its preview in a moment.";
 }));
 $("preview").addEventListener("submit", run($("file-msg"), preview));
@@ -110,8 +180,8 @@ $("withdraw-file").addEventListener("click", run($("file-msg"), () => fileComman
 $("lookup").addEventListener("submit", run($("lookup-msg"), async () => {
   const m = await api(R, "GET", G("member?employee=" + encodeURIComponent($("employee").value)));
   put($("member-view"), h("div", {}, h("p", {}, `${m.employee}: ${m.category}, salary ${money(m.salary_minor)}, ${m.in_force ? "on cover" : "not on cover"}${m.left ? ", left " + m.left : ""}.`),
-    table(["Cover", "Formula", "Automatic"], m.covers.map((c) => [c.cover, money(c.formula_minor), money(c.automatic_minor)])),
-    m.above_automatic.length ? table(["Above automatic", "Asked", "State", "In place"], m.above_automatic.map((a) => [a.cover, money(a.asked_minor), String(a.state).replace(/_/g, " "), a.in_place_minor ? money(a.in_place_minor) : ""])) : null));
+    table(["Cover", "Formula", "Automatic"], m.covers.map((c) => [product(c.cover), money(c.formula_minor), money(c.automatic_minor)])),
+    m.above_automatic.length ? table(["Above automatic", "Asked", "State", "In place"], m.above_automatic.map((a) => [product(a.cover), money(a.asked_minor), words(a.state), a.in_place_minor ? money(a.in_place_minor) : ""])) : null));
 }));
 $("plan").addEventListener("submit", run($("plan-msg"), async () => {
   const dependants = $("pl-deps").value.split("\n").map((l) => l.split(",").map((x) => x.trim())).filter((x) => x[0]).map(([key, date_of_birth]) => ({ key, date_of_birth }));
@@ -119,8 +189,10 @@ $("plan").addEventListener("submit", run($("plan-msg"), async () => {
   return "Recorded.";
 }));
 $("pool").addEventListener("submit", run($("pool-msg"), async () => {
-  await api(R, "POST", G("commands"), { declare_pool: { pool: $("po-pool").value.trim(), category: $("po-cat").value.trim(), effective: $("po-from").value, headcount: Number($("po-count").value), total_salary_minor: Math.round(Number($("po-salary").value) * 100) } });
-  return "Declared.";
+  const headcount = Number($("po-count").value);
+  await api(R, "POST", G("commands"), { declare_pool: { pool: $("po-pool").value.trim(), category: $("po-cat").value.trim(), effective: $("po-from").value, headcount, total_salary_minor: Math.round(Number($("po-salary").value) * 100) } });
+  await group();
+  return headcount ? "Declared." : "The pool ends from that date.";
 }));
 $("pl-from").value = $("po-from").value = portal.today();
 $("effective").value = portal.today();

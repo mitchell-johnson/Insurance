@@ -1043,6 +1043,13 @@ async fn submit_request(State(s): State<Shared>, headers: HeaderMap, method: Met
     if new.kind == crate::replacements::DISPUTE {
         return Err(Problem::bad_request("dispute a replacement from your matches in the adviser portal"));
     }
+    // Nothing reads a request for group administration: a scheme's members
+    // change through the group service, where the change is checked and applied.
+    if new.module == crate::group::STAFF_CALLER {
+        return Err(Problem::bad_request(
+            "change a scheme's members in the employer portal, under Changes to members, or by sending the membership file",
+        ));
+    }
     let action = request_action(&new.id, new.policy.as_ref(), &new.kind, &new.payload);
     let kind = new.kind.clone();
     let servicing = new.module == crate::servicing::MODULE;
@@ -1495,10 +1502,9 @@ impl AppState {
             .ok_or_else(|| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "group_unavailable", "the group service is not configured here"))
     }
 
-    /// The group service's scheme on this policy, once it is clear the
-    /// signed-in person administers the policy today. Any other policy, or
-    /// one with no scheme, is not found, so nobody learns which exist.
-    async fn administered_scheme(&self, session: &Session, policy: &str) -> Result<String, Problem> {
+    /// That the signed-in person administers this policy today: any other
+    /// policy is not found, so nobody learns which exist.
+    async fn administers(&self, session: &Session, policy: &str) -> Result<(), Problem> {
         let all = self
             .ask(Question::Policies {
                 party: session.party.clone(),
@@ -1513,6 +1519,14 @@ impl AppState {
         if !administers {
             return Err(Problem::not_found());
         }
+        Ok(())
+    }
+
+    /// The group service's scheme on this policy, once it is clear the
+    /// signed-in person administers the policy today. Any other policy, or
+    /// one with no scheme, is not found, so nobody learns which exist.
+    async fn administered_scheme(&self, session: &Session, policy: &str) -> Result<String, Problem> {
+        self.administers(session, policy).await?;
         let (status, answer) = self.group()?.ask(crate::group::scheme_of(policy)).await.map_err(group_down)?;
         match (status, crate::group::named_scheme(&answer)) {
             (200, Some(scheme)) => Ok(scheme),
@@ -1585,7 +1599,91 @@ async fn group_command(State(s): State<Shared>, headers: HeaderMap, method: Meth
     let sent: Value = parse(&body)?;
     let scheme = s.administered_scheme(&session, &policy).await?;
     let command = crate::group::command(&scheme, &sent).map_err(Problem::bad_request)?;
+    if let Some(file) = command["approve_file"]["file"].as_str() {
+        s.second_administrator(&session, &policy, &scheme, file).await?;
+    }
     grouped(s.group()?.command(&key, &session.party.0, command).await)
+}
+
+impl AppState {
+    /// Who administers the scheme on this policy and which kinds of change
+    /// need a second administrator.
+    async fn administration(&self, policy: &str) -> Result<Value, Problem> {
+        self.ask(Question::SchemeAdministration {
+            policy: PolicyId::from(policy),
+        })
+        .await
+    }
+
+    /// A file the signed-in administrator sent themselves, holding a kind of
+    /// change the employer asked a second administrator to approve, waits
+    /// for someone else.
+    async fn second_administrator(&self, session: &Session, policy: &str, scheme: &str, file: &str) -> Result<(), Problem> {
+        let question = json!({ "ask": "file", "scheme": scheme, "file": file });
+        let (status, found) = self.group()?.ask(question).await.map_err(group_down)?;
+        if status != 200 || found["uploaded_by"] != session.party.0.as_str() {
+            return Ok(());
+        }
+        let kinds = self.administration(policy).await?;
+        let needs = crate::group::needs_second_admin(&found, &kinds["second_admin"]);
+        if needs.is_empty() {
+            return Ok(());
+        }
+        let words: Vec<&str> = needs.iter().map(|k| crate::group::change_words(k)).collect();
+        Err(Problem::new(
+            StatusCode::CONFLICT,
+            "second_administrator",
+            format!(
+                "another administrator must approve this file: your scheme asks a second administrator to approve {}",
+                words.join(" and ")
+            ),
+        ))
+    }
+}
+
+/// The scheme's administrators and which changes need a second one, for
+/// an administrator of it.
+async fn scheme_admins(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(policy): Path<String>) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    s.administers(&session, &policy).await?;
+    let mut answer = s.administration(&policy).await?;
+    answer["you"] = json!(session.party);
+    ok(answer)
+}
+
+/// An administrator removes a member or changes a salary by hand. The
+/// change becomes a change file of its own on the group service, which
+/// refuses it, naming the member, if it does not fit the membership. It is
+/// approved at once unless the employer asked a second administrator to
+/// approve that kind of change, or the scheme's terms ask one for every
+/// file; then it waits for a colleague's approval.
+async fn group_member_change(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(policy): Path<String>, body: Bytes) -> Answer {
+    let session = s.customer(&headers, &method, &uri, &body).await?;
+    let key = key(&headers, &session.party.0)?;
+    let sent: Value = parse(&body)?;
+    let scheme = s.administered_scheme(&session, &policy).await?;
+    let (kind, row) = crate::group::entered_change(&sent).map_err(Problem::bad_request)?;
+    let kinds = s.administration(&policy).await?;
+    let second = kinds["second_admin"].as_array().is_some_and(|k| k.iter().any(|k| k == kind));
+    let file = crate::group::entered_file(&key);
+    let group = s.group()?;
+    let enter = json!({ "enter_changes": { "scheme": scheme, "file": file, "rows": [row], "second_approver": second } });
+    let (status, body) = group.command(&key, &session.party.0, enter).await.map_err(group_down)?;
+    if status != 200 {
+        return grouped(Ok((status, body)));
+    }
+    if second {
+        let why = format!("your scheme asks another administrator to approve {}", crate::group::change_words(kind));
+        return ok(json!({ "file": file, "status": "awaiting_approval", "why": why }));
+    }
+    // Approved at once, as the person who entered it; where the scheme's own
+    // terms want someone else, or anything else stops it, it waits and says why.
+    let approve = json!({ "approve_file": { "scheme": scheme, "file": file } });
+    let (status, refused) = group.command(&format!("{key}:approve"), &session.party.0, approve).await.map_err(group_down)?;
+    if status == 200 {
+        return ok(json!({ "file": file, "status": "approved" }));
+    }
+    ok(json!({ "file": file, "status": "awaiting_approval", "why": refused["error"]["message"] }))
 }
 
 // --- the group console, for group administration staff ---
@@ -1644,12 +1742,79 @@ async fn group_staff_question(
     Path(name): Path<String>,
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Answer {
-    let (_, standing) = s.group_standing(&headers, &method, &uri, b"").await?;
+    let (session, standing) = s.group_standing(&headers, &method, &uri, b"").await?;
     if name == "me" {
         return ok(standing);
     }
+    // A policy is known to people by its number: the scheme on it is found from either.
+    let mut q = q;
+    if let Some(text) = q.get("policy").filter(|_| name == "scheme_of").cloned() {
+        if let Some(policy) = s.ask(Question::PolicyNamed { text }).await?["policy"].as_str() {
+            q.insert("policy".to_string(), policy.to_string());
+        }
+    }
     let question = crate::group::staff_question(&name, |f| q.get(f).cloned()).map_err(Problem::bad_request)?;
-    group_staff_answer(s.group()?.ask(question).await)
+    let answered = s.group()?.ask(question).await;
+    match answered {
+        Ok((200, found)) if name == "possible_match" => ok(s.candidates(&session, q.get("case").cloned(), found).await),
+        other => group_staff_answer(other),
+    }
+}
+
+impl AppState {
+    /// The people a member might be, by name and birth date, so that staff
+    /// can judge them: each read from the customer master as a search is,
+    /// asked of the four questions under the case in hand and logged. One
+    /// closed to this person, or a master that cannot answer, stays a
+    /// reference.
+    async fn candidates(&self, session: &Session, case: Option<String>, mut found: Value) -> Value {
+        use crate::customers::Desk;
+        let parties: Vec<PartyId> = found["candidates"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(PartyId::from)
+            .collect();
+        let mut people = Vec::new();
+        for party in parties {
+            let why = Why {
+                case: case.clone(),
+                scope: None,
+            };
+            let open = self
+                .may_act(
+                    session,
+                    staff_actions::FIND_CUSTOMER,
+                    DataClass::Personal,
+                    format!("party:{}", party.0),
+                    Some(party.clone()),
+                    why,
+                )
+                .await;
+            let record = match (&open, &self.master) {
+                (Ok(()), Some(master)) => master
+                    .desk(
+                        &session.party,
+                        Desk::Read {
+                            party: party.clone(),
+                            query: String::new(),
+                        },
+                    )
+                    .await
+                    .ok(),
+                _ => None,
+            };
+            let read = match (open, record) {
+                (Err(_), _) => json!({ "party": party, "closed": true }),
+                (Ok(()), Some((200, record))) => crate::find::person(&party, &record),
+                _ => json!({ "party": party }),
+            };
+            people.push(read);
+        }
+        found["candidates"] = json!(people);
+        found
+    }
 }
 
 /// A command to the group service as the member of staff signed in, under
@@ -1694,7 +1859,13 @@ async fn group_reoffer(State(s): State<Shared>, headers: HeaderMap, method: Meth
 /// who has left: what they may take up, and by when.
 async fn my_continuations(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
     let session = s.customer(&headers, &method, &uri, b"").await?;
-    grouped(s.group()?.ask(crate::group::member_offers(&session.party.0)).await)
+    let (status, mut offers) = s.group()?.ask(crate::group::member_offers(&session.party.0)).await.map_err(group_down)?;
+    // Each scheme as the member knows it: by its number.
+    for offer in offers.as_array_mut().into_iter().flatten() {
+        let text = offer["policy"].as_str().unwrap_or_default().to_string();
+        offer["number"] = s.ask(Question::PolicyNamed { text }).await?["number"].clone();
+    }
+    grouped(Ok((status, offers)))
 }
 
 #[derive(Deserialize)]
@@ -1714,7 +1885,8 @@ async fn claim_membership(State(s): State<Shared>, headers: HeaderMap, method: M
         return Err(device_required("claiming a scheme membership"));
     }
     let key = key(&headers, &session.party.0)?;
-    let claim: Claim = parse(&body)?;
+    let mut claim: Claim = parse(&body)?;
+    claim.scheme = s.scheme_named(&claim.scheme).await?;
     let master = s.master.as_ref().ok_or_else(|| {
         Problem::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1762,8 +1934,25 @@ async fn claim_membership(State(s): State<Shared>, headers: HeaderMap, method: M
         _ => Err(Problem::new(
             StatusCode::NOT_FOUND,
             "no_such_member",
-            "no member of that scheme has that employee ID and your birth date",
+            "we could not find you on that scheme: check the scheme number and your employee ID with your employer, and that the birth date we hold for you is right",
         )),
+    }
+}
+
+impl AppState {
+    /// The group service's scheme a member names: the scheme number their
+    /// employer gave them (the policy's number) or its reference. Anything
+    /// that names no policy is passed on as it was typed.
+    async fn scheme_named(&self, text: &str) -> Result<String, Problem> {
+        let named = self.ask(Question::PolicyNamed { text: text.to_string() }).await?;
+        let Some(policy) = named["policy"].as_str() else {
+            return Ok(text.to_string());
+        };
+        let (status, answer) = self.group()?.ask(crate::group::scheme_of(policy)).await.map_err(group_down)?;
+        Ok(match (status, crate::group::named_scheme(&answer)) {
+            (200, Some(scheme)) => scheme,
+            _ => text.to_string(),
+        })
     }
 }
 
@@ -4425,7 +4614,9 @@ pub fn router(state: Shared) -> Router {
         .route("/app/v1/policies/{policy}/claims", get(policy_claims))
         .route("/adviser/v1/replacements/dispute", post(adviser_dispute))
         .route("/employer/v1/schemes", get(schemes))
+        .route("/employer/v1/schemes/{policy}/admins", get(scheme_admins))
         .route("/employer/v1/schemes/{policy}/admins/{party}", put(scheme_admin))
+        .route("/employer/v1/schemes/{policy}/group/changes", post(group_member_change))
         .route("/employer/v1/schemes/{policy}/second-admin", put(scheme_second_admin))
         .route("/employer/v1/schemes/{policy}/group/commands", post(group_command))
         .route(
