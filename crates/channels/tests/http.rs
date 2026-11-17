@@ -2585,6 +2585,23 @@ async fn the_claims_console() {
         work["view"]["definitions"].is_array() && work["view"]["decision_definitions"].is_object(),
         "{work}"
     );
+    // The payee is picked from the payments register, never typed: the portal fills in who it is
+    // and the checks it passed, and refuses a payee that does not fit (F-11-1).
+    let (status, payees) = ask("sub-cl1", "payees?text=party-p1").await;
+    assert_eq!(
+        (status, &payees["rows"][0]["payee"], &payees["rows"][0]["ending"]),
+        (StatusCode::OK, &json!("p1"), &json!("4567")),
+        "{payees}"
+    );
+    let verify = |kind: &str, payee: &str| json!({ "verify_payee": { "claim": "c-1", "account_ref": payee, "kind": kind } });
+    let (status, refused) = tell("sub-cl1", "paying the claimant", verify("estate", "p1")).await;
+    assert_eq!((status, &refused["title"]), (StatusCode::CONFLICT, &json!("payee_not_payable")), "{refused}");
+    let (status, refused) = tell("sub-cl1", "paying the claimant", verify("beneficiary", "p-nobody")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    let (status, done) = tell("sub-cl1", "paying the claimant", verify("beneficiary", "p1")).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let (_, work) = ask("sub-cl1", "work?claim=c-1").await;
+    assert_eq!(work["view"]["payee"][0], "party-p1", "{work}");
     // Investigation cases are answered for whoever signed in, gathered from every partition.
     let (status, cases) = ask("sub-cl1", "cases").await;
     assert_eq!((status, cases["rows"].is_array()), (StatusCode::OK, true), "{cases}");
@@ -7001,4 +7018,48 @@ fn servicing_requests_become_the_core_commands_they_name() {
     cared["route_to_person"] = json!(true);
     assert!(!carried_by_sweep(&cared));
     assert!(!carried_by_sweep(&request("surrender", json!({}))));
+}
+
+/// Purpose: a claim's payee is accepted only as a payee the payments register
+/// holds that passed the bank's name check, was confirmed by a second payee
+/// maintainer and screened clear, and whose kind fits how the claim pays it;
+/// the party, name check and screening the claim records come from that record,
+/// whatever the page sent.
+/// Why it matters: found by the scenario run (SCN-11, F-11-1, a blocker). An
+/// assessor could type any party and any "match" or "clear" references and
+/// release a claim to them; the fraud control rested on her say-so.
+#[test]
+fn a_claims_payee_comes_from_the_payments_register() {
+    use ic_channels::claims::payee_from_register;
+    let good = json!({ "party": "party-p1", "kind": "beneficiary", "name_check": "match", "confirmed_by": "pat", "screened_clear": true, "closed": false });
+    let fields = |kind: &str, id: &str| {
+        json!({ "claim": "c-1", "kind": kind, "account_ref": id, "party": "typed", "name_check_ref": "match", "screening_ref": "clear" })
+            .as_object()
+            .unwrap()
+            .clone()
+    };
+    let mut ok = fields("beneficiary", " p1 ");
+    payee_from_register(&mut ok, &good).unwrap();
+    assert_eq!((&ok["party"], &ok["account_ref"]), (&json!("party-p1"), &json!("p1")));
+    assert_eq!(ok["name_check_ref"], "payments:p1:name_check:match:confirmed_by:pat");
+    assert_eq!(ok["screening_ref"], "payments:p1:screened_clear");
+    let with = |key: &str, value: Value| {
+        let mut p = good.clone();
+        p[key] = value;
+        p
+    };
+    let refused = |kind: &str, id: &str, payee: &Value| payee_from_register(&mut fields(kind, id), payee).unwrap_err();
+    assert!(refused("beneficiary", "", &good).contains("pick the payee from the payments register"));
+    assert!(refused("beneficiary", "p9", &Value::Null).contains("there is no payee p9 in payments"));
+    assert!(refused("beneficiary", "p1", &with("closed", json!(true))).contains("is closed"));
+    assert!(refused("beneficiary", "p1", &with("name_check", json!("no_match"))).contains("name check"));
+    assert!(refused("beneficiary", "p1", &with("confirmed_by", Value::Null)).contains("second payee maintainer"));
+    assert!(refused("beneficiary", "p1", &with("screened_clear", Value::Null)).contains("screened clear"));
+    assert!(refused("estate", "p1", &good).contains("does not pay a claim's estate"));
+    assert!(refused("provider", "p1", &good).contains("does not pay a claim's provider"));
+    assert!(refused("policyholder", "p1", &with("kind", json!("reinsurer"))).contains("as a reinsurer account"));
+    let mut estate = fields("estate", "e1");
+    payee_from_register(&mut estate, &with("kind", json!("estate"))).unwrap();
+    let mut provider = fields("provider", "h1");
+    payee_from_register(&mut provider, &with("kind", json!("provider"))).unwrap();
 }

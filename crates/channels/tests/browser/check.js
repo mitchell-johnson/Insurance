@@ -663,12 +663,13 @@ const sees = async (page, text) => {
     await say(p, "Treasury reconciles the bank account, then approves the run");
     await tab(p, "Reconciliation");
     await p.fill("#rec-account", "anz-sf1-claims"); await p.locator("#rec-form button").click();
-    await sees(p, "closing 10000000.00");
+    await sees(p, "closing NZ$10,000,000.00");
     await tab(p, "Runs");
     await p.locator("#runs").getByText("rb1").waitFor();
     await p.locator("#runs").getByRole("button", { name: "Open" }).first().click();
     await p.getByRole("button", { name: "Approve" }).click();
     await p.locator("#run-msg").getByText("Done: approve run.").waitFor();
+    if (await p.locator("#run-actions").getByRole("button", { name: "Approve" }).count()) throw new Error("an approved run still offers approval");
     await tab(p, "Payees and refunds");
     await p.fill("#party-id", "party-p1"); await p.locator("#party-form button").click();
     await p.locator("#party").getByText("p1").first().waitFor();

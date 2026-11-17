@@ -311,6 +311,15 @@ impl World {
         }
     }
 
+    /// Apply a command that must be refused, and return what the person is told.
+    pub fn told(&mut self, command: Command) -> String {
+        let name = command.name();
+        match self.run(command) {
+            Err(e) => e.message,
+            Ok(()) => panic!("{name} was accepted"),
+        }
+    }
+
     /// Apply a command that must be refused, and return the code. A refused
     /// command must leave nothing behind: no state, no instruction, no notice.
     pub fn refused(&mut self, command: Command) -> String {

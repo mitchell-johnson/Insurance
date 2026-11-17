@@ -74,7 +74,7 @@ let me = {};
 const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
 const send = (command) => api(R, "POST", BASE + "commands", command);
-const money = (minor) => minor == null ? "" : (Number(minor) / 100).toFixed(2);
+const money = (minor) => minor == null ? "" : portal.money(minor);
 const has = (role) => (me.roles || []).includes(role);
 const status = (s) => typeof s === "object" && s ? Object.keys(s).map((k) => `${words(k)}: ${words(s[k])}`).join(", ") : words(s);
 const button = (label, out, act) => h("button", { class: "quiet", type: "button", on: { click: run(out, act) } }, label);
@@ -105,27 +105,42 @@ $("prep").addEventListener("submit", run($("r-msg"), async () => {
 async function showRun() {
   const id = $("run-id").value.trim();
   const [r, totals] = await Promise.all([ask("run", { run: id }), ask("control_totals", { run: id })]);
-  put($("run"), h("p", {}, `${words(r.run_type)} from ${r.fund}, value date ${r.value_date}${r.urgent ? ", urgent" : ""}: ${status(r.status)}. Prepared by ${[...r.makers].join(", ")}${r.approvers.length ? `; approved by ${r.approvers.join(", ")}` : ""}.`),
-    table(["Item", "Who", "Amount", "Status"], Object.entries(r.items).map(([i, it]) => [i, portal.text(it.counterparty), money(it.amount_minor),
-      it.status && it.status.held && holdWords[it.status.held] ? `held: ${holdWords[it.status.held]}` : status(it.status)])),
-    table(["Unsent", "At the bank", "Rejected", "Awaiting settlement", "Settled", "Returned"], [[money(totals.unsent), money(totals.awaiting_acknowledgement), money(totals.rejected), money(totals.awaiting_settlement), money(totals.settled), money(totals.returned)]]));
   const out = $("run-msg");
+  const st = typeof r.status === "string" ? r.status : Object.keys(r.status || {})[0];
+  const mine = (r.makers || []).includes(me.staff);
+  const holdsOf = (it) => it.status && it.status.held ? (it.holds && it.holds.length ? it.holds : [it.status.held]) : [];
+  // A hold is released by hand only for a person's judgement: a possible duplicate (an approver), an amount over the item limit (treasury).
+  const releasable = (it) => !mine && st === "checked" && holdsOf(it).some((x) => (x === "possible_duplicate" && has("approver")) || (x === "over_item_limit" && has("treasury")));
+  runHeld = Object.entries(r.items).filter(([, it]) => holdsOf(it).length).map(([i, it]) => ({ value: i, hint: [money(it.amount_minor), holdsOf(it).map(holdText).join("; ")].join(" · ") }));
+  put($("run"), h("p", {}, `${words(r.run_type)} from ${r.fund}, value date ${r.value_date}${r.urgent ? ", urgent" : ""}: ${status(r.status)}. Prepared by ${[...r.makers].join(", ")}${r.approvers.length ? `; approved by ${r.approvers.join(", ")}` : ""}.`),
+    table(["Item", "Who", "Amount", "Status", ""], Object.entries(r.items).map(([i, it]) => [i, portal.text(it.counterparty), money(it.amount_minor),
+      holdsOf(it).length ? `held: ${holdsOf(it).map(holdText).join("; ")}` : status(it.status),
+      releasable(it) ? button("Release the hold", out, async () => { await send({ type: "release_item", run: id, item: i }); await Promise.all([showRun(), showRuns()]); return `Released the hold on ${i}.`; }) : ""])),
+    table(["Run total", "Unsent", "At the bank", "Rejected", "Acknowledged", "Awaiting settlement", "Settled", "Returned"], [[money(Object.values(r.items).reduce((sum, it) => sum + Number(it.amount_minor), 0)), money(totals.unsent), money(totals.awaiting_acknowledgement), money(totals.rejected), money(totals.acknowledged), money(totals.awaiting_settlement), money(totals.settled), money(totals.returned)]]),
+    h("p", { class: "muted" }, "What went to the bank is what it acknowledged plus what it rejected. A rejected or returned item's reference is spent: a claim payment is released again by claims, anything else is added to a new run."));
   const act = (type) => async () => { await send({ type, run: id }); await Promise.all([showRun(), showRuns()]); return `Done: ${words(type)}.`; };
+  const open = st === "prepared" || st === "checked";
+  const unpaid = Object.values(r.items).some((it) => it.status === "pending");
   put($("run-actions"), [
-    has("maker") ? button("Check", out, act("check_run")) : null,
-    has("approver") ? button("Approve", out, act("approve_run")) : null,
-    has("maker") ? button("Cancel", out, act("cancel_run")) : null,
-    has("maker") ? button("Close", out, act("close_run")) : null,
-    has("maker") ? button("Send what is unpaid again", out, async () => { const value_date = await portal.ask({ title: "Send what is unpaid again", text: "Everything in this run the bank has not paid goes as a new submission.", label: "Value date", type: "date", confirm: "Send again" }); if (!value_date) return null; await send({ type: "resubmit", run: id, value_date }); await showRun(); return "A new submission is queued."; }) : null,
+    has("maker") && open ? button("Check", out, act("check_run")) : null,
+    has("approver") && st === "checked" && !mine && !(r.approvers || []).includes(me.staff) ? button("Approve", out, act("approve_run")) : null,
+    has("maker") && open ? button("Cancel", out, act("cancel_run")) : null,
+    has("maker") && st === "approved" ? button("Close", out, act("close_run")) : null,
+    has("maker") && st === "approved" && unpaid ? button("Send what is unpaid again", out, async () => { const value_date = await portal.ask({ title: "Send what is unpaid again", text: "Everything in this run the bank has not paid goes as a new submission.", label: "Value date", type: "date", confirm: "Send again" }); if (!value_date) return null; await send({ type: "resubmit", run: id, value_date }); await showRun(); return "A new submission is queued."; }) : null,
   ].filter(Boolean));
 }
 $("run-form").addEventListener("submit", run($("run-msg"), showRun));
 // A hold that is the customer's own (SVC-022) reads as such; an unconfirmed one clears when the run is checked again.
-const holdWords = { customer_hold: "the customer's own hold on money going out", hold_unconfirmed: "the customer's hold not yet confirmed: check the run again" };
+const holdWords = { customer_hold: "the customer's own hold on money going out", hold_unconfirmed: "the customer's hold not yet confirmed: check the run again",
+  over_item_limit: "over the route's limit for one item: treasury releases it once funded", possible_duplicate: "a possible duplicate: an approver who did not prepare the run releases it, or the maker takes it out",
+  payee_not_confirmed: "payee not confirmed: a second payee maintainer confirms it", payee_not_screened: "payee not screened yet", payee_needs_legal_approval: "payee needs legal's approval",
+  payee_cooling_off: "payee cooling off after new details: check again once it ends" };
+const holdText = (x) => holdWords[x] || words(x);
+let runHeld = [];
 let openRuns = [];
 async function showRuns() {
   const runs = openRuns = await ask("open_runs");
-  put($("runs"), runs.length ? table(["Run", "Type", "Value date", "Status", "Items", "Held", "Total", "Prepared by", ""], runs.map((r) => [r.run, words(r.run_type), r.value_date, status(r.status), r.items, r.held, money(r.total_minor),
+  put($("runs"), runs.length ? table(["Run", "Type", "Value date", "Status", "Items", "Held", "Total to pay (less rejected and returned)", "Prepared by", ""], runs.map((r) => [r.run, words(r.run_type), r.value_date, status(r.status), r.items, r.held, money(r.total_minor),
     (r.makers || []).join(", "), button("Open", $("runs-msg"), async () => { $("run-id").value = r.run; await showRun(); return ""; })])) : h("p", { class: "muted" }, "No run is open."));
 }
 let openExceptions = [];
@@ -227,7 +242,7 @@ const ACTIONS = {
   add_run_items: { label: "Add an item to a run", can: () => has("maker"), fields: [["run", "Run", "text"], ["item", "Item reference", "reference", "ITM"], ["source", "What it is for", "text"], ["to", "Pays", "select", ["payee", "authority"]], ["who", "Payee or authority", "text"], ["amount_minor", "Amount", "money"], ["policy", "Policy (optional)", "optional"]],
     build: (v) => ({ type: "add_run_items", run: v.run, items: [{ item: v.item, source: v.source, counterparty: { [v.to]: v.who }, amount_minor: v.amount_minor, ...(v.policy ? { policy: v.policy } : {}) }] }) },
   remove_run_item: { label: "Take an item out of a run", can: () => has("maker"), fields: [["run", "Run", "text"], ["item", "Item", "text"]] },
-  release_item: { label: "Release a held item", can: () => has("maker"), fields: [["run", "Run", "text"], ["item", "Item", "text"]] },
+  release_item: { label: "Release a held item", can: () => has("approver") || has("treasury"), note: "An approver releases a possible duplicate; treasury releases an amount over the item limit once it is funded. Neither may have prepared the run.", fields: [["run", "Run", "text"], ["item", "Item", "text"]] },
   redirect_route: { label: "Send a run type through the second bank", can: () => has("connectivity_admin"), fields: [["run_type", "Run type", "select", RUN_TYPES], ["secondary", "Through the second bank", "bool"]] },
   request_refund: { label: "Request a refund", can: () => has("maker"), fields: [["refund", "Refund reference", "reference", "RFD"], ["policy", "Policy", "text"], ["amount_minor", "Amount", "money"], ["currency", "Currency", "select", ["NZD", "AUD", "USD"]], ["to", "Paid to", "select", ["source", "payee"]], ["who", "The authority it came from, or the payee", "text"]],
     build: (v) => ({ type: "request_refund", refund: v.refund, policy: v.policy, amount_minor: v.amount_minor, currency: v.currency, destination: v.to === "source" ? { source: { authority: v.who } } : { payee: { payee: v.who } } }) },
@@ -239,7 +254,8 @@ const ACTIONS = {
   activate_config: { label: "Activate a connectivity configuration", can: () => has("connectivity_admin"), fields: [["config", "The configuration, as JSON", "json"]], build: (v) => ({ type: "activate_config", ...v.config }) },
 };
 let acts = null;
-function showActs() { acts = portal.actions($("acts"), ACTIONS, { id: "pa", send, after: () => Promise.all([showRuns(), showExceptions(), showNotices(), showMisdirections()]) }); }
+// Runs and held items are picked from what is open, never typed.
+function showActs() { acts = portal.actions($("acts"), ACTIONS, { id: "pa", send, pickers: { run: async () => runItems(), item: async () => runHeld }, after: () => Promise.all([showRuns(), showExceptions(), showNotices(), showMisdirections()]) }); }
 async function showNotices() {
   const held = me.roles || [];
   const lists = await Promise.all(held.map((role) => ask("notices", { role }).then((n) => (n || []).map((x) => ({ role, ...(Array.isArray(x) ? { id: x[0], ...x[1] } : x) })))));

@@ -116,7 +116,7 @@ fn the_maker_never_approves_their_own_run() {
         by: "ari".to_string(),
         approved: true
     }));
-    assert_eq!(desk.code(&ben(), Command::ApproveRun { run: run("r1") }), "wrong_state");
+    assert_eq!(desk.code(&ben(), Command::ApproveRun { run: run("r1") }), "already_approved");
 }
 
 /// Purpose: an ex gratia run needs two different approvers, and the same
@@ -190,7 +190,10 @@ fn the_check_holds_what_must_not_be_paid() {
     };
     assert_eq!(desk.code(&mia(), release("i3")), "not_permitted");
     assert_eq!(desk.code(&person("mia", &[ic_payments::Role::Approver]), release("i3")), "same_person");
-    assert_eq!(desk.code(&ari(), release("i2")), "not_releasable");
+    // An amount over the item limit is treasury's to let through, not an approver's.
+    assert_eq!(desk.code(&ari(), release("i2")), "not_permitted");
+    assert_eq!(desk.code(&ari(), release("i1")), "not_releasable");
+    assert_eq!(desk.code(&ari(), release("i4")), "not_releasable");
     assert_eq!(desk.code(&ari(), release("zz")), "unknown_item");
     desk.ok(&ari(), release("i3"));
     assert_eq!(status(&desk, "i3"), ItemStatus::Pending);
@@ -1383,4 +1386,128 @@ fn a_run_prepared_after_the_cutoff_goes_next_window_and_the_date_is_known() {
     };
     desk.ok(&svc(), Command::OfferPayment { waiting: Box::new(waiting) });
     assert_eq!(expected(&desk, "po-1"), json!({"payment": "po-1", "status": "waiting"}));
+}
+
+/// Purpose: an item held for more than one reason shows every reason at the
+/// check; an amount above the route's item limit is let through by treasury
+/// (not an approver, not the maker), and the item stays held for whatever
+/// else holds it; an approval refused for held items names each item, its
+/// payee, its amount in dollars, why it is held and who clears it; a second
+/// approval of an approved run says it is approved already, by whom.
+/// Why it matters: found by the scenario run. In SCN-12 (F-12-4) a $499,883.13
+/// death claim above the $100,000 item limit showed only "payee cooling off"
+/// and had no honest way through; in SCN-15 (F-15-1) nobody could release a
+/// hold from the screens; in SCN-16 (F-SCN16-1, F-SCN16-2) the approver was
+/// told "held items are released or removed" without which, and a repeat
+/// approval read as if the run had never been checked.
+#[test]
+fn every_hold_is_named_and_treasury_lets_a_large_claim_through() {
+    let mut desk = Desk::new();
+    desk.payee("estate", PayeeKind::Customer, "0101234567");
+    desk.payee("small", PayeeKind::Customer, "0102222222");
+    desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 18));
+    desk.add("r1", vec![claim("big", "estate", "pol-1", 499_883_13), pay("tiny", "small", 5_00)]);
+    // The estate's account changed: it is cooling off as well as over the limit.
+    desk.ok(
+        &pam(),
+        Command::ChangePayeeAccount {
+            payee: "estate".to_string(),
+            account: account("estate", "0103333333"),
+            name_check: NameCheck::Match,
+        },
+    );
+    desk.ok(&pat(), Command::ConfirmPayee { payee: "estate".to_string() });
+    desk.ok(
+        &svc(),
+        Command::ScreenPayee {
+            payee: "estate".to_string(),
+            clear: true,
+        },
+    );
+    desk.ok(&mia(), Command::CheckRun { run: run("r1") });
+    let item = |desk: &Desk| desk.state.runs["r1"].items["big"].clone();
+    assert_eq!(item(&desk).holds, vec!["payee_cooling_off".to_string(), "over_item_limit".to_string()]);
+    assert_eq!(item(&desk).status, ItemStatus::Held("payee_cooling_off".to_string()));
+
+    let refused = desk.send(&ari(), Command::ApproveRun { run: run("r1") }).unwrap_err();
+    assert_eq!(refused.code, "items_held");
+    assert!(refused.message.contains("big to payee estate, $499,883.13"), "{}", refused.message);
+    assert!(
+        refused.message.contains("payee cooling off (the payee's cooling-off period ends"),
+        "{}",
+        refused.message
+    );
+    assert!(
+        refused.message.contains("over the route's limit for one item (treasury releases it"),
+        "{}",
+        refused.message
+    );
+
+    let release = Command::ReleaseItem {
+        run: run("r1"),
+        item: "big".to_string(),
+    };
+    let tia = person("tia", &[ic_payments::Role::Treasury]);
+    assert_eq!(desk.code(&ari(), release.clone()), "not_permitted");
+    assert_eq!(
+        desk.code(&person("mia", &[ic_payments::Role::Maker, ic_payments::Role::Treasury]), release.clone()),
+        "same_person"
+    );
+    desk.ok(&tia, release.clone());
+    assert_eq!(item(&desk).limit_released_by.as_deref(), Some("tia"));
+    // Still cooling off: only the limit was treasury's to release.
+    assert_eq!(item(&desk).status, ItemStatus::Held("payee_cooling_off".to_string()));
+    let again = desk.send(&tia, release.clone()).unwrap_err();
+    assert_eq!(again.code, "not_releasable");
+    assert!(again.message.contains("big is held for payee cooling off"), "{}", again.message);
+
+    // Once the cooling off has passed, the check lets it go and remembers treasury's release.
+    desk.now += chrono::Duration::hours(25);
+    desk.ok(&mia(), Command::CheckRun { run: run("r1") });
+    assert_eq!(item(&desk).status, ItemStatus::Pending);
+    assert!(item(&desk).holds.is_empty());
+    desk.ok(&ari(), Command::ApproveRun { run: run("r1") });
+    let twice = desk.send(&ben(), Command::ApproveRun { run: run("r1") }).unwrap_err();
+    assert_eq!(twice.code, "already_approved");
+    assert_eq!(twice.message, "run r1 is already approved by ari; its submissions are r1-1");
+    // A hold is released on a checked run only.
+    assert_eq!(desk.code(&tia, release), "not_releasable");
+}
+
+/// Purpose: a run that is not checked, or is cancelled, is refused approval
+/// with where it stands and what to do; an item held before every reason
+/// was kept still shows its one reason; and an over-limit run total reads in
+/// dollars.
+/// Why it matters: found by the scenario run (SCN-16, F-SCN16-2): "a run is
+/// approved after it has been checked" was the answer whatever the run's
+/// state, so the approver could not tell what was wrong.
+#[test]
+fn an_approval_refusal_says_where_the_run_stands() {
+    let mut desk = Desk::new();
+    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.prepare("r1", RunType::BenefitPayments, d(2027, 11, 15));
+    desk.add("r1", vec![pay("i1", "p1", 100_00)]);
+    let mut old = desk.state.runs["r1"].items["i1"].clone();
+    let prepared = desk.send(&ari(), Command::ApproveRun { run: run("r1") }).unwrap_err();
+    assert_eq!(
+        (prepared.code.as_str(), prepared.message.contains("the maker checks it first")),
+        ("wrong_state", true)
+    );
+    desk.ok(&mia(), Command::CancelRun { run: run("r1") });
+    let cancelled = desk.send(&ari(), Command::ApproveRun { run: run("r1") }).unwrap_err();
+    assert!(cancelled.message.contains("cancelled"), "{}", cancelled.message);
+
+    old.status = ItemStatus::Held("payee_not_screened".to_string());
+    old.holds.clear();
+    assert_eq!(old.holds_now(), vec!["payee_not_screened".to_string()]);
+    old.holds = vec!["a".to_string(), "b".to_string()];
+    assert_eq!(old.holds_now().len(), 2);
+    old.status = ItemStatus::Pending;
+    assert!(old.holds_now().is_empty());
+
+    desk.prepare("r2", RunType::BenefitPayments, d(2027, 11, 15));
+    desk.add("r2", (0..6).map(|n| pay(&format!("j{n}"), "p1", 99_000_00 + n)).collect());
+    let over = desk.send(&mia(), Command::CheckRun { run: run("r2") }).unwrap_err();
+    assert_eq!(over.code, "over_run_limit");
+    assert!(over.message.contains("over its limit of $500,000.00"), "{}", over.message);
 }

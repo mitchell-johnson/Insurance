@@ -451,3 +451,50 @@ fn an_estate_or_liquidator_account_needs_legal_and_always_cools_off() {
         assert_eq!(desk.state.payees[id].blocked(desk.now + chrono::Duration::hours(24)), None);
     }
 }
+
+/// Purpose: an estate's account waits on legal's own console: registering
+/// it, or changing its account, raises a notice for legal naming the payee
+/// and what to do, and legal's approval closes it.
+/// Why it matters: found by the scenario run (SCN-12, F-12-3). The estate's
+/// payee was blocked "needs legal approval" while legal's console said
+/// "Nothing is waiting", so legal could find it only by typing the
+/// deceased's party reference.
+#[test]
+fn an_estate_account_waits_on_legals_worklist() {
+    let mut desk = Desk::new();
+    desk.ok(
+        &pam(),
+        Command::RegisterPayee {
+            payee: "estate".to_string(),
+            party: "party-late".to_string(),
+            kind: PayeeKind::Estate,
+            account: account("Executor", "0301234567"),
+            name_check: NameCheck::Match,
+        },
+    );
+    let open = |desk: &Desk| {
+        desk.state
+            .open_notices(Role::Legal)
+            .into_iter()
+            .map(|(_, n)| n.detail.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        open(&desk),
+        vec!["payee estate for party-late (estate) waits for legal's approval of its authority before it can be paid: open the payee and approve it"]
+    );
+    desk.ok(&lee(), Command::ApprovePayee { payee: "estate".to_string() });
+    assert!(open(&desk).is_empty());
+    desk.ok(
+        &pat(),
+        Command::ChangePayeeAccount {
+            payee: "estate".to_string(),
+            account: account("Executor", "0307654321"),
+            name_check: NameCheck::Match,
+        },
+    );
+    assert_eq!(open(&desk).len(), 1);
+    // An ordinary customer's account asks nothing of legal.
+    desk.payee("plain", PayeeKind::Customer, "0101234567");
+    assert_eq!(open(&desk).len(), 1);
+}

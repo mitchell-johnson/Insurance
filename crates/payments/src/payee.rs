@@ -105,8 +105,26 @@ impl PaymentsState {
                 foreign,
             },
         );
+        if kind.needs_legal() {
+            self.ask_legal(&id);
+        }
         tx.emit(Event::PayeeRegistered { payee: id, kind });
         Ok(())
+    }
+
+    /// Legal's worklist: an account for someone standing in for the person
+    /// owed waits for legal's approval, and legal is told so on its console.
+    fn ask_legal(&mut self, id: &str) {
+        let Some(p) = self.payees.get(id) else { return };
+        let detail = format!(
+            "payee {id} for {} ({}) waits for legal's approval of its authority before it can be paid: open the payee and approve it",
+            p.party,
+            serde_json::to_value(p.kind)
+                .ok()
+                .and_then(|k| k.as_str().map(str::to_string))
+                .unwrap_or_default()
+        );
+        self.raise_notice(Role::Legal, "payee_needs_legal_approval", &detail);
     }
 
     pub(crate) fn change_payee_account(&mut self, tx: &mut Tx<'_>, id: &str, account: AccountDetails, name_check: NameCheck) -> Result<(), Reject> {
@@ -126,6 +144,9 @@ impl PaymentsState {
         p.legal_approved_by = None;
         p.cooling_off_until = Some(until);
         p.suspect = false;
+        if p.kind.needs_legal() {
+            self.ask_legal(id);
+        }
         tx.emit(Event::PayeeAccountChanged {
             payee: id.to_string(),
             cooling_off_until: until,
@@ -166,6 +187,13 @@ impl PaymentsState {
             return Err(Reject::new("same_person", "the person who entered the details cannot approve them"));
         }
         p.legal_approved_by = Some(by.clone());
+        // The notice that asked for it is done with.
+        let asked = format!("payee {id} for ");
+        for n in self.notices.items.values_mut() {
+            if n.to == Role::Legal && n.closed.is_none() && n.subject == "payee_needs_legal_approval" && n.detail.starts_with(&asked) {
+                n.closed = Some((by.clone(), tx.now, "approved the payee".to_string()));
+            }
+        }
         tx.emit(Event::PayeeApproved { payee: id.to_string(), by });
         Ok(())
     }

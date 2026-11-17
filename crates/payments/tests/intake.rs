@@ -178,6 +178,46 @@ fn a_waiting_payment_is_paid_only_to_a_payee_that_is_certain() {
     assert_eq!(waiting(&desk), vec!["pay-1", "pay-2"]);
 }
 
+/// Purpose: a claim payment whose verified account is a payee here, of the
+/// party it is released to, goes to that payee even when the party has
+/// several; the payee search finds payees by reference, party or account
+/// name, shows only the account's last four digits and what blocks it, and
+/// leaves closed payees out.
+/// Why it matters: found by the scenario run (SCN-11, F-11-1). Claims'
+/// payee verification was the assessor's own typed references, and the
+/// waiting item named only the party, so a confirmed, screened payee could
+/// not be told apart from any other account of theirs. Claims now picks a
+/// payee from this register, and payments pays exactly that one.
+#[test]
+fn a_claim_payment_goes_to_the_payee_claims_picked_from_the_register() {
+    let mut desk = Desk::new();
+    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    desk.payee("p1-other", PayeeKind::Beneficiary, "02-0309-9999999-00");
+    // Both are the same party's.
+    desk.state.payees.get_mut("p1-other").unwrap().party = "party-p1".to_string();
+    let mut picked = released("pay-2", "party-p1", 200_00);
+    picked.account_ref = "p1-other".to_string();
+    desk.ok(&svc(), offer(picked));
+    desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
+    desk.ok(&mia(), take("r1", &["pay-2"]));
+    assert_eq!(
+        desk.state.runs["r1"].items["pay-2"].new.counterparty,
+        ic_payments::model::Counterparty::Payee("p1-other".to_string())
+    );
+
+    let found = answer(&desk.state, json!({"q": "find_payees", "text": "PARTY-P1"})).unwrap();
+    let rows = found.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        (rows[1]["payee"].as_str(), rows[1]["ending"].as_str(), &rows[1]["blocked"]),
+        (Some("p1-other"), Some("9900"), &json!(null))
+    );
+    desk.state.payees.get_mut("p1").unwrap().closed = true;
+    let found = answer(&desk.state, json!({"q": "find_payees", "text": "p1"})).unwrap();
+    assert_eq!(found.as_array().unwrap().len(), 1);
+    assert_eq!(answer(&desk.state, json!({"q": "find_payees", "text": "nobody"})).unwrap(), json!([]));
+}
+
 /// Purpose: a provider's evidence or rehabilitation cost that claims
 /// releases waits like a benefit, under its own reference and marked as a
 /// cost, for the provider's payee, with no account reference; other claims

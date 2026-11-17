@@ -305,3 +305,13 @@ Mitchell asked for every declared AIA benefit to work. The calls made, and why:
 - **Guaranteed rates are chosen per layer.** Each layer keeps the rate table version in force when it was priced. An increase is priced on the table of its own day, which is what the wording says.
 - **Cover for Life is made paid up instead of lapsing** only where every paying cover qualifies. Otherwise it lapses as before. Premium for the days ahead is credited first, then what is unpaid for the days already covered is written off as at a lapse. This posts under its own kind (`paid_up_arrears`), so the conduct return does not count it as a lapse.
 - **Medical Advancements and Enhancement Pass Back are shown in the cover check.** The facts list the later definition version beside the bound one, and the assessor applies whichever is more favourable. The claims decision records both.
+
+## A claim payment above the item limit (17 Nov 2026)
+
+The scenario run (SCN-12, F-12-4) released a $499,883.13 death benefit to an estate. The claims authority book let a senior assessor release it, and the lump sum claims route's limit for one item is $100,000. Payments could only hold it, and there was no honest way through: claims cannot split a payment, and the hold was hidden behind "payee cooling off".
+
+**What was chosen.** The item limit stays a hold, not a refusal, and treasury lets an item above it through once the money is there (`release_item` by someone holding `payments.treasury` who did not prepare the run). The run is then approved by its approvers as any other, under the run and day limits and the available-funds check. Each hold is recorded on the item (`limit_released_by`), and the check shows every hold an item has at once.
+
+**Why not raise the limit for claims, or split the payment.** A higher limit for one run type moves the line without adding a person at the moment a large sum leaves. Treasury already hears of large payments in advance (the pre-advice) and is the role that funds the account, so it is the natural second person. Splitting one benefit into items under the limit would defeat the limit and the duplicate check (several equal amounts to one account), and would put several payment references on one claim payment. The claims side is unchanged: what an assessor may release is the authority book's, and how money leaves is payments'.
+
+**What it costs.** A large claim waits for treasury as well as an approver. Treasury needs the payments console, with the release on its Act list.

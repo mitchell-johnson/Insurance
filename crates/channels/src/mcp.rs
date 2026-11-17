@@ -341,9 +341,9 @@ pub fn catalogue() -> Vec<Tool> {
             .query("`id` for complaint, running, subject_record, conduct_case; `party` for complaints_of; `from`, `to` (YYYY-MM-DD) for register and report."),
         tool("complaints_command", "Act on a complaint", S, M::POST, "/staff/v1/complaints/commands", "A command to the complaints module in a seat you hold.")
             .json(r#"{"as": "<seat>", "command": {...in that module's JSON}}"#),
-        tool("claims_question", "Ask the claims module", S, M::GET, "/staff/v1/claims/{question}", "A queue, a claim (the claimant's view), the work view of a claim, a policy's claim status, your cases, the book, the report, a remittance, or the definitions a cover can be bound to.")
-            .choose("question", vec!["me", "queue", "claim", "work", "policy", "cases", "book", "report", "remittance", "definitions"])
-            .query("`queue` for queue; `claim` for claim and work; `policy` for policy; `run` for remittance."),
+        tool("claims_question", "Ask the claims module", S, M::GET, "/staff/v1/claims/{question}", "A queue, a claim (the claimant's view), the work view of a claim, a policy's claim status, your cases, the book, the report, a remittance, the definitions a cover can be bound to, or the payments payees a claim may be paid to.")
+            .choose("question", vec!["me", "queue", "claim", "work", "policy", "cases", "book", "report", "remittance", "definitions", "payees"])
+            .query("`queue` for queue; `claim` for claim and work; `policy` for policy; `run` for remittance; `text` (part of a payee's reference, party or account name) for payees, which a claim's verify_payee then names as its account_ref."),
         tool("claims_definition", "A definition's wording", S, M::GET, "/staff/v1/claims/definitions/{id}/{version}", "The wording of one policy definition at one version, with its hash."),
         tool("claims_command", "Act on a claim", S, M::POST, "/staff/v1/claims/commands", "A command to the claims module: notify, record evidence, decide, pay, prepare and approve a run, and the rest. You are recorded as the actor.")
             .json(r#"{"purpose": "<why>", "partition"?: 0, "command": {...in the claims module's JSON}}"#),

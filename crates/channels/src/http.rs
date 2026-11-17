@@ -3001,6 +3001,16 @@ async fn claims_question(
     if name == "definitions" {
         return ok(json!({ "rows": s.wordings.list() }));
     }
+    // Payees a claim may be paid to are picked from the payments register.
+    if name == "payees" {
+        let text = fields.get("text").map(|t| t.trim().to_string()).unwrap_or_default();
+        let rows = s
+            .payments
+            .ask(json!({ "q": "find_payees", "text": text }))
+            .await
+            .map_err(|e| module_problem("payments", StatusCode::BAD_REQUEST, e))?;
+        return ok(json!({ "rows": rows }));
+    }
     let field = |f: &str| fields.get(f).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     let mut question = crate::claims::question(&name, field).map_err(Problem::bad_request)?;
     // A claim this person is conflicted on is never shown to them in a queue or a working view.
@@ -3097,7 +3107,17 @@ async fn claims_command(State(s): State<Shared>, headers: HeaderMap, method: Met
     }
     let session = s.claims_standing(&headers, &method, &uri, &body).await?;
     let key = key(&headers, &session.party.0)?;
-    let request: Body = parse(&body)?;
+    let mut request: Body = parse(&body)?;
+    // A payee is one the payments register holds, confirmed and screened, never typed references.
+    if let Some(fields) = request.command.get_mut("verify_payee").and_then(Value::as_object_mut) {
+        let id = fields.get("account_ref").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+        let payee = s
+            .payments
+            .ask(json!({ "q": "payee", "payee": id }))
+            .await
+            .map_err(|e| module_problem("payments", StatusCode::BAD_REQUEST, e))?;
+        crate::claims::payee_from_register(fields, &payee).map_err(|why| Problem::new(StatusCode::CONFLICT, "payee_not_payable", why))?;
+    }
     let (_, target, command) = crate::claims::command(&session.party, &request.purpose, request.partition, request.command).map_err(Problem::bad_request)?;
     let partition = match target {
         crate::claims::Target::Partition(p) if p < s.claims.count() => p,

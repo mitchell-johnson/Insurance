@@ -26,6 +26,50 @@ fn wrong_state(what: &str) -> Reject {
     Reject::new("wrong_state", what)
 }
 
+/// A hold in words.
+pub fn hold_words(hold: &str) -> String {
+    match hold {
+        "over_item_limit" => "the amount is over the route's limit for one item".to_string(),
+        "possible_duplicate" => "a possible duplicate of another item to the same account".to_string(),
+        "customer_hold" => "the customer's own hold on money going out".to_string(),
+        other => other.replace('_', " "),
+    }
+}
+
+/// Who clears a hold, and how.
+pub fn clears(hold: &str) -> &'static str {
+    match hold {
+        "possible_duplicate" => "an approver who did not prepare the run releases it, or the maker takes it out",
+        "over_item_limit" => "treasury releases it once it is funded, or the maker takes it out",
+        "payee_not_confirmed" => "a second payee maintainer confirms the payee, then the maker checks the run again",
+        "payee_not_screened" => "screening clears the payee, then the maker checks the run again",
+        "payee_needs_legal_approval" => "legal approves the payee, then the maker checks the run again",
+        "payee_cooling_off" => "the payee's cooling-off period ends; the maker checks the run again then, or takes it out for a later run",
+        "payee_name_mismatch" | "payee_account_returned" => "a payee maintainer corrects the account and a second confirms it",
+        "payee_closed" => "the maker takes it out and pays the person's current payee",
+        "customer_hold" | "hold_unconfirmed" => "the customer lifts their hold, or the maker takes it out",
+        "no_cross_border_channel" => "the connectivity administrator sets up the route's cross-border channel, or the maker takes it out",
+        _ => "the maker takes it out and checks the run again",
+    }
+}
+
+/// Why a run that is not checked cannot be approved, in words that say
+/// where it stands.
+fn not_approvable(id: &str, run: &Run) -> Reject {
+    let approvers = run.approvers.iter().cloned().collect::<Vec<_>>().join(" and ");
+    match run.status {
+        RunStatus::Prepared => wrong_state("the run has changed since it was checked, or was never checked: the maker checks it first"),
+        RunStatus::Approved | RunStatus::Closed => Reject::new(
+            "already_approved",
+            format!(
+                "run {id} is already approved by {approvers}; its submissions are {}",
+                run.submissions.join(", ")
+            ),
+        ),
+        _ => wrong_state("only a checked run is approved; this one is cancelled"),
+    }
+}
+
 impl PaymentsState {
     fn run(&self, id: &str) -> Result<&Run, Reject> {
         self.runs.get(id).ok_or_else(|| no_run(id))
@@ -229,6 +273,8 @@ impl PaymentsState {
                     submission: None,
                     was_settled: false,
                     released: false,
+                    limit_released_by: None,
+                    holds: Vec::new(),
                 };
                 run.items.insert(item.new.item.clone(), item);
             }
@@ -304,9 +350,10 @@ impl PaymentsState {
         Ok(())
     }
 
-    /// The account an item pays or draws on, and why it cannot go, if it cannot.
-    fn examine(&self, tx: &Tx<'_>, run: &Run, item: &Item, item_limit: i64, window: i64) -> (Option<AccountDetails>, Option<String>) {
-        let (account, mut hold) = match &item.new.counterparty {
+    /// The account an item pays or draws on, and every reason it cannot go,
+    /// the one to clear first first. A person sees them all at once.
+    fn examine(&self, tx: &Tx<'_>, run: &Run, item: &Item, item_limit: i64, window: i64) -> (Option<AccountDetails>, Vec<String>) {
+        let (account, hold) = match &item.new.counterparty {
             // An item is added only for a payee or authority on record, and
             // neither is ever removed; the default is for safety alone.
             Counterparty::Payee(p) => self.payees.get(p).map_or((None, Some("unknown_payee".to_string())), |payee| {
@@ -325,10 +372,11 @@ impl PaymentsState {
                 (Some(authority.account.clone()), hold.map(str::to_string))
             }),
         };
+        let mut holds: Vec<String> = hold.into_iter().collect();
         // A hold the customer placed after the item joined the run.
-        if hold.is_none() && !run.run_type.inbound() {
+        if !run.run_type.inbound() {
             let fresh = self.config.as_ref().and_then(|c| c.rules.hold_check_max_age_minutes);
-            hold = self.hold_reason(&item.new, tx.now, fresh).map(str::to_string);
+            holds.extend(self.hold_reason(&item.new, tx.now, fresh).map(str::to_string));
         }
         // An account abroad needs the route's cross-border channel.
         let abroad = matches!(&item.new.counterparty, Counterparty::Payee(p) if self.payees.get(p).is_some_and(|p| p.foreign.is_some()));
@@ -337,15 +385,16 @@ impl PaymentsState {
             .as_ref()
             .and_then(|c| c.routes.get(&run.run_type))
             .and_then(|r| r.cross_border.as_ref());
-        if hold.is_none() && abroad && cross_border.is_none() {
-            hold = Some("no_cross_border_channel".to_string());
+        if abroad && cross_border.is_none() {
+            holds.push("no_cross_border_channel".to_string());
         }
-        if hold.is_none() && item.new.amount_minor > item_limit {
-            hold = Some("over_item_limit".to_string());
+        // Above the route's limit for one item, treasury funds it and lets it through.
+        if item.new.amount_minor > item_limit && item.limit_released_by.is_none() {
+            holds.push("over_item_limit".to_string());
         }
         // The same account and amount close together in time is how a
         // payment made twice looks. A person decides.
-        if hold.is_none() && !item.released {
+        if !item.released {
             let twin = self
                 .runs
                 .values()
@@ -359,10 +408,10 @@ impl PaymentsState {
                     })
                 });
             if twin {
-                hold = Some("possible_duplicate".to_string());
+                holds.push("possible_duplicate".to_string());
             }
         }
-        (account, hold)
+        (account, holds)
     }
 
     fn account_of(&self, counterparty: &Counterparty) -> Option<&AccountDetails> {
@@ -394,25 +443,30 @@ impl PaymentsState {
             .collect();
         let going: i64 = findings
             .iter()
-            .filter(|(_, (_, hold))| hold.is_none())
+            .filter(|(_, (_, holds))| holds.is_empty())
             .map(|(item_id, _)| run.items[item_id].new.amount_minor)
             .sum();
         if going > route.run_limit_minor {
             return Err(Reject::new(
                 "over_run_limit",
-                format!("the run totals {going}, over its limit of {}", route.run_limit_minor),
+                format!(
+                    "the run totals {}, over its limit of {}: take items out into another run",
+                    ic_money::dollars(going),
+                    ic_money::dollars(route.run_limit_minor)
+                ),
             ));
         }
-        let held = findings.iter().filter(|(_, (_, hold))| hold.is_some()).count();
+        let held = findings.iter().filter(|(_, (_, holds))| !holds.is_empty()).count();
         if let Some(run) = self.runs.get_mut(id) {
-            for (item_id, (account, hold)) in findings {
+            for (item_id, (account, holds)) in findings {
                 if let Some(item) = run.items.get_mut(&item_id) {
                     item.foreign = match &item.new.counterparty {
                         Counterparty::Payee(p) => self.payees.get(p).and_then(|p| p.foreign.clone()),
                         Counterparty::Authority(_) => None,
                     };
                     item.account = account;
-                    item.status = hold.map_or(ItemStatus::Pending, ItemStatus::Held);
+                    item.status = holds.first().cloned().map_or(ItemStatus::Pending, ItemStatus::Held);
+                    item.holds = holds;
                 }
             }
             run.status = RunStatus::Checked;
@@ -422,27 +476,55 @@ impl PaymentsState {
         Ok(())
     }
 
+    /// Let a held item through, by the one person whose judgement the hold
+    /// waits for: an approver for a possible duplicate, treasury for an
+    /// amount above the route's item limit (`docs/decisions.md`, "A claim
+    /// payment above the item limit"). Neither prepared the run. Any other
+    /// hold clears at its source and the run is checked again.
     pub(crate) fn release_item(&mut self, tx: &mut Tx<'_>, id: &str, item_id: &str) -> Result<(), Reject> {
-        tx.need(Role::Approver)?;
         let run = self.run(id)?;
-        if run.makers.contains(&tx.actor.id) {
-            return Err(Reject::new("same_person", "someone who prepared the run cannot release its holds"));
-        }
         let item = run
             .items
             .get(item_id)
             .ok_or_else(|| Reject::new("unknown_item", format!("run {id} has no item {item_id}")))?;
-        if run.status != RunStatus::Checked || item.status != ItemStatus::Held("possible_duplicate".to_string()) {
-            return Err(Reject::new("not_releasable", "only a possible duplicate on a checked run can be released"));
+        let held = item.holds_now();
+        let has = |h: &str| held.iter().any(|x| x == h);
+        let hold = if has("possible_duplicate") && tx.actor.roles.contains(&Role::Approver) {
+            "possible_duplicate"
+        } else if has("over_item_limit") && tx.actor.roles.contains(&Role::Treasury) {
+            "over_item_limit"
+        } else if has("possible_duplicate") || has("over_item_limit") {
+            let role = if has("possible_duplicate") { "approver" } else { "treasury" };
+            return Err(Reject::new("not_permitted", format!("releasing this hold needs the {role} role")));
+        } else {
+            let why = held
+                .first()
+                .map_or("not held".to_string(), |h| format!("held for {}: {}", hold_words(h), clears(h)));
+            return Err(Reject::new(
+                "not_releasable",
+                format!("only a possible duplicate (by an approver) or an amount over the item limit (by treasury) is released by hand; {item_id} is {why}"),
+            ));
+        };
+        if run.status != RunStatus::Checked {
+            return Err(Reject::new("not_releasable", "a hold is released on a checked run: check it first"));
         }
+        if run.makers.contains(&tx.actor.id) {
+            return Err(Reject::new("same_person", "someone who prepared the run cannot release its holds"));
+        }
+        let by = tx.actor.id.clone();
         if let Some(item) = self.runs.get_mut(id).and_then(|r| r.items.get_mut(item_id)) {
-            item.released = true;
-            item.status = ItemStatus::Pending;
+            if hold == "possible_duplicate" {
+                item.released = true;
+            } else {
+                item.limit_released_by = Some(by.clone());
+            }
+            item.holds = item.holds_now().into_iter().filter(|h| h != hold).collect();
+            item.status = item.holds.first().cloned().map_or(ItemStatus::Pending, ItemStatus::Held);
         }
         tx.emit(Event::ItemReleased {
             run: id.to_string(),
             item: item_id.to_string(),
-            by: tx.actor.id.clone(),
+            by,
         });
         Ok(())
     }
@@ -603,16 +685,35 @@ impl PaymentsState {
         let run = self.run(id)?;
         let me = &tx.actor.id;
         if run.status != RunStatus::Checked {
-            return Err(wrong_state("a run is approved after it has been checked"));
+            return Err(not_approvable(id, run));
         }
         if run.makers.contains(me) {
             return Err(Reject::new("same_person", "someone who prepared the run cannot approve it"));
         }
         if run.approvers.contains(me) {
-            return Err(Reject::new("already_approved", "each approval comes from a different person"));
+            return Err(Reject::new(
+                "already_approved",
+                "you have approved this run already: each approval comes from a different person",
+            ));
         }
-        if run.items.values().any(|i| matches!(i.status, ItemStatus::Held(_))) {
-            return Err(Reject::new("items_held", "held items are released or removed before approval"));
+        let held: Vec<String> = run
+            .items
+            .iter()
+            .filter(|(_, i)| matches!(i.status, ItemStatus::Held(_)))
+            .map(|(item_id, i)| {
+                let who = match &i.new.counterparty {
+                    Counterparty::Payee(p) => format!("payee {p}"),
+                    Counterparty::Authority(a) => format!("authority {a}"),
+                };
+                let why: Vec<String> = i.holds_now().iter().map(|h| format!("{} ({})", hold_words(h), clears(h))).collect();
+                format!("{item_id} to {who}, {}: {}", ic_money::dollars(i.new.amount_minor), why.join("; "))
+            })
+            .collect();
+        if !held.is_empty() {
+            return Err(Reject::new(
+                "items_held",
+                format!("held items are released or taken out before approval. {}", held.join(". ")),
+            ));
         }
         let cfg = self.cfg()?;
         let route = cfg

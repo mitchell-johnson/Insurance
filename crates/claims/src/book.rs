@@ -492,7 +492,10 @@ impl ClaimsState {
             return Err(held_payment());
         }
         let Some(payee) = claim.payee.as_ref().map(|p| p.party.clone()) else {
-            return Err(Reject::new("payee_not_verified", "verify the payee before the first payment"));
+            return Err(Reject::new(
+                "payee_not_verified",
+                "verify the payee before the first payment: the claim's owner picks, under Verify the payee, a payee the payments team has registered, confirmed and screened",
+            ));
         };
         if !claim.directed(&payee) {
             return Err(held_for_direction());

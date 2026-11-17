@@ -381,6 +381,12 @@ impl ClaimsState {
                 if matches!(request, Request::Decline) && claim.claim_type != ClaimType::Health && !spoken {
                     return refuse("conversation_required", "talk to the claimant before declining, and record it as a task");
                 }
+                if matches!(request, Request::Decline) && claim.has_open_task(TaskKind::NonDisclosureReview) {
+                    return refuse(
+                        "awaiting_non_disclosure_review",
+                        "a non-disclosure review is open on this claim: underwriting decides the remedy first",
+                    );
+                }
             }
             Request::ReverseAdmission { .. } => {
                 let admitted = matches!(claim.status, Status::Admitted | Status::InPayment | Status::Paid | Status::Ended);
@@ -476,7 +482,14 @@ impl ClaimsState {
                 }
                 let room = self.rules.funeral_advance_max_minor - claim.advanced_minor;
                 if *amount_minor <= 0 || *amount_minor > room {
-                    return refuse("advance_limit", "the advance is more than the rules allow before a decision");
+                    return Err(Reject::new(
+                        "advance_limit",
+                        format!(
+                            "an advance before a decision is at most {} in all, and {} of it is left on this claim",
+                            ic_money::dollars(self.rules.funeral_advance_max_minor),
+                            ic_money::dollars(room.max(0))
+                        ),
+                    ));
                 }
                 if claim
                     .cover_check
@@ -697,6 +710,17 @@ impl ClaimsState {
         }
         let profile = self.authority.profile(&actor.staff)?;
         self.rules.check_reasons(kind, &reasons)?;
+        if kind == DecisionKind::Decline && reasons.iter().any(|r| self.rules.non_disclosure_reasons.contains(r)) {
+            let avoided = claim
+                .task(TaskKind::NonDisclosureReview)
+                .any(|t| t.completed_on.is_some() && t.outcome.as_deref() == Some("Avoid"));
+            if !avoided {
+                return refuse(
+                    "no_non_disclosure_remedy",
+                    "a decline for non-disclosure stands on underwriting's remedy: refer the claim for a non-disclosure review, and decline only once it has avoided the policy",
+                );
+            }
+        }
         let plan = self.plan(cx, &claim, &request)?;
         // Some authority cannot be borrowed from a second signer.
         let holds = match &request {

@@ -93,6 +93,38 @@ impl PaymentsState {
         json!(rows)
     }
 
+    /// Payees whose reference, party or account name holds `text` (any
+    /// case), at most twenty, closed ones left out: what a person picks a
+    /// payee from instead of typing its reference. Only the last four digits
+    /// of the account are shown, and what stops it being paid now.
+    pub fn find_payees(&self, text: &str) -> Value {
+        let now = self.clock.unwrap_or_default();
+        let want = text.trim().to_lowercase();
+        let rows: Vec<Value> = self
+            .payees
+            .iter()
+            .filter(|(id, p)| {
+                !p.closed
+                    && [id.as_str(), p.party.as_str(), p.account.name.as_str()]
+                        .iter()
+                        .any(|s| s.to_lowercase().contains(&want))
+            })
+            .take(20)
+            .map(|(id, p)| {
+                let digits: String = p.account.number.chars().filter(char::is_ascii_alphanumeric).collect();
+                json!({
+                    "payee": id,
+                    "party": p.party,
+                    "kind": p.kind,
+                    "name": p.account.name,
+                    "ending": digits.get(digits.len().saturating_sub(4)..).unwrap_or_default(),
+                    "blocked": p.blocked(now),
+                })
+            })
+            .collect();
+        json!(rows)
+    }
+
     /// A party's payees and authorities, with what stops each being paid
     /// or collected from now, and what the customer master last said about
     /// the party's own hold.

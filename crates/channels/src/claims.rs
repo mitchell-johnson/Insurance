@@ -277,6 +277,65 @@ pub fn command(staff: &PartyId, purpose: &str, partition: Option<PartitionId>, m
     Ok((name, target, Command::Claims(Box::new(typed))))
 }
 
+/// A claim's payee is a payee the payments module holds, never references
+/// an assessor types: `fields` are a `verify_payee` command's, whose
+/// `account_ref` names the payee there, and `payee` is that module's answer
+/// for it (null when there is none). The payee must have passed the bank's
+/// name check, been confirmed by a second payee maintainer and screened
+/// clear; who it is paid to, and the name check and screening relied on,
+/// are filled in from that record. An estate is paid only to an estate's
+/// account and a provider only to a provider's. Legal's approval of an
+/// estate's account and the cooling-off on new details are payments' to
+/// hold, and they hold the payment, not the verification.
+pub fn payee_from_register(fields: &mut serde_json::Map<String, Value>, payee: &Value) -> Result<(), String> {
+    let id = fields.get("account_ref").and_then(Value::as_str).map(str::trim).unwrap_or_default().to_string();
+    if id.is_empty() {
+        return Err("pick the payee from the payments register: the payments team registers a payee, and a second person confirms it".to_string());
+    }
+    let tell = |why: &str| format!("payee {id} {why}, so a claim cannot be paid to it yet");
+    if payee.is_null() {
+        return Err(format!(
+            "there is no payee {id} in payments: ask a payee maintainer there to register it, and a second to confirm it"
+        ));
+    }
+    if payee["closed"] == true {
+        return Err(tell("is closed"));
+    }
+    if payee["name_check"] == "no_match" {
+        return Err(tell("failed the bank's name check"));
+    }
+    if payee["confirmed_by"].as_str().is_none() {
+        return Err(tell("has not been confirmed by a second payee maintainer"));
+    }
+    if payee["screened_clear"] != true {
+        return Err(tell("has not been screened clear"));
+    }
+    let theirs = payee["kind"].as_str().unwrap_or_default();
+    let ours = fields.get("kind").and_then(Value::as_str).unwrap_or_default();
+    let fits = match (ours, theirs) {
+        ("estate", t) => t == "estate",
+        ("provider", t) => t == "provider",
+        (_, t) => t == "customer" || t == "beneficiary",
+    };
+    if !fits {
+        return Err(format!(
+            "payee {id} is held in payments as a {} account, which does not pay a claim's {ours}",
+            theirs.replace('_', " ")
+        ));
+    }
+    let party = payee["party"].as_str().unwrap_or_default();
+    let check = payee["name_check"].as_str().unwrap_or_default();
+    let confirmed = payee["confirmed_by"].as_str().unwrap_or_default();
+    fields.insert("account_ref".to_string(), json!(id));
+    fields.insert("party".to_string(), json!(party));
+    fields.insert(
+        "name_check_ref".to_string(),
+        json!(format!("payments:{id}:name_check:{check}:confirmed_by:{confirmed}")),
+    );
+    fields.insert("screening_ref".to_string(), json!(format!("payments:{id}:screened_clear")));
+    Ok(())
+}
+
 /// The envelope for one person's command. The key is theirs, so a retry
 /// after a timeout applies once.
 pub fn envelope(key: String, command: Command) -> Envelope {
