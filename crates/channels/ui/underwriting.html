@@ -19,6 +19,7 @@
 <option value="record_opinion">Record your opinion</option><option value="countersign">Countersign a decision</option><option value="hand_over">Hand the case over</option>
 <option value="move">Move the case to another queue</option><option value="release">Release documents to the reinsurer</option>
 <option value="schedule">Book a tele-interview</option><option value="interview">Record a tele-interview</option><option value="option">Check the proof for an option or conversion</option>
+<option value="conflict">Declare a conflict: I know someone on this application</option>
 </select></div></div>
 <form id="c-form"><div class="row" id="c-fields"></div><p><button>Send</button></p></form>
 <div id="c-msg" aria-live="polite"></div></section>
@@ -38,7 +39,9 @@
 <div id="d-msg" aria-live="polite"></div><div id="disclosures"></div></section>
 
 <section data-view="Conflicts and reports"><h2>A conflict of interest</h2>
-<form id="x-form"><div class="row"><div><label for="x-party">Person you are connected to</label><input id="x-party" required></div><button>Declare</button></div></form>
+<p class="muted">If you know someone on an application, declare it from the case ("Declare a conflict" under Work a case), or here after opening the proposal. The case leaves you at once and is closed to you.</p>
+<form id="x-form"><div class="row"><div><label for="x-party">Person you are connected to</label><select id="x-party" required><option value="">Open a proposal first</option></select></div>
+<div><label for="x-reason">How you know them</label><input id="x-reason" required size="32"></div><button>Declare</button></div></form>
 <div id="x-msg" aria-live="polite"></div></section>
 
 <section data-view="Remedies and review" id="senior" hidden><h2>Non-disclosure remedy</h2>
@@ -88,15 +91,27 @@ const EVIDENCE = ["gp_report", "specialist_report", "blood_test", "medical_exam"
 const QUEUES = ["medical", "financial", "occupational", "tele_interview", "senior_review", "reinsurer_liaison"];
 const TYPES = ["tele_interview", "medical_evidence", "financial_evidence", "referral", "reinsurer_referral", "decline_review", "countersign", "non_disclosure_review"];
 const ACTIONS = {
-  propose: [[["cover", "Cover", "text"], ["outcome", "Outcome", "select", ["accept", "decline", "defer"]], ["loading", "Loading %", "number"],
-    ["exclusion", "Exclusion code", "text"], ["revised", "Sum accepted, if less", "number"], ["until", "Deferred until", "date"], ["reasons", "Reason codes", "text"], ["notes", "Notes reference", "text"]],
+  // A decision gives terms for every cover on the life, each on its own row.
+  propose: [() => [...coversHere().flatMap((c) => [["h:" + c.value, `${c.label}${c.hint ? " (" + c.hint + ")" : ""}`, "heading"],
+      [c.value + ".outcome", "Outcome", "select", ["accept", "decline", "defer"]], [c.value + ".loading", "Loading %", "number"], [c.value + ".exclusion", "Exclusion code", "text"],
+      [c.value + ".revised", "Amount accepted, if less, in dollars", "number"], [c.value + ".until", "Deferred until", "date"]]),
+    ["reasons", "Reason codes", "text"], ["notes", "Notes reference", "text"]],
     (f, c) => {
-      const outcome = f.outcome === "accept"
-        ? { outcome: "accept", loading_percent: Number(f.loading || 0), exclusions: f.exclusion ? [{ code: f.exclusion, from: me.today }] : [], revised_sum_insured_minor: f.revised ? Math.round(Number(f.revised) * 100) : null }
-        : f.outcome === "defer" ? { outcome: "defer", until: f.until } : { outcome: "decline" };
-      return { propose_decision: { case: c, terms: [{ cover: f.cover, outcome }], reasons: codes(f.reasons), withheld_reasons: [], notes_ref: f.notes || null, evidence: [] } };
+      const covers = coversHere();
+      if (!covers.length) throw new Error("Open the case first, so its covers are listed.");
+      const terms = covers.map(({ value: cover }) => {
+        const g = (k) => f[cover + "." + k];
+        const outcome = g("outcome") === "accept"
+          ? { outcome: "accept", loading_percent: Number(g("loading") || 0), exclusions: g("exclusion") ? [{ code: g("exclusion"), from: me.today }] : [], revised_sum_insured_minor: g("revised") ? Math.round(Number(g("revised")) * 100) : null }
+          : g("outcome") === "defer" ? { outcome: "defer", until: g("until") } : { outcome: "decline" };
+        return { cover, outcome };
+      });
+      return { propose_decision: { case: c, terms, reasons: codes(f.reasons), withheld_reasons: [], notes_ref: f.notes || null, evidence: [] } };
     }],
-  evidence: [[["kinds", "Evidence", "multi", EVIDENCE]], (f, c) => ({ request_evidence: { case: c, kinds: f.kinds } })],
+  evidence: [[["kinds", "Evidence", "multi", EVIDENCE], ["due_on", "Wanted by (leave empty for the usual time)", "date"]],
+    (f, c) => ({ request_evidence: { case: c, kinds: f.kinds, due_on: f.due_on || null } })],
+  conflict: [() => [["party", "Who you know", "select", peopleHere()], ["reason", "How you know them", "text"]],
+    (f) => { if (!f.reason) throw new Error("Say how you know them, for the record."); return { declare_conflict: { party: f.party, reason: f.reason } }; }],
   opinion: [[["of", "Underwriter asked", "text"]], (f, c) => ({ ask_opinion: { case: c, of: f.of } })],
   record_opinion: [[["vault_ref", "Where your opinion is filed", "text"]], (f, c) => ({ record_opinion: { case: c, vault_ref: f.vault_ref } })],
   countersign: [[["agree", "Your answer", "select", ["true", "false"]], ["reasons", "Reason codes", "text"]],
@@ -104,7 +119,11 @@ const ACTIONS = {
   hand_over: [[["to", "Hand to", "text"]], (f, c) => ({ hand_over: { case: c, to: f.to } })],
   move: [[["queue", "Queue", "select", QUEUES], ["case_type", "Case type", "select", TYPES], ["reasons", "Why", "text"]],
     (f, c) => ({ move_case: { case: c, queue: f.queue, case_type: f.case_type, reasons: codes(f.reasons) } })],
-  schedule: [[["when", "When", "datetime-local"]], (f, c) => ({ schedule_interview: { proposal: $("p-id").value.trim(), life: $("d-life").value.trim(), scheduled_for: new Date(f.when).toISOString() } })],
+  schedule: [[["when", "When", "datetime-local"]], (f) => {
+    if (!current) throw new Error("Open the case first: the interview is booked for its life.");
+    if (!f.when || f.when.slice(0, 10) <= (me.today || portal.today())) throw new Error(`Choose a time after today, ${portal.day(me.today || portal.today())}.`);
+    return { schedule_interview: { proposal: current.proposal, life: current.life, scheduled_for: new Date(f.when).toISOString() } };
+  }],
   interview: [[["notes_ref", "Where the notes are filed", "text"], ["notes_hash", "The notes' fingerprint (SHA-256)", "text"], ["recording_ref", "Recording, if any", "text"], ["present", "Who was on the call", "text"], ["adviser_present", "The adviser was on the call", "select", ["false", "true"]]],
     (f, c) => ({ record_interview: { case: c, notes_ref: f.notes_ref, notes_hash: f.notes_hash, recording_ref: f.recording_ref || null, present: codes(f.present), adviser_present: f.adviser_present === "true" } })],
   option: [[["accepted", "The proof", "select", ["true", "false"]], ["note", "What it rests on", "text"]],
@@ -113,11 +132,14 @@ const ACTIONS = {
 };
 function field([key, label, kind, options]) {
   const id = "cf-" + key;
+  if (kind === "heading") return h("h4", { class: "full" }, label);
+  if (kind === "select" && options.length && typeof options[0] === "object") return h("div", {}, h("label", { for: id }, label), h("select", { id }, options.map((o) => h("option", { value: o.value }, o.label))));
   if (kind === "select") return h("div", {}, h("label", { for: id }, label), h("select", { id }, options.map((o) => h("option", { value: o }, words(o)))));
   if (kind === "multi") return h("fieldset", {}, h("legend", {}, label), options.map((o) => h("label", {}, h("input", { type: "checkbox", name: id, value: o }), " " + words(o))));
   return h("div", {}, h("label", { for: id }, label), h("input", { id, type: kind }));
 }
 function value([key, , kind]) {
+  if (kind === "heading") return "";
   if (kind === "multi") return [...document.querySelectorAll(`input[name="cf-${key}"]:checked`)].map((i) => i.value);
   return $("cf-" + key).value.trim();
 }
@@ -129,23 +151,35 @@ function pickers(scope) {
   for (const input of scope.querySelectorAll("input")) {
     if (input.dataset.picked) continue;
     const key = input.id.replace(/^cf-/, "");
-    if (key === "of" || key === "to") portal.picker(input, () => portal.colleagues("underwriting.work"), { min: 0 });
+    // Nobody hands a case to themselves.
+    if (key === "of" || key === "to") portal.picker(input, () => portal.colleagues("underwriting.work").then((all) => all.filter((p) => p.value !== me.staff)), { min: 0 });
     else if (key === "reasons" || input.id === "n-reasons" || input.id === "f-reasons") portal.picker(input, () => Promise.resolve(codeItems(reasons)), { min: 0, empty: "No reason codes are in force." });
-    else if (key === "exclusion" || input.id === "n-exclusion") portal.picker(input, () => Promise.resolve(codeItems(exclusions)), { min: 0, empty: "No exclusion codes are in force." });
+    else if (key === "exclusion" || key.endsWith(".exclusion") || input.id === "n-exclusion") portal.picker(input, () => Promise.resolve(codeItems(exclusions)), { min: 0, empty: "No exclusion codes are in force." });
     else if (key === "cover") portal.picker(input, () => Promise.resolve(coversHere()), { min: 0, none: "" });
     else continue;
     input.dataset.picked = "yes";
   }
 }
-let proposal = null;
+let proposal = null, current = null;
+// The covers on the life in hand, as the proposal lists them.
 const coversHere = () => {
-  const life = proposal && $("d-life").value && proposal.lives && proposal.lives[$("d-life").value];
-  return ((life && life.covers) || []).map((c) => typeof c === "string" ? { value: c, label: c } : { value: c.cover || c.code, label: c.cover || c.code, hint: c.sum_insured_minor != null ? portal.money(c.sum_insured_minor) : "" });
+  const life = $("d-life").value;
+  return ((proposal && proposal.covers) || []).filter((c) => c.life === life).map((c) => ({ value: c.code, label: words(c.code).replace(/^./, (x) => x.toUpperCase()), hint: c.sum_insured_minor != null ? portal.money(c.sum_insured_minor) : "" }));
 };
-function showAction() { put($("c-fields"), ACTIONS[$("c-what").value][0].map(field)); pickers($("c-fields")); }
+// The people on the proposal in hand: its policyholder and each life.
+const peopleHere = () => {
+  if (!proposal) return [{ value: "", label: "Open the case first" }];
+  const lives = Object.entries(proposal.lives || {}).map(([life, f]) => ({ value: f.party, label: `The person insured as ${life.replace(/^life-?/i, "life ")}` }));
+  return [{ value: proposal.policyholder, label: "The policyholder" }, ...lives.filter((l) => l.value !== proposal.policyholder)];
+};
+function showAction() {
+  const spec = ACTIONS[$("c-what").value][0];
+  put($("c-fields"), (typeof spec === "function" ? spec() : spec).map(field)); pickers($("c-fields"));
+}
 $("c-what").addEventListener("change", showAction);
 $("c-form").addEventListener("submit", run($("c-msg"), async () => {
-  const [spec, build] = ACTIONS[$("c-what").value];
+  const [made, build] = ACTIONS[$("c-what").value];
+  const spec = typeof made === "function" ? made() : made;
   const fields = Object.fromEntries(spec.map((s) => [s[0], value(s)]));
   const answer = await send(build(fields, $("c-case").value.trim()));
   await refresh();
@@ -162,13 +196,17 @@ function take(c) {
 }
 // Open a case: its proposal and life come with it, and the Cases tab is where it is worked.
 async function openCase(item) {
+  current = item;
   $("c-case").value = item.case; $("p-id").value = item.proposal; $("d-life").value = item.life; $("mt-life").value = item.life; $("g-life").value = item.life;
   if (!$("d-purpose").value) $("d-purpose").value = `Assessing case ${item.case}`;
   put($("case-head"), h("p", { class: "working" }, h("strong", {}, item.case), ` ${words(item.case_type)} for life ${item.life} on proposal ${item.proposal}`, item.owner ? `, held by ${item.owner}` : ", not yet taken"));
   await openProposal(item.proposal).catch((e) => say($("p-msg"), "bad", e.message));
+  showAction();
   portal.view("cases");
 }
-const row = (i, also) => [i.case, i.proposal, i.life, words(i.case_type), i.owner || "", (i.reasons || []).join(", "),
+// Why a case is waiting, in the reason library's words.
+const why = (codes) => (codes || []).map((c) => (reasons.find((r) => r.code === c) || {}).text || c).join(" ");
+const row = (i, also) => [i.case, i.proposal, i.life, words(i.case_type), i.owner === me.staff ? "You" : i.owner || "", why(i.reasons),
   h("span", {}, also, " ", h("button", { class: "quiet", type: "button", on: { click: run($("q-msg"), () => openCase(i)) } }, "Open"))];
 async function showQueue() {
   const items = await ask("queue", { queue: $("q-name").value });
@@ -194,14 +232,19 @@ async function openProposal(id) {
   const p = await ask("proposal", { proposal: id });
   proposal = p;
   const lives = Object.entries(p.lives || {});
-  put($("proposal"), h("p", {}, `${p.id}: ${words(typeof p.status === "object" && p.status ? p.status.status : p.status)}, policy ${p.policy_number}, ${p.product_code}, received ${p.received_on}, expires ${p.expires_on}.`),
+  // Evidence asked for on each life: where it stands, when it is due, the provider's reference and what it cost.
+  const evidence = lives.flatMap(([life, f]) => (f.evidence || []).map((e) => [life, words(e.kind), words(e.status), portal.day(e.requested_at), portal.day(e.deadline),
+    e.provider_ref || "", e.cost_minor ? portal.money(e.cost_minor) : "", e.vault_ref ? "Arrived: filed in the clinical store" : ""]));
+  put($("proposal"), h("p", {}, `${p.id}: ${words(typeof p.status === "object" && p.status ? p.status.status : p.status)}, policy ${p.policy_number}, ${words(p.product_code)}, received ${portal.day(p.received_on)}, open until ${portal.day(p.expires_on)}.`),
     table(["Life", "Stage", "Cases", "Decisions"], lives.map(([life, f]) => [life, words(f.stage), (f.cases || []).map((c) => `${c.id} (${words(c.status || c.case_type)})`).join(", "),
-      (f.decisions || []).map((d) => `${d.reference} ${words(d.status)}`).join(", ")])));
+      (f.decisions || []).map((d) => `${d.reference} ${words(d.status)}`).join(", ")])),
+    h("h3", {}, "Cover applied for"), table(["Life", "Cover", "Amount"], (p.covers || []).map((c) => [c.life, words(c.code), portal.money(c.sum_insured_minor)])),
+    h("h3", {}, "Evidence"), evidence.length ? table(["Life", "Evidence", "Status", "Asked", "Due", "Provider reference", "Cost", ""], evidence) : portal.empty("No evidence has been asked for."));
+  put($("x-party"), peopleHere().map((o) => h("option", { value: o.value }, o.label)));
 }
 $("p-form").addEventListener("submit", run($("p-msg"), () => openProposal($("p-id").value.trim())));
 portal.picker($("p-id"), () => Promise.resolve([...new Map([...held, ...listed].map((i) => [i.proposal, i])).values()].map((i) => ({ value: i.proposal, label: i.proposal, hint: `life ${i.life} · ${words(i.case_type)}` }))), { min: 0, empty: "Open a case from a queue, or type the proposal reference." });
 portal.picker($("d-life"), () => Promise.resolve(Object.keys((proposal && proposal.lives) || {}).map((l) => ({ value: l, label: l, hint: words(proposal.lives[l].stage) }))), { min: 0, empty: "Open the proposal first." });
-portal.picker($("x-party"), portal.people);
 // The review's proposal says when the cover started, which is when an exclusion added by the remedy applies from.
 let reviewStart = null;
 portal.picker($("n-review"), () => Promise.resolve(listed.concat(held).filter((i) => i.case_type === "non_disclosure_review").map((i) => ({ value: i.case, label: i.case, hint: `life ${i.life} · proposal ${i.proposal}`, item: i }))),
@@ -215,10 +258,20 @@ $("g-form").addEventListener("submit", run($("p-msg"), async () => done(await se
 $("p-retry").addEventListener("click", run($("p-msg"), async () => done(await send({ retry_issue: { proposal: $("p-id").value.trim() } }))));
 $("d-form").addEventListener("submit", run($("d-msg"), async () => {
   const records = await api(R, "POST", BASE + "disclosures", { proposal: $("p-id").value.trim(), life: $("d-life").value.trim(), purpose: $("d-purpose").value.trim() });
-  put($("disclosures"), records.length ? records.map((r) => h("details", {}, h("summary", {}, `${r.submitted_at} (${r.hash})`), portal.details(r.answers || r)))
+  // Each answer beside the question the person read, in their units; the record's fingerprint last.
+  const shown = (a) => { const v = a.answer || {}; return "yes_no" in v ? (v.yes_no ? "Yes" : "No") : "money" in v ? portal.money(v.money) : "number" in v ? `${v.number}${a.unit ? " " + a.unit : ""}` : "choice" in v ? words(v.choice) : v.text || ""; };
+  put($("disclosures"), records.length ? records.map((r) => h("div", {}, h("h4", {}, `Signed on ${portal.when ? portal.when(r.submitted_at) : portal.day(r.submitted_at)}`),
+    table(["Question", "Answer", "Typed by the adviser"], Object.entries((r.record && r.record.answers) || {}).map(([id, a]) => [a.question || words(id), shown(a), a.entered_by_adviser ? "Yes" : ""])),
+    h("p", { class: "muted" }, `Sealed as ${r.vault_ref}, fingerprint ${r.hash}.`)))
     : h("p", { class: "muted" }, "This life has made no disclosure."));
+  return `Read for: ${$("d-purpose").value.trim()}. The reading is recorded.`;
 }));
-$("x-form").addEventListener("submit", run($("x-msg"), async () => done(await send({ declare_conflict: { party: $("x-party").value.trim() } }))));
+$("x-form").addEventListener("submit", run($("x-msg"), async () => {
+  if (!$("x-party").value) throw new Error("Open the proposal first, then choose who you know.");
+  const answer = await send({ declare_conflict: { party: $("x-party").value, reason: $("x-reason").value.trim() } });
+  await refresh();
+  return "Declared. Any case you held on this person has gone back to its queue, and their applications are closed to you.";
+}));
 
 $("n-form").addEventListener("submit", run($("n-msg"), async () => {
   const outcome = $("n-outcome").value;
@@ -229,20 +282,26 @@ $("n-form").addEventListener("submit", run($("n-msg"), async () => {
   await refresh();
   return done(answer);
 }));
+// The seed comes from the period, not from whoever draws: a period is drawn once, and nobody picks the sample.
+const seedOf = (period) => [...period].reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 7);
 $("r-form").addEventListener("submit", run($("r-msg"), async () => {
-  const seed = crypto.getRandomValues(new Uint32Array(1))[0];
-  const answer = await send({ draw_peer_review_sample: { period: $("r-period").value.trim(), from: iso($("r-from").value), to: iso($("r-to").value, true), seed } });
-  drawn = (answer.events || []).flatMap((e) => Object.values(e)).flatMap((e) => e.decisions || []);
-  return drawn.length ? `Drawn for review: ${drawn.join(", ")}. Record a finding on each below.` : done(answer);
+  const period = $("r-period").value.trim();
+  if (!(await portal.ask({ title: `Draw the sample for ${period}?`, text: "A period is drawn once. The sample is drawn from the decisions that took effect in it.", confirm: "Draw" }))) return;
+  const answer = await send({ draw_peer_review_sample: { period, from: iso($("r-from").value), to: iso($("r-to").value, true), seed: seedOf(period) } });
+  const view = (answer.view && answer.view.sample) || answer.view || {};
+  drawn = view.decisions || [];
+  return drawn.length ? `Drawn ${drawn.length} of the ${view.considered} decisions that took effect in ${period}: ${drawn.join(", ")}. Record a finding on each below.`
+    : `No decision took effect in ${period}, so there is nothing to review.`;
 }));
 $("f-form").addEventListener("submit", run($("r-msg"), async () => done(await send({ record_peer_finding: { decision: $("f-decision").value.trim(), agrees: $("f-agrees").value === "true", reasons: codes($("f-reasons").value) } }))));
 
 $("m-form").addEventListener("submit", run($("m-msg"), async () => {
   const r = await ask("report", { from: iso($("m-from").value), to: iso($("m-to").value, true) });
   const average = r.decisions ? (r.turnaround_hours / r.decisions).toFixed(1) : "-";
-  put($("report"), table(["Decisions", "Straight through", "Peer reviewed", "Peer disagreed", "Evidence cost", "Average hours to decide"],
-    [[r.decisions, r.straight_through, r.peer_reviewed, r.peer_disagreed, (r.evidence_cost_minor / 100).toFixed(2), average]]),
-    table(["Outcome", "Count"], Object.entries(r.by_outcome || {}).map(([k, v]) => [words(k), v])));
+  put($("report"), table(["Decisions", "Covers decided", "Straight through", "Peer reviewed", "Peer disagreed", "Evidence cost", "Average hours to decide"],
+    [[r.decisions, r.covers, r.straight_through, r.peer_reviewed, r.peer_disagreed, portal.money(r.evidence_cost_minor), average]]),
+    h("p", { class: "muted" }, "A decision gives terms for each cover on a life, so covers are counted by outcome."),
+    table(["Outcome, by cover", "Covers"], Object.entries(r.by_outcome || {}).map(([k, v]) => [words(k), v])));
 }));
 
 function decide(verb, id) {
@@ -266,7 +325,7 @@ signIn(R).then(async () => {
   await refresh();
   const load = await ask("workload");
   $("senior").hidden = !me.senior;
-  $("me").textContent = `You are ${me.staff}${me.senior ? ", a senior underwriter" : ""}. You hold ${load} open case${load === 1 ? "" : "s"}. Commands are made on ${me.today || "today's date"}.`;
+  $("me").textContent = `Signed in as ${me.staff}${me.senior ? ", a senior underwriter" : ""}. You hold ${load} open case${load === 1 ? "" : "s"}. Commands are made on ${me.today || "today's date"}.`;
   // Defaults: this month for peer review, the last month for the report.
   $("r-period").value = portal.month(); $("r-from").value = portal.month() + "-01"; $("r-to").value = portal.today();
   $("m-from").value = portal.days(-30); $("m-to").value = portal.today();

@@ -536,3 +536,23 @@ impl Master for Hosted {
         })
     }
 }
+
+/// A refusal of a new record as a possible duplicate, said with the records
+/// it may be and what to do next. Any other refusal is left as it is.
+pub fn possible_duplicate(refused: &mut Value) {
+    if refused["title"] != "possible_duplicate" {
+        return;
+    }
+    let candidates: Vec<String> = refused["candidates"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|c| c["party"].as_str().or(c.as_str()).map(str::to_string))
+        .collect();
+    refused["detail"] = serde_json::json!(format!(
+        "this person may already be known{}. Look at {} with match_customer, or under Record on the records page; if this is someone else, send allow_duplicate: true (\"Add even if they may already be known\" on the page)",
+        if candidates.is_empty() { String::new() } else { format!(": {} on file may be them", candidates.join(", ")) },
+        if candidates.len() == 1 { "them" } else { "each" },
+    ));
+}

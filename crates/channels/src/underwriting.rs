@@ -111,8 +111,15 @@ pub fn question(name: &str, fields: &BTreeMap<String, String>, staff: &PartyId, 
         out.insert((*field).to_string(), json!(value));
     }
     match name {
+        // Read as the person signed in, so a proposal on anyone they declared
+        // a conflict with is closed to them, and its case is not in their queue.
+        "proposal" => {
+            out.insert("query".to_string(), json!("proposal_for"));
+            out.insert("underwriter".to_string(), json!(staff));
+        }
         "queue" => {
             out.insert("now".to_string(), json!(when(at)));
+            out.insert("underwriter".to_string(), json!(staff));
         }
         "workload" => {
             out.insert("underwriter".to_string(), json!(staff));
@@ -133,6 +140,10 @@ pub fn command(sent: &Value, staff: &PartyId, senior: bool) -> Result<(Value, St
         return Err(format!("{name} is for a senior underwriter"));
     }
     let mut fields = fields.clone();
+    // A conflict is declared with how the person is connected, for the record.
+    if name == "declare_conflict" && fields.get("reason").and_then(Value::as_str).is_none_or(|r| r.trim().is_empty()) {
+        return Err("say how you are connected to them (reason), for the record".to_string());
+    }
     if COUNTERSIGNED.contains(&name) {
         if fields.get("countersigned_by").is_some_and(|v| !v.is_null()) {
             return Err("the second senior is whoever signs it, not something to type".to_string());
@@ -157,10 +168,10 @@ pub fn envelope(key: &str, at: At, today: &str, command: Value) -> Value {
     json!({ "key": key, "caller": CALLER, "at": when(at), "today": today, "command": command })
 }
 
-/// The envelope that carries a life's own consent from the app, on the
-/// New Zealand date.
-pub fn app_envelope(key: &str, at: At, command: Value) -> Value {
-    let today = crate::payments::nz(at).date().to_string();
+/// The envelope that carries a life's own act from the app (a consent, an
+/// answer to an offer), on the books' business date `today`: an offer
+/// accepted issues the policy from that date.
+pub fn app_envelope(key: &str, at: At, today: &str, command: Value) -> Value {
     json!({ "key": key, "caller": APP_CALLER, "at": when(at), "today": today, "command": command })
 }
 

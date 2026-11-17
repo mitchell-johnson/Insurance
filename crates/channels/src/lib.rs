@@ -41,6 +41,8 @@ pub mod ops;
 pub mod payments;
 pub mod pricing;
 pub mod query;
+pub mod questions;
+pub mod quote;
 pub mod reinsurance;
 pub mod replacements;
 pub mod serve;
