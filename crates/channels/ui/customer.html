@@ -221,20 +221,27 @@ $("notify").addEventListener("submit", run($("nc-msg"), async () => {
 }));
 
 // ---- Changes waiting for the customer, from every policy, and their own requests.
+// A change in words, with whose life a reduction is on: the reader's own, or the other life insured (F2-04-3, F2-04-5).
+const said = (r) => {
+  const life = r.context && r.context.life_party ? (r.context.life_party === me.party ? "your life" : "the other life insured") : null;
+  return portal.change(r.kind, r.payload, r.context, life);
+};
 async function waiting() {
   const views = await Promise.all(me.policies.map(async (p) => [p, await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(p.policy))]));
   const open = views.flatMap(([p, v]) => v.rows.filter((r) => r.kind === "request" && r.body.state && r.body.state.status === "awaiting_approval" && r.body.state.from === "customer").map((r) => [p, r.body]));
   const by = { adviser: "Prepared by your adviser", staff: "Prepared by our staff when you called", owner: "Asked by another owner", support: "Prepared by your support person" };
   put($("waiting"), open.length ? table(["Policy", "Change", "Asked", ""], open.map(([p, r]) => [p.number,
-    h("div", {}, h("strong", {}, portal.change(r.kind, r.payload)), by[r.prepared_by] ? h("div", { class: "muted" }, by[r.prepared_by] + (r.payload && r.payload.note ? `: "${r.payload.note}"` : ".")) : null),
-    portal.day(r.submitted),
-    h("div", { class: "actions" },
-      h("button", { type: "button", id: "approve-" + r.id, on: { click: run($("wait-msg"), () => approve(r)) } }, "Approve"),
-      h("button", { type: "button", class: "quiet", id: "decline-" + r.id, on: { click: run($("wait-msg"), () => decline(r)) } }, "Decline"))]))
+    h("div", {}, h("strong", {}, said(r)), by[r.prepared_by] ? h("div", { class: "muted" }, by[r.prepared_by] + (r.payload && r.payload.note ? `: "${r.payload.note}"` : ".")) : null),
+    portal.day(r.on || r.submitted),
+    // One owner's signature is not the other's: once signed it waits for them, and is not offered again (F2-04-4).
+    (r.signed_by || []).includes(me.party) ? h("span", { class: "muted" }, portal.requestState(r, false, me.party))
+      : h("div", { class: "actions" },
+        h("button", { type: "button", id: "approve-" + r.id, on: { click: run($("wait-msg"), () => approve(r)) } }, "Approve"),
+        h("button", { type: "button", class: "quiet", id: "decline-" + r.id, on: { click: run($("wait-msg"), () => decline(r)) } }, "Decline"))]))
     : h("p", { class: "muted" }, "Nothing is waiting for you."));
   const mine = await api(R, "GET", "/app/v1/requests");
-  put($("requests"), mine.length ? table(["Asked", "Policy", "Change", "Where it stands"], mine.map((r) => [portal.day(r.submitted), (me.policies.find((p) => p.policy === r.policy) || {}).number || r.policy || "",
-    portal.change(r.kind, r.payload), portal.requestState(r, r.party === me.party)])) : portal.empty("You have asked for nothing, and approved nothing, yet."));
+  put($("requests"), mine.length ? table(["Asked", "Policy", "Change", "Where it stands"], mine.map((r) => [portal.day(r.on || r.submitted), (me.policies.find((p) => p.policy === r.policy) || {}).number || r.policy || "",
+    said(r), portal.requestState(r, r.party === me.party, me.party)])) : portal.empty("You have asked for nothing, and approved nothing, yet."));
   return open.length;
 }
 // ---- Applications, and an answer to an offer of terms, signed over underwriting's own message.
@@ -379,10 +386,11 @@ async function approve(r) {
   if (!enrolled) throw new Error("Approving needs your signature. Set up this browser under Signing, or approve it on your phone.");
   await api(R, "POST", "/app/v1/requests/" + encodeURIComponent(r.id) + "/approve", { signed: await signed({ action: "approve_request", id: r.id }) });
   await waiting();
-  return `Approved: ${portal.change(r.kind, r.payload)}. It shows under Your requests as it is carried out.`;
+  const done = (await api(R, "GET", "/app/v1/requests")).find((x) => x.id === r.id) || {};
+  return done.status === "awaiting_approval" ? `Signed: ${said(r)}. It goes ahead once the other owner signs it too.` : `Approved: ${said(r)}. It shows under Your requests as it is carried out.`;
 }
 async function decline(r) {
-  const what = portal.change(r.kind, r.payload);
+  const what = said(r);
   if (!(await portal.ask({ title: "Decline this change?", text: `${what}: this will not go ahead. ${r.prepared_by === "adviser" ? "Your adviser sees that you declined it." : "Whoever prepared it sees that you declined it."}`, confirm: "Decline the change", keep: "Keep it waiting", danger: true }))) return;
   await api(R, "DELETE", "/app/v1/requests/" + encodeURIComponent(r.id));
   await waiting();

@@ -16,7 +16,10 @@
 //! staff holding [`actions::CARRY_OUT`], who has spoken to the customer, to
 //! carry it out or decline it from the staff console.
 
+use chrono::{Datelike, NaiveDate};
+use ic_core::invest::{Direction, InvestCommand, NewOrder, OrderAmount, OrderKind};
 use ic_core::{Command, PolicyId};
+use ic_money::FundId;
 use ic_product::Frequency;
 use serde_json::Value;
 
@@ -24,7 +27,7 @@ use serde_json::Value;
 pub const MODULE: &str = "policy-servicing";
 
 /// The kinds of request this carries, with what each needs in its payload.
-pub const KINDS: [(&str, &str); 4] = [
+pub const KINDS: [(&str, &str); 5] = [
     (
         "decline_indexation",
         "`declined`: true to decline indexation, false to take it again (true if left out)",
@@ -38,7 +41,36 @@ pub const KINDS: [(&str, &str); 4] = [
         "reduce_cover",
         "`cover` and `life` as the policy names them (term_life, life-1) and `sum_insured_minor`: the cover the life keeps, in cents, less than now (0 gives it up)",
     ),
+    (
+        "switch_funds",
+        "`from_fund` and `to_fund` (fund codes such as balanced, cash, growth) and either `amount_minor`: how much to move, in cents, or `all`: true to move everything held in `from_fund`",
+    ),
 ];
+
+/// What the customer is told when they ask for a change of a kind this
+/// does not take, with who can help (F2-05-1).
+pub fn unknown_kind(kind: &str) -> String {
+    let kinds: Vec<&str> = KINDS.iter().map(|(k, _)| *k).collect();
+    format!(
+        "{kind} is not a change you can ask for here; the changes are {}. For anything else, ask your adviser or call us",
+        kinds.join(", ")
+    )
+}
+
+/// The pricing date a switch placed now takes for `fund`: the books' date,
+/// or the day after the fund's latest price where that has been struck,
+/// moved past a weekend. A fund holiday is the core's to refuse, naming the
+/// next pricing day.
+pub fn switch_pricing_date(today: NaiveDate, struck: Option<NaiveDate>) -> NaiveDate {
+    let mut date = match struck {
+        Some(last) if last >= today => last + chrono::Days::new(1),
+        _ => today,
+    };
+    while matches!(date.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun) {
+        date = date + chrono::Days::new(1);
+    }
+    date
+}
 
 /// Kinds that give up cover, so that commission clawed back for them may
 /// fall on whoever submitted them. Before the core is asked, the commission
@@ -131,10 +163,40 @@ pub fn command(request: &Value) -> Result<Command, Refusal> {
                 billing_day,
             })))
         }
-        other => Err(refuse(
-            "not_carried",
-            format!("{other} is not a change the portal carries to the core; ask the service team"),
-        )),
+        "switch_funds" => {
+            let fund = |field: &str, which: &str| {
+                payload[field]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(|v| FundId(v.to_string()))
+                    .ok_or_else(|| refuse("nothing_to_switch", format!("say the fund to switch {which}")))
+            };
+            let (from, to) = (fund("from_fund", "from")?, fund("to_fund", "to")?);
+            if from == to {
+                return Err(refuse("nothing_to_switch", "a switch is from one fund to another"));
+            }
+            let amount = match (payload["all"].as_bool(), payload["amount_minor"].as_i64()) {
+                (Some(true), _) => OrderAmount::AllUnits,
+                (_, Some(minor)) if minor > 0 => OrderAmount::Cash { minor },
+                _ => return Err(refuse("bad_amount", "say how much to switch, in cents, or that it is everything in the fund")),
+            };
+            let pricing_date = request["pricing_date"]
+                .as_str()
+                .and_then(|d| d.parse().ok())
+                .ok_or_else(|| refuse("no_pricing_date", "the switch has no pricing date yet"))?;
+            Ok(Command::Investment(Box::new(InvestCommand::PlaceOrder(Box::new(NewOrder {
+                order_id: id.to_string(),
+                policy,
+                fund: from,
+                direction: Direction::Sell,
+                amount,
+                kind: OrderKind::SwitchOut,
+                pricing_date,
+                switch_to: Some(to),
+            })))))
+        }
+        other => Err(refuse("not_carried", unknown_kind(other))),
     }
 }
 

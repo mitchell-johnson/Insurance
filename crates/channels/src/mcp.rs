@@ -136,7 +136,7 @@ pub fn reach_of(name: &str) -> Reach {
         "staff_policy" => Reach::Actions(&["policy.view"]),
         "check_caller" => Reach::Actions(&["policy.view"]),
         "staff_document" => Reach::Actions(&["documents.download"]),
-        "enter_change_for_customer" => Reach::Actions(&["service.enter_change"]),
+        "enter_change_for_customer" | "withdraw_change_for_customer" => Reach::Actions(&["service.enter_change"]),
         "second_approval" | "changes_for_second_approval" => Reach::Actions(&["service.approve_change"]),
         "find" | "find_customers" | "match_customer" => Reach::Actions(&["customers.find"]),
         "marker_reviews" | "decide_marker_review" => Reach::Actions(&["service.vulnerability_kind"]),
@@ -469,7 +469,7 @@ pub fn catalogue() -> Vec<Tool> {
             .json(r#"{"access": "viewer" | "financial" | "support" | null}"#),
         tool("my_requests", "My requests", C, M::GET, "/app/v1/requests", "Every request you made or that waits for you, with where it stands."),
         tool("make_request", "Ask for a change", C, M::POST, "/app/v1/requests", "Ask for a change to a policy (or prepare one as its adviser). Requests that move money need the enrolled device's signature; an adviser's needs the customer's approval.")
-            .json(r#"{"id": "<your own ID for it>", "policy": "<policy>", "kind": "<what you ask: with module policy-servicing, decline_indexation (payload {declined}), change_frequency (payload {frequency, billing_day?}, signed) or cancel_policy (signed); notify_claim with module claims>", "module": "<owning module, e.g. policy-servicing>", "payload": {...}, "signed"?: {"challenge", "signature"}}"#),
+            .json(r#"{"id": "<your own ID for it>", "policy": "<policy>", "kind": "<what you ask: with module policy-servicing, decline_indexation (payload {declined}), change_frequency (payload {frequency, billing_day?}, signed), cancel_policy (signed), reduce_cover (payload {cover, life, sum_insured_minor: the cover kept, in cents}, signed) or switch_funds (payload {from_fund, to_fund, amount_minor: cents to move | all: true}, signed); any other kind is refused; notify_claim with module claims>", "module": "<owning module, e.g. policy-servicing>", "payload": {...}, "signed"?: {"challenge", "signature"}}"#),
         tool("withdraw_request", "Withdraw a request", C, M::DELETE, "/app/v1/requests/{id}", "Withdraw a request of yours that has not been acted on."),
         tool("approve_request", "Approve a request prepared for me", C, M::POST, "/app/v1/requests/{id}/approve", "Approve a change your adviser, a support person or a joint owner prepared. Needs the enrolled device's signature over this approval.")
             .json(r#"{"signed": {"challenge": "<from the device>", "signature": "<the device key's>"}}"#),
@@ -511,6 +511,7 @@ pub fn catalogue() -> Vec<Tool> {
             .query("`purpose`: why you need it."),
         tool("enter_change_for_customer", "Enter a change for a customer", S, M::POST, "/staff/v1/requests", "A change for a customer on the phone. The customer approves it; above your limit or backdated, a second member of staff agrees it first.")
             .json(r#"{"id", "policy", "kind", "module", "payload": {...}, "reason": "<why>", "case": "<case>"}"#),
+        tool("withdraw_change_for_customer", "Take back a change you entered", S, M::DELETE, "/staff/v1/requests/{id}", "Take back a change you entered for a customer by mistake, until an owner has signed it. After that only the customer can decline it."),
         tool("second_approval", "Agree a colleague's change", S, M::POST, "/staff/v1/requests/{id}/second-approval", "As a second member of staff, agree a change a colleague entered."),
         tool("changes_for_second_approval", "Changes waiting for a second person", S, M::GET, "/staff/v1/requests", "Changes colleagues entered for customers that wait for a second member of staff, oldest first. Empty unless your roles include agreeing them."),
         tool("find", "Find a customer or a policy", S, M::GET, "/staff/v1/find", "From what you know: a name with a birth date (Kiri Ngata 7/3/1984), an email, a phone or IRD number, or a policy number in whole or in part. Each person comes with the policies they own or are insured on.")

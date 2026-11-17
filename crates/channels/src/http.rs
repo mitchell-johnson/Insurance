@@ -3931,7 +3931,7 @@ async fn staff_policy(State(s): State<Shared>, headers: HeaderMap, method: Metho
     let session = s.staff(&headers, &method, &uri, b"").await?;
     let view = s
         .ask(Question::StaffPolicy {
-            staff: session.party,
+            staff: session.party.clone(),
             policy: PolicyId::from(policy.as_str()),
             scopes: why
                 .scope
@@ -3962,6 +3962,29 @@ async fn staff_policy(State(s): State<Shared>, headers: HeaderMap, method: Metho
         .map(PartyId::from)
         .collect();
     if let Some(master) = &s.master {
+        // The people on the policy by name, so a cover is picked by whose life it is, not by its code (F2-04-1).
+        let mut people: Vec<PartyId> = holders.clone();
+        for row in view["rows"].as_array().into_iter().flatten() {
+            if let Some(party) = row["subject"].as_str().map(PartyId::from).filter(|p| !people.contains(p)) {
+                people.push(party);
+            }
+        }
+        let mut names = serde_json::Map::new();
+        for party in people {
+            let read = master
+                .desk(
+                    &session.party,
+                    crate::customers::Desk::Read {
+                        party: party.clone(),
+                        query: String::new(),
+                    },
+                )
+                .await;
+            if let Ok((200, record)) = read {
+                names.insert(party.0.clone(), crate::find::person(&party, &record)["name"].clone());
+            }
+        }
+        view["names"] = Value::Object(names);
         for holder in holders {
             if let Some(approach) = approach(master.routing(&holder).await, may_see_kind) {
                 view["approach"] = approach;
@@ -4125,10 +4148,21 @@ async fn staff_request(State(s): State<Shared>, headers: HeaderMap, method: Meth
             case: new.case,
             backdated: false,
             above_limit: false,
+            cover_given_up_minor: None,
             second: None,
         }),
     };
     accepted(s.propose(key(&headers, &session.party.0)?, Actor::Staff(session.party), command).await?)
+}
+
+/// The member of staff who entered a change for a customer takes it back,
+/// entered by mistake, until an owner has signed it.
+async fn staff_withdraw_request(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(id): Path<String>) -> Answer {
+    let session = s.staff(&headers, &method, &uri, b"").await?;
+    ok(
+        s.propose(key(&headers, &session.party.0)?, Actor::Staff(session.party), Command::CancelRequest { id })
+            .await?,
+    )
 }
 
 /// A second member of staff agrees a change another entered for a customer;
@@ -5184,6 +5218,7 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/requests", post(staff_request).get(staff_second_waiting))
         .route("/staff/v1/find", get(staff_find))
         .route("/staff/v1/colleagues", get(staff_colleagues))
+        .route("/staff/v1/requests/{id}", delete(staff_withdraw_request))
         .route("/staff/v1/requests/{id}/second-approval", post(staff_second_approval))
         .route("/staff/v1/care/reviews", get(care_reviews))
         .route("/staff/v1/care/reviews/{review}", post(care_decide))
