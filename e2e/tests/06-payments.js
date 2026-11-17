@@ -554,7 +554,12 @@ test({ id: "E2E-203", area: A, persona: "ST10", story: "US-ST10-1", title: "A re
   await s.press("Open", "#refund-form");
   await s.sees("requested", "#refund");
   await s.sees(to.id, "#refund");
-  await s.sees("Release", "#refund-actions");
+  await s.sees(policy, "#refund");
+  await s.sees("NZ$50.00", "#refund");
+  // The one action on a refund gives the money back to suspense; it is named for that, and offered only
+  // once the refund is owed (F2-16-7), never as a "Release" that reads like paying it out.
+  await s.never("Release", "#refund-actions");
+  await s.never("Cancel it: give the money back to suspense", "#refund-actions");
 });
 
 // --- Reconciliation and controls ---------------------------------------------------------------------------------

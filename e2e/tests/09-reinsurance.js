@@ -81,7 +81,8 @@ test({ id: "E2E-259", area: A, persona: "Auditor", story: "US-R01-1", title: "So
   why: "A second person is not enough; it must be a person the insurer has authorised to sign." }, async (t) => {
   const id = await prepared(t, t.ref("abandon"), 4);
   const r = await t.sys.portal("POST", BASE + "sign/" + encodeURIComponent(id), cast.auditor);
-  if (r.status !== 403 || !String(r.data.detail).includes("reinsurance.approve")) throw new Error(`the signature answered ${r.status} ${JSON.stringify(r.data)}`);
+  // A reader is refused before what they sent is read, and told who may sign (F2-18-2).
+  if (r.status !== 403 || !String(r.data.detail).includes("a second person with reinsurance approval signs it")) throw new Error(`the signature answered ${r.status} ${JSON.stringify(r.data)}`);
   await withdraw(t, id);
 });
 

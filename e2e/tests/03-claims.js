@@ -128,7 +128,10 @@ test({ id: "E2E-074", area: A, persona: "ST3", story: "US-ST01-1", title: "A cla
   const c = await notified(t);
   const s = await desk(t, cast.st4, c.claim);
   await s.act("#act", "assign", { "Claim": c.claim, "To (staff reference)": "st3" }, { purpose: "allocating" });
-  await s.stopped("#act-msg", "st3 is not accredited for this line and queue", 409);
+  // The refusal names the assessor's own lines and who could take the claim instead (F2-09-9).
+  const said = await s.stopped("#act-msg", "st3 is not accredited for lump sum claims in this queue (their lines: health)", 409);
+  const could = (String(said).match(/: (\S+(?: or \S+)*) can take it/) || [])[1];
+  if (!could || could.split(" or ").includes("st3") || !could.split(" or ").includes("st4")) throw new Error(`the refusal names who can take it as: ${could}`);
   if ((await summary(s)).Owner !== "unassigned") throw new Error("the claim changed owner");
 });
 

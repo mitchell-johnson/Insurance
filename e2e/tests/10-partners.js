@@ -249,7 +249,8 @@ test({ id: "E2E-277", area: COM, persona: "Auditor", story: "US-D10-1", title: "
   await asks(s, "status");
   await s.sees(t.stack.opening, "#answer");
   await changes(s, "add_party", { party: t.ref("adv"), kind: "adviser" }, "trying a change");
-  await s.stopped("#do-msg", "none of your roles allows", 403);
+  // The module refuses a reader before reading the command, and says who acts there (F2-18-2).
+  await s.stopped("#do-msg", "you may read the commission console but hold no role to act in it: the distribution administrator and commission operations act there", 403);
 });
 
 test({ id: "E2E-278", area: COM, persona: "ST5", story: "US-D10-1", title: "Staff with no commission role are refused the console", matrix: [],
@@ -299,7 +300,8 @@ test({ id: "E2E-282", area: COM, persona: "Commission", story: "US-D10-1", title
   const party = t.ref("adv");
   const s = await t.open("/commission", cast.comops);
   await changes(s, "add_party", { party, kind: "adviser" }, "trying to add an adviser");
-  await s.stopped("#do-msg", "none of your roles allows", 403);
+  // The module refuses a reader before reading the command, and says who acts there (F2-18-2).
+  await s.stopped("#do-msg", "you may read the commission console but hold no role to act in it: the distribution administrator and commission operations act there", 403);
   const position = await t.does(cast.comops, "GET", `${COMMISSION}position?party=${party}&as_at=2027-11-30`, undefined, "reads the position");
   if (position.licence_history.length) throw new Error("the refused party has a history");
 });

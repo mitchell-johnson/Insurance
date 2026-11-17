@@ -158,17 +158,19 @@ test({ id: "E2E-154", area: A, persona: "ST10", story: "US-ST10-1", title: "A jo
 });
 
 test({ id: "E2E-155", area: A, persona: "Auditor", story: "US-ST12-2", title: "The internal auditor reads the finance console and can change nothing", matrix: ["AUD-006"],
-  purpose: "Sign in as the read-only auditor, read the close, and try to propose a journal.",
-  why: "Audit needs to see everything finance sees; a read-only role that could post would not be read-only." }, async (t) => {
+  purpose: "Sign in as the read-only auditor, read the close, look for the journal form, and propose a journal on the console's route all the same.",
+  why: "Audit needs to see everything finance sees; a read-only role that could post would not be read-only, and a form every send of which is refused is no use to a reader." }, async (t) => {
   const s = await close(t, cast.auditor);
-  await s.sees("View only.", "#roles");
+  await s.sees("View only: acting here is for the finance operator, approver, lead and appointed actuary.", "#roles");
   await s.sees("control_check", "#dash-steps");
   for (const id of ["#sign-lead", "#sign-actuary", "#close-period"]) if (!(await s.page.locator(id).isDisabled())) throw new Error(`${id} is offered to the auditor`);
+  // A reader is not offered the forms that act (F2-18-3).
   await s.tab("Journals");
-  await s.fill("#j-id", t.ref("JNL")); await s.fill("#j-period", PERIOD(t)); await s.fill("#j-date", t.stack.opening); await s.fill("#j-reason", "x"); await s.fill("#j-evidence", "doc-1");
-  await s.fill("#j-lines", "6500, 1.00, SF1-life\n2500, -1.00, SF1-life");
-  await s.press("Propose", "#journal");
-  await s.stopped("#journal-msg", "you may read the finance console but hold no role to act in it", 403);
+  if (await s.page.locator("#journal").isVisible()) throw new Error("the journal form is offered to the auditor");
+  // The route refuses them all the same, whatever they send.
+  const r = await t.sys.portal("POST", "/staff/v1/finance/commands", cast.auditor, { propose_journal: { journal: { id: t.ref("JNL"), kind: "accrual", period: PERIOD(t), value_date: t.stack.opening,
+    lines: [{ account: "6500", currency: "NZD", signed_minor: 100, fund: "SF1-life" }, { account: "2500", currency: "NZD", signed_minor: -100, fund: "SF1-life" }], reason: "x", evidence: ["doc-1"] } } });
+  if (r.status !== 403 || !JSON.stringify(r.data).includes("you may read the finance console but hold no role to act in it")) throw new Error(`a journal from the auditor answered ${r.status} ${JSON.stringify(r.data)}`);
 });
 
 test({ id: "E2E-156", area: A, persona: "ST10", story: "US-ST12-2", title: "The trial balance of an empty ledger is empty, not an error", matrix: ["LED-003"],
