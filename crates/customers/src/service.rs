@@ -134,8 +134,19 @@ impl<W: KeyWrapper, S: WormStore> App<W, S> {
             Some(_) => return Err(refused(StatusCode::BAD_REQUEST, "invalid", "x-ic-party is not a party ID")),
             None => None,
         };
+        let today = match header(headers, "x-ic-business-date") {
+            Some(d) => Some(
+                d.parse::<NaiveDate>()
+                    .map_err(|_| refused(StatusCode::BAD_REQUEST, "invalid", "x-ic-business-date is a date such as 2027-11-15"))?,
+            ),
+            None => None,
+        };
         Ok(Ctx {
-            who: Who { caller: caller.role, actor },
+            who: Who {
+                caller: caller.role,
+                actor,
+                today,
+            },
             purpose,
             acting,
         })
@@ -156,7 +167,20 @@ impl<W: KeyWrapper, S: WormStore> App<W, S> {
         let Some(acting) = &ctx.acting else {
             return Ok(ask);
         };
-        let acting = self.store.resolve(acting).await.map_err(failed)?;
+        let signed_in = acting;
+        let acting = self.store.resolve(signed_in).await.map_err(failed)?;
+        // A sign-in bound to a record since merged into another is not
+        // taken to be the survivor: a merge made in error would otherwise
+        // show one person another's details. Until the person's identity
+        // is checked again and the sign-in bound to the survivor, they are
+        // told so, and nothing more.
+        if acting.as_ref().is_some_and(|a| a != signed_in) && (party == signed_in || acting.as_ref() == Some(party)) {
+            return Err(refused(
+                StatusCode::CONFLICT,
+                "record_combined",
+                "your record has been combined with another record we hold, so for your privacy we show nothing from it until we have checked it is you: call us and we will confirm your identity and link this sign-in to it",
+            ));
+        }
         if acting.as_ref() == Some(party) {
             ask.self_access = true;
             return Ok(ask);
@@ -254,7 +278,7 @@ async fn read<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Pa
     let (resolved, party) = app.find(&id).await?;
     let ask = app.ask_about(&ctx, &resolved).await?;
     let now = Utc::now();
-    let facts = party.facts(q.as_of.unwrap_or(now.date_naive()), q.known_at.unwrap_or(now));
+    let facts = party.facts(q.as_of.unwrap_or(ctx.who.today(now)), q.known_at.unwrap_or(now));
     let released = app.access.readable(&ask, Field::ALL);
     // A marker the caller may not see is left out without a trace: not
     // masked, not listed as withheld.
@@ -638,7 +662,12 @@ async fn export<W: KeyWrapper, S: WormStore>(
         return Err(app.deny(&ctx, Some(&resolved), "export").await);
     }
     let mut streams = BTreeMap::new();
-    for p in std::iter::once(&resolved).chain(party.absorbed.iter()) {
+    // A person's own copy is their own record only: records merged into it
+    // go out in the copy the privacy officer sends, who checks the merge
+    // first, so a merge made in error never hands one person another's
+    // history.
+    let absorbed = party.absorbed.iter().filter(|_| !ask.self_access);
+    for p in std::iter::once(&resolved).chain(absorbed) {
         if let Some(records) = app.store.records(p).await.map_err(failed)? {
             streams.insert(p.0.clone(), records);
         }
@@ -840,6 +869,7 @@ async fn match_party<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S
                 let who = Who {
                     caller: ctx.who.caller.clone(),
                     actor: source.clone(),
+                    today: ctx.who.today,
                 };
                 let o = app
                     .store
@@ -1015,6 +1045,9 @@ struct MergeRequest {
     absorbed: PartyId,
     #[serde(default)]
     review: Option<String>,
+    /// Why the two records are one person. Needed for a merge.
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 async fn merge<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, body: Bytes) -> Reply {
@@ -1037,8 +1070,15 @@ async fn merging<W: KeyWrapper, S: WormStore>(app: Arc<App<W, S>>, headers: Head
     }
     let now = Utc::now();
     let result = if merge {
+        let Some(reason) = request.reason.as_deref().map(str::trim).filter(|r| !r.is_empty()) else {
+            return Err(refused(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                "say why these two records are one person (reason), such as the documents you checked: a merge is hard to undo once the person has used the record",
+            ));
+        };
         app.store
-            .merge(&request.survivor, &request.absorbed, request.review.as_deref(), &ctx.who, now)
+            .merge(&request.survivor, &request.absorbed, request.review.as_deref(), reason, &ctx.who, now)
             .await
     } else {
         app.store.unmerge(&request.survivor, &request.absorbed, &ctx.who, now).await
@@ -1063,12 +1103,26 @@ async fn reviews<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>,
     }
 }
 
-async fn dismiss<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap) -> Reply {
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DismissRequest {
+    /// Why the records are different people. Needed for a duplicate.
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+async fn dismiss<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap, body: Bytes) -> Reply {
     let ctx = app.ctx(&headers, None).await?;
     if !app.access.allows(&app.ask(&ctx), "reviews") {
         return Err(app.deny(&ctx, None, "reviews").await);
     }
-    match app.store.dismiss_review(&id, &ctx.who, Utc::now()).await {
+    let request: DismissRequest = if body.is_empty() {
+        DismissRequest::default()
+    } else {
+        serde_json::from_slice(&body).map_err(|e| refused(StatusCode::BAD_REQUEST, "invalid", &e.to_string()))?
+    };
+    let reason = request.reason.as_deref().map(str::trim).filter(|r| !r.is_empty());
+    match app.store.dismiss_review(&id, reason, &ctx.who, Utc::now()).await {
         Ok(()) => Ok((StatusCode::OK, Json(json!({ "review": id, "status": "dismissed" })))),
         Err(e) => Err(failed(e)),
     }

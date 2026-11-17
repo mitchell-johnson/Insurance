@@ -63,6 +63,18 @@ pub struct Who {
     pub caller: String,
     /// The person or process it acted for.
     pub actor: String,
+    /// The books' business date the caller works to, where it said one
+    /// (`x-ic-business-date`). The day a change is made on is the later of
+    /// it and the calendar's, so a fact dated in the books' past is not
+    /// refused as future while the calendar lags them.
+    pub today: Option<NaiveDate>,
+}
+
+impl Who {
+    /// The day a change is made on: the later of the books' and the calendar's.
+    pub fn today(&self, now: DateTime<Utc>) -> NaiveDate {
+        self.today.map_or(now.date_naive(), |d| d.max(now.date_naive()))
+    }
 }
 
 /// A change to a person's own hold, waiting to be told to the core.
@@ -116,6 +128,13 @@ pub struct RelationshipRow {
     pub party: PartyId,
     #[serde(flatten)]
     pub relationship: Relationship,
+}
+
+/// A judgement that two records are different people.
+struct Apart {
+    by: String,
+    at: DateTime<Utc>,
+    reason: Option<String>,
 }
 
 /// An open possible-duplicate review.
@@ -244,6 +263,7 @@ impl<W: KeyWrapper> Store<W> {
         let who = Who {
             caller: "customer-master".into(),
             actor: "cooling-off".into(),
+            today: None,
         };
         let mut ended = 0;
         for id in due {
@@ -751,7 +771,7 @@ impl<W: KeyWrapper> Store<W> {
         now: DateTime<Utc>,
     ) -> Result<Outcome> {
         let id = PartyId::generate();
-        let bodies = party::create(&id, kind, facts, group, &who.caller, now)?;
+        let bodies = party::create_on(&id, kind, facts, group, &who.caller, now, who.today(now))?;
         let mut client = self.client().await?;
         let tx = client.transaction().await.map_err(db)?;
         if let Some(idem) = idem {
@@ -832,7 +852,7 @@ impl<W: KeyWrapper> Store<W> {
                 )));
             }
         }
-        let bodies = loaded.party.decide(change, &who.caller, now)?;
+        let bodies = loaded.party.decide_on(change, &who.caller, now, who.today(now))?;
         if let Change::AddRelationship {
             target: Target::Party(other), ..
         } = change
@@ -1011,14 +1031,33 @@ impl<W: KeyWrapper> Store<W> {
 
     /// Merge `absorbed` into `survivor`. The absorbed ID resolves to the
     /// survivor from then on, so nothing in the core has to change.
-    pub async fn merge(&self, survivor: &PartyId, absorbed: &PartyId, review: Option<&str>, who: &Who, now: DateTime<Utc>) -> Result<Outcome> {
+    ///
+    /// `reason` says why the person merging judges the two records to be
+    /// one person; it is kept on the absorbed record's stream. A pair that
+    /// someone judged to be two people (a duplicate review dismissed) is
+    /// not merged by that same person: a merge after a dismissal needs
+    /// someone else to look again, and they are told who judged the pair
+    /// apart, when and why.
+    pub async fn merge(&self, survivor: &PartyId, absorbed: &PartyId, review: Option<&str>, reason: &str, who: &Who, now: DateTime<Utc>) -> Result<Outcome> {
         if survivor == absorbed {
             return Err(StoreError::Refused(reject("invalid", "a party cannot be merged into itself")));
         }
         let mut client = self.client().await?;
         let tx = client.transaction().await.map_err(db)?;
         let (mut s, mut a) = self.load_pair(&tx, survivor, absorbed).await?;
-        let (on_survivor, on_absorbed) = party::merge(&s.party, &a.party)?;
+        if let Some(apart) = Self::judged_apart(&tx, survivor, absorbed).await? {
+            if apart.by == who.actor {
+                return Err(StoreError::Refused(reject(
+                    "judged_apart",
+                    format!(
+                        "you judged these two records to be different people on {} ({}): a merge after that needs someone else to look at both records again",
+                        apart.at.date_naive(),
+                        apart.reason.as_deref().unwrap_or("no reason was given"),
+                    ),
+                )));
+            }
+        }
+        let (on_survivor, on_absorbed) = party::merge(&s.party, &a.party, reason)?;
         let written = self.append(&tx, &mut s, vec![on_survivor], who, now).await?;
         self.append(&tx, &mut a, vec![on_absorbed], who, now).await?;
         if let Some(review) = review {
@@ -1062,12 +1101,48 @@ impl<W: KeyWrapper> Store<W> {
         Ok(())
     }
 
-    /// Close a review: the parties are different people.
-    pub async fn dismiss_review(&self, review: &str, who: &Who, now: DateTime<Utc>) -> Result<()> {
+    /// Close a review: the parties are different people, for `reason`.
+    /// A duplicate review is closed only with a reason, since a later merge
+    /// of the same pair is told it.
+    pub async fn dismiss_review(&self, review: &str, reason: Option<&str>, who: &Who, now: DateTime<Utc>) -> Result<()> {
         let mut client = self.client().await?;
         let tx = client.transaction().await.map_err(db)?;
+        let duplicate = tx
+            .query_opt("select kind = 'duplicate' from reviews where id = $1 and status = 'open'", &[&review])
+            .await
+            .map_err(db)?
+            .is_some_and(|r| r.get::<_, bool>(0));
+        if duplicate && reason.is_none() {
+            return Err(StoreError::Refused(reject(
+                "invalid",
+                "say why these are different people (reason): a later merge of the same two records is shown it",
+            )));
+        }
         self.close_review(&tx, review, "dismissed", who, now).await?;
+        tx.execute("update reviews set resolution_reason = $2 where id = $1", &[&review, &reason])
+            .await
+            .map_err(db)?;
         tx.commit().await.map_err(db)
+    }
+
+    /// The latest judgement that two records are different people: a
+    /// duplicate review naming both, dismissed.
+    async fn judged_apart(tx: &Transaction<'_>, a: &PartyId, b: &PartyId) -> Result<Option<Apart>> {
+        let row = tx
+            .query_opt(
+                "select resolved_by, resolved_at, resolution_reason from reviews \
+                 where kind = 'duplicate' and status = 'dismissed' \
+                   and ((party_id = $1 and $2 = any(candidates)) or (party_id = $2 and $1 = any(candidates))) \
+                 order by resolved_at desc limit 1",
+                &[&a.0, &b.0],
+            )
+            .await
+            .map_err(db)?;
+        Ok(row.map(|r| Apart {
+            by: r.get::<_, Option<String>>(0).unwrap_or_default(),
+            at: r.get(1),
+            reason: r.get(2),
+        }))
     }
 
     pub async fn open_reviews(&self, limit: i64) -> Result<Vec<Review>> {
@@ -1541,6 +1616,7 @@ impl<W: KeyWrapper> Store<W> {
         let who = Who {
             caller: "customer-master".into(),
             actor: "retention".into(),
+            today: None,
         };
         l.key = None;
         self.append(tx, &mut l, vec![EventBody::Shredded], &who, now).await?;

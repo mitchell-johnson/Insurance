@@ -46,6 +46,9 @@ pub enum EventBody {
     /// This party was a duplicate of `survivor`, and resolves to it.
     MergedInto {
         survivor: PartyId,
+        /// Why the person who merged it judged the two to be one person.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
     /// `other` was merged into this party.
     Absorbed {
@@ -226,7 +229,7 @@ impl PublicEvent {
             _ => None,
         };
         let other = match &rec.body {
-            EventBody::MergedInto { survivor } | EventBody::Unmerged { survivor } => Some(survivor.clone()),
+            EventBody::MergedInto { survivor, .. } | EventBody::Unmerged { survivor } => Some(survivor.clone()),
             EventBody::Absorbed { other } | EventBody::Released { other } => Some(other.clone()),
             _ => None,
         };

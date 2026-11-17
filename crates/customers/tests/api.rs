@@ -458,7 +458,13 @@ async fn duplicates_are_reviewed_merged_and_unmerged() {
     assert_eq!(reviews["reviews"][0]["candidates"], json!([a]));
     let (status, _) = w.get("/v1/reviews", "documents", "notices").await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    let (status, out) = w.post("/v1/merges", "staff", json!({ "survivor": a, "absorbed": b, "review": review })).await;
+    let (status, out) = w
+        .post(
+            "/v1/merges",
+            "staff",
+            json!({ "survivor": a, "absorbed": b, "review": review, "reason": "passport sighted" }),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{out}");
     let (status, r) = w.get(&format!("/v1/parties/{b}"), "staff", "servicing").await;
     assert_eq!(status, StatusCode::OK);
@@ -476,10 +482,11 @@ async fn duplicates_are_reviewed_merged_and_unmerged() {
         .await;
     assert_eq!(m, json!({ "outcome": "linked", "party": a, "ignored": [] }));
     for (body, code) in [
-        (json!({ "survivor": a, "absorbed": a }), StatusCode::UNPROCESSABLE_ENTITY),
-        (json!({ "survivor": a, "absorbed": b }), StatusCode::CONFLICT),
-        (json!({ "survivor": a, "absorbed": "pty_none" }), StatusCode::NOT_FOUND),
-        (json!({ "survivor": "pty_none", "absorbed": a }), StatusCode::NOT_FOUND),
+        (json!({ "survivor": a, "absorbed": a, "reason": "same" }), StatusCode::UNPROCESSABLE_ENTITY),
+        (json!({ "survivor": a, "absorbed": b, "reason": "same" }), StatusCode::CONFLICT),
+        (json!({ "survivor": a, "absorbed": "pty_none", "reason": "same" }), StatusCode::NOT_FOUND),
+        (json!({ "survivor": "pty_none", "absorbed": a, "reason": "same" }), StatusCode::NOT_FOUND),
+        (json!({ "survivor": a, "absorbed": b, "reason": "  " }), StatusCode::BAD_REQUEST),
     ] {
         let (status, _) = w.post("/v1/merges", "staff", body).await;
         assert_eq!(status, code);
@@ -513,6 +520,162 @@ async fn duplicates_are_reviewed_merged_and_unmerged() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
+/// Purpose: after two records are merged, the person whose sign-in is bound to the absorbed
+/// record is told their record was combined and shown nothing of the survivor's: not its
+/// details, spending hold or past statements, and cannot change it; the survivor's own copy
+/// of everything held holds only their own stream until the merge is undone.
+/// Why it matters: found by the scenario run, SCN2-13 (F2-13-1): a wrong merge let one woman
+/// sign in and read another man's name, email and birth date.
+#[tokio::test]
+async fn a_merge_never_shows_one_sign_in_another_persons_record() {
+    let w = world_or_skip!();
+    let survivor = w.person("Wiremu", "Kingi", "1990-07-07", &[("email", json!("wiremu@x.nz"))]).await;
+    let absorbed = w.person("Mere", "Kingi", "1990-07-07", &[("email", json!("mere@x.nz"))]).await;
+    let (status, out) = w
+        .post(
+            "/v1/merges",
+            "staff",
+            json!({ "survivor": survivor, "absorbed": absorbed, "reason": "same birth date" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let as_party = |party: &str, method: &'static str, path: String, body: Option<Value>| Call {
+        method,
+        path,
+        role: "portal",
+        purpose: Some("self_service"),
+        body,
+        headers: vec![("x-ic-party", party.to_string()), ("x-ic-actor", "app-session-1".into())],
+    };
+    for path in [
+        format!("/v1/parties/{absorbed}"),
+        format!("/v1/parties/{survivor}"),
+        format!("/v1/parties/{absorbed}/history"),
+        format!("/v1/parties/{absorbed}/spending-hold"),
+        format!("/v1/parties/{absorbed}/export"),
+    ] {
+        let (status, e) = w.send(as_party(&absorbed, "GET", path.clone(), None)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{path}: {e}");
+        assert_eq!(e["error"]["code"], "record_combined");
+        assert!(!e.to_string().contains("Wiremu") && !e.to_string().contains("wiremu"));
+    }
+    let contact = json!({ "command": "record", "facts": [{ "field": "email", "value": "mere2@x.nz" }] });
+    let (status, _) = w
+        .send(as_party(&absorbed, "POST", format!("/v1/parties/{absorbed}/commands"), Some(contact)))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    // The survivor still sees their own record, and their own copy holds only their own stream.
+    let (status, mine) = w.send(as_party(&survivor, "GET", format!("/v1/parties/{survivor}"), None)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(mine["facts"]["email"]["value"], "wiremu@x.nz");
+    let mut export = as_party(&survivor, "GET", format!("/v1/parties/{survivor}/export"), None);
+    export.purpose = Some("subject_access");
+    let (status, copy) = w.send(export).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(copy["streams"].as_object().unwrap().len(), 1, "{copy}");
+    // Staff's copy for an access request holds both, for the privacy officer to check.
+    let (_, all) = w.get(&format!("/v1/parties/{survivor}/export"), "staff", "subject_access").await;
+    assert_eq!(all["streams"].as_object().unwrap().len(), 2);
+    // Once the merge is undone, each sees their own again.
+    let (status, _) = w.post("/v1/unmerges", "staff", json!({ "survivor": survivor, "absorbed": absorbed })).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, mine) = w.send(as_party(&absorbed, "GET", format!("/v1/parties/{absorbed}"), None)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(mine["facts"]["email"]["value"], "mere@x.nz");
+}
+
+/// Purpose: a merge needs a reason, and a pair someone dismissed as two people is not merged
+/// by that same person: they are told when and why they judged the pair apart. Someone else
+/// may merge it after looking again.
+/// Why it matters: found by the scenario run, SCN2-13 (F2-13-5, F2-13-6): the privacy officer
+/// pressed "Not the same person" and then merged the same pair from the form with no warning,
+/// which showed one customer another's record.
+#[tokio::test]
+async fn a_pair_judged_apart_is_not_merged_by_whoever_judged_it() {
+    let w = world_or_skip!();
+    let a = w.person("Jo", "Brown", "1991-01-01", &[]).await;
+    let b = w.person("Jo", "Brown", "1991-01-01", &[]).await;
+    let (_, reviews) = w.get("/v1/reviews", "staff", "servicing").await;
+    let review = reviews["reviews"][0]["id"].as_str().unwrap().to_string();
+    let staff = |who: &str, path: String, body: Value| Call {
+        method: "POST",
+        path,
+        role: "staff",
+        purpose: None,
+        body: Some(body),
+        headers: vec![("x-ic-actor", who.to_string())],
+    };
+    let (status, _) = w
+        .send(staff(
+            "st-privacy",
+            format!("/v1/reviews/{review}/dismiss"),
+            json!({ "reason": "different mothers" }),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let merge = json!({ "survivor": a, "absorbed": b, "reason": "same phone" });
+    let (status, e) = w.send(staff("st-privacy", "/v1/merges".into(), merge.clone())).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(e["error"]["code"], "judged_apart");
+    assert!(e["error"]["message"].as_str().unwrap().contains("different mothers"), "{e}");
+    let (status, e) = w.send(staff("st-other", "/v1/merges".into(), merge)).await;
+    assert_eq!(status, StatusCode::OK, "{e}");
+    let (_, copy) = w.get(&format!("/v1/parties/{b}/export"), "staff", "subject_access").await;
+    assert!(copy.to_string().contains("same phone"), "the reason is kept on the absorbed record: {copy}");
+}
+
+/// Purpose: a caller working to the books' business date (`x-ic-business-date`) states facts up
+/// to that day and reads as at it by default, while a caller who names none is held to the
+/// calendar; a malformed date is refused.
+/// Why it matters: found by the scenario run, SCN2-23 (F2-23-9) and SCN2-12 (F2-12-3): with the
+/// books a year ahead of the calendar, an address true from the books' last month was refused as
+/// "a future date", and a correction was dated by the wall clock, so screens had two todays.
+#[tokio::test]
+async fn facts_are_dated_by_the_books_where_the_caller_says() {
+    let w = world_or_skip!();
+    let p = w.person("Hana", "Mason", "1988-02-14", &[]).await;
+    let books = chrono::Utc::now().date_naive() + chrono::Days::new(365);
+    let month_ago = books - chrono::Days::new(30);
+    let address =
+        json!({ "command": "record", "facts": [{ "field": "postal_address", "value": ["2 Victoria Street", "Hamilton 3204"], "valid_from": month_ago }] });
+    let call = |date: Option<&str>, method: &'static str, path: String, body: Option<Value>| Call {
+        method,
+        path,
+        role: "staff",
+        purpose: Some("servicing"),
+        body,
+        headers: date.map(|d| vec![("x-ic-business-date", d.to_string())]).unwrap_or_default(),
+    };
+    let (status, _) = w.send(call(None, "POST", format!("/v1/parties/{p}/commands"), Some(address.clone()))).await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "the calendar's today is held to without a business date"
+    );
+    let (status, _) = w
+        .send(call(Some("soon"), "POST", format!("/v1/parties/{p}/commands"), Some(address.clone())))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let day = books.to_string();
+    let (status, out) = w.send(call(Some(&day), "POST", format!("/v1/parties/{p}/commands"), Some(address))).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    // A fact with no date is true from the books' day, and is read as at it.
+    let email = json!({ "command": "record", "facts": [{ "field": "email", "value": "hana@x.nz" }] });
+    w.send(call(Some(&day), "POST", format!("/v1/parties/{p}/commands"), Some(email))).await;
+    let (_, read) = w.send(call(Some(&day), "GET", format!("/v1/parties/{p}"), None)).await;
+    assert_eq!(
+        read["facts"]["postal_address"]["value"],
+        json!(["2 Victoria Street", "Hamilton 3204"]),
+        "{read}"
+    );
+    assert_eq!(read["facts"]["email"]["valid_from"], json!(day));
+    let (_, today) = w.get(&format!("/v1/parties/{p}"), "staff", "servicing").await;
+    assert!(
+        today["facts"]["email"].is_null(),
+        "as at the calendar's day the email was not yet true: {today}"
+    );
+}
+
 /// Purpose: a dismissed review is closed and leaves both parties as they are.
 /// Why it matters: two different people with the same name and birthday are common; saying so
 /// must take them off the duplicate list without touching either record.
@@ -524,7 +687,17 @@ async fn reviews_can_be_dismissed() {
     let (_, reviews) = w.get("/v1/reviews", "staff", "servicing").await;
     let review = reviews["reviews"][0]["id"].as_str().unwrap().to_string();
     assert_eq!(reviews["reviews"][0]["party"], b);
-    let (status, _) = w.post(&format!("/v1/reviews/{review}/dismiss"), "staff", json!({})).await;
+    let (status, e) = w.post(&format!("/v1/reviews/{review}/dismiss"), "staff", json!({})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "a duplicate is dismissed with a reason: {e}");
+    let (status, _) = w.post(&format!("/v1/reviews/{review}/dismiss"), "staff", json!({ "colour": 1 })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = w
+        .post(
+            &format!("/v1/reviews/{review}/dismiss"),
+            "staff",
+            json!({ "reason": "different mothers' names" }),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK);
     let (_, reviews) = w.get("/v1/reviews", "staff", "servicing").await;
     assert_eq!(reviews["reviews"], json!([]));
@@ -875,7 +1048,13 @@ async fn a_third_party_concern_opens_a_prompt_and_discloses_nothing() {
     assert_eq!(prompts[0]["reason"], "financial_abuse");
     let id = prompts[0]["id"].as_str().unwrap();
     let other = w.person("Hone", "Rakau", "1938-03-03", &[]).await;
-    let (status, _) = w.post("/v1/merges", "staff", json!({ "survivor": p, "absorbed": other, "review": id })).await;
+    let (status, _) = w
+        .post(
+            "/v1/merges",
+            "staff",
+            json!({ "survivor": p, "absorbed": other, "review": id, "reason": "same" }),
+        )
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "a prompt is not a duplicate review");
     let (status, _) = w.post(&format!("/v1/reviews/{id}/dismiss"), "staff", json!({})).await;
     assert_eq!(status, StatusCode::OK);
