@@ -37,3 +37,30 @@ Counts are as each area recorded them; a finding raised by two operators can app
 - Registering a scheme from an issued policy needs its own route and terms form (F-SCN19-1).
 - A reused idempotency key with a different body is not yet refused (F-SCN02-4).
 - Employer administrators on the e2e stack have no customer-master record (F-SCN07-8).
+
+## Round 2 (17 to 18 Nov 2026)
+
+There were 24 new scenarios (SCN2-01 to SCN2-24) in [round-2/scenarios.md](round-2/scenarios.md). Six operators ran them ([round-2/reports](round-2/reports)), and six areas fixed what they found ([round-2/fixes](round-2/fixes)). Before the run, the stack gained the cast and seed the scenarios needed: collections roles, AIA templates, commission books and second approvers.
+
+| Area | Findings | Fixed | Partly | Decided or not a defect | Left |
+|---|---|---|---|---|---|
+| New business and underwriting ([fix2-newbiz](round-2/fixes/fix2-newbiz.md)) | 34 | 28 | 2 | 2 | 2 |
+| Staff access, customer master and privacy ([fix2-people](round-2/fixes/fix2-people.md)) | 40 | 19 | 4 | 4 | 13 |
+| Documents ([fix2-documents](round-2/fixes/fix2-documents.md)) | 23 | 17 | 4 | 2 | 0 |
+| Claims, payments and reinsurance ([fix2-money](round-2/fixes/fix2-money.md)) | 41 | 19 | 3 | 5 | 14 |
+| Distribution, commission, readers and group ([fix2-distribution](round-2/fixes/fix2-distribution.md)) | 36 | 15 | 7 | 3 | 18 |
+| Servicing and unit pricing ([fix2-servicing](round-2/fixes/fix2-servicing.md)) | 28 | 16 | 1 | 2 | 9 |
+
+Counts are as each area recorded them.
+
+**The most serious findings, all fixed:**
+
+- A customer's sign-in for a record merged into another person's showed the survivor's whole record (F2-13-1).
+- An internal auditor's payments reads showed full bank account numbers (F2-18-1).
+- One staff administrator could change configuration and authority profiles alone (F2-24-1).
+- A customer could not answer their own health questions or give consent on the customer page (F2-02-1 to 3).
+- A conflicted underwriter could still read the case (F2-03-1).
+- A large claim's second signature needed a second claims manager who did not exist (F2-08-2).
+- Bank payment references overran the ISO 20022 end-to-end id (F2-X-1).
+
+**What is still open** is listed in [round-2/outstanding.md](round-2/outstanding.md), most serious first. Three scenarios were not run: SCN2-07, SCN2-17 and SCN2-19, which move the business date or lose a region.
