@@ -364,6 +364,8 @@ fn a_binding_decision_is_implemented_before_the_complaint_closes() {
 fn the_forums_decision_ends_a_complaint_that_had_no_outcome() {
     let mut kit = Kit::ready();
     kit.in_review("c1");
+    // The date to decide by passes without an outcome.
+    kit.advance_days(timers().decide_days as i64 + 1);
     kit.ok("complaints", "reviewer-1", Command::DeclareDeadlock { complaint: "c1".into() });
     kit.ok(
         "complaints",

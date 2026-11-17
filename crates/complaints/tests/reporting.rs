@@ -797,8 +797,21 @@ fn questions_are_answered_only_to_those_allowed_to_ask() {
     );
     assert_eq!(ask(h, Query::SubjectRecord { id: "nobody".into() }).unwrap(), Value::Null);
     assert_eq!(ask(h, Query::AdviserView { engagement: "eng-1".into() }).unwrap()[0]["complaint"], json!("c1"));
-    assert_eq!(ask(h, Query::Queue { limit: usize::MAX }).unwrap().as_array().unwrap().len(), 3);
-    assert_eq!(ask(h, Query::Queue { limit: 2 }).unwrap().as_array().unwrap().len(), 2);
+    assert_eq!(
+        ask(
+            h,
+            Query::Queue {
+                limit: usize::MAX,
+                owner: None
+            }
+        )
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .len(),
+        3
+    );
+    assert_eq!(ask(h, Query::Queue { limit: 2, owner: None }).unwrap().as_array().unwrap().len(), 2);
     assert_eq!(
         ask(h, Query::Running { id: "c2".into() }).unwrap(),
         serde_json::to_value(kit.state.running(kit.complaint("c2"))).unwrap()
@@ -816,6 +829,7 @@ fn questions_are_answered_only_to_those_allowed_to_ask() {
     assert!(ask(h, Query::Register { from: period.1, to: period.1 }).unwrap().is_array());
     assert_eq!(ask(h, Query::Timers { version: 1 }).unwrap()["decide_days"], json!(20));
     assert_eq!(ask(h, Query::Timers { version: 9 }).unwrap(), Value::Null);
+    assert_eq!(ask(h, Query::CurrentTimers).unwrap()["front_line_limit_minor"], json!(10_000));
     assert_eq!(ask(h, Query::PendingEvents { limit: 2 }).unwrap().as_array().unwrap().len(), 2);
     assert!(ask(h, Query::PendingEvents { limit: usize::MAX }).unwrap().as_array().unwrap().len() <= module::MAX_ANSWER);
 
@@ -844,4 +858,42 @@ fn questions_are_answered_only_to_those_allowed_to_ask() {
     );
 
     assert!(hosted.query(json!({"everything": {}})).unwrap_err().contains("not a question"));
+}
+
+/// Purpose: a report for a period still running counts a timer as late
+/// only once its due date has passed today, not because the period's end
+/// is later than the due date.
+/// Why it matters: found by the scenario run, SCN-21 (F-21-6). The month's
+/// report, read mid-month, counted complaints received that day as
+/// acknowledged late, and that is the report the regulator is sent.
+#[test]
+fn a_running_period_counts_nothing_late_before_it_is_due() {
+    let mut kit = Kit::ready();
+    let start = kit.today();
+    let mut c1 = intake("c1", Process::Service);
+    c1.vulnerable = true;
+    kit.record(c1);
+    let month_end = start + Duration::days(30);
+    let report = kit.state.report(start, month_end);
+    assert_eq!((report.received, report.acknowledged_late, report.vulnerable_late), (1, 0, 0));
+    // Once the acknowledgement is overdue, it is late.
+    kit.advance_days(timers().acknowledge_days as i64 + 1);
+    kit.tick();
+    let report = kit.state.report(start, month_end);
+    assert_eq!((report.acknowledged_late, report.vulnerable_late), (1, 1));
+    // A closed period is judged as it stood at its end.
+    assert_eq!(kit.state.report(start, start + Duration::days(1)).acknowledged_late, 0);
+}
+
+/// Purpose: a handler's own complaints are in the queue they are shown however far down it they come; others are cut at the limit.
+/// Why it matters: found by the persona suite run against the scenario stack (E2E-044, E2E-034, E2E-039 failing, reported with
+/// SCN-21). With more than 200 open complaints, a decided complaint with nothing due fell off the end of the queue, and its own handler
+/// could no longer see it to close it.
+#[test]
+fn a_handlers_own_complaints_never_fall_off_the_queue() {
+    let (kit, _) = scenario();
+    let ids = |q: Vec<QueueItem>| q.into_iter().map(|i| i.complaint).collect::<Vec<_>>();
+    assert_eq!(ids(kit.state.queue_for(1, Some("reviewer-1"))), vec!["c2", "c1"]);
+    assert_eq!(ids(kit.state.queue_for(1, Some("someone-else"))), vec!["c2"]);
+    assert_eq!(ids(kit.state.queue_for(1, None)), vec!["c2"]);
 }

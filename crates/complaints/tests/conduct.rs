@@ -707,6 +707,8 @@ fn the_register_lists_the_letters_that_are_owed() {
     );
     assert_eq!(due(&kit, 10), licence_letters);
     kit.assign("c1", "reviewer-1", 3);
+    kit.decide("c1", OutcomeKind::NotUpheld);
+    kit.delivered("c1");
     kit.ok("complaints", "reviewer-1", Command::DeclareDeadlock { complaint: "c1".into() });
     assert_eq!(due(&kit, 1), vec![(LetterKind::DeadlockNotice, "c1".to_string(), "aroha".to_string())]);
     kit.ok(

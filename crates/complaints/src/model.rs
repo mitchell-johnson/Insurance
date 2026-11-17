@@ -328,6 +328,10 @@ pub struct Complaint {
     pub timers_version: u32,
     pub owner: Option<String>,
     pub owner_authority: u8,
+    /// Whether the owner is trained to work with vulnerable customers, as
+    /// the staff records said when the complaint was assigned to them.
+    #[serde(default)]
+    pub owner_trained: bool,
     pub status: Status,
     pub acknowledged_on: Option<NaiveDate>,
     pub acknowledgement: Option<String>,

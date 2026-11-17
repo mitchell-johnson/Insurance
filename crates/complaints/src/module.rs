@@ -52,6 +52,9 @@ pub enum Query {
     },
     Queue {
         limit: usize,
+        /// The handler asking: their own complaints are listed beyond the limit.
+        #[serde(default)]
+        owner: Option<String>,
     },
     /// The timers running on a complaint, with their due dates.
     Running {
@@ -78,6 +81,9 @@ pub enum Query {
     Timers {
         version: u32,
     },
+    /// The timers new complaints run under: the cause codes a person picks
+    /// from and the limit for putting a matter right on the spot.
+    CurrentTimers,
     PendingEvents {
         limit: usize,
     },
@@ -110,7 +116,7 @@ pub fn answer(state: &ComplaintsState, question: Value) -> Result<Value, String>
         }
         Query::SubjectRecord { id } => json(state.subject_record(&id)),
         Query::AdviserView { engagement } => json(state.adviser_view(&engagement)),
-        Query::Queue { limit } => json(state.queue(limit.min(MAX_ANSWER))),
+        Query::Queue { limit, owner } => json(state.queue_for(limit.min(MAX_ANSWER), owner.as_deref())),
         Query::LettersDue { limit } => json(state.letters_due(limit.min(MAX_ANSWER))),
         Query::OutcomesAwaitingDelivery { limit } => json(state.outcomes_awaiting_delivery(limit.min(MAX_ANSWER))),
         Query::Running { id } => json(state.complaints.get(&id).map(|c| state.running(c))),
@@ -122,6 +128,7 @@ pub fn answer(state: &ComplaintsState, question: Value) -> Result<Value, String>
         Query::ConductCase { id, .. } => json(state.conduct.get(&id)),
         Query::OpenConductCases { .. } => json(state.open_conduct.iter().take(MAX_ANSWER).collect::<Vec<_>>()),
         Query::Timers { version } => json(state.timers(version)),
+        Query::CurrentTimers => json(state.timers(state.timers_version)),
         Query::PendingEvents { limit } => json(state.pending_events(limit.min(MAX_ANSWER))),
         Query::StateHash => json(state.state_hash()),
     }

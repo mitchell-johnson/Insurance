@@ -12,7 +12,7 @@ use ic_core::PartyId;
 use serde::{Deserialize, Serialize};
 
 use crate::model::*;
-use crate::state::{days, ComplaintsState};
+use crate::state::{days, nz_date, ComplaintsState};
 
 /// One line of the register: what the regulator's return is built from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,7 +168,8 @@ impl ComplaintsState {
     }
 
     /// The figures for complaints received in a period, as they stand on
-    /// `to`: a timer not met by then counts as late.
+    /// `to`, or today while the period is still running: a timer not met by
+    /// then counts as late.
     pub fn report(&self, from: NaiveDate, to: NaiveDate) -> Report {
         let mut r = Report {
             from: Some(from),
@@ -177,6 +178,7 @@ impl ComplaintsState {
             records_removed: self.removed,
             ..Report::default()
         };
+        let as_at = self.now.map_or(to, |now| nz_date(now).min(to));
         let mut complainants = BTreeSet::new();
         for c in self.in_period(from, to) {
             let Some(t) = self.timers(c.timers_version) else { continue };
@@ -189,10 +191,11 @@ impl ComplaintsState {
             if let Some(product) = &c.category.product {
                 *r.by_product.entry(product.clone()).or_default() += 1;
             }
-            // Met, missed, or not yet due.
+            // Met, missed, or not yet due. A period still running is judged
+            // as it stands today, so nothing is late before it is due.
             let met = |done: Option<NaiveDate>, due: NaiveDate| match done {
                 Some(on) => Some(on <= due),
-                None if to > due => Some(false),
+                None if as_at > due => Some(false),
                 None => None,
             };
             let acknowledged = met(c.acknowledged_on, c.received_on + days(t.acknowledge_days));
@@ -320,6 +323,13 @@ impl ComplaintsState {
     /// The open complaints, those marked vulnerable first, then by the
     /// timer due soonest.
     pub fn queue(&self, limit: usize) -> Vec<QueueItem> {
+        self.queue_for(limit, None)
+    }
+
+    /// The queue as one handler sees it: the first `limit` open complaints,
+    /// and every one they own however far down it comes, so a handler's own
+    /// files never fall off the end of a long queue.
+    pub fn queue_for(&self, limit: usize, owner: Option<&str>) -> Vec<QueueItem> {
         let mut items: Vec<QueueItem> = self
             .open
             .iter()
@@ -343,7 +353,11 @@ impl ComplaintsState {
                 i.complaint.clone(),
             )
         });
-        items.truncate(limit);
+        let mut n = 0;
+        items.retain(|i| {
+            n += 1;
+            n <= limit || (owner.is_some() && i.owner.as_deref() == owner)
+        });
         items
     }
 }

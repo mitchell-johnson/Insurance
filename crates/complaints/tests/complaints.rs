@@ -763,3 +763,96 @@ fn a_complaint_closes_only_when_everything_is_done() {
         (Some("term-life-4"), Some("decline-letter-2"))
     );
 }
+
+/// Purpose: a vulnerability marker added while the complaint is with
+/// someone not trained for it sends the complaint back to the queue and
+/// ends their access; with a trained handler it stays where it is.
+/// Why it matters: found by the scenario run, SCN-21 (F-21-4). The
+/// training check was made only when the complaint was assigned, so a
+/// junior who took it before the marker kept a vulnerable complainant's
+/// file and went on acting on it.
+#[test]
+fn a_vulnerability_marker_takes_the_complaint_from_an_untrained_handler() {
+    let mut kit = Kit::ready();
+    kit.record(intake("c1", Process::Service));
+    kit.record(intake("c2", Process::Service));
+    let assign = |id: &str, handler: &str, trained: bool| Command::Assign {
+        complaint: id.into(),
+        handler: handler.into(),
+        authority: 1,
+        trained_for_vulnerability: trained,
+    };
+    let mark = |id: &str| Command::SetVulnerability {
+        complaint: id.into(),
+        vulnerable: true,
+        adjustments: vec!["plain_language".into()],
+    };
+    kit.ok("complaints", "junior", assign("c1", "junior", false));
+    kit.ok("complaints", "lead", assign("c2", "trained-1", true));
+    assert_eq!(
+        kit.ok("complaints", "lead", mark("c1")),
+        vec![Event::ComplaintReturnedToQueue {
+            complaint: "c1".into(),
+            handler: "junior".into()
+        }]
+    );
+    let c1 = kit.complaint("c1");
+    assert_eq!((c1.owner.as_deref(), c1.vulnerable), (None, true));
+    assert!(!c1.grants.contains_key("junior"), "the untrained handler's access ends");
+    assert!(kit
+        .state
+        .queue(10)
+        .iter()
+        .any(|q| q.complaint == "c1" && q.owner.is_none() && q.needs_trained_handler));
+    // The untrained handler can no longer act as its owner, or take it back.
+    assert_eq!(
+        kit.err(
+            "complaints",
+            "junior",
+            Command::Decide {
+                complaint: "c1".into(),
+                outcome: OutcomeKind::NotUpheld,
+                reason_codes: vec!["r".into()],
+                document: Some("doc".into()),
+            }
+        ),
+        "not_owner"
+    );
+    assert_eq!(kit.err("complaints", "junior", assign("c1", "junior", false)), "not_trained");
+
+    // A trained handler keeps it.
+    assert!(kit.ok("complaints", "lead", mark("c2")).is_empty());
+    assert_eq!(kit.complaint("c2").owner.as_deref(), Some("trained-1"));
+}
+
+/// Purpose: a goodwill payment above the authoriser's limit is refused
+/// with the amount, the limit, and the authority level that could
+/// authorise it, in dollars.
+/// Why it matters: found by the scenario run, SCN-21 (F-21-11). The
+/// refusal said only that the payment was above the limit, so the handler
+/// did not know by how much or whom to ask.
+#[test]
+fn a_goodwill_payment_over_the_limit_says_the_limit_and_who_may_authorise_it() {
+    let mut kit = Kit::ready();
+    kit.in_review("c1");
+    kit.decide("c1", OutcomeKind::Upheld);
+    let refused = |kit: &mut Kit, amount: i64, authority: u8| {
+        let pay = Command::RecordRemediation {
+            complaint: "c1".into(),
+            kind: RemediationKind::ExGratia,
+            reference: format!("pay-{amount}"),
+            amount_minor: amount,
+            authorised_by: "lead".into(),
+            authority,
+        };
+        kit.send("complaints", "reviewer-1", pay).result.expect_err("over the limit").message
+    };
+    assert_eq!(
+        refused(&mut kit, 60_000, 2),
+        "the goodwill payment is above the authoriser's limit: $600.00 against a limit of $500.00 at authority level 2; someone at authority level 3 or above may authorise it"
+    );
+    assert_eq!(
+        refused(&mut kit, 123_456_789, 3),
+        "the goodwill payment is above the authoriser's limit: $1,234,567.89 against a limit of $5,000.00 at authority level 3; no authority level covers it"
+    );
+}
