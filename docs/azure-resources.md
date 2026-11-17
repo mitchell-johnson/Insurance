@@ -183,7 +183,7 @@ There is one namespace, `<name>-<unique>-events`: **Premium, 1 processing unit**
 | Azure Monitor private link scope | main | Private only for ingestion, open for queries | The monitoring agent and the collector |
 | Log alert rules | main (7), reinsurance (2), unit-pricing (3) | Every 5 or 15 minutes on the workspace; severity 0 to 2 | The core: no leader, state hashes differ, node down, close failed, housekeeping backlog, unit orders left, watch silent (`operations.md`, "Alerts"). Reinsurance exception opened and delivery stopped; a price that needs a person, failing passes, a silent driver |
 | Action groups | main, reinsurance, unit-pricing | Email to `alertEmails` | On-call |
-| Front Door Premium and WAF | edge | DRS 2.1 and bot manager in Prevention; rate limit 600 a minute per client (placeholder); managed TLS | The only way in, over Private Link to the internal ingress |
+| Front Door Premium and WAF | edge | DRS 2.1 and bot manager in Prevention; rate limit 600 a minute per client (placeholder), and 10 membership claims in 5 minutes; managed TLS | The only way in, over Private Link to the internal ingress |
 | Backup vault | main | Geo-redundant and immutable in prod; snapshots every 4 hours kept 7 days, daily vault copies kept 35 days | The `ic-node` disks |
 | Email Communication Service | documents (with `emailDomain`) | Customer-managed domain, sender `letters@<domain>`, SPF, DKIM and DMARC records | Letters by e-mail |
 

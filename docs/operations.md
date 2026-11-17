@@ -227,7 +227,7 @@ The public names are on Azure Front Door Premium (`infra/edge.bicep`): managed T
 3. Approve Front Door's connection, once: `az network private-endpoint-connection list --id <pls id>` shows it pending; `az network private-endpoint-connection approve --id <connection id>`. Nothing else is ever approved, so only Front Door can reach the controller.
 4. Put the same host names in `deploy/k8s/ingress.yaml` and apply.
 
-The rate limit (`rateLimitPerMinute`, 600) and the country list (`allowedCountries`, empty) are placeholders. In a new environment, set the WAF to Detection for the first week (`mode`) and read `AzureDiagnostics | where Category == "FrontDoorWebApplicationFirewallLog"` for false positives before turning Prevention back on.
+The rate limit (`rateLimitPerMinute`, 600) and the country list (`allowedCountries`, empty) are placeholders. In a new environment, set the WAF to Detection for the first week (`mode`) and read `AzureDiagnostics | where Category == "FrontDoorWebApplicationFirewallLog"` for false positives before turning Prevention back on. Claiming a scheme membership (`POST /app/v1/memberships`) has its own limit, 10 in 5 minutes per client, because each claim is a guess at an employee ID.
 
 ## Private networking
 

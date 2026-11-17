@@ -264,6 +264,30 @@ resource waf 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@2024-02-
             }
           ]
         }
+        {
+          // Claiming a scheme membership is a guess at an employee ID: a few tries are a typo, more are a search. Each claim
+          // already needs a signed-in customer on an enrolled device, and every refusal is the same; this slows the rest.
+          name: 'RateLimitMembershipClaims'
+          priority: 110
+          ruleType: 'RateLimitRule'
+          rateLimitDurationInMinutes: 5
+          rateLimitThreshold: 10
+          action: 'Block'
+          enabledState: 'Enabled'
+          matchConditions: [
+            {
+              matchVariable: 'RequestMethod'
+              operator: 'Equal'
+              matchValue: ['POST']
+            }
+            {
+              matchVariable: 'RequestUri'
+              operator: 'Contains'
+              transforms: ['Lowercase']
+              matchValue: ['/app/v1/memberships']
+            }
+          ]
+        }
       ], empty(allowedCountries) ? [] : [
         {
           name: 'AllowedCountries'
