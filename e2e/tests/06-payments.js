@@ -520,8 +520,10 @@ test({ id: "E2E-201", area: A, persona: "Payments", story: "US-ST17-1", title: "
   const party = t.ref("cust").toLowerCase(), authority = t.ref("dd").toLowerCase();
   const p = await t.policy("term_life", party);
   const s = await t.open("/payments", cast.payee);
-  await another(s, { type: "create_authority", authority, policy: p.id, party, account: { name: "Account Holder", number: "01-0001-0000005-00" }, sole_name: true });
+  await another(s, { type: "create_authority", authority, policy: p.id, party, account: { name: "Account Holder", number: "01-0001-1234579-00" }, sole_name: true });
   await s.done("#raw-msg", "Done.");
+  // Nothing is collected on an authority until a second payee maintainer confirms the account with the payer (SCN2-15).
+  await sends(t, cast.payee2, { type: "confirm_authority", authority });
   await s.tab("Payees and refunds");
   await s.fill("#party-id", party);
   await s.press("Show", "#party-form");
@@ -542,8 +544,10 @@ test({ id: "E2E-203", area: A, persona: "ST10", story: "US-ST10-1", title: "A re
   purpose: "Request a premium refund to a verified account and open it on the refunds form.",
   why: "A refund is the customer's money; the maker must see how much, for which policy and where it is going before releasing it." }, async (t) => {
   const to = await payee(t);
-  const refund = t.ref("rf").toLowerCase();
-  await sends(t, cast.st10, { type: "request_refund", refund, policy: t.ref("pol").toLowerCase(), amount_minor: 5000, currency: "NZD", destination: { payee: { payee: to.id } } });
+  const refund = t.ref("rf").toLowerCase(), policy = t.ref("pol").toLowerCase();
+  // A refund goes only to the policy owner's own payee, so payments is told who owns the policy, as the core's feed does on issue.
+  await reports(t, { type: "policy_owner", policy, owner: to.party });
+  await sends(t, cast.st10, { type: "request_refund", refund, policy, amount_minor: 5000, currency: "NZD", destination: { payee: { payee: to.id } } });
   const s = await t.open("/payments", cast.st10);
   await s.tab("Payees and refunds");
   await s.fill("#refund-id", refund);
