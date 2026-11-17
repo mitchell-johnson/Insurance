@@ -1225,9 +1225,13 @@ async fn the_employer_portal_serves_administrators() {
 async fn the_staff_console_asks_the_four_questions() {
     let portal = portal();
     let policy = &portal.retail;
-    let (status, problem) = portal.get("sub-kiri", "/staff/v1/me").await;
+    // Someone signed in to the workforce but not on the staff directory is told so, not refused:
+    // every workforce page asks, and an operations engineer's must still open.
+    let (status, me) = portal.get("sub-kiri", "/staff/v1/me").await;
+    assert_eq!((status, &me), (StatusCode::OK, &json!({ "staff": false })));
+    let (status, problem) = portal.get("sub-kiri", &format!("/staff/v1/policies/{policy}?case=case-1&scope=")).await;
     assert_eq!(
-        (status, problem["detail"].as_str().unwrap().contains("no staff role")),
+        (status, problem["detail"].as_str().unwrap_or_default().contains("no staff role")),
         (StatusCode::FORBIDDEN, true)
     );
     // Your own access: your roles, the profile that sets your limits, and (below) your access log with each refusal's reason.

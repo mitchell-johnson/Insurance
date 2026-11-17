@@ -2215,7 +2215,13 @@ async fn care_decide(State(s): State<Shared>, headers: HeaderMap, method: Method
 }
 
 async fn staff_me(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
-    let session = s.staff(&headers, &method, &uri, b"").await?;
+    // Every workforce page asks who is signed in. Someone on the workforce
+    // sign-in but not the staff directory (an operations engineer) is told
+    // so, rather than refused, and is offered the platform pages only.
+    let (_, session) = s.session(&s.workforce, &headers, &method, &uri, b"").await?;
+    if !session.staff {
+        return ok(json!({ "staff": false }));
+    }
     ok(s.ask(Question::OwnAccess {
         staff: session.party,
         at: session.at,
