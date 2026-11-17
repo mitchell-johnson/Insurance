@@ -96,7 +96,7 @@ fn collected() -> Desk {
     two_funds(&mut desk);
     desk.payee("own-sf2", PayeeKind::Own, "0102222222");
     desk.payee("someone", PayeeKind::Customer, "0103333333");
-    desk.authority("a1", "pol-1", "0201234567", false);
+    desk.authority("a1", "pol-1", "02-0001-1234579-00", false);
     desk.prepare("r1", RunType::Collection, d(2027, 11, 15));
     desk.add("r1", vec![collect("c1", "a1", "pol-1", 100_00)]);
     let submission = desk.approve("r1");

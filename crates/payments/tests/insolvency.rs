@@ -63,7 +63,7 @@ fn claim(item: &str, payee: &str, amount: i64) -> NewItem {
 fn new_account() -> Command {
     Command::ChangePayeeAccount {
         payee: "p1".to_string(),
-        account: account("p1", "0109999999"),
+        account: account("p1", "01-0001-9999993-00"),
         name_check: NameCheck::Match,
     }
 }
@@ -104,7 +104,7 @@ fn only_an_owners_insolvency_is_taken_in() {
 #[test]
 fn a_bankrupt_owners_accounts_are_frozen() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     let by_hand = Command::RecordInsolvency {
         owner: "party-p1".to_string(),
         policy: "pol-1".to_string(),
@@ -159,7 +159,7 @@ fn a_bankrupt_owners_accounts_are_frozen() {
 #[test]
 fn the_freeze_ends_when_the_last_release_takes_effect() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     hear(&mut desk, "1-1", recorded("pol-1", "int-1", "insolvency", Some("party-p1")));
     hear(&mut desk, "1-2", recorded("pol-2", "int-9", "insolvency", Some("party-p1")));
     assert!(hear(&mut desk, "1-3", released("pol-1", "int-1", "party-p1", "2027-11-01")).is_empty());
@@ -184,7 +184,7 @@ fn the_freeze_ends_when_the_last_release_takes_effect() {
 #[test]
 fn a_bankruptcy_heard_after_the_item_joined_holds_it_at_the_check() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
     desk.add("r1", vec![payout("w1", "p1", 500_00)]);
     hear(&mut desk, "1-1", recorded("pol-1", "int-1", "insolvency", Some("party-p1")));

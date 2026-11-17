@@ -55,9 +55,12 @@ pub const ROLES: [(&str, &str); 9] = [
 
 /// The commands a person may send. That module decides whether this
 /// person's roles allow it.
-pub const COMMANDS: [&str; 37] = [
+pub const COMMANDS: [&str; 39] = [
     "activate_config",
     "create_authority",
+    // A second payee maintainer confirms it; a changed account cools off.
+    "confirm_authority",
+    "change_authority_account",
     "suspend_authority",
     "reinstate_authority",
     "cancel_authority",

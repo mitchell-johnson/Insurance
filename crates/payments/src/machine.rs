@@ -49,6 +49,17 @@ pub enum Command {
         account: AccountDetails,
         sole_name: bool,
     },
+    /// A second payee maintainer confirms an authority's account with the
+    /// payer; until then nothing is collected on it.
+    ConfirmAuthority {
+        authority: Id,
+    },
+    /// The payer collects from another account: it is confirmed again by a
+    /// second person and waits out the cooling-off period.
+    ChangeAuthorityAccount {
+        authority: Id,
+        account: AccountDetails,
+    },
     SuspendAuthority {
         authority: Id,
         reason: String,
@@ -64,6 +75,9 @@ pub enum Command {
     MarkHardship {
         authority: Id,
         hardship: bool,
+        /// The last day the mark stands; none until it is taken off.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until: Option<NaiveDate>,
     },
     /// What a conversation with a payer in hardship decided about a
     /// dishonoured collection held for that conversation.
@@ -477,6 +491,14 @@ pub enum Event {
     },
     AuthorityReinstated {
         authority: Id,
+    },
+    AuthorityConfirmed {
+        authority: Id,
+        by: String,
+    },
+    AuthorityAccountChanged {
+        authority: Id,
+        cooling_off_until: NaiveDateTime,
     },
     /// The bank's window for a submission's value date had passed when a
     /// driver took it; it goes for the next window.
@@ -902,10 +924,12 @@ impl PaymentsState {
                 account,
                 sole_name,
             } => self.create_authority(tx, authority, policy, party, life, account, sole_name),
+            Command::ConfirmAuthority { authority } => self.confirm_authority(tx, &authority),
+            Command::ChangeAuthorityAccount { authority, account } => self.change_authority_account(tx, &authority, account),
             Command::SuspendAuthority { authority, reason } => self.suspend_authority(tx, &authority, reason),
             Command::ReinstateAuthority { authority } => self.reinstate_authority(tx, &authority),
             Command::CancelAuthority { authority, reason } => self.cancel_authority(tx, &authority, reason),
-            Command::MarkHardship { authority, hardship } => self.mark_hardship(tx, &authority, hardship),
+            Command::MarkHardship { authority, hardship, until } => self.mark_hardship(tx, &authority, hardship, until),
             Command::RecordConversation { item, outcome, note } => self.record_conversation(tx, &item, outcome, note),
             Command::PayerDeceased { policy, claim } => self.payer_deceased(tx, &policy, &claim),
             Command::MemberCollectionEnded { policy, life, reason } => self.member_collection_ended(tx, &policy, &life, &reason),

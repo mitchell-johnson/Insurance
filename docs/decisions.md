@@ -364,3 +364,14 @@ The scenario run (SCN2-08, F2-08-2) admitted a $900,000 trauma claim. The claims
 **What it costs.** A senior assessor can countersign a decision above their own limit. A business that wants two full-limit signatures above some amount should add a second person to the authority book at that level; the refusal says when nobody else can sign.
 
 Built in: `crates/claims/src/decide.rs` (`Need::Peer`, `peers`, `signers`, `cannot_sign`), `crates/claims/src/report.rs` (`WorkDecision.signers`), `crates/channels/ui/claims.html`. Docs: `docs/claims.md`.
+
+## Direct debit authorities, hardship and refunds to a payee (17 Nov 2026)
+
+The scenario run (SCN2-15, SCN2-16) found an authority with a digit missing accepted and active on one person's word, a payer in hardship collected again, a suspended authority added to a run and reinstated by one click, and a customer's refund requested to another customer's account. The calls made:
+
+- **An authority's account is checked by its check digits.** Direct debits are collected from New Zealand accounts only, so the bank's published check-digit algorithms apply (A to G and X by bank). Payee accounts keep the looser shape check, because a payee can be abroad or be given by a file in another form.
+- **A second payee maintainer confirms an authority**, as a payee is confirmed: on creation, on reinstatement after suspension, and on a change of account, which also waits out the cooling-off period. Reinstatement still resets the dishonour count (the payer has told us the money is there); the second person is the control, not a new account. Authorities recorded before this change count as confirmed.
+- **A hardship mark stops new collections.** Collecting from someone the insurer knows cannot pay only adds dishonour fees. The mark can carry a last day; without one it stands until collections takes it off. A collection already in a run when the mark is made is held at the check; a presentation again that a recorded conversation agreed goes ahead.
+- **A refund to a payee goes only to the owner's own payee.** The owner is the one the core reports (`PolicyOwner`); until it has, a refund to a payee is refused rather than guessed. A refund of money paid by direct credit from someone else's account is paid to the owner, not back to that account: the channels have no rail to return a credit, and the third-party payer case is compliance's.
+
+Built in: `crates/payments/src/authority.rs`, `model.rs` (`Authority::collection_stop`), `run.rs`, `refund.rs`, `console.rs`; `crates/channels/ui/payments.html`. Docs: `docs/payments.md`.

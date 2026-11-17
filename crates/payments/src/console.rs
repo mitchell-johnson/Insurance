@@ -155,7 +155,12 @@ impl PaymentsState {
                     "status": a.status,
                     "reason": a.reason,
                     "dishonours": a.dishonours,
-                    "hardship": a.hardship,
+                    "hardship": a.in_hardship(now.date()),
+                    "hardship_until": a.hardship_until,
+                    "awaiting_confirmation": a.unconfirmed(),
+                    "cooling_off_until": a.cooling_off_until,
+                    // Why nothing new can be collected on it now, in words.
+                    "stopped": a.collection_stop(id, now, false).map(|(_, why)| why),
                     "sole_name": a.sole_name,
                 })
             })

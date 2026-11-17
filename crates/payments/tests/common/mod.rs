@@ -322,6 +322,8 @@ impl Desk {
                 sole_name,
             },
         );
+        // A second payee maintainer confirms it with the payer.
+        self.ok(&pat(), Command::ConfirmAuthority { authority: id.to_string() });
     }
 
     pub fn prepare(&mut self, run: &str, run_type: RunType, value_date: NaiveDate) {

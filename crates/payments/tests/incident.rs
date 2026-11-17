@@ -41,9 +41,9 @@ fn declare(id: &str, authorities: &[&str], reason: &str) -> Command {
 #[test]
 fn failures_in_an_incident_are_not_held_against_the_payers() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", false);
-    desk.authority("a2", "pol-2", "0201234567", false);
-    desk.authority("a3", "pol-3", "0301234567", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
+    desk.authority("a2", "pol-2", "02-0001-1234579-00", false);
+    desk.authority("a3", "pol-3", "03-0001-1234579-00", false);
     desk.prepare("r1", RunType::Collection, d(2027, 11, 15));
     desk.add(
         "r1",

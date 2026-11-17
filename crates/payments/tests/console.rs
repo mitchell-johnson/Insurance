@@ -19,7 +19,7 @@ fn ask(desk: &Desk, question: serde_json::Value) -> serde_json::Value {
 #[test]
 fn open_runs_are_listed_with_their_totals() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.prepare("r2", RunType::LumpSumClaims, d(2027, 11, 16));
     desk.add("r2", vec![pay("i1", "p1", 100_00), pay("i2", "p1", 250_00)]);
     desk.prepare("r1", RunType::Commission, d(2027, 11, 15));
@@ -78,8 +78,8 @@ fn open_exceptions_are_listed_across_accounts() {
 #[test]
 fn a_party_is_shown_without_its_account_numbers() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
-    desk.authority("a1", "pol-1", "0107654321", false);
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
+    desk.authority("a1", "pol-1", "01-0001-7654338-00", false);
     let party = ask(&desk, json!({"q": "party", "party": "party-p1"}));
     assert_eq!(party["payees"][0]["payee"], "p1");
     assert_eq!(party["payees"][0]["blocked"], json!(null));
@@ -91,7 +91,7 @@ fn a_party_is_shown_without_its_account_numbers() {
         (json!("a1"), json!("active"))
     );
     for text in [party.to_string(), payer.to_string()] {
-        assert!(!text.contains("0101234567") && !text.contains("0107654321"), "{text}");
+        assert!(!text.contains("01-0001-1234579-00") && !text.contains("01-0001-7654338-00"), "{text}");
     }
     assert!(answer(&desk.state, json!({"q": "party"})).is_err());
 }
@@ -117,7 +117,7 @@ fn deferred_collection(desk: &mut Desk, run: &str, day: chrono::NaiveDate) {
 #[test]
 fn notices_wait_for_someone_with_the_role() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
     deferred_collection(&mut desk, "d1", d(2027, 11, 19));
     let open = ask(&desk, json!({"q": "notices", "role": "maker"}));
     assert_eq!(open[0][1]["subject"], "submission_deferred");

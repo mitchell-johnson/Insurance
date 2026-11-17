@@ -29,7 +29,7 @@ fn credit(id: &str, amount: i64, reference: &str) -> StatementLine {
         id: id.to_string(),
         amount_minor: amount,
         reference: reference.to_string(),
-        payer_account: Some("0601111111".to_string()),
+        payer_account: Some("06-0001-1111114-00".to_string()),
     }
 }
 

@@ -134,7 +134,9 @@ $("run-form").addEventListener("submit", run($("run-msg"), showRun));
 const holdWords = { customer_hold: "the customer's own hold on money going out", hold_unconfirmed: "the customer's hold not yet confirmed: check the run again",
   over_item_limit: "over the route's limit for one item: treasury releases it once funded", possible_duplicate: "a possible duplicate: an approver who did not prepare the run releases it, or the maker takes it out",
   payee_not_confirmed: "payee not confirmed: a second payee maintainer confirms it", payee_not_screened: "payee not screened yet", payee_needs_legal_approval: "payee needs legal's approval",
-  payee_cooling_off: "payee cooling off after new details: check again once it ends" };
+  payee_cooling_off: "payee cooling off after new details: check again once it ends",
+  authority_not_active: "the authority is suspended or cancelled: a payee maintainer reinstates it, and a second confirms it", authority_not_confirmed: "the authority waits for a second payee maintainer to confirm it with the payer",
+  authority_cooling_off: "the authority's account was changed: check again once its cooling-off ends", payer_in_hardship: "the payer is marked in hardship: collections takes the mark off, or it ends" };
 const holdText = (x) => holdWords[x] || words(x);
 let runHeld = [];
 let openRuns = [];
@@ -160,7 +162,7 @@ $("party-form").addEventListener("submit", run($("party-msg"), async () => {
   put($("party"), p.support_prompt ? h("div", { class: "banner info" }, "Offer this person support on this contact, and take extra care with what they ask for.") : null, h("p", {}, hold && hold.held ? `They have a hold on their own money going out (checked ${hold.checked_at}).` : "No hold of their own is recorded."),
     table(["Payee", "Kind", "Blocked", "Cooling off until", ""], (p.payees || []).map((x) => [x.payee, words(x.kind), x.blocked ? (holdWords[x.blocked] || words(x.blocked)) : "", x.cooling_off_until || "",
       button("Open", $("party-msg"), async () => { $("payee-id").value = x.payee; await showPayee(); return ""; })])),
-    table(["Authority", "Policy", "Life", "Status", "Dishonours", "Hardship", "Sole name"], (p.authorities || []).map((a) => [a.authority, a.policy, a.life || "", status(a.status), a.dishonours, a.hardship ? "yes" : "", a.sole_name ? "yes" : ""])));
+    table(["Authority", "Policy", "Life", "Status", "Dishonours", "Hardship", "Sole name", "Collected on"], (p.authorities || []).map((a) => [a.authority, a.policy, a.life || "", status(a.status) + (a.reason ? ` (${words(a.reason)})` : ""), a.dishonours, a.hardship ? (a.hardship_until ? `until ${a.hardship_until}` : "yes") : "", a.sole_name ? "yes" : "", a.stopped || "yes"])));
 }));
 
 async function showPayee() {
@@ -181,7 +183,9 @@ async function showRefund() {
   const id = $("refund-id").value.trim();
   const r = await ask("refund", { refund: id });
   put($("refund"), portal.details(r));
-  put($("refund-actions"), has("maker") ? [button("Release", $("refund-msg"), async () => { await send({ type: "release_refund", refund: id }); await showRefund(); return "Released."; })] : []);
+  // Giving an owed refund back to suspense is not paying it out: it is offered only while the refund is owed and not in a run.
+  const owed = r && (r.status === "raised" || (r.status && r.status.raised !== undefined));
+  put($("refund-actions"), has("maker") && owed ? [button("Cancel it: give the money back to suspense", $("refund-msg"), async () => { await send({ type: "release_refund", refund: id }); await showRefund(); return "Cancelled: the core gives the money back to suspense once it confirms."; })] : []);
 }
 $("refund-form").addEventListener("submit", run($("refund-msg"), showRefund));
 
@@ -223,18 +227,21 @@ $("aml-form").addEventListener("submit", run($("aml-msg"), async () => {
   const relationship = $("aml-rel").value.trim();
   await send({ type: "clear_payer", case: $("aml-case").value.trim(), note: $("aml-note").value.trim(), ...(relationship ? { relationship } : {}) });
   await showPayerCases();
-  return "Cleared.";
+  // A relationship is checked by the customer master first: the case is not cleared until it confirms it.
+  return relationship ? `Sent to the customer master to check relationship ${relationship}. The case stays open until it confirms it; if it cannot, compliance is told why.` : "Cleared.";
 }));
 // Every action people send, by the role that sends it.
 const ACCOUNT = [["account.name", "Account name", "text"], ["account.number", "Account number", "text"], ["name_check", "Name check", "select", ["match", "close", "no_match", "unavailable"]]];
 const RUN_TYPES = ["collection", "lump_sum_claims", "benefit_payments", "provider_payments", "premium_refunds", "commission", "reinsurer", "fund_settlement", "tax_and_levies", "unclaimed_money", "fund_transfer", "ex_gratia"];
 const PAYEE_KINDS = ["customer", "beneficiary", "estate", "liquidator", "provider", "adviser"];
 const ACTIONS = {
-  create_authority: { label: "Set up a direct debit authority", can: () => has("payee_maintainer"), fields: [["authority", "Authority reference", "reference", "DDA"], ["policy", "Policy", "text"], ["party", "Payer (customer reference)", "text"], ["life", "Member who pays for their own cover (optional)", "optional"], ["account.name", "Account name", "text"], ["account.number", "Account number", "text"], ["sole_name", "The account is in the payer's sole name", "bool"]] },
+  create_authority: { label: "Set up a direct debit authority", can: () => has("payee_maintainer"), fields: [["authority", "Authority reference", "reference", "DDA"], ["policy", "Policy", "text"], ["party", "Payer (customer reference)", "text"], ["life", "Member who pays for their own cover (optional)", "optional"], ["account.name", "Account name", "text"], ["account.number", "Account number (bank-branch-account-suffix)", "text"], ["sole_name", "The account is in the payer's sole name", "bool"]] },
+  confirm_authority: { label: "Confirm a direct debit authority with the payer", can: () => has("payee_maintainer"), note: "A second payee maintainer, not the one who entered it, confirms the account with the payer. Nothing is collected on a new, changed or reinstated authority until then.", fields: [["authority", "Authority", "text"]] },
+  change_authority_account: { label: "Change the account an authority collects from", can: () => has("payee_maintainer"), note: "A second payee maintainer confirms the new account, and nothing is collected on it before the cooling-off period ends.", fields: [["authority", "Authority", "text"], ["account.name", "Account name", "text"], ["account.number", "Account number (bank-branch-account-suffix)", "text"]] },
   suspend_authority: { label: "Suspend an authority", can: () => has("payee_maintainer"), fields: [["authority", "Authority", "text"], ["reason", "Why", "text"]] },
-  reinstate_authority: { label: "Reinstate an authority", can: () => has("payee_maintainer"), fields: [["authority", "Authority", "text"]] },
+  reinstate_authority: { label: "Reinstate an authority", can: () => has("payee_maintainer"), note: "A second payee maintainer then confirms it with the payer before anything is collected.", fields: [["authority", "Authority", "text"]] },
   cancel_authority: { label: "Cancel an authority", can: () => has("payee_maintainer"), fields: [["authority", "Authority", "text"], ["reason", "Why", "text"]] },
-  mark_hardship: { label: "Mark a payer as in hardship", can: () => has("payee_maintainer") || has("collections"), fields: [["authority", "Authority", "text"], ["hardship", "In hardship", "bool"]] },
+  mark_hardship: { label: "Mark a payer as in hardship", can: () => has("payee_maintainer") || has("collections"), fields: [["authority", "Authority", "text"], ["hardship", "In hardship", "bool"], ["until", "Last day of the mark (optional)", "optdate"]] },
   record_conversation: { label: "Record a conversation about a failed collection", can: () => has("collections"), fields: [["item", "Item", "text"], ["outcome", "Outcome", "select", ["represent", "do_not_represent"]], ["note", "Note", "text"]] },
   register_payee: { label: "Register a payee", can: () => has("payee_maintainer"), fields: [["payee", "Payee reference", "reference", "PYE"], ["party", "Party (customer reference)", "text"], ["kind", "Kind", "select", PAYEE_KINDS], ...ACCOUNT] },
   register_foreign_payee: { label: "Register a payee abroad", can: () => has("payee_maintainer"), fields: [["payee", "Payee reference", "reference", "PYE"], ["party", "Party (customer reference)", "text"], ["kind", "Kind", "select", PAYEE_KINDS], ["account.name", "Account name", "text"], ["account.number", "Account number or IBAN", "text"], ["foreign.bic", "Bank's BIC", "text"], ["foreign.country", "Country (two letters)", "text"], ["foreign.currency", "Currency received (three letters)", "text"], ["foreign.address", "Beneficiary's address", "text"], ["name_check", "Name check", "select", ["match", "close", "no_match", "unavailable"]]] },

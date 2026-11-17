@@ -83,8 +83,8 @@ fn a_payer_who_is_not_the_owner_is_raised_once() {
     let mut desk = Desk::new();
     issued(&mut desk, "pol-1", "party-own");
     issued(&mut desk, "pol-9", "party-a9");
-    desk.authority("a1", "pol-1", "0101111111", false);
-    desk.authority("a9", "pol-9", "0109999999", true);
+    desk.authority("a1", "pol-1", "01-0001-1111114-00", false);
+    desk.authority("a9", "pol-9", "01-0001-9999993-00", true);
     desk.prepare("d1", RunType::Collection, d(2027, 11, 15));
     desk.add("d1", vec![collect("c1", "a1", "pol-1", 150_00), collect("c9", "a9", "pol-9", 150_00)]);
     let s = desk.approve("d1");
@@ -95,11 +95,11 @@ fn a_payer_who_is_not_the_owner_is_raised_once() {
     let case = "party-own|party:party-a1";
     assert_eq!(events, [Event::PayerCaseOpened { case: case.into() }]);
     assert_eq!(compliance_notices(&desk), 1);
-    let receipt = direct_credit(&mut desk, "l1", d(2027, 11, 16), "01-0999-9999");
+    let receipt = direct_credit(&mut desk, "l1", d(2027, 11, 16), "01-0001-9999993-00");
     assert!(applied(&mut desk, "pol-9", &receipt).is_empty(), "from the owner's own account");
     assert!(applied(&mut desk, "pol-9", "never-seen").is_empty());
 
-    let receipt = direct_credit(&mut desk, "l2", d(2027, 11, 17), "0101111111");
+    let receipt = direct_credit(&mut desk, "l2", d(2027, 11, 17), "01-0001-1111114-00");
     desk.state.payer_checks.pending.insert(
         "c1-again".into(),
         ic_payments::aml::Payer {
@@ -211,8 +211,8 @@ fn a_recorded_relationship_stops_the_rule() {
 /// Purpose: the third refund an owner asks for within sixty days opens one
 /// restricted case for compliance; the party question then shows staff only
 /// a support prompt, not the case; further refunds in the window raise
-/// nothing more; a refund on a policy whose owner is not known is not
-/// counted; once cleared, a new pattern after the window
+/// nothing more; a refund on a policy whose owner is not known is refused
+/// (it could be to anyone's account) and so never counted; once cleared, a new pattern after the window
 /// is raised again.
 /// Why it matters: overpaying and asking for the money back is a known way
 /// to pass money through an insurer, and it also describes a confused or
@@ -223,7 +223,7 @@ fn repeated_refunds_raise_a_restricted_case() {
     use ic_payments::model::{PayeeKind, RefundDestination};
     let mut desk = Desk::new();
     issued(&mut desk, "pol-1", "party-p1");
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     let refund = |desk: &mut Desk, id: &str, policy_id: &str, on: chrono::NaiveDateTime| {
         desk.at(on);
         desk.ok(
@@ -237,7 +237,14 @@ fn repeated_refunds_raise_a_restricted_case() {
             },
         )
     };
-    refund(&mut desk, "rf0", "pol-unknown", t(2027, 11, 1, 9, 0));
+    let unknown = Command::RequestRefund {
+        refund: "rf0".into(),
+        policy: policy("pol-unknown"),
+        amount_minor: 50_00,
+        currency: ic_money::Currency::NZD,
+        destination: RefundDestination::Payee { payee: "p1".into() },
+    };
+    assert_eq!(desk.code(&mia(), unknown), "owner_unknown");
     refund(&mut desk, "rf1", "pol-1", t(2027, 11, 1, 9, 0));
     refund(&mut desk, "rf2", "pol-1", t(2027, 11, 20, 9, 0));
     let party = |desk: &Desk| answer(&desk.state, json!({"q": "party", "party": "party-p1"})).unwrap();

@@ -64,12 +64,28 @@ impl PaymentsState {
                 None
             }
             RefundDestination::Payee { payee } => {
-                if !self.payees.contains_key(payee) {
+                let Some(account) = self.payees.get(payee) else {
                     return Err(Reject::new("unknown_payee", format!("there is no payee {payee}")));
-                }
+                };
                 // Money goes back to where it came from while that is possible.
                 if self.authorities.values().any(|a| a.policy == policy && a.status != AuthorityStatus::Cancelled) {
                     return Err(Reject::new("refund_to_source", "the policy has a source account: the refund goes back to it"));
+                }
+                // A refund is the owner's money: it goes only to the owner's own account.
+                match self.payer_checks.owners.get(&policy.to_string()) {
+                    None => {
+                        return Err(Reject::new(
+                            "owner_unknown",
+                            format!("payments has not been told who owns policy {policy}, so it cannot tell whose account payee {payee} is: the refund waits until the core has said"),
+                        ));
+                    }
+                    Some(owner) if *owner != account.party => {
+                        return Err(Reject::new(
+                            "not_owners_account",
+                            format!("payee {payee} is another person's account, not the owner's of policy {policy}: a refund goes only to the owner's own verified account"),
+                        ));
+                    }
+                    Some(_) => {}
                 }
                 None
             }

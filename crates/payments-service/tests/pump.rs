@@ -364,7 +364,7 @@ impl World {
             payee: id.to_string(),
             party: "party".to_string(),
             kind,
-            account: account(id, "0101234567"),
+            account: account(id, "01-0001-1234579-00"),
             name_check: ic_payments::model::NameCheck::Match,
         };
         self.ok(&pam(), register);
@@ -429,7 +429,7 @@ async fn a_refund_travels_from_the_ledger_to_the_bank_and_back() {
         policy: policy.clone(),
         party: "payer".to_string(),
         life: None,
-        account: account("Ana Payer", "0101234567"),
+        account: account("Ana Payer", "01-0001-1234579-00"),
         sole_name: false,
     };
     world.ok(&pam(), create);
@@ -1726,7 +1726,7 @@ async fn the_pump_hears_a_customers_own_hold_from_the_customer_master() {
         policy: policy.clone(),
         party: "payer".to_string(),
         life: None,
-        account: account("Ana Payer", "0101234567"),
+        account: account("Ana Payer", "01-0001-1234579-00"),
         sole_name: false,
     };
     world.ok(&pam(), create);
@@ -1956,7 +1956,7 @@ async fn a_misdirected_refund_is_recalled_through_the_bank() {
         policy: policy.clone(),
         party: "payer".to_string(),
         life: None,
-        account: account("Ana Payer", "0101234567"),
+        account: account("Ana Payer", "01-0001-1234579-00"),
         sole_name: false,
     };
     world.ok(&pam(), create);

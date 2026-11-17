@@ -33,7 +33,7 @@ fn unidentified(desk: &mut Desk, line: &str, amount: i64) -> String {
                 id: line.into(),
                 amount_minor: amount,
                 reference: "family premiums".into(),
-                payer_account: Some("0601111111".into()),
+                payer_account: Some("06-0001-1111114-00".into()),
             }],
         },
     );
