@@ -299,6 +299,8 @@ signIn(R).then(async () => {
   const preparing = openRuns.filter((r) => /prepar/i.test(status(r.status)));
   if (preparing.length === 1 && !$("t-run").value) $("t-run").value = preparing[0].run;
   $("mm-send").disabled = !has("reconciler");
+  // Only a reconciler is offered the form; anyone else sees what waits for one (F2-18-3).
+  $("mm-form").hidden = !has("reconciler");
   const conv = await ask("awaiting_conversation");
   const held = Object.entries(conv || {});
   put($("conv"), held.length ? table(["Item", "Detail"], held.map(([k, v]) => [k, portal.text(v)])) : h("p", { class: "muted" }, "None."));
