@@ -2218,7 +2218,12 @@ async fn staff_me(State(s): State<Shared>, headers: HeaderMap, method: Method, u
     // Every workforce page asks who is signed in. Someone on the workforce
     // sign-in but not the staff directory (an operations engineer) is told
     // so, rather than refused, and is offered the platform pages only.
-    let (_, session) = s.session(&s.workforce, &headers, &method, &uri, b"").await?;
+    let session = match s.session(&s.workforce, &headers, &method, &uri, b"").await {
+        Ok((_, session)) => session,
+        // Signed in, but not registered with the insurer at all.
+        Err(problem) if problem.status == StatusCode::FORBIDDEN => return ok(json!({ "staff": false })),
+        Err(problem) => return Err(problem),
+    };
     if !session.staff {
         return ok(json!({ "staff": false }));
     }

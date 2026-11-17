@@ -1229,6 +1229,9 @@ async fn the_staff_console_asks_the_four_questions() {
     // every workforce page asks, and an operations engineer's must still open.
     let (status, me) = portal.get("sub-kiri", "/staff/v1/me").await;
     assert_eq!((status, &me), (StatusCode::OK, &json!({ "staff": false })));
+    // So is a workforce sign-in the insurer has never registered (an engineer bound to no party).
+    let (status, me) = portal.get("sub-nobody-registered", "/staff/v1/me").await;
+    assert_eq!((status, &me), (StatusCode::OK, &json!({ "staff": false })));
     let (status, problem) = portal.get("sub-kiri", &format!("/staff/v1/policies/{policy}?case=case-1&scope=")).await;
     assert_eq!(
         (status, problem["detail"].as_str().unwrap_or_default().contains("no staff role")),
