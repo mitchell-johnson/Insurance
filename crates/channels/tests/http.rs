@@ -7365,13 +7365,17 @@ async fn the_documents_console() {
     assert_eq!(ask("sub-docview", "everything").await.0, StatusCode::BAD_REQUEST);
 
     // A reader acts on nothing; a legal hold goes as legal, by the person signed in.
-    let hold = json!({ "type": "place_legal_hold", "scope": { "policy": "pol-9" }, "case": "LIT-1" });
+    let hold = json!({ "type": "place_legal_hold", "scope": { "policy": "pol-9" }, "case": "LIT-1", "reason": "a dispute" });
     assert_eq!(tell("sub-docview", hold.clone()).await.0, StatusCode::FORBIDDEN);
     let (status, done) = tell("sub-docof", hold).await;
     assert_eq!((status, &done["accepted"]), (StatusCode::OK, &json!(true)), "{done}");
     let sent = portal.correspondence.received().last().unwrap().clone();
     assert_eq!((sent.caller.as_str(), sent.actor.as_str()), ("legal", "doc-of"));
-    assert_eq!(ask("sub-docview", "legal_holds").await.1, json!([[{ "policy": "pol-9" }, "LIT-1"]]));
+    let holds = ask("sub-docview", "legal_holds").await.1;
+    assert_eq!(
+        (&holds[0]["scope"], &holds[0]["case"], &holds[0]["by"]),
+        (&json!({ "policy": "pol-9" }), &json!("LIT-1"), &json!("doc-of"))
+    );
 
     // Approvals: each by the action for it, and the module keeps one person to one approval.
     let approve = |role: &str| json!({ "type": "approve_template", "template": { "id": "letter", "version": 1 }, "role": role });
@@ -7423,6 +7427,92 @@ async fn the_documents_console() {
     assert_eq!(tell("sub-docof", json!({ "type": "tick" })).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(tell("sub-docof", json!("place_legal_hold")).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(portal.correspondence.received().len(), sent);
+}
+
+/// Purpose: on the documents console a policy's documents are found by the number on its letters (and any policy is
+/// offered by its number as it is typed), a document comes back without its wrapped key or vault path, a draft is rendered
+/// for a sample customer with its hash, the kinds and shipped wordings to write from are listed, undeliverable documents
+/// are listed, a legal hold is refused without a reason, corrected notices and a returned letter go as the callers that
+/// send them, and `me` says whether the person may download.
+/// Why it matters: the records officer typed the policy number and was told no document existed; the lookup showed key
+/// material; the product owner had to retype letters as JSON and compute a hash by hand; a hold showed no reason; nothing
+/// could correct a notice or record a returned letter (found by the scenario run, F2-11-1, F2-11-7, F2-10-1, F2-10-3,
+/// F2-11-11, F2-11-2, F2-11-4 and F2-11-10).
+#[tokio::test]
+async fn the_documents_console_finds_by_number_renders_samples_and_keeps_keys_back() {
+    let portal = portal();
+    let ask = |rest: String| {
+        let portal = &portal;
+        async move { portal.get("sub-docof", &format!("/staff/v1/documents/{rest}")).await }
+    };
+    let tell = |command: Value| {
+        let portal = &portal;
+        async move { portal.write("POST", "sub-docof", "/staff/v1/documents/commands", command).await }
+    };
+    // A schedule issued on the retail policy.
+    {
+        let mut held = portal.correspondence.0.lock().unwrap();
+        let mut spec = held.0.issue_spec("s1", ic_documents::DocumentKind::PolicySchedule, "schedule");
+        spec.policy = Some(portal.retail.clone());
+        spec.wordings = vec![common::correspondence::kit::tref("wording", 1)];
+        held.0.issue(spec);
+    }
+    assert_eq!(ask("me".into()).await.1["download"], json!(false));
+    let (status, found) = ask(format!("policies?q={}", portal.retail)).await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    let number = found[0]["number"].as_str().unwrap().to_string();
+    assert_eq!(ask("policies".into()).await.0, StatusCode::BAD_REQUEST);
+    let (status, docs) = ask(format!("policy_documents?policy={}", number.to_lowercase())).await;
+    assert_eq!((status, docs.as_array().map(Vec::len)), (StatusCode::OK, Some(1)), "{docs}");
+    assert!(
+        docs[0].get("wrapped_key").is_none() && docs[0].get("blob").is_none() && docs[0]["content_sha256"].is_string(),
+        "{docs}"
+    );
+    let doc = ask("document?id=s1".into()).await.1;
+    assert!(doc.get("wrapped_key").is_none() && doc["id"] == "s1", "{doc}");
+    assert_eq!(
+        ask(format!("policy_documents?policy={}", portal.retail)).await.1.as_array().map(Vec::len),
+        Some(1)
+    );
+
+    let (status, sample) = ask("render_sample?id=letter&version=1".into()).await;
+    assert_eq!((status, &sample["text"]), (StatusCode::OK, &json!("Dear Aroha Sample.")), "{sample}");
+    assert_eq!(sample["sha256"].as_str().map(str::len), Some(64));
+    let mine = ask("render_sample?id=letter&version=1&language=en&data=%7B%22name%22%3A%22Ben%22%7D".into())
+        .await
+        .1;
+    assert_eq!(mine["text"], "Dear Ben.");
+    assert_eq!(ask("render_sample?id=letter&version=1&data=nope".into()).await.0, StatusCode::BAD_REQUEST);
+    let authoring = ask("authoring".into()).await.1;
+    assert!(
+        authoring["placeholders"].as_array().unwrap().iter().any(|p| p["id"] == "policy-wording"),
+        "{authoring}"
+    );
+    assert_eq!(ask("undeliverable".into()).await, (StatusCode::OK, json!([])));
+
+    let (status, problem) = tell(json!({ "type": "place_legal_hold", "scope": { "policy": "pol-9" }, "case": "LIT-1" })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(problem["detail"].as_str().unwrap().contains("say why the hold is placed"), "{problem}");
+    assert_eq!(
+        tell(json!({ "type": "release_legal_hold", "scope": { "policy": "pol-9" }, "reason": " " }))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let defect = json!({ "type": "raise_notice_defect", "defect": "d9", "case": "REM-9", "description": "wrong number", "cause": "template_error",
+        "from": "2027-11-01", "to": "2027-11-30", "template": { "id": "letter", "version": 1 } });
+    assert_eq!(tell(defect).await.0, StatusCode::OK);
+    let (status, _) = tell(json!({ "type": "correct_defect_notices", "defect": "d9" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "no notice is attached yet");
+    assert_eq!(portal.correspondence.received().last().unwrap().caller, "remediation");
+    let (status, _) = tell(json!({ "type": "record_returned_post", "document": "s1", "party": "aroha" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "no post is out");
+    assert_eq!(portal.correspondence.received().last().unwrap().caller, "servicing");
+
+    // A member of staff without the download action is told who downloads.
+    let (status, problem) = portal.get("sub-docof", "/staff/v1/documents/s1/pdf?purpose=dispute").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(problem["detail"].as_str().unwrap().contains("documents.download"), "{problem}");
 }
 
 /// Purpose: staff work collections from the collections console. An officer reads the day's queue as an officer and records

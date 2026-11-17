@@ -179,6 +179,11 @@ impl World {
 
     /// Send the complaints module a command that must be accepted.
     async fn complaints(&self, caller: &str, command: Cmd) {
+        self.complaints_at(caller, command, self.now).await;
+    }
+
+    /// Send the complaints module a command, made at `at`, that must be accepted.
+    async fn complaints_at(&self, caller: &str, command: Cmd, at: DateTime<Utc>) {
         let n = self.issuer.complaints.inner.read(|s| s.remembered_keys());
         let applied = self
             .issuer
@@ -188,12 +193,22 @@ impl World {
                 key: format!("setup-{n}"),
                 caller: caller.into(),
                 actor: if caller == "complaints" { "lead".into() } else { "setup".into() },
-                at: self.now,
+                at,
                 command,
             })
             .await
             .unwrap();
         assert_eq!(applied.result, Ok(()));
+    }
+
+    /// A person declares complaint `id` deadlocked, which they may do only once
+    /// the date to decide it by has passed: 21 days after it was received.
+    /// The module's time never runs backwards, so what it records after this
+    /// is recorded on the returned day.
+    async fn declare_deadlock(&self, id: &str) -> NaiveDate {
+        let at = self.now + chrono::Duration::days(21);
+        self.complaints_at("complaints", Cmd::DeclareDeadlock { complaint: id.into() }, at).await;
+        ic_complaints::state::nz_date(at)
     }
 
     /// The scheduler's tick, `days` after the world's day.
@@ -343,7 +358,7 @@ async fn deadlock_notices_and_licence_letters_are_issued() {
         trained_for_vulnerability: true,
     };
     w.complaints("complaints", assign).await;
-    w.complaints("complaints", Cmd::DeclareDeadlock { complaint: "c1".into() }).await;
+    let deadlocked_on = w.declare_deadlock("c1").await;
     let kind = ConductKind::LicenceEvent {
         licence_event: "ev-1".into(),
         party: PartyId::from("fap-1"),
@@ -392,7 +407,7 @@ async fn deadlock_notices_and_licence_letters_are_issued() {
         told,
         Told::Notified {
             document: "licence-notice:licence:ev-1:cust-1".into(),
-            on: w.today()
+            on: deadlocked_on
         }
     );
     assert_eq!(w.issuer.pass().await, LetterPass::default());
@@ -417,7 +432,7 @@ async fn letters_that_cannot_be_written_are_left_for_a_person() {
         trained_for_vulnerability: true,
     };
     w.complaints("complaints", assign).await;
-    w.complaints("complaints", Cmd::DeclareDeadlock { complaint: "c2".into() }).await;
+    w.declare_deadlock("c2").await;
 
     let pass = w.issuer.pass().await;
     assert_eq!((pass.issued, pass.left), (1, 2));

@@ -163,7 +163,7 @@ async function open(p) {
       b.price_date ? `${money(b.value_minor)} at the price of ${b.price_date}` : "shown once the fund is priced"])) : null,
     orders.length ? [h("h4", {}, "Waiting for a price"), table(["Fund", "Buy or sell", "Amount", "Priced on"], orders.map((o) => [words(o.fund), words(o.direction), ordered(o.amount || {}), o.pricing_date]))] : null,
   ] : h("p", { class: "muted" }, "No units held yet. If this policy invests, units are bought once a payment is invested."));
-  put($("bills"), owed && owed.outstanding_minor > 0 ? h("div", { class: "banner warn", role: "status" }, `${money(owed.outstanding_minor)} is due, the oldest from ${owed.oldest_unpaid_due}.`) : h("p", { class: "muted" }, "Nothing is overdue."),
+  put($("bills"), owed && owed.outstanding_minor > 0 ? h("div", { class: "banner warn", role: "status" }, `${money(owed.outstanding_minor)} is due, the oldest from ${portal.day(owed.oldest_unpaid_due)}.`) : h("p", { class: "muted" }, "Nothing is overdue."),
     table(["From", "To", "Amount"], bills.filter((b) => b.period_start).map((b) => [b.period_start, b.period_end, money(b.total_minor)])));
   // The claims on a policy are read by its policyholder or adviser; a scheme member's own claims go through the claims team.
   const reads = p.relationships.some((r) => ["policyholder", "adviser", "employer_admin"].includes(r));

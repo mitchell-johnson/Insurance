@@ -24,7 +24,11 @@ A version becomes active only after:
 2. legal and product have approved it, and compliance as well for anything that must be proven delivered;
 3. a rendering run has passed: synthetic personas rendered and compared with the expected hash, covering every product version the template is bound to and every language. A failed run is recorded and blocks activation.
 
-Nobody approves their own template. `DisableTemplate` stops a version being used at once when it is found to be wrong.
+Nobody approves their own template. `DisableTemplate` stops a version being used at once when it is found to be wrong, and withdraws a draft nobody should approve.
+
+**What a template is checked against at submission.** No sentence may run past `Settings.max_sentence_words` (40 by default); the refusal quotes the sentence's start and says to break it. The reading grade it was measured at is kept (`reading_grade_x10`) and listed. A template bound to a product, of a kind the core's events ask for (`supplied::REQUIRED_KINDS`), may use only the fields a policy's documents of that kind are given: the policy's data and a scheme member's, `name`, `date` and that kind's event facts (`supplied::fields`). A field outside them is refused, naming the fields it is given, because the template would render in a test and fail on a real customer. A template bound to no product is used only where it is asked for by its id, with the data its asker gives.
+
+**Samples for a person to read.** `supplied::sample(kind)` is the standard sample for each of those kinds, built from a synthetic policy as the required documents step builds a real one. `Query::RenderSample { template, language, data }` renders a version from it, or from data the author gives, and returns the text, its hash and grade, the fields the template asks for and those a product gives: what an author reads and then records as a rendering test. `Query::Authoring` lists the kinds (with the fields each is given), the formats, the placeholder marker and the placeholder wordings to start from. `the_standard_sample_gives_what_a_policy_gives` keeps the sample's fields equal to what a policy gives.
 
 
 **Where a clause is used.** `Query::PartUsage { part }` (`DocumentsState::part_usage`) lists every template version that is not disabled and uses a shared part, the product versions their documents serve, and `behind`: the products whose newest template still uses an older version of the part than the newest registered. A change to a clause is one `RegisterPart`; the register then shows every product it has still to reach.
@@ -106,11 +110,19 @@ When a notice is proven delivered the module emits `NoticeDelivered` and queues 
 
 A remediation case raises a defect against the notices that went out wrong. A defective notice is treated as not given: its gate closes. Each affected notice is corrected by a new notice that supersedes it and must itself be proven delivered. When it is, the clock restarts from that date, `ReopenPeriodOpened` is emitted with reference `<defect>:<original notice>`, and an `OpenReopenWindow` instruction is queued for the core so a choice the customer made on the wrong information can be made again. A defect cannot be closed while any notice is uncorrected, and closing records the control that should have caught it.
 
+A defect may name the template version that was wrong (`RaiseNoticeDefect.template`); it then takes only notices issued from that version, and `notices_by_template` lists them to add. A notice that did not have to be proven delivered is refused, and so is a document that does not exist. Whoever raised a defect does not close it: another person who works notice defects does.
+
+**Corrected notices are issued by the service.** Remediation asks with `CorrectDefectNotices { defect }`. From then on each required documents pass issues, for every outstanding notice of that defect, `correction:<defect>:<notice>`: rendered from the original's own stored data with the newest version of the same template in force today, to the original's recipients, for the same event, superseding the original and marked as its correction. While no newer version is in force the notice is left with "no corrected version of template X is in force; activate one to send the correction". A letter with no notice period is not corrected this way. `State::corrections_due` lists what is waiting.
+
+**Post that came back.** `RecordReturnedPost { document, party }` (caller `delivery` or `servicing`) marks that recipient's delivery failed. `Query::Undeliverable` lists every document with a recipient it did not reach, until it is delivered again.
+
+**Why a document waits.** Each pass records against a waiting trigger why it waits (no active template of that kind for the product, or what the issue step said), and `triggers` shows it.
+
 ## Retention, holds and erasure
 
 Each kind has a retention rule: a number of days from issue, or from the end of the policy for contractual documents. The default is 2,557 days (seven years); **the periods per kind need legal review before go-live**. When a period ends the module drops the document's wrapped key, which makes the stored object unreadable, and the driver deletes the object.
 
-Where the period runs from issue it is known when the document is written, and the object is written with a locked immutability policy to that date, so nobody can delete it early. A legal hold on a document, party or policy stops destruction until it is released. Erasing a person (`ShredParty`) drops keys at once for everything not held or still within a period the insurer must keep, and the rest as each period ends.
+Where the period runs from issue it is known when the document is written, and the object is written with a locked immutability policy to that date, so nobody can delete it early. A legal hold on a document, party or policy stops destruction until it is released. Each hold keeps who placed it, when, and the reason given (`legal_holds` answers `{scope, case, reason, by, on}`). Erasing a person (`ShredParty`) drops keys at once for everything not held or still within a period the insurer must keep, and the rest as each period ends.
 
 ## Events
 
@@ -170,7 +182,7 @@ A clinical letter goes to the person alone (`clinical_to_adviser` otherwise). Ot
 
 ## The staff console
 
-Staff reach this module from the portal's documents console (`/documents`, described in `docs/channels.md` "The documents console"), which sends each person's command as the caller their staff actions name and with them as actor. For its lists the module answers three questions added by the portal thread on 15 Nov 2026: `Templates { limit }` (every version, with status, approvals, author and date in force), `LegalHolds` (each scope and its case) and `OpenDefects { limit }`.
+Staff reach this module from the portal's documents console (`/documents`, described in `docs/channels.md` "The documents console"), which sends each person's command as the caller their staff actions name and with them as actor. For its lists the module answers three questions added by the portal thread on 15 Nov 2026: `Templates { limit }` (every version, with status, approvals, author and date in force), `LegalHolds` (each scope, its case, reason, who placed it and when) and `OpenDefects { limit }`. The documents fixes of 17 Nov 2026 added `Undeliverable`, `CorrectionsDue`, `RenderSample` and `Authoring`.
 
 ## Not built, or waiting on others
 

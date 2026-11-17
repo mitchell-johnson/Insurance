@@ -254,7 +254,8 @@ const portal = (() => {
       const said = data && (data.detail || (data.error && data.error.message) || data.message);
       const vague = res.status === 404 && (!said || /^no such (resource|party)$/i.test(said));
       // A role named as the code spells it (PayeeMaintainer) reads as words.
-      const detail = said && String(said).replace(/\b([A-Z][a-z]+)((?:[A-Z][a-z]+)+)\b/g, (w) => w.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase());
+      // A reference that carries such a word (required:...:PolicySchedule) is left as it is, to be copied.
+      const detail = said && String(said).replace(/(?<![\w:/-])([A-Z][a-z]+)((?:[A-Z][a-z]+)+)\b/g, (w) => w.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase());
       const e = new Error(vague ? "Nothing was found with that reference. Check it for a slip and try again; if it is right, it may not be open to you." : detail || "The request failed (" + res.status + ")."); e.status = res.status; e.code = data && (data.title || (data.error && data.error.code)); e.reference = headers.traceparent.split("-")[1]; throw e;
     }
     return data;
@@ -591,8 +592,12 @@ const portal = (() => {
       });
       const answer = await opts.send(a.build ? a.build(values, name) : { type: name, ...values });
       if (opts.after) await opts.after(name, answer);
+      // The reference this form made is the one recorded: say it, before the form makes the next.
+      const made = a.fields.map(([key, , kind]) => kind === "reference" ? values[key] : null).filter(Boolean);
+      const said = a.done ? await a.done(values, answer) : null;
       draw();
-      return (answer && answer.prepared) ? "Prepared. Someone else signs it before it is sent." : `Done: ${a.label || name.replace(/_/g, " ")}.`;
+      if (said) return said;
+      return (answer && answer.prepared) ? "Prepared. Someone else signs it before it is sent." : `Done: ${a.label || name.replace(/_/g, " ")}.${made.length ? ` Its reference is ${made.join(", ")}.` : ""}`;
     }) } }, h("div", { class: "row" }, h("div", {}, h("label", { for: pick.id }, "Action"), pick)), note, fields, h("p", {}, h("button", {}, "Send")));
     pick.addEventListener("change", draw);
     put(el, [form, out]);

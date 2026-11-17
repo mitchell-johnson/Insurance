@@ -881,7 +881,9 @@ async fn staff_document(
         })
         .await?;
     if standing != true {
-        return Err(Problem::forbidden("your roles do not include downloading documents"));
+        return Err(Problem::forbidden(
+            "your roles do not include downloading documents: ask someone whose role holds documents.download, such as a records officer",
+        ));
     }
     let purpose = fields
         .get("purpose")
@@ -2962,6 +2964,31 @@ async fn documents_question(
     if name == "me" {
         return ok(standing);
     }
+    // A policy is found by the number on its letters, not only by its reference.
+    let numbered = |text: &str| Question::StaffFind {
+        number: Some(text.to_string()),
+        parties: vec![],
+    };
+    if name == crate::correspondence::POLICIES {
+        let text = fields.get("q").map(|q| q.trim()).filter(|q| !q.is_empty());
+        let text = text.ok_or_else(|| Problem::bad_request("policies needs q: the policy number or its start or end"))?;
+        return ok(s.ask(numbered(text)).await?["policies"].clone());
+    }
+    let mut fields = fields;
+    if name == "policy_documents" {
+        if let Some(text) = fields.get("policy").map(|p| p.trim().to_string()).filter(|p| !p.is_empty()) {
+            let found = s.ask(numbered(&text)).await?;
+            let exact = found["policies"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|p| p["number"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(&text)))
+                .and_then(|p| p["policy"].as_str().map(str::to_string));
+            if let Some(policy) = exact {
+                fields.insert("policy".to_string(), policy);
+            }
+        }
+    }
     let question = crate::correspondence::question(&name, &fields, session.at).map_err(Problem::bad_request)?;
     let answer = s
         .correspondence
@@ -2971,7 +2998,7 @@ async fn documents_question(
     if answer.is_null() {
         return Err(Problem::not_found());
     }
-    ok(answer)
+    ok(crate::correspondence::shown(&name, answer))
 }
 
 /// What the wellness module holds about AIA Vitality: a policy's members

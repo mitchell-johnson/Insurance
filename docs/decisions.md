@@ -352,3 +352,18 @@ The scenario run (op-b, SCN-05, SCN-07, SCN-09, SCN-19) found the employer's "As
 - **A scheme is pools or named members, not both** (F-SCN07-5). A pool and named staff for one employer are two schemes on two policies, each billed and renewed on its own terms. Mixing them would make every file and every declaration answer for members the other counts.
 
 Built in: `crates/group/src/state.rs` (`enter_changes`, `employer_limits`), `crates/group/src/work.rs` (pools), `crates/channels/src/http.rs` (`group_member_change`, `scheme_admins`, `second_administrator`), `crates/channels/src/directory.rs`, `crates/channels/ui/employer.html`. Docs: `docs/group.md`, `docs/channels.md`.
+
+## Documents: authoring, corrections and the console (17 Nov 2026)
+
+Decided while fixing the scenario run's documents findings (op2-d, F2-10, F2-11):
+
+- **A sentence is at most 40 words.** `Settings.max_sentence_words`, 40 by default, is checked at submission beside the reading grade: one long sentence can pass a document's average grade and still lose a reader. (F2-10-5)
+- **A product's notice uses only the fields a policy's documents are given.** A template bound to a product, of a kind the core's events ask for, is refused at submission for any other field. A template bound to no product is used only where asked for by its id, as the shipped placeholders are. (F2-10-4)
+- **Activation may be backdated.** `effective_from` may lie before today, so documents that waited for a template issue once it is active from on or before their business date. The page says so beside Activate. (F2-10-10)
+- **A draft is withdrawn by disabling it.** `DisableTemplate` takes a draft too, and nothing can approve or activate it after. (F2-10-9)
+- **Corrected notices are rendered from the original's data with the newer version of the same template.** The service issues them, but only once remediation asks (`CorrectDefectNotices`), and only from a version newer than the wrong one that is in force: the correction says the same thing about the same facts, in the wording put right. (F2-11-2)
+- **Whoever raised a defect does not close it.** Unchanged: a second person who works notice defects checks and closes. The refusal says so, and the page names colleagues who can. (F2-11-6)
+- **A legal hold says why.** The console requires a reason to place or release one, and keeps who and when. The module takes a hold without one, so the log already written replays. (F2-11-11)
+- **Returned post is recorded against the recipient** (`RecordReturnedPost`), which fails that delivery and lists the document as undeliverable until it is sent again. (F2-11-4)
+
+Built in: `crates/documents/src/supplied.rs`, `state.rs`, `module.rs` (`RenderSample`, `Authoring`, `Undeliverable`, `CorrectionsDue`), `required_documents.rs` (corrections, why a trigger waits), `crates/channels/src/correspondence.rs`, `crates/channels/ui/documents.html`.

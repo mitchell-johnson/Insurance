@@ -740,10 +740,15 @@ const sees = async (page, text) => {
     await sees(p, "Done: Approve a template.");
     await tab(p, "Templates");
     await p.locator("#templates").getByText("product: doc-of").waitFor();
+    await say(p, "The draft is rendered from the standard sample for a person to read before the test is recorded");
+    await p.locator("#templates tr", { hasText: "letter v1" }).getByRole("button", { name: "Test" }).click();
+    await p.locator("#x-form button").click();
+    await p.locator("#sample").getByText("Dear Aroha Sample.").waitFor();
+    await p.locator("#sample").getByRole("button", { name: "These are right: record the test" }).waitFor();
     await say(p, "A legal hold is placed on a policy, and shows under Defects and holds");
     await tab(p, "Act");
     await p.selectOption("#da-which", "place_legal_hold");
-    await p.selectOption("#da-f0", "policy"); await p.fill("#da-f1", "pol-9"); await p.fill("#da-f2", "LIT-1");
+    await p.selectOption("#da-f0", "policy"); await p.fill("#da-f1", "pol-9"); await p.fill("#da-f2", "LIT-1"); await p.fill("#da-f3", "litigation over the policy");
     await p.locator("#acts form button").click();
     await sees(p, "Done: Place a legal hold.");
     await tab(p, "Defects and holds");
