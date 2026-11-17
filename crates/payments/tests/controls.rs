@@ -19,7 +19,7 @@ fn a_repeated_command_is_answered_once() {
             payee: "p1".to_string(),
             party: "party".to_string(),
             kind: PayeeKind::Customer,
-            account: account("Ana", "0101234567"),
+            account: account("Ana", "01-0001-1234579-00"),
             name_check: NameCheck::Match,
         },
     );
@@ -86,7 +86,7 @@ fn configuration_is_versioned_and_immutable() {
             &pam(),
             Command::ChangePayeeAccount {
                 payee: "p".to_string(),
-                account: account("A", "0101234567"),
+                account: account("A", "01-0001-1234579-00"),
                 name_check: NameCheck::Match
             }
         ),
@@ -211,7 +211,7 @@ fn every_voter_region_must_be_able_to_reach_every_channel() {
 #[test]
 fn an_authority_moves_through_its_states() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
     assert_eq!(desk.state.authorities["a1"].status, AuthorityStatus::Active);
     let create = |number: &str| Command::CreateAuthority {
         authority: "a1".to_string(),
@@ -221,10 +221,10 @@ fn an_authority_moves_through_its_states() {
         account: account("Ana", number),
         sole_name: false,
     };
-    assert_eq!(desk.code(&pam(), create("0101234567")), "duplicate_authority");
+    assert_eq!(desk.code(&pam(), create("01-0001-1234579-00")), "duplicate_authority");
     assert_eq!(desk.code(&pam(), create("12")), "invalid_account");
     assert_eq!(desk.code(&pam(), create("01-0123-45x7")), "invalid_account");
-    assert_eq!(desk.code(&mia(), create("0101234567")), "not_permitted");
+    assert_eq!(desk.code(&mia(), create("01-0001-1234579-00")), "not_permitted");
     let a = || "a1".to_string();
     assert_eq!(desk.code(&pam(), Command::ReinstateAuthority { authority: a() }), "authority_not_suspended");
     assert_eq!(
@@ -288,9 +288,9 @@ fn an_authority_moves_through_its_states() {
 #[test]
 fn a_deceased_payers_account_is_never_drawn_on_again() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", true);
-    desk.authority("a2", "pol-2", "0101234567", true);
-    desk.authority("a3", "pol-3", "0207654321", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", true);
+    desk.authority("a2", "pol-2", "01-0001-1234579-00", true);
+    desk.authority("a3", "pol-3", "02-0001-7654338-00", false);
     let death = Command::PayerDeceased {
         policy: policy("pol-1"),
         claim: "clm-1".to_string(),
@@ -308,7 +308,7 @@ fn a_deceased_payers_account_is_never_drawn_on_again() {
         policy: policy("pol-4"),
         party: "x".to_string(),
         life: None,
-        account: account("Ana", "0101234567"),
+        account: account("Ana", "01-0001-1234579-00"),
         sole_name: false,
     };
     assert_eq!(desk.code(&pam(), again), "account_blocked");
@@ -321,8 +321,8 @@ fn a_deceased_payers_account_is_never_drawn_on_again() {
 #[test]
 fn a_joint_account_is_not_blocked_by_one_death() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", false);
-    desk.authority("a2", "pol-2", "0101234567", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
+    desk.authority("a2", "pol-2", "01-0001-1234579-00", false);
     desk.ok(
         &svc(),
         Command::PayerDeceased {
@@ -347,7 +347,7 @@ fn a_payee_passes_every_control_before_it_can_be_paid() {
         payee: id.to_string(),
         party: "party".to_string(),
         kind: PayeeKind::Customer,
-        account: account("Ana", "0101234567"),
+        account: account("Ana", "01-0001-1234579-00"),
         name_check: check,
     };
     let p = || "p1".to_string();
@@ -384,7 +384,7 @@ fn a_payee_passes_every_control_before_it_can_be_paid() {
 #[test]
 fn changed_details_wait_out_the_cooling_off_period() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     assert_eq!(desk.state.payees["p1"].blocked(desk.now), None);
     let change = |number: &str| Command::ChangePayeeAccount {
         payee: "p1".to_string(),
@@ -392,8 +392,8 @@ fn changed_details_wait_out_the_cooling_off_period() {
         name_check: NameCheck::Match,
     };
     assert_eq!(desk.code(&pam(), change("1")), "invalid_account");
-    assert_eq!(desk.code(&mia(), change("0209999999")), "not_permitted");
-    let events = desk.ok(&pam(), change("0209999999"));
+    assert_eq!(desk.code(&mia(), change("02-0001-9999993-00")), "not_permitted");
+    let events = desk.ok(&pam(), change("02-0001-9999993-00"));
     let until = t(2027, 11, 16, 9, 0);
     assert_eq!(
         events,
@@ -430,7 +430,7 @@ fn an_estate_or_liquidator_account_needs_legal_and_always_cools_off() {
                 payee: id.to_string(),
                 party: "party".to_string(),
                 kind,
-                account: account("Executor", "0301234567"),
+                account: account("Executor", "03-0001-1234579-00"),
                 name_check: NameCheck::Match,
             },
         );
@@ -468,7 +468,7 @@ fn an_estate_account_waits_on_legals_worklist() {
             payee: "estate".to_string(),
             party: "party-late".to_string(),
             kind: PayeeKind::Estate,
-            account: account("Executor", "0301234567"),
+            account: account("Executor", "03-0001-1234579-00"),
             name_check: NameCheck::Match,
         },
     );
@@ -495,6 +495,191 @@ fn an_estate_account_waits_on_legals_worklist() {
     );
     assert_eq!(open(&desk).len(), 1);
     // An ordinary customer's account asks nothing of legal.
-    desk.payee("plain", PayeeKind::Customer, "0101234567");
+    desk.payee("plain", PayeeKind::Customer, "01-0001-1234579-00");
     assert_eq!(open(&desk).len(), 1);
+}
+
+fn new_authority(id: &str, name: &str, number: &str) -> Command {
+    Command::CreateAuthority {
+        authority: id.to_string(),
+        policy: policy("pol-7"),
+        party: "party-7".to_string(),
+        life: None,
+        account: account(name, number),
+        sole_name: false,
+    }
+}
+
+/// Purpose: a direct debit authority's account must be a New Zealand account whose check digits
+/// hold (a digit missing or wrong is refused in words), and a new authority collects nothing
+/// until a second payee maintainer, not the one who entered it, confirms it with the payer.
+/// Why it matters: found by the scenario run, SCN2-15 (F2-15-1, a blocker): `12-3140-012345-00`,
+/// a digit short, was accepted and active at once on one person's word, so a mistyped or
+/// planted account would be debited with nobody else ever looking at it.
+#[test]
+fn an_authority_needs_a_valid_account_and_a_second_person() {
+    let mut desk = Desk::new();
+    let refused = |desk: &mut Desk, name: &str, number: &str| desk.send(&pam(), new_authority("a7", name, number)).expect_err("refused");
+    let short = refused(&mut desk, "Payer", "12-3140-012345-00");
+    assert_eq!(short.code, "invalid_account");
+    assert!(short.message.contains("has 6 digits"), "{}", short.message);
+    let mistyped = refused(&mut desk, "Payer", "12-3140-0010002-00");
+    assert!(mistyped.message.contains("check digits"), "{}", mistyped.message);
+    for bad in ["123140001000100", "12-314-0010001-00", "12-3140-0010001-0", "12-3140-00100x1-00"] {
+        assert!(refused(&mut desk, "Payer", bad).message.contains("bank-branch-account-suffix"), "{bad}");
+    }
+    assert_eq!(refused(&mut desk, " ", "12-3140-0010001-00").code, "invalid_account");
+    // Payments NZ's published examples, across the algorithms.
+    for (id, good) in [
+        ("e1", "01-0902-0068389-00"),
+        ("e2", "08-6523-1954512-001"),
+        ("e3", "26-2600-0320871-032"),
+        ("e4", "31-2800-0123456-0000"),
+        ("e5", "25-2500-1000009-00"),
+        ("e6", "09-0000-1000000-00"),
+        ("e7", "01-0001-9999993-00"),
+    ] {
+        desk.ok(&pam(), new_authority(id, "Payer", good));
+    }
+    desk.ok(&pam(), new_authority("a7", "Payer", "12-3140-0010001-00"));
+    assert!(desk.state.authorities["a7"].unconfirmed());
+
+    desk.prepare("d1", RunType::Collection, d(2027, 11, 15));
+    let add = |item: &str| Command::AddRunItems {
+        run: "d1".to_string(),
+        items: vec![collect(item, "a7", "pol-7", 233_74)],
+    };
+    let held = desk.send(&mia(), add("c1")).expect_err("refused");
+    assert_eq!(held.code, "authority_not_confirmed");
+    assert!(held.message.contains("second payee maintainer"), "{}", held.message);
+    let confirm = |id: &str| Command::ConfirmAuthority { authority: id.to_string() };
+    assert_eq!(desk.code(&pam(), confirm("a7")), "same_person");
+    assert_eq!(desk.code(&mia(), confirm("a7")), "not_permitted");
+    assert_eq!(desk.code(&pat(), confirm("zz")), "unknown_authority");
+    let events = desk.ok(&pat(), confirm("a7"));
+    assert_eq!(
+        events,
+        vec![Event::AuthorityConfirmed {
+            authority: "a7".to_string(),
+            by: "pat".to_string()
+        }]
+    );
+    assert_eq!(desk.code(&pat(), confirm("a7")), "already_confirmed");
+    desk.ok(&mia(), add("c1"));
+    desk.ok(
+        &pam(),
+        Command::CancelAuthority {
+            authority: "e1".to_string(),
+            reason: "closed".to_string(),
+        },
+    );
+    assert_eq!(desk.code(&pat(), confirm("e1")), "authority_cancelled");
+}
+
+/// Purpose: a payer marked in hardship is not collected from until the mark is taken off or its
+/// last day passes; an item already in a run is held at the check; the party view says why in
+/// words; a mark cannot end before today.
+/// Why it matters: found by the scenario run, SCN2-15 (F2-15-5): a payer collections had just
+/// marked in hardship was added to the next collection run and checked with no hold, so the
+/// insurer would debit someone it knew could not pay and cause a second dishonour fee.
+#[test]
+fn a_payer_in_hardship_is_not_collected_from() {
+    let mut desk = Desk::new();
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
+    desk.prepare("d1", RunType::Collection, d(2027, 11, 15));
+    desk.add("d1", vec![collect("c1", "a1", "pol-1", 233_74)]);
+    let mark = |hardship, until| Command::MarkHardship {
+        authority: "a1".to_string(),
+        hardship,
+        until,
+    };
+    assert_eq!(desk.code(&col(), mark(true, Some(d(2027, 11, 14)))), "hardship_ended");
+    desk.ok(&col(), mark(true, Some(d(2027, 11, 29))));
+    desk.ok(&mia(), Command::CheckRun { run: "d1".to_string() });
+    assert_eq!(desk.state.runs["d1"].items["c1"].holds, vec!["payer_in_hardship".to_string()]);
+    desk.prepare("d2", RunType::Collection, d(2027, 11, 22));
+    let add = |run: &str, item: &str| Command::AddRunItems {
+        run: run.to_string(),
+        items: vec![collect(item, "a1", "pol-1", 233_74)],
+    };
+    let refused = desk.send(&mia(), add("d2", "c2")).expect_err("refused");
+    assert_eq!(refused.code, "payer_in_hardship");
+    assert!(refused.message.contains("until 29 November 2027"), "{}", refused.message);
+    let party = ic_payments::query::answer(&desk.state, serde_json::json!({"q": "party", "party": "party-a1"})).unwrap();
+    assert_eq!(party["authorities"][0]["hardship_until"], "2027-11-29");
+    assert!(party["authorities"][0]["stopped"].as_str().unwrap().contains("hardship"));
+    // After its last day the mark no longer stops a collection.
+    desk.at(t(2027, 11, 30, 9, 0));
+    desk.prepare("d3", RunType::Collection, d(2027, 11, 30));
+    desk.ok(&mia(), add("d3", "c3"));
+    // Taken off, it keeps no last day.
+    desk.ok(&col(), mark(false, Some(d(2027, 12, 31))));
+    assert_eq!(desk.state.authorities["a1"].hardship_until, None);
+}
+
+/// Purpose: a suspended authority cannot be added to a run, and says why and who reinstates it;
+/// reinstating it needs a second payee maintainer's confirmation before it is collected on; a
+/// changed account is checked, confirmed by a second person and waits out the cooling-off period.
+/// Why it matters: found by the scenario run, SCN2-15 (F2-15-6): an authority suspended after two
+/// dishonours was added to a run ("Done"), reinstated by one click with its dishonours reset, and
+/// there was no way to change the account it collects from at all.
+#[test]
+fn a_suspended_or_changed_authority_waits_for_a_second_person() {
+    let mut desk = Desk::new();
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
+    desk.ok(
+        &pam(),
+        Command::SuspendAuthority {
+            authority: "a1".to_string(),
+            reason: "repeated_dishonour".to_string(),
+        },
+    );
+    let add = |run: &str, item: &str| Command::AddRunItems {
+        run: run.to_string(),
+        items: vec![collect(item, "a1", "pol-1", 233_74)],
+    };
+    desk.prepare("d1", RunType::Collection, d(2027, 11, 15));
+    let suspended = desk.send(&mia(), add("d1", "c1")).expect_err("refused");
+    assert_eq!(suspended.code, "authority_not_active");
+    assert!(suspended.message.contains("suspended (repeated dishonour)"), "{}", suspended.message);
+    desk.ok(&pam(), Command::ReinstateAuthority { authority: "a1".to_string() });
+    assert_eq!(desk.send(&mia(), add("d1", "c1")).expect_err("refused").code, "authority_not_confirmed");
+    let confirm = || Command::ConfirmAuthority { authority: "a1".to_string() };
+    desk.ok(&pat(), confirm());
+    desk.ok(&mia(), add("d1", "c1"));
+
+    let change = |id: &str, number: &str| Command::ChangeAuthorityAccount {
+        authority: id.to_string(),
+        account: account("a1", number),
+    };
+    assert_eq!(desk.code(&pam(), change("a1", "01-0001-1234578-00")), "invalid_account");
+    assert_eq!(desk.code(&mia(), change("a1", "12-3140-0010001-00")), "not_permitted");
+    assert_eq!(desk.code(&pam(), change("zz", "12-3140-0010001-00")), "unknown_authority");
+    let events = desk.ok(&pam(), change("a1", "12-3140-0010001-00"));
+    assert_eq!(
+        events,
+        vec![Event::AuthorityAccountChanged {
+            authority: "a1".to_string(),
+            cooling_off_until: t(2027, 11, 16, 9, 0)
+        }]
+    );
+    desk.ok(&mia(), Command::CheckRun { run: "d1".to_string() });
+    assert_eq!(desk.state.runs["d1"].items["c1"].holds, vec!["authority_not_confirmed".to_string()]);
+    desk.ok(&pat(), confirm());
+    desk.prepare("d2", RunType::Collection, d(2027, 11, 16));
+    let cooling = desk.send(&mia(), add("d2", "c2")).expect_err("refused");
+    assert_eq!(cooling.code, "authority_cooling_off");
+    assert!(cooling.message.contains("16 November 2027 09:00"), "{}", cooling.message);
+    desk.at(t(2027, 11, 16, 9, 0));
+    desk.ok(&mia(), add("d2", "c2"));
+    desk.ok(
+        &pam(),
+        Command::CancelAuthority {
+            authority: "a1".to_string(),
+            reason: "closed".to_string(),
+        },
+    );
+    assert_eq!(desk.code(&pam(), change("a1", "12-3140-0010001-00")), "authority_cancelled");
+    let cancelled = desk.send(&mia(), add("d2", "c3")).expect_err("refused");
+    assert!(cancelled.message.contains("cancelled"), "{}", cancelled.message);
 }

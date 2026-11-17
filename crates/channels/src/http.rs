@@ -2766,6 +2766,22 @@ async fn reinsurance_command(State(s): State<Shared>, headers: HeaderMap, method
     let command: Value = parse(&body)?;
     let (name, countersigned) = crate::reinsurance::check(&command).map_err(Problem::bad_request)?;
     if countersigned {
+        // A held settlement is not prepared: the signature would only be refused.
+        if name == "instruct_settlement" {
+            let number = command[name]["number"].as_u64().unwrap_or_default();
+            let statement = s
+                .reinsurance
+                .ask(json!({ "statement": { "number": number } }))
+                .await
+                .map_err(|e| module_problem("reinsurance", StatusCode::BAD_REQUEST, e))?;
+            if let Some(reason) = statement["held"].as_str() {
+                return Err(Problem::new(
+                    StatusCode::CONFLICT,
+                    "settlement_held",
+                    format!("settlement of statement {number} is on hold ({reason}): release the hold first, then prepare it"),
+                ));
+            }
+        }
         let reason = command[name]["reason"].as_str().unwrap_or_default().to_string();
         let prepare = crate::countersign::CountersignCommand::Prepare {
             id: key.clone(),

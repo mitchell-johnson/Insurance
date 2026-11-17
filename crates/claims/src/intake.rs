@@ -165,7 +165,8 @@ impl ClaimsState {
             id: n.claim.clone(),
             policy: n.policy,
             cover: n.cover,
-            life: n.life,
+            // Left blank, the life is the cover's own where the policy has one.
+            life: n.life.or_else(|| facts.life.clone()),
             claim_type: n.claim_type,
             event_date: n.event_date,
             notified_on: cx.today,
@@ -388,7 +389,30 @@ impl ClaimsState {
             return refuse("claim_closed", "cannot be given a closed claim");
         }
         if !profile.lines.contains(&claim.line()) || !staff.queues.contains(&claim.queue) {
-            return refuse("not_accredited", "is not accredited for this line and queue");
+            // Name the person's own lines and who could take it instead.
+            let words = |line: &crate::config::Line| match line {
+                crate::config::Line::Health => "health",
+                crate::config::Line::LumpSum => "lump sum",
+                crate::config::Line::IncomeProtection => "income protection",
+            };
+            let theirs: Vec<&str> = profile.lines.iter().map(words).collect();
+            let able: Vec<&str> = self
+                .authority
+                .staff
+                .iter()
+                .filter(|(id, s)| {
+                    id.as_str() != to && s.queues.contains(&claim.queue) && self.authority.profile(id).is_ok_and(|p| p.lines.contains(&claim.line()))
+                })
+                .map(|(id, _)| id.as_str())
+                .collect();
+            #[rustfmt::skip]
+            let who = if able.is_empty() { "a queue lead finds someone accredited for it".to_string() } else { format!("{} can take it", able.join(" or ")) };
+            let why = format!(
+                "is not accredited for {} claims in this queue (their lines: {}): {who}",
+                words(&claim.line()),
+                if theirs.is_empty() { "none".to_string() } else { theirs.join(", ") },
+            );
+            return refuse("not_accredited", &why);
         }
         if claim.queue == Queue::ComplexLarge && !profile.senior {
             return refuse("not_senior", "does not work the senior queue");

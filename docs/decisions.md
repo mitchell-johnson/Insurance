@@ -399,3 +399,26 @@ Decided while fixing the scenario run's documents findings (op2-d, F2-10, F2-11)
 - **Returned post is recorded against the recipient** (`RecordReturnedPost`), which fails that delivery and lists the document as undeliverable until it is sent again. (F2-11-4)
 
 Built in: `crates/documents/src/supplied.rs`, `state.rs`, `module.rs` (`RenderSample`, `Authoring`, `Undeliverable`, `CorrectionsDue`), `required_documents.rs` (corrections, why a trigger waits), `crates/channels/src/correspondence.rs`, `crates/channels/ui/documents.html`.
+
+## A large claim's second signature (17 Nov 2026)
+
+The scenario run (SCN2-08, F2-08-2) admitted a $900,000 trauma claim. The claims manager, the only person with authority above $600,000, proposed it; it then waited for a second signature from someone whose own limit also covered $900,000. Nobody held that, so the claim could never be admitted.
+
+**What was chosen.** Authority and the four-eyes check are separate. When the proposer's own profile covers the decision, the second signature needed because of its size is a peer's: another person accredited for the line who may themselves sign that kind of decision at the two-signature level (an admission at `two_signature_admission_minor`, an ex gratia payment at `two_signature_ex_gratia_minor`, a write-off at `two_signature_write_off_minor`; for a decline, the power to decline; for a reversal, a senior with the power to reverse). When the proposer's authority does not cover it, the second signer must cover the whole decision, as before. Conflicts and the different-person rule apply to both.
+
+**Why.** Requiring two people who each hold the full limit makes the top of the authority book a single point of failure: with one claims manager, every claim above everyone else's limit stops. The four-eyes control is that a second competent person checks the decision, not that the insurer has two people able to make it alone; the person accountable for the amount is the proposer, whose authority is recorded with the decision. A peer still has to be trusted with large decisions in their own right (the two-signature level), so a junior cannot wave a large claim through.
+
+**What it costs.** A senior assessor can countersign a decision above their own limit. A business that wants two full-limit signatures above some amount should add a second person to the authority book at that level; the refusal says when nobody else can sign.
+
+Built in: `crates/claims/src/decide.rs` (`Need::Peer`, `peers`, `signers`, `cannot_sign`), `crates/claims/src/report.rs` (`WorkDecision.signers`), `crates/channels/ui/claims.html`. Docs: `docs/claims.md`.
+
+## Direct debit authorities, hardship and refunds to a payee (17 Nov 2026)
+
+The scenario run (SCN2-15, SCN2-16) found an authority with a digit missing accepted and active on one person's word, a payer in hardship collected again, a suspended authority added to a run and reinstated by one click, and a customer's refund requested to another customer's account. The calls made:
+
+- **An authority's account is checked by its check digits.** Direct debits are collected from New Zealand accounts only, so the bank's published check-digit algorithms apply (A to G and X by bank). Payee accounts keep the looser shape check, because a payee can be abroad or be given by a file in another form.
+- **A second payee maintainer confirms an authority**, as a payee is confirmed: on creation, on reinstatement after suspension, and on a change of account, which also waits out the cooling-off period. Reinstatement still resets the dishonour count (the payer has told us the money is there); the second person is the control, not a new account. Authorities recorded before this change count as confirmed.
+- **A hardship mark stops new collections.** Collecting from someone the insurer knows cannot pay only adds dishonour fees. The mark can carry a last day; without one it stands until collections takes it off. A collection already in a run when the mark is made is held at the check; a presentation again that a recorded conversation agreed goes ahead.
+- **A refund to a payee goes only to the owner's own payee.** The owner is the one the core reports (`PolicyOwner`); until it has, a refund to a payee is refused rather than guessed. A refund of money paid by direct credit from someone else's account is paid to the owner, not back to that account: the channels have no rail to return a credit, and the third-party payer case is compliance's.
+
+Built in: `crates/payments/src/authority.rs`, `model.rs` (`Authority::collection_stop`), `run.rs`, `refund.rs`, `console.rs`; `crates/channels/ui/payments.html`. Docs: `docs/payments.md`.

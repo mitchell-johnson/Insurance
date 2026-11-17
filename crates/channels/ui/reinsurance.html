@@ -9,13 +9,13 @@
 <section data-view="Notices and abandoned"><h2>Abandoned</h2><div id="abandoned"></div></section>
 <section data-view="Accounts"><h2>Reinsurer accounts</h2><p class="muted">Each reinsurer's statements: cut one for a period that has ended, agree it with the reinsurer's confirmation, hold or release its settlement, and prepare the settlement for a second person to instruct.</p>
 <form id="acc"><div class="row"><div><label for="acc-re">Reinsurer</label><input id="acc-re" required></div><button>Show</button></div></form><div id="acc-msg" aria-live="polite"></div><div id="acc-bal"></div><div id="acc-out"></div>
-<h2>Cut a statement</h2><form id="cut"><div class="row"><div><label for="cut-treaty">Treaty</label><input id="cut-treaty" required></div><div><label for="cut-end">Period ending</label><input id="cut-end" type="date" required></div><button>Cut it</button></div></form>
+<h2>Cut a statement</h2><form id="cut"><div class="row"><div><label for="cut-re">Reinsurer</label><input id="cut-re" required></div><div><label for="cut-treaty">Treaty</label><input id="cut-treaty" required></div><div><label for="cut-end">Period ending</label><input id="cut-end" type="date" required></div><button>Cut it</button></div></form>
 <h2>Review profit commission</h2><form id="pc"><div class="row"><div><label for="pc-treaty">Treaty</label><input id="pc-treaty" required></div><button>Review</button></div></form></section>
 <section data-view="Treaty changes"><h2>Change a treaty's cover in force</h2><p class="muted">Take cover back from a treaty, or move it to another version of the treaty, from a date. Either takes a second person.</p>
 <form id="tc"><div class="row"><div><label for="tc-what">Change</label><select id="tc-what"><option value="recapture">Recapture from the treaty</option><option value="move_treaty_version">Move to another version</option></select></div><div><label for="tc-treaty">Treaty</label><input id="tc-treaty" required></div><div><label for="tc-version">To version (moving only)</label><input id="tc-version" type="number" min="1"></div><div><label for="tc-from">From</label><input id="tc-from" type="date" required></div></div>
 <div><label for="tc-keys">Covers, one per line, as policy/cover/layer/life</label><textarea id="tc-keys" rows="4" required></textarea></div><div><label for="tc-reason">Why (for the person who signs)</label><input id="tc-reason" required size="40"></div><p><button>Prepare</button></p></form><div id="tc-msg" aria-live="polite"></div></section>
 <section data-view="Facultative and claims" class="operate" hidden><h2>Facultative offers, evidence and claim facts</h2><p class="muted">What a reinsurer offered or declined for a risk beyond the treaty, a record of evidence released to a reinsurer, and a claim fact the core's events did not carry. You are recorded as the person who sent each.</p><div id="acts"></div></section>
-<section data-view="Lives"><h2>A life's accumulation</h2><p class="muted">What the insurer keeps on one person's life on a date, across every policy that insures them.</p><form id="life"><div class="row"><div><label for="l-who">Person (find them by name and birth date)</label><input id="l-who" required size="32"></div><div><label for="l-on">On</label><input id="l-on" type="date" required></div><button>Show</button></div></form><div id="l-msg" aria-live="polite"></div><div id="l-out"></div></section>
+<section data-view="Lives"><h2>A life's accumulation</h2><p class="muted">What the insurer keeps on one person's life on a date, across every policy that insures them.</p><form id="life"><div class="row"><div><label for="l-why">Case, call or task you are working on (every search is recorded against it)</label><input id="l-why" required size="28"></div><div><label for="l-who">Person (find them by name and birth date)</label><input id="l-who" required size="32"></div><div><label for="l-on">On</label><input id="l-on" type="date" required></div><button>Show</button></div></form><div id="l-msg" aria-live="polite"></div><div id="l-out"></div></section>
 <section data-view="Month-end check"><h2>Month-end check</h2><form id="sweep"><div class="row"><div><label for="s-date">Period ending</label><input id="s-date" type="date" required></div><button>Check</button></div></form><div id="s-msg" aria-live="polite"></div><div id="s-out"></div></section>
 </main>
 <script src="/ui/app.js"></script>
@@ -87,7 +87,7 @@ function open(id, [label, , spec, build, warning]) {
 }
 // The reinsurers the insurer has a balance with, for the pickers.
 const reinsurers = async () => Object.entries(await ask("exposure", { on: me.today || portal.days(0) })).map(([id, e]) => ({ value: id, label: id, hint: `balance ${money(e.balance_minor)}` }));
-const money = (minor) => minor == null ? "" : (Number(minor) / 100).toFixed(2);
+const money = (minor) => minor == null ? "" : portal.money(minor);
 // One statement's actions: each sends at once, except instructing its settlement, which a second person signs.
 function statementActions(st) {
   const n = st.number, go = (words, command, done) => h("button", { class: "quiet", type: "button", on: { click: run($("acc-msg"), async () => { const c = await command(); if (!c) return ""; const a = await send(c); await accounts(); return a.prepared ? "Prepared. Someone else signs it before it is sent." : done; }) } }, words);
@@ -104,15 +104,19 @@ function statementActions(st) {
 async function accounts() {
   const reinsurer = $("acc-re").value.trim();
   if (!reinsurer) return "";
-  const rows = await ask("statements", { reinsurer });
+  // The listing is the reinsurer's view; whether a settlement is held is the insurer's, read per statement.
+  const rows = await Promise.all((await ask("statements", { reinsurer })).map(async (st) => ({ ...st, held: ((await ask("statement", { number: st.number }).catch(() => null)) || {}).held || "" })));
   put($("acc-out"), rows.length ? table(["Statement", "Treaty", "Period", "Net", "Status", "Held", ""], rows.map((st) => [st.number, st.treaty, `${st.period_start} to ${st.period_end}`, money(st.net_minor),
     words(typeof st.status === "string" ? st.status : Object.keys(st.status || {})[0]), st.held || "", me.operate ? statementActions(st) : ""])) : h("p", { class: "muted" }, "No statements have been cut for this reinsurer."));
   return "";
 }
 $("acc").addEventListener("submit", run($("acc-msg"), accounts));
 portal.picker($("acc-re"), reinsurers, { min: 0 });
+portal.picker($("cut-re"), reinsurers, { min: 0 });
 $("cut").addEventListener("submit", run($("acc-msg"), async () => {
-  await send({ cut_statement: { treaty: $("cut-treaty").value.trim(), reinsurer: $("acc-re").value.trim(), period_end: $("cut-end").value } });
+  const reinsurer = $("cut-re").value.trim();
+  await send({ cut_statement: { treaty: $("cut-treaty").value.trim(), reinsurer, period_end: $("cut-end").value } });
+  $("acc-re").value = reinsurer;
   await accounts();
   return "Cut. Send it to the reinsurer and agree it when they confirm.";
 }));
@@ -159,6 +163,10 @@ $("sweep").addEventListener("submit", run($("s-msg"), async () => {
   put($("s-out"), h("div", { class: check.green ? "banner ok" : "banner warn" }, check.green ? "Nothing stops the close." : "Stopping the close:"), check.green ? null : table(["Item"], (check.items || []).map((i) => [cell(i)])));
 }));
 // What the insurer keeps on one person's life, whichever policies insure them.
+// A search is recorded against the work it is for, so the page asks for it first.
+$("l-why").value = portal.working() || "";
+$("l-why").addEventListener("change", () => portal.workOn($("l-why").value.trim()));
+$("l-who").addEventListener("focus", () => { if ($("l-why").value.trim()) portal.workOn($("l-why").value.trim()); });
 portal.picker($("l-who"), portal.people, { label: true, onPick: (item) => { $("l-who").dataset.party = item.value; } });
 $("l-who").addEventListener("input", () => { delete $("l-who").dataset.party; });
 $("life").addEventListener("submit", run($("l-msg"), async () => {

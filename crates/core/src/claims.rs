@@ -219,6 +219,7 @@ pub fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&s
         premium_paid_since_event_minor: settled_since.iter().map(|r| r.total_minor).sum(),
         life_on_policy,
         life_party,
+        life: life_id.as_ref().filter(|_| record.is_some()).map(|l| l.0.clone()),
         policy_year_start: ic_product::schedule::anniversary(p.inception, ic_product::schedule::policy_year(p.inception, on)),
         ends_on_death: p.lives.len() == 1 && p.lives.values().all(|l| matches!(l.kind, LifeKind::Named { .. })) && !p.is_scheme(),
         policy_loan_minor: p.loan.as_ref().map_or(0, crate::loan::Loan::outstanding_minor),

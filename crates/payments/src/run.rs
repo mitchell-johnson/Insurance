@@ -174,6 +174,9 @@ impl PaymentsState {
             if n.policy.as_ref() != Some(&authority.policy) || n.payable.is_some() || n.refund.is_some() {
                 return bad("a collection names the authority's policy and nothing else");
             }
+            if let Some((code, why)) = authority.collection_stop(a, now, n.represents.is_some()) {
+                return Err(Reject::new(code, why));
+            }
             if let Some(first) = &n.represents {
                 let same = self
                     .item(first)
@@ -362,8 +365,8 @@ impl PaymentsState {
             Counterparty::Authority(a) => self.authorities.get(a).map_or((None, Some("unknown_authority".to_string())), |authority| {
                 let hold = if self.blocked_accounts.contains(&authority.account.number) {
                     Some("account_blocked")
-                } else if run.run_type.inbound() && authority.status != AuthorityStatus::Active {
-                    Some("authority_not_active")
+                } else if run.run_type.inbound() {
+                    authority.collection_stop(a, tx.now, item.new.represents.is_some()).map(|(code, _)| code)
                 } else if authority.status == AuthorityStatus::Cancelled {
                     Some("source_unavailable")
                 } else {
@@ -1174,6 +1177,7 @@ impl PaymentsState {
             Counterparty::Authority(a) if inbound => self.incident_for(a, value_date),
             _ => None,
         };
+        let by_incident = incident.is_some();
         match &n.counterparty {
             // Not the payer's doing: no dishonour, no suspension, no second
             // presentment; collections asks for new details.
@@ -1201,7 +1205,7 @@ impl PaymentsState {
                         reason: "repeated_dishonour".to_string(),
                     });
                 } else if reason == ReturnReason::InsufficientFunds && n.represents.is_none() && active {
-                    if self.authorities.get(a).is_some_and(|x| x.hardship) {
+                    if self.authorities.get(a).is_some_and(|x| x.in_hardship(tx.now.date())) {
                         self.hold_for_conversation(tx, &n.item, a);
                     } else {
                         // Presented once more, and only once.
@@ -1215,6 +1219,32 @@ impl PaymentsState {
                 }
             }
             _ => {}
+        }
+        // A dishonour is collections' to follow up, with what happens next.
+        if let (Counterparty::Authority(a), true, false) = (&n.counterparty, inbound, by_incident) {
+            let next = if self.represent.contains(&n.item) {
+                "it can be presented once more in the next collection run"
+            } else if self.awaiting_conversation.contains_key(&n.item) {
+                "the payer is in hardship: call them before anything is presented again"
+            } else if self.authorities.get(a).is_some_and(|x| x.status == AuthorityStatus::Suspended) {
+                "the authority is suspended after repeated dishonours: agree another way to pay"
+            } else {
+                "it is not presented again: agree another way to pay"
+            };
+            let policy = n.policy.as_ref().map_or_else(|| "no policy".to_string(), ToString::to_string);
+            let why = match &reason {
+                ReturnReason::InsufficientFunds => "insufficient funds",
+                ReturnReason::AccountClosed => "the account is closed",
+                ReturnReason::AuthorityCancelled => "the payer cancelled the authority at their bank",
+                ReturnReason::InvalidAccount => "the account number is not valid",
+                ReturnReason::Other(said) => said.as_str(),
+            };
+            let detail = format!(
+                "the collection of {} on policy {policy} (item {}) was returned by the bank: {why}; {next}",
+                ic_money::dollars(n.amount_minor),
+                n.item
+            );
+            self.raise_notice(Role::Collections, "collection_dishonoured", &detail);
         }
         if !inbound {
             self.push_outbox(OutboxEntry {

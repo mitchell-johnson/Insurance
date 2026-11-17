@@ -23,7 +23,7 @@ fn line(id: &str, amount: i64, reference: &str) -> StatementLine {
         id: id.to_string(),
         amount_minor: amount,
         reference: reference.to_string(),
-        payer_account: Some("0601111111".to_string()),
+        payer_account: Some("06-0001-1111114-00".to_string()),
     }
 }
 
@@ -36,7 +36,7 @@ fn line(id: &str, amount: i64, reference: &str) -> StatementLine {
 #[test]
 fn settled_and_returned_money_matches_the_statement() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.prepare("r1", RunType::BenefitPayments, d(2027, 11, 15));
     desk.add("r1", vec![pay("i1", "p1", 300_00), pay("i2", "p1", 500_00)]);
     let s = desk.approve("r1");
@@ -120,7 +120,7 @@ fn a_statement_that_cannot_be_trusted_is_refused() {
 #[test]
 fn what_the_statement_cannot_explain_becomes_an_owned_exception() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.prepare("r1", RunType::BenefitPayments, d(2027, 11, 15));
     desk.add("r1", vec![pay("i1", "p1", 300_00)]);
     let s = desk.approve("r1");
@@ -228,7 +228,7 @@ fn a_direct_credit_goes_to_cash_matching_and_stays_open_until_identified() {
     };
     assert_eq!(
         (amount_minor, reference.as_str(), payer_account.as_deref(), *received_on),
-        (&150_00, "POL1 SMITH", Some("0601111111"), d(2027, 11, 15))
+        (&150_00, "POL1 SMITH", Some("06-0001-1111114-00"), d(2027, 11, 15))
     );
     assert_eq!(desk.state.exceptions[exception].kind, ExceptionKind::UnidentifiedReceipt);
     let events = desk.ok(
@@ -259,7 +259,7 @@ fn a_direct_credit_goes_to_cash_matching_and_stays_open_until_identified() {
 #[test]
 fn a_settlement_the_core_refuses_becomes_an_exception() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    desk.payee("p1", PayeeKind::Beneficiary, "01-0001-1234579-00");
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
     let mut item = pay("i1", "p1", 300_00);
     item.policy = Some(policy("pol-1"));
@@ -375,8 +375,8 @@ fn a_region_is_ready_only_after_a_drill_reaches_every_channel() {
 #[test]
 fn questions_are_answered_from_state() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
-    desk.authority("a1", "pol-1", "0101234567", false);
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
     desk.prepare("r1", RunType::BenefitPayments, d(2027, 11, 15));
     desk.add("r1", vec![pay("i1", "p1", 300_00)]);
     let ask = |desk: &Desk, q: serde_json::Value| answer(&desk.state, q);
@@ -393,7 +393,7 @@ fn questions_are_answered_from_state() {
     assert_eq!(ask(&desk, json!({"q": "submission", "submission": s})).unwrap()["status"], json!("queued"));
     assert_eq!(
         ask(&desk, json!({"q": "batch", "submission": s})).unwrap()["items"][0]["number"],
-        json!("0101234567")
+        json!("01-0001-1234579-00")
     );
     let trail = ask(&desk, json!({"q": "trail"})).unwrap();
     assert_eq!(trail["events"], json!(desk.state.event_seq));
@@ -414,8 +414,8 @@ fn questions_are_answered_from_state() {
 fn state_survives_a_snapshot_and_replicas_agree() {
     let build = || {
         let mut desk = Desk::new();
-        desk.payee("p1", PayeeKind::Estate, "0101234567");
-        desk.authority("a1", "pol-1", "0207654321", true);
+        desk.payee("p1", PayeeKind::Estate, "01-0001-1234579-00");
+        desk.authority("a1", "pol-1", "02-0001-7654338-00", true);
         desk.prepare("r1", RunType::BenefitPayments, desk.now.date());
         desk.add("r1", vec![pay("i1", "p1", 300_00)]);
         let s = desk.approve("r1");
@@ -459,14 +459,14 @@ fn the_cores_death_notice_stops_collection() {
     };
     let death = record(json!({"payment_authority_cancelled": {"policy": "pol-1", "claim": "clm-1"}}));
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", true);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", true);
     let commands = ic_payments::query::react(&death);
     assert_eq!(commands.len(), 1);
     assert_eq!(commands[0].key, "core-3-77");
     for (index, envelope) in commands.iter().chain(&ic_payments::query::react(&death)).enumerate() {
         desk.state.apply(index as u64 + 1000, envelope.clone()).unwrap();
     }
-    assert!(desk.state.blocked_accounts.contains("0101234567"));
+    assert!(desk.state.blocked_accounts.contains("01-0001-1234579-00"));
     assert_eq!(desk.state.clock, Some(monday()), "an event does not move the clock");
     let other = record(json!({"payment_returned": {"policy": "pol-1", "payment": "i1", "payable": "benefit", "amount_minor": 5, "bank_account": "a"}}));
     assert!(ic_payments::query::react(&other).is_empty());
@@ -488,7 +488,7 @@ fn a_members_ended_collection_stops_only_their_own_authority() {
         serde_json::from_value(json!({"id": "3-78", "partition": 3, "seq": 78, "business_date": "2027-11-16", "log_index": 901, "event": event})).unwrap()
     };
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", true);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", true);
     for (id, life) in [("a2", "life-7"), ("a3", "life-8")] {
         desk.ok(
             &pam(),
@@ -497,7 +497,7 @@ fn a_members_ended_collection_stops_only_their_own_authority() {
                 policy: policy("pol-1"),
                 party: format!("party-{id}"),
                 life: Some(ic_core::LifeId::from(life)),
-                account: account("Mere Member", "0201234567"),
+                account: account("Mere Member", "02-0001-1234579-00"),
                 sole_name: true,
             },
         );
@@ -561,7 +561,7 @@ fn the_financial_close_is_told_what_cash_is_outstanding() {
     assert_eq!(check["items"][0]["fund"], json!("sf1"));
 
     // A run the bank has not settled is outstanding from its value date.
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.at(t(2027, 11, 17, 9, 0));
     desk.prepare("r1", RunType::BenefitPayments, d(2027, 11, 18));
     desk.add("r1", vec![pay("i1", "p1", 100_00)]);
@@ -703,22 +703,22 @@ fn a_direct_credit_from_an_authoritys_account_names_its_policy() {
     let mut desk = Desk::new();
     let a = "anz-sf1-collection";
     let open = 10_000_000_00;
-    desk.authority("auth-1", "POL7", "0601111111", true);
+    desk.authority("auth-1", "POL7", "06-0001-1111114-00", true);
     let spaced = StatementLine {
-        payer_account: Some("06-0111-1111".to_string()),
+        payer_account: Some("06 0001 1111114 00".to_string()),
         ..line("l1", 150_00, "top up")
     };
     desk.ok(&svc(), statement(a, d(2027, 11, 15), open, open + 150_00, vec![spaced]));
     assert_eq!(payer_policy_of_first_match(&desk), Some(policy("POL7")));
 
     let mut desk = Desk::new();
-    desk.authority("auth-1", "POL7", "0601111111", true);
-    desk.authority("auth-2", "POL8", "0601111111", true);
+    desk.authority("auth-1", "POL7", "06-0001-1111114-00", true);
+    desk.authority("auth-2", "POL8", "06-0001-1111114-00", true);
     desk.ok(&svc(), statement(a, d(2027, 11, 15), open, open + 150_00, vec![line("l1", 150_00, "top up")]));
     assert_eq!(payer_policy_of_first_match(&desk), None);
 
     let mut desk = Desk::new();
-    desk.authority("auth-1", "POL7", "0209999999", true);
+    desk.authority("auth-1", "POL7", "02-0001-9999993-00", true);
     desk.ok(&svc(), statement(a, d(2027, 11, 15), open, open + 150_00, vec![line("l1", 150_00, "top up")]));
     assert_eq!(payer_policy_of_first_match(&desk), None);
 }

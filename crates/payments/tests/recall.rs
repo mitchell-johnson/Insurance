@@ -96,7 +96,7 @@ fn credit(desk: &mut Desk, day: u32, line: &str, amount: i64, reference: &str) {
 #[test]
 fn a_refund_paid_to_the_wrong_account_is_recalled_owed_again_and_chased() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
     desk.ok(
         &mia(),
         Command::RequestRefund {
@@ -287,7 +287,7 @@ fn a_refund_paid_to_the_wrong_account_is_recalled_owed_again_and_chased() {
 fn a_recalled_payment_coming_back_is_recovered_not_retried() {
     let mut desk = Desk::new();
     desk.payee("p1", PayeeKind::Customer, "0201111111");
-    desk.authority("a1", "pol-1", "0101234567", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
     let benefit = NewItem {
         source: "claim:cl-1:i1".to_string(),

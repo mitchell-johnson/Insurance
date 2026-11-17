@@ -380,6 +380,7 @@ pub const EXCLUDED: [(&str, &str, &str); 29] = [
 static PAYMENTS_QUERY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static PAYMENTS_COMMANDS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static REINSURANCE_QUERY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static REINSURANCE_COMMANDS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// A description made once from a module's own lists, so it never drifts from them.
 fn once(cell: &'static std::sync::OnceLock<String>, make: impl FnOnce() -> String) -> &'static str {
@@ -574,9 +575,11 @@ pub fn catalogue() -> Vec<Tool> {
         tool("reinsurance_question", "Ask reinsurance", S, M::GET, "/staff/v1/reinsurance/{question}", "Exceptions, notices, abandonments, the sweep check, statements, notice retries, what is owed to each reinsurer, and what the insurer keeps on one person's life. `exposure` names the reinsurers there is a balance with.")
             .choose("question", with_me(crate::reinsurance::question_names()))
             .query(once(&REINSURANCE_QUERY, || fields_needed(&crate::reinsurance::question_fields()))),
-        tool("reinsurance_command", "Act in reinsurance", S, M::POST, "/staff/v1/reinsurance/commands", "A command to reinsurance in its own JSON. An abandonment is prepared for a second person to sign.")
-            .json(r#"{"<command>": {...}}"#),
-        tool("reinsurance_decide", "Sign or withdraw a prepared abandonment", S, M::POST, "/staff/v1/reinsurance/{verb}/{id}", "Sign and send, or take back, a prepared abandonment.")
+        tool("reinsurance_command", "Act in reinsurance", S, M::POST, "/staff/v1/reinsurance/commands", "A command to reinsurance in its own JSON. A settlement or an abandonment is prepared, with a reason, for a second person to sign.")
+            .json(once(&REINSURANCE_COMMANDS, || {
+                format!(r#"{{"<command>": {{...that command's fields}}}}, where the command is one of: {}"#, crate::reinsurance::command_names().join(", "))
+            })),
+        tool("reinsurance_decide", "Sign or withdraw a prepared settlement or abandonment", S, M::POST, "/staff/v1/reinsurance/{verb}/{id}", "As a second person, sign and send a prepared settlement or abandonment, or take back one you prepared.")
             .choose("verb", vec!["sign", "withdraw"])
             .json("{}"),
         tool("finance_question", "Ask the finance ledger", S, M::GET, "/staff/v1/finance/{question}", "The close, checks, trial balance, movements, journals, returns, tax reconciliation, proposals, aged suspense, extracts and accounting groups.")

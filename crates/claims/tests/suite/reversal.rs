@@ -187,7 +187,8 @@ fn a_reversal_stops_the_benefit_and_holds_the_overpayment() {
 /// faith changes status only with the conduct officer and legal both signing; holding it needs
 /// neither; every status change is on the overpayment's history.
 /// Why it matters: this is the addendum's central conduct rule. A senior claims manager alone
-/// must not be able to start pursuing a customer for the insurer's mistake.
+/// must not be able to start pursuing a customer for the insurer's mistake. A status outside the
+/// rules is refused saying what is allowed (found by the scenario run, SCN2-09, F2-09-6).
 #[test]
 fn recovering_the_insurers_own_error_needs_conduct_and_legal() {
     let mut w = World::new();
@@ -222,7 +223,16 @@ fn recovering_the_insurers_own_error_needs_conduct_and_legal() {
         offset_pct: 26,
         instalment_minor: 0,
     };
-    assert_eq!(w.undecided("ip-1", "sam", too_much, "R-OK"), "invalid_recovery_status");
+    assert_eq!(w.undecided("ip-1", "sam", too_much.clone(), "R-OK"), "invalid_recovery_status");
+    // Found by the scenario run, SCN2-09 (F2-09-6): the refusal names the cap.
+    let told = w.told(World::decide_command("ip-1", "sam", too_much, "R-OK"));
+    assert!(told.contains("1% to 25% of each payment") && told.contains("26%"), "{told}");
+    let told = w.told(World::decide_command("ip-1", "sam", status(op, RecoveryStatus::Arrangement), "R-OK"));
+    assert!(told.contains("instalment"), "{told}");
+    let told = w.told(World::decide_command("ip-1", "sam", status(op, RecoveryStatus::WrittenOff), "R-OK"));
+    assert!(told.contains("decide a write-off"), "{told}");
+    let told = w.told(World::decide_command("ip-1", "sam", status(op, RecoveryStatus::Recovered), "R-OK"));
+    assert!(told.contains("repayments are recorded"), "{told}");
 
     // Confirming the hold is an ordinary decision.
     w.decided("ip-1", "sam", status(op, RecoveryStatus::Held), "R-OK");

@@ -326,7 +326,9 @@ const portal = (() => {
     };
     function show(found, text) {
       // A value typed in full is chosen already: the list would only stand in front of what comes next.
-      if (text && found.some((i) => String(i.value).toLowerCase() === text.toLowerCase())) { tell(""); return close(); }
+      // It is chosen, so the page learns of it (onPick), whether its reference or its label was typed.
+      const exact = text && found.find((i) => [i.value, i.label].some((v) => v != null && String(v).toLowerCase() === text.toLowerCase()));
+      if (exact) { if (input.dataset.label !== (exact.label || exact.value) || input.value !== (opts.label ? exact.label || exact.value : exact.value)) choose(exact); else { tell(""); close(); } return; }
       items = found.slice(0, opts.max || 12);
       if (!items.length) { close(); return tell(text ? opts.none ?? "Nothing matches that." : opts.empty || "Nothing to choose from yet."); }
       tell("");

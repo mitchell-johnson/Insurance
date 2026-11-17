@@ -173,6 +173,10 @@ pub enum DecisionKind {
 pub enum Need {
     /// Someone whose own profile covers the whole decision.
     Authority,
+    /// The four-eyes check on a decision the proposer's own authority
+    /// already covers: a different person accredited for the line who may
+    /// themselves sign decisions of this kind at the two-signature level.
+    Peer,
     ConductOfficer,
     Legal,
 }
@@ -649,6 +653,10 @@ pub struct Pending {
     pub proposed_on: NaiveDate,
     pub needs: Vec<Need>,
     pub signed: Vec<StaffId>,
+    /// The amount the decision was measured at when proposed, so the work
+    /// view can say who could sign it. Absent on proposals recorded before.
+    #[serde(default)]
+    pub amount_minor: Option<i64>,
 }
 
 /// What the reinsurance module has told claims about this claim.
@@ -985,8 +993,22 @@ impl RunItem {
     pub fn net_minor(&self) -> i64 {
         self.gross_minor - self.offset.as_ref().map_or(0, |o| o.amount_minor) - self.tax_withheld_minor
     }
+    /// The payment's reference, which the bank carries as its ISO 20022
+    /// end-to-end id: at most 35 printable characters with no spaces. The
+    /// readable `{run}/{claim}/{period}` is kept when it fits; otherwise the
+    /// period's date and a digest of the readable form, which stays unique
+    /// to the run, the claim and the period.
     pub fn payment_ref(&self, run: &str) -> String {
-        format!("{run}/{}/{}", self.claim, self.period_start)
+        const MAX_END_TO_END: usize = 35;
+        let readable = format!("{run}/{}/{}", self.claim, self.period_start);
+        let fits = readable.len() <= MAX_END_TO_END && readable.chars().all(|c| c.is_ascii_graphic());
+        if fits {
+            return readable;
+        }
+        use sha2::{Digest, Sha256};
+        let digest = hex::encode(Sha256::digest(readable.as_bytes()));
+        // 9 for the date and its dash, 26 hex digits (104 bits) of digest.
+        format!("{}-{}", self.period_start.format("%Y%m%d"), &digest[..MAX_END_TO_END - 9])
     }
 }
 

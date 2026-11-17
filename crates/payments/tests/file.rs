@@ -17,7 +17,7 @@ use ic_payments::Command;
 #[test]
 fn a_submission_becomes_a_file_the_bank_can_check() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.ok(
         &pam(),
         Command::RegisterPayee {
@@ -47,7 +47,7 @@ fn a_submission_becomes_a_file_the_bank_can_check() {
     assert_eq!(batch.direction, Direction::Credit);
     assert_eq!(
         batch.file(),
-        "H|ICPAY1|r1-1|anz-sf1-claims|CREDIT|2027-11-15|NZD\nD|i1|p1|0101234567|30000\nD|i2|Dr A B Clinic|02-0765-4321|4550\nT|2|34550\n"
+        "H|ICPAY1|r1-1|anz-sf1-claims|CREDIT|2027-11-15|NZD\nD|i1|p1|01-0001-1234579-00|30000\nD|i2|Dr A B Clinic|02-0765-4321|4550\nT|2|34550\n"
     );
     assert_eq!(batch.wire().unwrap(), batch.file(), "a channel in the system's own format is sent the file");
     assert_eq!(batch.content_hash().unwrap().len(), 64);
@@ -56,7 +56,7 @@ fn a_submission_becomes_a_file_the_bank_can_check() {
     assert_eq!((manifest.items, manifest.total_minor, manifest.bytes), (2, 345_50, batch.file().len()));
     assert_eq!(manifest.sha256, batch.content_hash().unwrap());
 
-    desk.authority("a1", "pol-1", "0309999999", false);
+    desk.authority("a1", "pol-1", "03-0001-9999993-00", false);
     desk.prepare("dd", RunType::Collection, d(2027, 11, 15));
     desk.add("dd", vec![collect("c1", "a1", "pol-1", 10_00)]);
     let s = desk.approve("dd");
@@ -149,7 +149,7 @@ fn a_bank_spoken_to_in_iso_20022_is_sent_iso_20022() {
     desk.ok(&cal(), activate(1, other_bank));
     desk.statement("anz-sf1-claims", d(2027, 11, 12), 1_000_000_00, &[]);
 
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     let prepare = |run: &str| Command::PrepareRun {
         run: run.to_string(),
         run_type: RunType::ProviderPayments,

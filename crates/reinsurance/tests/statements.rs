@@ -1303,3 +1303,26 @@ fn a_statement_asks_documents_for_a_covering_letter_to_the_reinsurers_party() {
         "no party, no letter"
     );
 }
+
+/// Purpose: a statement is cut only for a reinsurer on the treaty's panel (or one the account
+/// still holds money for); an empty or unknown reinsurer is refused, naming the panel.
+/// Why it matters: found by the scenario run, SCN2-08 (F2-08-9): the screen cut statement 1 for
+/// a reinsurer named "", filed write-once, which then showed in exposure as a reinsurer with
+/// zeros and could never be taken back.
+#[test]
+fn a_statement_for_no_reinsurer_is_refused() {
+    let mut b = billed();
+    for nobody in ["", "reinsurer-nobody"] {
+        let told = b.refused(
+            "month-end",
+            Command::CutStatement {
+                treaty: retail(),
+                reinsurer: nobody.into(),
+                period_end: d(2027, 3, 31),
+            },
+        );
+        assert_eq!(told, "unknown_reinsurer");
+    }
+    assert!(b.ri.statement(1).is_none());
+    b.ok("month-end", cut(d(2027, 3, 31)));
+}

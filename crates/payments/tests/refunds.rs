@@ -64,7 +64,7 @@ fn core_ok(desk: &mut Desk) -> Vec<Event> {
 #[test]
 fn a_refund_goes_back_to_the_account_it_came_from() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
     assert_eq!(desk.code(&ari(), request("rf1", "pol-1", 70_00, source("a1"))), "not_permitted");
     let events = desk.ok(&mia(), request("rf1", "pol-1", 70_00, source("a1")));
     assert_eq!(
@@ -95,7 +95,7 @@ fn a_refund_goes_back_to_the_account_it_came_from() {
     let mut part = item();
     part.amount_minor = 60_00;
     assert_eq!(desk.code(&mia(), add(vec![part])), "invalid_item");
-    desk.payee("p1", PayeeKind::Customer, "0309999999");
+    desk.payee("p1", PayeeKind::Customer, "03-0001-9999993-00");
     let elsewhere = refund_item("i1", "rf1", Counterparty::Payee("p1".to_string()), "pol-1", 70_00);
     assert_eq!(desk.code(&mia(), add(vec![elsewhere])), "wrong_destination");
     let mut twice = item();
@@ -107,7 +107,7 @@ fn a_refund_goes_back_to_the_account_it_came_from() {
     assert_eq!(desk.code(&mia(), Command::ReleaseRefund { refund: "rf1".to_string() }), "refund_not_owed");
 
     let s = desk.approve("r1");
-    assert_eq!(desk.state.runs["r1"].items["i1"].account.as_ref().unwrap().number, "0101234567");
+    assert_eq!(desk.state.runs["r1"].items["i1"].account.as_ref().unwrap().number, "01-0001-1234579-00");
     assert_eq!(desk.state.submissions[&s].account, "anz-sf1-refunds");
     desk.settle(&s, d(2027, 11, 15));
     assert_eq!(desk.state.refunds["rf1"].status, RefundStatus::Paid);
@@ -127,9 +127,9 @@ fn a_refund_goes_back_to_the_account_it_came_from() {
 #[test]
 fn a_refund_to_the_wrong_place_is_refused() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", false);
-    desk.authority("a2", "pol-2", "0207654321", false);
-    desk.payee("p1", PayeeKind::Customer, "0309999999");
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
+    desk.authority("a2", "pol-2", "02-0001-7654338-00", false);
+    desk.payee("p1", PayeeKind::Customer, "03-0001-9999993-00");
     assert_eq!(desk.code(&mia(), request("rf1", "pol-1", 0, source("a1"))), "invalid_amount");
     assert_eq!(desk.code(&mia(), request("rf1", "pol-1", 5, source("a2"))), "unknown_authority");
     assert_eq!(desk.code(&mia(), request("rf1", "pol-1", 5, to_payee("nobody"))), "unknown_payee");
@@ -146,6 +146,13 @@ fn a_refund_to_the_wrong_place_is_refused() {
         },
     );
     assert_eq!(desk.code(&mia(), request("rf2", "pol-2", 5, source("a2"))), "source_unavailable");
+    desk.ok(
+        &svc(),
+        Command::PolicyOwner {
+            policy: "pol-2".into(),
+            owner: "party-p1".into(),
+        },
+    );
     desk.ok(&mia(), request("rf2", "pol-2", 5, to_payee("p1")));
     core_ok(&mut desk);
     core_ok(&mut desk);
@@ -163,7 +170,7 @@ fn a_refund_to_the_wrong_place_is_refused() {
 #[test]
 fn the_cores_answers_decide_what_is_owed() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
     desk.ok(&mia(), request("rf1", "pol-1", 70_00, source("a1")));
     let events = desk.ok(
         &svc(),
@@ -222,9 +229,9 @@ fn the_cores_answers_decide_what_is_owed() {
 #[test]
 fn after_the_payers_death_a_refund_is_paid_with_the_claim() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", true);
-    desk.payee("estate", PayeeKind::Estate, "0301234567");
-    desk.payee("cust", PayeeKind::Customer, "0309999999");
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", true);
+    desk.payee("estate", PayeeKind::Estate, "03-0001-1234579-00");
+    desk.payee("cust", PayeeKind::Customer, "03-0001-9999993-00");
     desk.ok(
         &svc(),
         Command::PayerDeceased {
@@ -267,8 +274,8 @@ fn after_the_payers_death_a_refund_is_paid_with_the_claim() {
 
     // Another policy paid from the same sole-name account refunds nowhere
     // but with a claim either.
-    desk.authority("a9", "pol-9", "0401234567", false);
-    desk.state.blocked_accounts.insert("0401234567".to_string());
+    desk.authority("a9", "pol-9", "04-0001-1234579-00", false);
+    desk.state.blocked_accounts.insert("04-0001-1234579-00".to_string());
     assert_eq!(desk.code(&mia(), request("rf9", "pol-9", 5, source("a9"))), "refund_with_claim");
 }
 
@@ -283,7 +290,7 @@ fn after_the_payers_death_a_refund_is_paid_with_the_claim() {
 #[test]
 fn refunds_in_flight_are_stopped_when_the_payer_dies() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", true);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", true);
     let to_source = || Counterparty::Authority("a1".to_string());
     for id in ["owed", "in-run", "at-bank"] {
         desk.ok(&mia(), request(id, "pol-1", 10_00 + id.len() as i64, source("a1")));
@@ -337,7 +344,7 @@ fn refunds_in_flight_are_stopped_when_the_payer_dies() {
     }));
     assert_eq!(desk.state.refunds["asked"].status, RefundStatus::Releasing);
     // A new run cannot pay the blocked account even if someone tries.
-    assert!(desk.state.blocked_accounts.contains("0101234567"));
+    assert!(desk.state.blocked_accounts.contains("01-0001-1234579-00"));
 }
 
 /// Purpose: a refund item waiting in an approved run whose file failed is
@@ -348,9 +355,9 @@ fn refunds_in_flight_are_stopped_when_the_payer_dies() {
 #[test]
 fn an_unsent_refund_in_an_approved_run_is_still_stopped() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", true);
-    desk.authority("a2", "pol-2", "0101234567", true);
-    desk.authority("a3", "pol-3", "0207654321", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", true);
+    desk.authority("a2", "pol-2", "01-0001-1234579-00", true);
+    desk.authority("a3", "pol-3", "02-0001-7654338-00", false);
     for (id, pol, a) in [("rf1", "pol-1", "a1"), ("rf2", "pol-2", "a2"), ("rf3", "pol-3", "a3")] {
         desk.ok(&mia(), request(id, pol, 10_00 + pol.len() as i64 + id.as_bytes()[2] as i64, source(a)));
         core_ok(&mut desk);
@@ -425,7 +432,7 @@ fn an_unsent_refund_in_an_approved_run_is_still_stopped() {
 #[test]
 fn a_refund_the_bank_sends_back_is_owed_again() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
     desk.ok(&mia(), request("rf1", "pol-1", 70_00, source("a1")));
     core_ok(&mut desk);
     let item = |id: &str| refund_item(id, "rf1", Counterparty::Authority("a1".to_string()), "pol-1", 70_00);
@@ -456,4 +463,32 @@ fn a_refund_the_bank_sends_back_is_owed_again() {
         },
     );
     assert_eq!(desk.state.refunds["rf1"].status, RefundStatus::Raised);
+}
+
+/// Purpose: a refund named to a payee goes only to the policy owner's own account: a payee that
+/// belongs to someone else is refused, and so is any payee while payments has not been told who
+/// owns the policy; the owner's own payee is accepted.
+/// Why it matters: found by the scenario run, SCN2-16 (F2-16-5, a blocker): a maker requested a
+/// customer's refund to another customer's registered account and it was accepted, which is a
+/// path for paying a policy's money to anyone.
+#[test]
+fn a_refund_goes_only_to_the_owners_own_account() {
+    let mut desk = Desk::new();
+    desk.payee("mine", PayeeKind::Customer, "03-0001-9999993-00");
+    desk.payee("theirs", PayeeKind::Customer, "01-0001-1111114-00");
+    let told = |desk: &mut Desk, payee: &str| desk.send(&mia(), request("rf1", "pol-5", 116_87, to_payee(payee))).expect_err("refused");
+    let unknown = told(&mut desk, "mine");
+    assert_eq!(unknown.code, "owner_unknown");
+    desk.ok(
+        &svc(),
+        Command::PolicyOwner {
+            policy: "pol-5".into(),
+            owner: "party-mine".into(),
+        },
+    );
+    let wrong = told(&mut desk, "theirs");
+    assert_eq!(wrong.code, "not_owners_account");
+    assert!(wrong.message.contains("another person's account"), "{}", wrong.message);
+    assert_eq!(desk.code(&mia(), request("rf1", "pol-5", 116_87, to_payee("theirs"))), "not_owners_account");
+    desk.ok(&mia(), request("rf1", "pol-5", 116_87, to_payee("mine")));
 }

@@ -255,6 +255,7 @@ pub fn facts(cover_type: &str) -> CoverFacts {
         peak_months: vec![],
         survival_days: 0,
         ends_cover: None,
+        life: Some("life-1".into()),
     }
 }
 

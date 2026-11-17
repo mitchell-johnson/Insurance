@@ -43,7 +43,7 @@ fn claim(item: &str, payee: &str, amount: i64) -> NewItem {
 fn new_account() -> Command {
     Command::ChangePayeeAccount {
         payee: "p1".to_string(),
-        account: account("p1", "0109999999"),
+        account: account("p1", "01-0001-9999993-00"),
         name_check: NameCheck::Match,
     }
 }
@@ -91,8 +91,8 @@ fn only_the_service_records_what_the_master_says() {
 #[test]
 fn a_hold_stops_value_leaving_and_nothing_else() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
-    desk.authority("a1", "pol-1", "0107654321", false);
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
+    desk.authority("a1", "pol-1", "01-0001-7654338-00", false);
     desk.ok(&svc(), record("party-p1", true));
     desk.ok(&svc(), record("party-a1", true));
 
@@ -158,7 +158,7 @@ fn a_refund_is_value_going_out_and_a_claim_is_not() {
         ..refund
     };
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0107654321", false);
+    desk.authority("a1", "pol-1", "01-0001-7654338-00", false);
     desk.ok(&svc(), record("party-a1", true));
     desk.prepare("r1", RunType::PremiumRefunds, d(2027, 11, 15));
     let add = Command::AddRunItems {
@@ -175,7 +175,7 @@ fn a_refund_is_value_going_out_and_a_claim_is_not() {
 #[test]
 fn a_hold_heard_after_the_item_joined_holds_it_at_the_check() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.payee("p2", PayeeKind::Customer, "0102222222");
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
     desk.add("r1", vec![payout("w1", "p1", 500_00), payout("w2", "p2", 700_00)]);
@@ -208,7 +208,7 @@ fn a_payout_waits_for_a_recent_answer_where_one_is_required() {
         config: Box::new(c),
     };
     desk.ok(&cal(), activate);
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
     desk.add("r1", vec![payout("w1", "p1", 500_00), claim("c1", "p1", 900_00)]);
     let check = Command::CheckRun { run: "r1".to_string() };
@@ -233,9 +233,9 @@ fn a_payout_waits_for_a_recent_answer_where_one_is_required() {
 #[test]
 fn the_pump_watches_every_party_money_is_about_to_go_to() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.payee("p2", PayeeKind::Beneficiary, "0102222222");
-    desk.authority("a1", "pol-1", "0107654321", false);
+    desk.authority("a1", "pol-1", "01-0001-7654338-00", false);
     let refund = |id: &str, pol: &str, destination: RefundDestination| Command::RequestRefund {
         refund: id.to_string(),
         policy: policy(pol),
@@ -244,6 +244,13 @@ fn the_pump_watches_every_party_money_is_about_to_go_to() {
         destination,
     };
     desk.ok(&mia(), refund("rf1", "pol-1", RefundDestination::Source { authority: "a1".to_string() }));
+    desk.ok(
+        &svc(),
+        Command::PolicyOwner {
+            policy: "pol-2".into(),
+            owner: "party-p1".into(),
+        },
+    );
     desk.ok(&mia(), refund("rf2", "pol-2", RefundDestination::Payee { payee: "p1".to_string() }));
     let with_claim = RefundDestination::WithClaim {
         claim: "cl-9".to_string(),

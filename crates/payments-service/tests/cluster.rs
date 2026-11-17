@@ -152,7 +152,7 @@ async fn the_service_works_against_a_real_node() {
         policy: policy.clone(),
         party: "payer".to_string(),
         life: None,
-        account: account("Ana Payer", "0101234567"),
+        account: account("Ana Payer", "01-0001-1234579-00"),
         sole_name: false,
     };
     Module::propose(&client, tell(&pam(), create)).await.unwrap().unwrap();

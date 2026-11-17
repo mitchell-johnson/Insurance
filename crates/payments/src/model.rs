@@ -129,6 +129,78 @@ pub struct Authority {
     /// again until someone has talked to them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hardship: bool,
+    /// The last day a hardship mark stands, if it was given one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardship_until: Option<NaiveDate>,
+    /// Who entered the account (or last reinstated or changed it). Absent
+    /// on an authority recorded before a second person confirmed them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintained_by: Option<String>,
+    /// The second payee maintainer who confirmed it with the payer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmed_by: Option<String>,
+    /// A changed account is not collected on before this time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooling_off_until: Option<NaiveDateTime>,
+}
+
+impl Authority {
+    /// Entered or changed by one person and not yet confirmed by a second.
+    pub fn unconfirmed(&self) -> bool {
+        self.maintained_by.is_some() && self.confirmed_by.is_none()
+    }
+
+    /// Whether the payer's hardship mark stands on `today`.
+    pub fn in_hardship(&self, today: NaiveDate) -> bool {
+        self.hardship && self.hardship_until.is_none_or(|until| today <= until)
+    }
+
+    /// Why nothing new may be collected on this authority at `now`, in a
+    /// code and in words that say what to do. A presentation again that a
+    /// conversation with a payer in hardship agreed is not stopped by it.
+    pub fn collection_stop(&self, id: &str, now: NaiveDateTime, represents: bool) -> Option<(&'static str, String)> {
+        match self.status {
+            AuthorityStatus::Suspended => {
+                let why = self.reason.as_deref().unwrap_or("no reason given").replace('_', " ");
+                return Some((
+                    "authority_not_active",
+                    format!("authority {id} is suspended ({why}): a payee maintainer reinstates it and a second confirms it before it is collected on"),
+                ));
+            }
+            AuthorityStatus::Cancelled => {
+                return Some((
+                    "authority_not_active",
+                    format!("authority {id} is cancelled: the payer gives a new authority to be collected from"),
+                ));
+            }
+            AuthorityStatus::Active => {}
+        }
+        if self.unconfirmed() {
+            return Some((
+                "authority_not_confirmed",
+                format!("authority {id} waits for a second payee maintainer to confirm its account with the payer before anything is collected on it"),
+            ));
+        }
+        if let Some(until) = self.cooling_off_until.filter(|until| now < *until) {
+            return Some((
+                "authority_cooling_off",
+                format!(
+                    "authority {id}'s account was changed: it can be collected on from {}",
+                    until.format("%-d %B %Y %H:%M")
+                ),
+            ));
+        }
+        if !represents && self.in_hardship(now.date()) {
+            let until = self.hardship_until.map_or(String::new(), |u| format!(" until {}", u.format("%-d %B %Y")));
+            return Some((
+                "payer_in_hardship",
+                format!(
+                    "the payer on authority {id} is marked in financial hardship{until}: nothing is collected until collections takes the mark off or it ends"
+                ),
+            ));
+        }
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

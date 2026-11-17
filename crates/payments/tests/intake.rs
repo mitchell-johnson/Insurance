@@ -114,7 +114,7 @@ fn a_released_claim_payment_waits_then_is_paid_as_released() {
 #[test]
 fn a_waiting_payment_is_neither_lost_nor_changed() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    desk.payee("p1", PayeeKind::Beneficiary, "01-0001-1234579-00");
     desk.ok(&svc(), offer(released("pay-1", "p1", 700_00)));
     desk.ok(&svc(), offer(released("pay-2", "party-p1", 300_00)));
     assert_eq!(desk.code(&mia(), offer(released("pay-3", "p1", 1))), "not_permitted");
@@ -157,7 +157,7 @@ fn a_waiting_payment_is_neither_lost_nor_changed() {
 #[test]
 fn a_waiting_payment_is_paid_only_to_a_payee_that_is_certain() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    desk.payee("p1", PayeeKind::Beneficiary, "01-0001-1234579-00");
     desk.ok(&svc(), offer(released("pay-1", "party-nobody", 100_00)));
     desk.ok(&svc(), offer(released("pay-2", "party-p1", 200_00)));
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
@@ -170,7 +170,7 @@ fn a_waiting_payment_is_paid_only_to_a_payee_that_is_certain() {
             payee: "p1-other".to_string(),
             party: "party-p1".to_string(),
             kind: PayeeKind::Beneficiary,
-            account: account("p1", "0309999999"),
+            account: account("p1", "03-0001-9999993-00"),
             name_check: ic_payments::model::NameCheck::Match,
         },
     );
@@ -191,7 +191,7 @@ fn a_waiting_payment_is_paid_only_to_a_payee_that_is_certain() {
 #[test]
 fn a_claim_payment_goes_to_the_payee_claims_picked_from_the_register() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    desk.payee("p1", PayeeKind::Beneficiary, "01-0001-1234579-00");
     desk.payee("p1-other", PayeeKind::Beneficiary, "02-0309-9999999-00");
     // Both are the same party's.
     desk.state.payees.get_mut("p1-other").unwrap().party = "party-p1".to_string();
@@ -229,7 +229,7 @@ fn a_claim_payment_goes_to_the_payee_claims_picked_from_the_register() {
 #[test]
 fn a_released_provider_cost_waits_like_a_benefit() {
     let mut desk = Desk::new();
-    desk.payee("prov-1", PayeeKind::Provider, "0207654321");
+    desk.payee("prov-1", PayeeKind::Provider, "02-0001-7654338-00");
     let detail = json!({"policy": "pol-1", "payment_ref": "clm-1-cost-1", "net_minor": "45000", "payee": "party-prov-1",
         "kind": "evidence", "item": "gp-report"});
     for envelope in react(&claims_event("3-80", "claim_cost_paid", detail.clone())) {
@@ -261,8 +261,8 @@ fn a_released_provider_cost_waits_like_a_benefit() {
 #[test]
 fn a_unit_linked_payout_waits_for_a_named_payee() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
-    desk.payee("p2", PayeeKind::Customer, "0207654321");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
+    desk.payee("p2", PayeeKind::Customer, "02-0001-7654338-00");
     let record = |id: &str, event: serde_json::Value| -> ic_core::EventRecord {
         serde_json::from_value(json!({"id": id, "partition": 3, "seq": 90, "business_date": "2027-11-15", "log_index": 950, "event": {"investment": event}}))
             .unwrap()
@@ -448,7 +448,7 @@ fn a_reinsurer_settlement_is_offered_by_its_module_and_paid() {
 #[test]
 fn claims_is_told_when_the_bank_refuses_a_released_payment() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    desk.payee("p1", PayeeKind::Beneficiary, "01-0001-1234579-00");
     for (n, payment) in ["pay-a", "pay-b"].into_iter().enumerate() {
         // Different amounts: two equal payments to one payee are held as a possible duplicate.
         let detail = json!({"policy": "pol-1", "payment_ref": payment, "net_minor": (10_000 * (n + 1)).to_string(), "payee": "p1"});
@@ -508,7 +508,7 @@ fn claims_is_told_when_the_bank_refuses_a_released_payment() {
 #[test]
 fn claims_is_given_a_runs_settled_total_when_all_of_it_is_done() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    desk.payee("p1", PayeeKind::Beneficiary, "01-0001-1234579-00");
     let paid = |n: u64, payment: &str, net: i64, run: &str| {
         let detail = json!({"policy": "pol-1", "payment_ref": payment, "net_minor": net.to_string(), "payee": "p1", "run": run});
         react(&claim_paid(&format!("3-{}", 200 + n), detail)).remove(0)
@@ -583,7 +583,7 @@ fn claims_is_given_a_runs_settled_total_when_all_of_it_is_done() {
 #[test]
 fn a_run_with_its_total_waits_for_a_late_release() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    desk.payee("p1", PayeeKind::Beneficiary, "01-0001-1234579-00");
     let paid = |n: u64, payment: &str| {
         let net = if n == 0 { "10000" } else { "15000" };
         let detail = json!({"policy": "pol-1", "payment_ref": payment, "net_minor": net, "payee": "p1", "run": "run-7"});
@@ -629,7 +629,7 @@ fn a_run_with_its_total_waits_for_a_late_release() {
 #[test]
 fn a_payment_goes_only_to_the_account_that_was_verified() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    desk.payee("p1", PayeeKind::Beneficiary, "01-0001-1234579-00");
     let mut other = released("pay-x", "p1", 100_00);
     other.account_ref = "02-9999-9999".to_string();
     let mut by_id = released("pay-y", "p1", 100_00);
@@ -694,7 +694,7 @@ fn claims_note(id: &str, kind: &str, claim: &str, detail: serde_json::Value) -> 
 #[test]
 fn a_large_admitted_claim_is_flagged_and_forecast() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    desk.payee("p1", PayeeKind::Beneficiary, "01-0001-1234579-00");
     let mut n = 9100;
     let mut apply = |desk: &mut Desk, envelope: ic_payments::Envelope| {
         n += 1;
@@ -766,7 +766,7 @@ fn a_large_admitted_claim_is_flagged_and_forecast() {
 #[test]
 fn the_core_is_told_when_the_bank_refuses_a_payout() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     let raised: ic_core::EventRecord = serde_json::from_value(json!({"id": "3-90", "partition": 3, "seq": 90, "business_date": "2027-11-15", "log_index": 950, "event": {"investment": {"payout_raised": {"policy": "pol-1", "policyholder": "party-p1", "payout": "po-1", "amount_minor": 12_345_00, "reason": "surrender"}}}})).unwrap();
     for (index, envelope) in react(&raised).into_iter().enumerate() {
         desk.state.apply(5000 + index as u64, envelope).unwrap();

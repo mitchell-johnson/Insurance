@@ -41,8 +41,8 @@ fn claim(item: &str, payee: &str, pol: &str, amount: i64) -> ic_payments::model:
 #[test]
 fn a_claims_run_is_paid_settled_and_closed() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
-    desk.payee("p2", PayeeKind::Provider, "0207654321");
+    desk.payee("p1", PayeeKind::Beneficiary, "01-0001-1234579-00");
+    desk.payee("p2", PayeeKind::Provider, "02-0001-7654338-00");
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
     desk.add("r1", vec![claim("i1", "p1", "pol-1", 50_000_00), pay("i2", "p2", 1_200_00)]);
     let submission = desk.approve("r1");
@@ -99,7 +99,7 @@ fn a_claims_run_is_paid_settled_and_closed() {
 #[test]
 fn the_maker_never_approves_their_own_run() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.prepare("r1", RunType::BenefitPayments, d(2027, 11, 15));
     desk.add("r1", vec![pay("i1", "p1", 100_00)]);
     assert_eq!(desk.code(&ari(), Command::ApproveRun { run: run("r1") }), "wrong_state");
@@ -126,7 +126,7 @@ fn the_maker_never_approves_their_own_run() {
 #[test]
 fn a_run_type_can_need_two_approvers() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.prepare("r1", RunType::ExGratia, d(2027, 11, 15));
     desk.add("r1", vec![pay("i1", "p1", 100_00)]);
     desk.ok(&mia(), Command::CheckRun { run: run("r1") });
@@ -148,15 +148,15 @@ fn a_run_type_can_need_two_approvers() {
 #[test]
 fn the_check_holds_what_must_not_be_paid() {
     let mut desk = Desk::new();
-    desk.payee("good", PayeeKind::Customer, "0101234567");
-    desk.payee("twin", PayeeKind::Customer, "0101234567");
+    desk.payee("good", PayeeKind::Customer, "01-0001-1234579-00");
+    desk.payee("twin", PayeeKind::Customer, "01-0001-1234579-00");
     desk.ok(
         &pam(),
         Command::RegisterPayee {
             payee: "raw".to_string(),
             party: "x".to_string(),
             kind: PayeeKind::Customer,
-            account: account("Raw", "0309999999"),
+            account: account("Raw", "03-0001-9999993-00"),
             name_check: NameCheck::Match,
         },
     );
@@ -229,8 +229,8 @@ fn the_check_holds_what_must_not_be_paid() {
 #[test]
 fn an_item_that_duplicates_or_contradicts_is_refused() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
-    desk.authority("a1", "pol-1", "0401234567", false);
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
+    desk.authority("a1", "pol-1", "04-0001-1234579-00", false);
     desk.prepare("r1", RunType::BenefitPayments, d(2027, 11, 15));
     desk.add("r1", vec![pay("i1", "p1", 100_00)]);
     let add = |items| Command::AddRunItems { run: run("r1"), items };
@@ -270,7 +270,7 @@ fn an_item_that_duplicates_or_contradicts_is_refused() {
 #[test]
 fn run_and_day_limits_cap_what_can_be_released() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Reinsurer, "0101234567");
+    desk.payee("p1", PayeeKind::Reinsurer, "01-0001-1234579-00");
     let prepare = |id: &str, fund: &str, on, urgent, run_type| Command::PrepareRun {
         run: run(id),
         run_type,
@@ -332,7 +332,7 @@ fn a_run_is_not_released_without_the_funds_to_cover_it() {
             config: Box::new(config()),
         },
     );
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.prepare("r1", RunType::Commission, d(2027, 11, 15));
     desk.add("r1", vec![pay("i1", "p1", 60_000_00)]);
     desk.ok(&mia(), Command::CheckRun { run: run("r1") });
@@ -353,7 +353,7 @@ fn a_run_is_not_released_without_the_funds_to_cover_it() {
 #[test]
 fn the_bank_cutoff_and_calendar_are_respected() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     let ready = |desk: &mut Desk, id: &str, on| {
         desk.prepare(id, RunType::BenefitPayments, on);
         desk.add(id, vec![pay(&format!("i-{id}"), "p1", 100_00 + id.len() as i64)]);
@@ -377,7 +377,7 @@ fn the_bank_cutoff_and_calendar_are_respected() {
 #[test]
 fn an_urgent_run_needs_two_on_call_approvers() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    desk.payee("p1", PayeeKind::Beneficiary, "01-0001-1234579-00");
     desk.at(t(2027, 11, 20, 23, 30));
     desk.ok(
         &mia(),
@@ -408,7 +408,7 @@ fn an_urgent_run_needs_two_on_call_approvers() {
 #[test]
 fn a_submission_is_taken_once_from_a_provisioned_region() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.prepare("r1", RunType::BenefitPayments, d(2027, 11, 15));
     desk.add("r1", vec![pay("i1", "p1", 100_00)]);
     let s = desk.approve("r1");
@@ -479,7 +479,7 @@ fn a_submission_is_taken_once_from_a_provisioned_region() {
 #[test]
 fn a_failed_file_is_replaced_never_resent() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.prepare("r1", RunType::BenefitPayments, d(2027, 11, 15));
     desk.add("r1", vec![pay("i1", "p1", 100_00), pay("i2", "p1", 200_00)]);
     let first = desk.approve("r1");
@@ -564,7 +564,7 @@ fn a_failed_file_is_replaced_never_resent() {
 #[test]
 fn a_partial_acknowledgement_accounts_for_every_item() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.prepare("r1", RunType::BenefitPayments, d(2027, 11, 15));
     desk.add("r1", vec![pay("i1", "p1", 100_00), pay("i2", "p1", 200_00)]);
     let s = desk.approve("r1");
@@ -648,7 +648,7 @@ fn a_partial_acknowledgement_accounts_for_every_item() {
 #[test]
 fn a_returned_payment_is_owed_again() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    desk.payee("p1", PayeeKind::Beneficiary, "01-0001-1234579-00");
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
     desk.add("r1", vec![claim("i1", "p1", "pol-1", 80_000_00)]);
     let s = desk.approve("r1");
@@ -694,7 +694,7 @@ fn a_returned_payment_is_owed_again() {
 #[test]
 fn a_payment_returned_before_settlement_never_reaches_the_ledger() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    desk.payee("p1", PayeeKind::Beneficiary, "01-0001-1234579-00");
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
     desk.add("r1", vec![claim("i1", "p1", "pol-1", 500_00), claim("i2", "p1", "pol-2", 700_00)]);
     let s = desk.approve("r1");
@@ -730,8 +730,16 @@ fn a_payment_returned_before_settlement_never_reaches_the_ledger() {
 #[test]
 fn a_collection_run_draws_on_active_authorities() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", false);
-    desk.authority("a2", "pol-2", "0207654321", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
+    desk.authority("a2", "pol-2", "02-0001-7654338-00", false);
+    desk.prepare("dd", RunType::Collection, d(2027, 11, 15));
+    let add = |items| Command::AddRunItems { run: run("dd"), items };
+    assert_eq!(desk.code(&mia(), add(vec![collect("c0", "zz", "pol-1", 5)])), "unknown_authority");
+    assert_eq!(desk.code(&mia(), add(vec![collect("c0", "a1", "pol-2", 5)])), "invalid_item");
+    desk.payee("p1", PayeeKind::Customer, "03-0001-1234579-00");
+    assert_eq!(desk.code(&mia(), add(vec![pay("c0", "p1", 5)])), "invalid_item");
+    desk.add("dd", vec![collect("c1", "a1", "pol-1", 150_00), collect("c2", "a2", "pol-2", 90_00)]);
+    // Suspended after it joined the run: held at the check.
     desk.ok(
         &pam(),
         Command::SuspendAuthority {
@@ -739,13 +747,6 @@ fn a_collection_run_draws_on_active_authorities() {
             reason: "customer".to_string(),
         },
     );
-    desk.prepare("dd", RunType::Collection, d(2027, 11, 15));
-    let add = |items| Command::AddRunItems { run: run("dd"), items };
-    assert_eq!(desk.code(&mia(), add(vec![collect("c0", "zz", "pol-1", 5)])), "unknown_authority");
-    assert_eq!(desk.code(&mia(), add(vec![collect("c0", "a1", "pol-2", 5)])), "invalid_item");
-    desk.payee("p1", PayeeKind::Customer, "0301234567");
-    assert_eq!(desk.code(&mia(), add(vec![pay("c0", "p1", 5)])), "invalid_item");
-    desk.add("dd", vec![collect("c1", "a1", "pol-1", 150_00), collect("c2", "a2", "pol-2", 90_00)]);
     let events = desk.ok(&mia(), Command::CheckRun { run: run("dd") });
     assert_eq!(events, vec![Event::RunChecked { run: run("dd"), held: 1 }]);
     assert_eq!(desk.state.runs["dd"].items["c2"].status, ItemStatus::Held("authority_not_active".to_string()));
@@ -780,7 +781,7 @@ fn a_collection_run_draws_on_active_authorities() {
 #[test]
 fn a_dishonour_is_presented_once_more_then_the_authority_is_suspended() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
     desk.prepare("d1", RunType::Collection, d(2027, 11, 15));
     desk.add("d1", vec![collect("c1", "a1", "pol-1", 150_00)]);
     let s = desk.approve("d1");
@@ -803,6 +804,20 @@ fn a_dishonour_is_presented_once_more_then_the_authority_is_suspended() {
     );
     assert_eq!(desk.state.books["anz-sf1-collection"].expected["c1"].amount_minor, -150_00);
     assert_eq!(answer(&desk.state, json!({"q": "represent"})).unwrap(), json!(["c1"]));
+    // Collections hears of it, with what happens next (found by the scenario run, SCN2-15, F2-15-3).
+    let told = |desk: &Desk| -> Vec<String> {
+        desk.state
+            .notices
+            .items
+            .values()
+            .filter(|n| n.to == ic_payments::Role::Collections && n.subject == "collection_dishonoured")
+            .map(|n| n.detail.clone())
+            .collect()
+    };
+    assert_eq!(
+        told(&desk),
+        ["the collection of $150.00 on policy pol-1 (item c1) was returned by the bank: insufficient funds; it can be presented once more in the next collection run"]
+    );
     assert_eq!(desk.state.authorities["a1"].dishonours, 1);
 
     // Presenting again: same authority, same amount, once.
@@ -854,9 +869,15 @@ fn a_dishonour_is_presented_once_more_then_the_authority_is_suspended() {
         reason: "repeated_dishonour".to_string()
     }));
     assert!(desk.state.represent.is_empty(), "a second presentment is never presented again");
+    assert!(
+        told(&desk)[1].ends_with("the authority is suspended after repeated dishonours: agree another way to pay"),
+        "{:?}",
+        told(&desk)
+    );
     assert_eq!(desk.state.authorities["a1"].status, AuthorityStatus::Suspended);
     // Reinstated after talking to the customer, a clean collection clears the count.
     desk.ok(&pam(), Command::ReinstateAuthority { authority: "a1".to_string() });
+    desk.ok(&pat(), Command::ConfirmAuthority { authority: "a1".to_string() });
     desk.prepare("d3", RunType::Collection, d(2027, 11, 19));
     desk.add("d3", vec![collect("c4", "a1", "pol-1", 150_00)]);
     desk.at(t(2027, 11, 19, 9, 0));
@@ -882,7 +903,7 @@ fn a_dishonour_is_presented_once_more_then_the_authority_is_suspended() {
 #[test]
 fn a_closed_account_cancels_the_authority() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
     desk.prepare("d1", RunType::Collection, d(2027, 11, 15));
     desk.add("d1", vec![collect("c1", "a1", "pol-1", 150_00)]);
     let s = desk.approve("d1");
@@ -900,7 +921,7 @@ fn a_closed_account_cancels_the_authority() {
         .any(|e| matches!(e, Event::AuthorityCancelled { reason, .. } if reason == "account_unusable")));
     assert!(desk.state.represent.is_empty());
     // Removing a dropped re-presentment puts the original back in the queue.
-    desk.authority("a2", "pol-2", "0207654321", false);
+    desk.authority("a2", "pol-2", "02-0001-7654338-00", false);
     desk.prepare("d2", RunType::Collection, d(2027, 11, 16));
     desk.add("d2", vec![collect("c5", "a2", "pol-2", 10_00)]);
     desk.at(t(2027, 11, 16, 9, 0));
@@ -933,7 +954,7 @@ fn a_closed_account_cancels_the_authority() {
 #[test]
 fn a_route_is_redirected_to_the_second_bank() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     for (id, item, amount) in [("r1", "i1", 100_00), ("r2", "i2", 200_00)] {
         desk.prepare(id, RunType::BenefitPayments, d(2027, 11, 15));
         desk.add(id, vec![pay(item, "p1", amount)]);
@@ -1005,7 +1026,7 @@ fn a_route_is_redirected_to_the_second_bank() {
 #[test]
 fn pruning_forgets_only_what_is_finished() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     for (id, item) in [("old", "i1"), ("open", "i2")] {
         desk.prepare(id, RunType::BenefitPayments, d(2027, 11, 15));
         desk.add(id, vec![pay(item, "p1", 100_00 + item.len() as i64 + id.len() as i64)]);
@@ -1036,7 +1057,7 @@ fn pruning_forgets_only_what_is_finished() {
 #[test]
 fn a_members_own_collection_is_applied_to_that_member_alone() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
     desk.ok(
         &pam(),
         Command::CreateAuthority {
@@ -1044,10 +1065,11 @@ fn a_members_own_collection_is_applied_to_that_member_alone() {
             policy: policy("pol-1"),
             party: "party-member".to_string(),
             life: Some(ic_core::LifeId::from("life-7")),
-            account: account("Mere Member", "0201234567"),
+            account: account("Mere Member", "02-0001-1234579-00"),
             sole_name: true,
         },
     );
+    desk.ok(&pat(), Command::ConfirmAuthority { authority: "a2".to_string() });
     desk.prepare("dd", RunType::Collection, d(2027, 11, 15));
     desk.add("dd", vec![collect("c1", "a1", "pol-1", 900_00), collect("c2", "a2", "pol-1", 41_50)]);
     let s = desk.approve("dd");
@@ -1099,11 +1121,12 @@ fn a_members_own_collection_is_applied_to_that_member_alone() {
 fn a_payer_in_hardship_is_talked_to_before_anything_is_presented_again() {
     use ic_payments::model::ConversationOutcome;
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", false);
-    desk.authority("a2", "pol-2", "0201234567", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
+    desk.authority("a2", "pol-2", "02-0001-1234579-00", false);
     let mark = |hardship| Command::MarkHardship {
         authority: "a1".to_string(),
         hardship,
+        until: None,
     };
     assert_eq!(desk.code(&mia(), mark(true)), "not_permitted");
     assert_eq!(
@@ -1111,12 +1134,17 @@ fn a_payer_in_hardship_is_talked_to_before_anything_is_presented_again() {
             &col(),
             Command::MarkHardship {
                 authority: "zz".to_string(),
-                hardship: true
+                hardship: true,
+                until: None,
             }
         ),
         "unknown_authority"
     );
     desk.ok(&pam(), mark(false));
+    // Collected before the payer told us; the mark comes before the bank answers.
+    desk.prepare("d1", RunType::Collection, d(2027, 11, 15));
+    desk.add("d1", vec![collect("c1", "a1", "pol-1", 150_00), collect("c2", "a2", "pol-2", 90_00)]);
+    let s = desk.approve("d1");
     let events = desk.ok(&col(), mark(true));
     assert_eq!(
         events,
@@ -1125,10 +1153,6 @@ fn a_payer_in_hardship_is_talked_to_before_anything_is_presented_again() {
             hardship: true
         }]
     );
-
-    desk.prepare("d1", RunType::Collection, d(2027, 11, 15));
-    desk.add("d1", vec![collect("c1", "a1", "pol-1", 150_00), collect("c2", "a2", "pol-2", 90_00)]);
-    let s = desk.approve("d1");
     desk.settle(&s, d(2027, 11, 15));
     for item in ["c1", "c2"] {
         desk.ok(
@@ -1179,17 +1203,18 @@ fn a_payer_in_hardship_is_talked_to_before_anything_is_presented_again() {
     // Agreed not to present: it never is.
     let s2 = desk.approve("d2");
     desk.settle(&s2, d(2027, 11, 22));
-    desk.authority("a3", "pol-3", "0301234567", false);
+    desk.authority("a3", "pol-3", "03-0001-1234579-00", false);
+    desk.prepare("d3", RunType::Collection, d(2027, 12, 15));
+    desk.add("d3", vec![collect("c3", "a3", "pol-3", 150_00)]);
+    let s3 = desk.approve("d3");
     desk.ok(
         &col(),
         Command::MarkHardship {
             authority: "a3".to_string(),
             hardship: true,
+            until: None,
         },
     );
-    desk.prepare("d3", RunType::Collection, d(2027, 12, 15));
-    desk.add("d3", vec![collect("c3", "a3", "pol-3", 150_00)]);
-    let s3 = desk.approve("d3");
     desk.settle(&s3, d(2027, 12, 15));
     desk.ok(
         &svc(),
@@ -1223,8 +1248,8 @@ fn a_payer_in_hardship_is_talked_to_before_anything_is_presented_again() {
 #[test]
 fn a_collection_held_up_by_an_outage_goes_next_window_and_is_found() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0101234567", false);
-    desk.authority("a2", "pol-2", "0201234567", false);
+    desk.authority("a1", "pol-1", "01-0001-1234579-00", false);
+    desk.authority("a2", "pol-2", "02-0001-1234579-00", false);
     // Friday, with the file channel's cutoff at 16:00.
     desk.at(t(2027, 11, 19, 9, 0));
     desk.prepare("d1", RunType::Collection, d(2027, 11, 19));
@@ -1287,7 +1312,7 @@ fn a_collection_held_up_by_an_outage_goes_next_window_and_is_found() {
 #[test]
 fn an_approved_run_is_closed_to_change_and_unknown_accounts_are_refused() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    desk.payee("p1", PayeeKind::Beneficiary, "01-0001-1234579-00");
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
     desk.add("r1", vec![pay("i1", "p1", 100_00)]);
     desk.approve("r1");
@@ -1330,7 +1355,7 @@ fn an_approved_run_is_closed_to_change_and_unknown_accounts_are_refused() {
 #[test]
 fn a_run_prepared_after_the_cutoff_goes_next_window_and_the_date_is_known() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     let next = |desk: &Desk, run_type: &str| {
         let at = desk.now.format("%Y-%m-%dT%H:%M:%S").to_string();
         answer(&desk.state, json!({"q": "next_value_date", "run_type": run_type, "at": at})).unwrap()
@@ -1403,7 +1428,7 @@ fn a_run_prepared_after_the_cutoff_goes_next_window_and_the_date_is_known() {
 #[test]
 fn every_hold_is_named_and_treasury_lets_a_large_claim_through() {
     let mut desk = Desk::new();
-    desk.payee("estate", PayeeKind::Customer, "0101234567");
+    desk.payee("estate", PayeeKind::Customer, "01-0001-1234579-00");
     desk.payee("small", PayeeKind::Customer, "0102222222");
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 18));
     desk.add("r1", vec![claim("big", "estate", "pol-1", 499_883_13), pay("tiny", "small", 5_00)]);
@@ -1484,7 +1509,7 @@ fn every_hold_is_named_and_treasury_lets_a_large_claim_through() {
 #[test]
 fn an_approval_refusal_says_where_the_run_stands() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.prepare("r1", RunType::BenefitPayments, d(2027, 11, 15));
     desk.add("r1", vec![pay("i1", "p1", 100_00)]);
     let mut old = desk.state.runs["r1"].items["i1"].clone();
@@ -1521,7 +1546,7 @@ fn an_approval_refusal_says_where_the_run_stands() {
 #[test]
 fn sending_again_says_why_nothing_goes() {
     let mut desk = Desk::new();
-    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p1", PayeeKind::Customer, "01-0001-1234579-00");
     desk.prepare("r1", RunType::BenefitPayments, d(2027, 11, 15));
     desk.add("r1", vec![pay("i1", "p1", 100_00)]);
     let told = |desk: &mut Desk| {
@@ -1541,4 +1566,57 @@ fn sending_again_says_why_nothing_goes() {
         message.starts_with("nothing in run r1 is left to send. i1 came back from the bank"),
         "{message}"
     );
+}
+
+/// Purpose: every collection the bank returns tells collections, in words, why and what happens
+/// next, whatever the bank's reason.
+/// Why it matters: found by the scenario run, SCN2-15 (F2-15-3): a dishonour reached nobody but
+/// the run, so collections never followed up a customer whose premium bounced.
+#[test]
+fn every_returned_collection_is_told_to_collections() {
+    let mut desk = Desk::new();
+    let reasons = [
+        ReturnReason::AccountClosed,
+        ReturnReason::AuthorityCancelled,
+        ReturnReason::InvalidAccount,
+        ReturnReason::Other("refer to payer".to_string()),
+    ];
+    desk.prepare("d1", RunType::Collection, d(2027, 11, 15));
+    for n in 1..=reasons.len() {
+        desk.authority(&format!("a{n}"), &format!("pol-{n}"), "01-0001-1234579-00", false);
+        desk.add("d1", vec![collect(&format!("c{n}"), &format!("a{n}"), &format!("pol-{n}"), 100_00 + n as i64)]);
+    }
+    let s = desk.approve("d1");
+    desk.settle(&s, d(2027, 11, 15));
+    for (n, reason) in reasons.into_iter().enumerate() {
+        desk.ok(
+            &svc(),
+            Command::RecordReturn {
+                item: format!("c{}", n + 1),
+                reason,
+                returned_on: d(2027, 11, 16),
+            },
+        );
+    }
+    let told: Vec<String> = desk
+        .state
+        .notices
+        .items
+        .values()
+        .filter(|n| n.subject == "collection_dishonoured")
+        .map(|n| n.detail.clone())
+        .collect();
+    let expected = [
+        "the account is closed",
+        "the payer cancelled the authority at their bank",
+        "the account number is not valid",
+        "refer to payer",
+    ];
+    assert_eq!(told.len(), 4, "{told:?}");
+    for (line, why) in told.iter().zip(expected) {
+        assert!(
+            line.contains(why) && line.ends_with("it is not presented again: agree another way to pay"),
+            "{line}"
+        );
+    }
 }

@@ -2526,7 +2526,8 @@ async fn the_reinsurance_exceptions_console() {
 /// claim's consent can be read.
 /// Why it matters: before this, nothing in the system cut a reinsurer's statement or instructed its settlement, so no
 /// reinsurer was ever paid or billed. The module checks two people itself, but only by the names it is given, so the console
-/// must name them from the sign-in and never from the page.
+/// must name them from the sign-in and never from the page. A held settlement is not prepared at all (found by the scenario
+/// run, SCN2-08, F2-08-11: it was prepared, then lost when the signature was refused).
 #[tokio::test]
 async fn the_reinsurer_accounts_are_run_from_the_console() {
     let portal = portal();
@@ -2564,6 +2565,24 @@ async fn the_reinsurer_accounts_are_run_from_the_console() {
     );
     // A claim no reinsurer was asked about has no consent to show.
     assert_eq!(ask("sub-riview", "consent_status?claim=C1".into()).await.0, StatusCode::NOT_FOUND);
+
+    // A held settlement is refused before it is prepared, saying to release the hold first.
+    let (status, answer) = tell("sub-ri1", json!({ "hold_settlement": { "number": number, "reason": "query on the listing" } })).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let (status, problem) = tell(
+        "sub-ri1",
+        json!({ "instruct_settlement": { "number": number, "reason": "February settlement" } }),
+    )
+    .await;
+    assert_eq!(
+        (status, problem["title"].as_str()),
+        (StatusCode::CONFLICT, Some("settlement_held")),
+        "{problem}"
+    );
+    assert!(problem["detail"].as_str().unwrap().contains("release the hold first"), "{problem}");
+    assert_eq!(ask("sub-ri2", "me".into()).await.1["pending"], json!([]));
+    let (status, answer) = tell("sub-ri1", json!({ "release_hold": { "number": number } })).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
 
     // The page names neither the preparer nor the approver; a settlement needs a reason for the signer.
     for bad in [

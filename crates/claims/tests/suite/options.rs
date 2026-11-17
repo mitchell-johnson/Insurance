@@ -51,7 +51,8 @@ fn ip_claim(w: &mut World, id: &str, cause: &str) {
 /// life chose, nor past the day the option's age limit ends it; inside both it is admitted.
 /// Why it matters: a two-year option priced as two years and paid to 65 would pay decades of
 /// benefit the premium never bought, and the schedule set at admission is what every later
-/// payment run follows.
+/// payment run follows. The refusal names the limit and the last allowed date (found by the
+/// scenario run, SCN2-09, F2-09-3: it said only "the period or the age").
 #[test]
 fn an_income_benefit_stops_at_the_options_period_and_age() {
     let mut w = World::new();
@@ -68,6 +69,8 @@ fn an_income_benefit_stops_at_the_options_period_and_age() {
     assert_eq!(w.undecided("ip-1", "ana", income(3_000, first, d(2029, 3, 2)), "R-OK"), "beyond_benefit_period");
     // Inside two years, but past the age the option pays to.
     assert_eq!(w.undecided("ip-1", "ana", income(3_000, first, d(2028, 9, 2)), "R-OK"), "beyond_benefit_period");
+    let told = w.told(World::decide_command("ip-1", "ana", income(3_000, first, d(2029, 3, 2)), "R-OK"));
+    assert_eq!(told, "the benefit runs past the age the option pays to: the latest it can end is 2028-09-01");
     w.decided("ip-1", "ana", income(3_000, first, d(2028, 9, 1)), "R-OK");
     assert_eq!(w.claim("ip-1").status, Status::InPayment);
 }

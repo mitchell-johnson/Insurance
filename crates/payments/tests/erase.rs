@@ -108,12 +108,12 @@ fn an_erased_payees_details_are_forgotten_once_the_bank_has_finished() {
 #[test]
 fn an_erased_payer_is_forgotten_everywhere_and_not_taken_again() {
     let mut desk = Desk::new();
-    desk.authority("a1", "pol-1", "0203333333", false);
+    desk.authority("a1", "pol-1", "02-0001-3333358-00", false);
     {
         let cases = &mut desk.state.payer_checks.cases;
         cases.insert("party-a1|party:x".to_string(), case("party-a1", "party:x"));
         cases.insert("own|party:party-a1".to_string(), case("own", "party:party-a1"));
-        cases.insert("own|account:0203333333".to_string(), case("own", "account:0203333333"));
+        cases.insert("own|account:020001333335800".to_string(), case("own", "account:020001333335800"));
         cases.insert("own|party:y".to_string(), case("own", "party:y"));
     }
     assert_eq!(desk.code(&rae(), checked("party-a1", true)), "not_permitted");
@@ -131,7 +131,7 @@ fn an_erased_payer_is_forgotten_everywhere_and_not_taken_again() {
         payee: "p9".to_string(),
         party: "party-a1".to_string(),
         kind: PayeeKind::Customer,
-        account: account("a1", "0204444444"),
+        account: account("a1", "02-0001-4444445-00"),
         name_check: NameCheck::Match,
     };
     assert_eq!(desk.code(&pam(), payee), ERASED);
@@ -140,7 +140,7 @@ fn an_erased_payer_is_forgotten_everywhere_and_not_taken_again() {
         policy: policy("pol-1"),
         party: "party-a1".to_string(),
         life: None,
-        account: account("a1", "0204444444"),
+        account: account("a1", "02-0001-4444445-00"),
         sole_name: false,
     };
     assert_eq!(desk.code(&pam(), authority), ERASED);
