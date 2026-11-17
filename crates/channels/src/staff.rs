@@ -24,6 +24,11 @@ use crate::classes::DataClass;
 /// Seconds since the Unix epoch, supplied by whoever proposes a command.
 pub type At = i64;
 
+/// Actions one person never holds both of, so no grant gives one to a
+/// holder of the other: who makes a payment run never approves runs, and
+/// who approves them never maintains the payees they pay.
+pub const SEPARATE_ACTIONS: [(&str, &str); 2] = [("payments.maker", "payments.approver"), ("payments.approver", "payments.payees")];
+
 /// The policy shipped with the platform.
 pub const DEFAULT_POLICIES: &str = include_str!("../../../config/cedar/staff.cedar");
 
@@ -953,6 +958,25 @@ impl StaffState {
                 if action.trim().is_empty() || record.trim().is_empty() {
                     return Err(reject("bad_one_off", "a one-off grant names one action and one record"));
                 }
+                // A grant never joins duties kept apart: whoever holds one side
+                // is not given the other, even once.
+                let held = self.templates_of(holder, at);
+                let kept_apart = SEPARATE_ACTIONS.iter().find_map(|(a, b)| {
+                    let other = if action == a {
+                        b
+                    } else if action == b {
+                        a
+                    } else {
+                        return None;
+                    };
+                    held.iter().any(|t| t.actions.contains(*other)).then_some(*other)
+                });
+                if let Some(other) = kept_apart {
+                    return Err(reject(
+                        "separation_of_duties",
+                        format!("{holder} holds {other}, which is kept apart from {action}: someone who does not hold {other} takes this on"),
+                    ));
+                }
             }
             GrantKind::BreakGlass { template } => {
                 if !self.templates.get(template).is_some_and(|t| t.break_glass) {
@@ -1278,11 +1302,16 @@ impl StaffState {
                 });
             }
             StaffCommand::RevokeGrant { id } => {
-                let g = self
-                    .grants
-                    .get(&id)
-                    .filter(|g| g.state == GrantState::Active)
-                    .ok_or_else(|| reject("not_active", "no such active grant"))?;
+                let g = self.grants.get(&id).filter(|g| g.state == GrantState::Active).ok_or_else(|| {
+                    match self.grants.get(&id).filter(|g| g.state == GrantState::Requested) {
+                        // A request is withdrawn, not revoked: nothing was granted yet.
+                        Some(_) => reject(
+                            "not_active",
+                            format!("grant {id} is still waiting for approval: its requester withdraws it, or an approver declines it, with decline_grant"),
+                        ),
+                        None => reject("not_active", "no such active grant"),
+                    }
+                })?;
                 if &g.holder != actor && self.members.get(&g.holder).and_then(|m| m.manager.as_ref()) != Some(actor) {
                     self.require(actor, actions::APPROVE_GRANT, at)?;
                 }

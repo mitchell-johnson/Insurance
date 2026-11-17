@@ -135,6 +135,8 @@ pub fn seeded() -> ClaimsCore {
             let mut core = FakeCore::new(d(2027, 3, 1));
             if p == 0 {
                 core.cover("pol-c0", "life", facts("life"));
+                // The policy the underwriting fixture issued, for a claim referred there.
+                core.cover("POL-P1", "life", facts("life"));
             } else {
                 core.cover("pol-c1", "life", facts("life"));
                 core.cover("pol-c1", "trauma", facts("trauma"));

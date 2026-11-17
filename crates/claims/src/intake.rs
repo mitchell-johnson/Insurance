@@ -6,7 +6,7 @@ use chrono::NaiveDate;
 
 use crate::command::{Actor, Notification};
 use crate::config::{Match, Queue, Role};
-use crate::model::{Claim, ClaimType, CoverCheck, Due, Evidence, PreApproval, Reinsurance, Status, TaskKind, TimerKind};
+use crate::model::{Claim, ClaimType, CoverCheck, Due, Evidence, HealthItem, PreApproval, Reinsurance, Status, TaskKind, TimerKind};
 use crate::port::{CoverFacts, Instruction, Reject};
 use crate::state::{note, open_task, plus_days, ClaimsState, Cx};
 
@@ -393,8 +393,32 @@ impl ClaimsState {
         if claim.queue == Queue::ComplexLarge && !profile.senior {
             return refuse("not_senior", "does not work the senior queue");
         }
-        if profile.max_admission_minor.get(&claim.claim_type).copied().unwrap_or(0) < claim.claimed_minor {
-            return refuse("authority", "has no authority for a claim of this type and amount");
+        let limit = profile.max_admission_minor.get(&claim.claim_type).copied().unwrap_or(0);
+        if limit < claim.claimed_minor {
+            // Name the limit, and who can take it: a lead hands it to one of them.
+            let able: Vec<&str> = self
+                .authority
+                .staff
+                .iter()
+                .filter(|(id, s)| {
+                    id.as_str() != to
+                        && s.queues.contains(&claim.queue)
+                        && self.authority.profile(id).is_ok_and(|p| {
+                            p.lines.contains(&claim.line()) && p.max_admission_minor.get(&claim.claim_type).copied().unwrap_or(0) >= claim.claimed_minor
+                        })
+                })
+                .map(|(id, _)| id.as_str())
+                .collect();
+            let who = match able.as_slice() {
+                [] => "nobody in this queue has the authority for it: the claims manager takes it".to_string(),
+                some => format!("{} can take it, given it by a queue lead", some.join(" or ")),
+            };
+            let why = format!(
+                "may admit up to {} for a claim of this type, and this one is {}: {who}",
+                ic_money::dollars(limit),
+                ic_money::dollars(claim.claimed_minor)
+            );
+            return refuse("authority", &why);
         }
         if self.conflicted(to, claim) {
             return refuse("conflict_of_interest", "underwrote the life or is related to someone on the claim");
@@ -569,13 +593,83 @@ impl ClaimsState {
         Ok(())
     }
 
+    /// Record the invoice on an open health claim: one notified without it,
+    /// as by phone, or one typed wrong. Only before anything is decided or
+    /// paid on the claim, and only in a category the cover pays. The
+    /// amount claimed follows the invoice; the reserve is the assessor's to
+    /// revise.
+    pub(crate) fn record_invoice(
+        &mut self,
+        cx: &mut Cx<'_>,
+        id: &str,
+        category: &str,
+        invoice_minor: i64,
+        provider: Option<String>,
+        actor: &Actor,
+    ) -> Result<(), Reject> {
+        let mut claim = self.claim(id)?;
+        if claim.claim_type != ClaimType::Health {
+            return Err(Reject::new("not_health", "an invoice is recorded on a health claim"));
+        }
+        let pre_approval = claim.health.as_ref().is_some_and(|h| h.pre_approval_request);
+        if !claim.status.is_open() || claim.admitted_minor > 0 || !claim.decisions.is_empty() || claim.pending.is_some() || pre_approval {
+            return Err(Reject::new(
+                "invoice_after_decision",
+                "the invoice is recorded before anything is decided on the claim: a further invoice is notified as a claim of its own",
+            ));
+        }
+        self.owner(actor, &claim)?;
+        if invoice_minor <= 0 {
+            return Err(Reject::new("invalid_invoice", "an invoice is for an amount above nothing"));
+        }
+        let facts = cx.core.cover_facts(&claim.policy, &claim.cover, claim.life.as_deref(), claim.event_date)?;
+        let categories: std::collections::BTreeSet<&str> = self
+            .rules
+            .health_benefits
+            .keys()
+            .map(String::as_str)
+            .chain(facts.health_limits.iter().map(|l| l.category.as_str()))
+            .collect();
+        if !categories.contains(category) {
+            let listed: Vec<&str> = categories.into_iter().collect();
+            return Err(Reject::new(
+                "unknown_category",
+                format!("{category} is not a benefit category this cover pays: the categories are {}", listed.join(", ")),
+            ));
+        }
+        let item = claim.health.get_or_insert_with(|| HealthItem {
+            category: String::new(),
+            invoice_minor: 0,
+            provider: None,
+            pre_approval_request: false,
+            settles_pre_approval: None,
+            service_code: None,
+            service_date: None,
+        });
+        item.category = category.to_string();
+        item.invoice_minor = invoice_minor;
+        item.provider = provider.or(item.provider.take());
+        claim.claimed_minor = invoice_minor;
+        note(&mut claim, cx, Some(actor), "invoice_recorded");
+        self.commit(claim);
+        Ok(())
+    }
+
     /// Record the cause of claim, from the controlled list. The code stays
     /// inside the module.
     pub(crate) fn record_cause(&mut self, cx: &mut Cx<'_>, id: &str, cause_code: &str, actor: &Actor) -> Result<(), Reject> {
         let mut claim = self.claim(id)?;
         self.owner(actor, &claim)?;
         if !self.rules.cause_codes.contains_key(cause_code) {
-            return Err(Reject::new("unknown_cause", "that cause code is not on the controlled list"));
+            // Say which codes there are, so the next try is one of them.
+            let codes: Vec<&str> = self.rules.cause_codes.keys().take(12).map(String::as_str).collect();
+            let more = self.rules.cause_codes.len().saturating_sub(codes.len());
+            let more = if more > 0 { format!(", and {more} more") } else { String::new() };
+            let listed = format!("the codes are {}{more}", codes.join(", "));
+            return Err(Reject::new(
+                "unknown_cause",
+                format!("{cause_code} is not on the controlled list of cause codes: {listed}"),
+            ));
         }
         claim.cause_code = Some(cause_code.to_string());
         claim.cause_history.push((cx.today, cause_code.to_string()));

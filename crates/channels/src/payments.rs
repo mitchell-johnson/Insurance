@@ -104,7 +104,7 @@ pub const COMMANDS: [&str; 37] = [
 /// The questions the console may put, with their fields. `reconciliation`
 /// and `readiness` are asked as of today; the outbox, messages read and the
 /// trail are the drivers'.
-const QUESTIONS: [(&str, &[&str]); 32] = [
+const QUESTIONS: [(&str, &[&str]); 33] = [
     ("open_runs", &[]),
     ("open_exceptions", &[]),
     ("matches_to_approve", &[]),
@@ -138,12 +138,14 @@ const QUESTIONS: [(&str, &[&str]); 32] = [
     ("misdirection_reference", &["misdirection"]),
     ("tax_remittance", &["remittance"]),
     ("funding_forecast", &["from", "to"]),
+    // The registered payees whose party, name or reference has the text, for a picker.
+    ("find_payees", &["text"]),
 ];
 
 /// Questions whose answers carry bank account details: only for someone
 /// who holds a role there, never a reader. The configuration is the
 /// connectivity administrator's alone.
-const DETAILED: [&str; 3] = ["authority", "payee", "refund"];
+const DETAILED: [&str; 4] = ["authority", "payee", "refund", "find_payees"];
 
 /// Questions about money-laundering cases: who paid whose premium. Only
 /// compliance sees them.
@@ -211,6 +213,16 @@ pub fn question(name: &str, fields: &BTreeMap<String, String>, roles: &[String],
         out.insert("today".to_string(), json!(nz(at).date()));
     }
     Ok(Value::Object(out))
+}
+
+/// What a question that found nothing says: the thing asked about, by the
+/// reference typed, such as "there is no run run-9".
+pub fn nothing_found(name: &str, fields: &BTreeMap<String, String>) -> String {
+    let asked = QUESTIONS.iter().find(|(q, _)| *q == name).and_then(|(_, w)| w.first());
+    match asked.and_then(|field| fields.get(*field).map(|v| (field, v.trim()))) {
+        Some((field, value)) => format!("there is no {} {value}", field.replace('_', " ")),
+        None => format!("payments has no {} to show", name.replace('_', " ")),
+    }
 }
 
 /// The command's name, if it is one a person may send from the console:

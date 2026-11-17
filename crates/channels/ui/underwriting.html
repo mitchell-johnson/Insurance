@@ -43,12 +43,14 @@
 
 <section data-view="Remedies and review" id="senior" hidden><h2>Non-disclosure remedy</h2>
 <p class="banner warn">A remedy changes or ends someone's cover. You prepare it, and a second senior signs it before it is sent.</p>
+<p class="muted">A review is opened when a claims assessor refers a claim for possible non-disclosure; it then waits in the senior review queue. Varying the terms puts the cover on the terms that would have been offered at the start: a loading, an exclusion, or both.</p>
 <form id="n-form"><div class="row">
 <div><label for="n-review">Review</label><input id="n-review" required size="28"></div>
-<div><label for="n-outcome">Outcome</label><select id="n-outcome"><option value="no_action">No action</option><option value="vary">Vary the terms</option><option value="avoid">Avoid the policy</option></select></div>
+<div><label for="n-outcome">Outcome</label><select id="n-outcome"><option value="no_action">No action</option><option value="vary">Vary the terms (loading or exclusion from the start)</option><option value="avoid">Avoid the policy</option></select></div>
 <div><label for="n-reasons">Reason codes</label><input id="n-reasons" required></div>
 <div><label for="n-cover">Cover varied</label><input id="n-cover" placeholder="life"></div>
 <div><label for="n-loading">Loading %</label><input id="n-loading" type="number" min="0"></div>
+<div><label for="n-exclusion">Exclusion from the start (optional)</label><input id="n-exclusion"></div>
 <div><label for="n-premium">On avoidance</label><select id="n-premium"><option value="">Not an avoidance</option><option value="refund">Refund premiums</option><option value="retain">Keep premiums</option></select></div>
 </div><p><button>Prepare</button></p></form>
 <div id="n-msg" aria-live="polite"></div>
@@ -129,7 +131,7 @@ function pickers(scope) {
     const key = input.id.replace(/^cf-/, "");
     if (key === "of" || key === "to") portal.picker(input, () => portal.colleagues("underwriting.work"), { min: 0 });
     else if (key === "reasons" || input.id === "n-reasons" || input.id === "f-reasons") portal.picker(input, () => Promise.resolve(codeItems(reasons)), { min: 0, empty: "No reason codes are in force." });
-    else if (key === "exclusion") portal.picker(input, () => Promise.resolve(codeItems(exclusions)), { min: 0, empty: "No exclusion codes are in force." });
+    else if (key === "exclusion" || input.id === "n-exclusion") portal.picker(input, () => Promise.resolve(codeItems(exclusions)), { min: 0, empty: "No exclusion codes are in force." });
     else if (key === "cover") portal.picker(input, () => Promise.resolve(coversHere()), { min: 0, none: "" });
     else continue;
     input.dataset.picked = "yes";
@@ -200,7 +202,11 @@ $("p-form").addEventListener("submit", run($("p-msg"), () => openProposal($("p-i
 portal.picker($("p-id"), () => Promise.resolve([...new Map([...held, ...listed].map((i) => [i.proposal, i])).values()].map((i) => ({ value: i.proposal, label: i.proposal, hint: `life ${i.life} · ${words(i.case_type)}` }))), { min: 0, empty: "Open a case from a queue, or type the proposal reference." });
 portal.picker($("d-life"), () => Promise.resolve(Object.keys((proposal && proposal.lives) || {}).map((l) => ({ value: l, label: l, hint: words(proposal.lives[l].stage) }))), { min: 0, empty: "Open the proposal first." });
 portal.picker($("x-party"), portal.people);
-portal.picker($("n-review"), () => Promise.resolve(listed.concat(held).filter((i) => i.case_type === "non_disclosure_review").map((i) => ({ value: i.case, label: i.case, hint: `life ${i.life} · proposal ${i.proposal}` }))), { min: 0, empty: "No non-disclosure review is in the queues you have open." });
+// The review's proposal says when the cover started, which is when an exclusion added by the remedy applies from.
+let reviewStart = null;
+portal.picker($("n-review"), () => Promise.resolve(listed.concat(held).filter((i) => i.case_type === "non_disclosure_review").map((i) => ({ value: i.case, label: i.case, hint: `life ${i.life} · proposal ${i.proposal}`, item: i }))),
+  { min: 0, empty: "No non-disclosure review is waiting. One opens when a claims assessor refers a claim; open the senior review queue to see it.",
+    onPick: async (x) => { reviewStart = null; const p = await ask("proposal", { proposal: x.item.proposal }).catch(() => null); reviewStart = p && (p.commencement_date || p.received_on) || null; } });
 let drawn = [];
 portal.picker($("f-decision"), () => Promise.resolve(drawn.map((d) => ({ value: d, label: d, hint: "drawn for peer review" }))), { min: 0, empty: "Draw a sample first." });
 pickers(document);
@@ -216,7 +222,9 @@ $("x-form").addEventListener("submit", run($("x-msg"), async () => done(await se
 
 $("n-form").addEventListener("submit", run($("n-msg"), async () => {
   const outcome = $("n-outcome").value;
-  const varied = outcome === "vary" ? [{ cover: $("n-cover").value.trim(), outcome: { outcome: "accept", loading_percent: Number($("n-loading").value || 0), exclusions: [] } }] : [];
+  const exclusion = $("n-exclusion").value.trim();
+  if (outcome === "vary" && exclusion && !reviewStart) throw new Error("Pick the review from its list first, so the exclusion runs from the cover's start.");
+  const varied = outcome === "vary" ? [{ cover: $("n-cover").value.trim(), outcome: { outcome: "accept", loading_percent: Number($("n-loading").value || 0), exclusions: exclusion ? [{ code: exclusion, from: reviewStart }] : [] } }] : [];
   const answer = await send({ record_non_disclosure_outcome: { review: $("n-review").value.trim(), outcome, reasons: codes($("n-reasons").value), varied_terms: varied, premium: $("n-premium").value || null } });
   await refresh();
   return done(answer);

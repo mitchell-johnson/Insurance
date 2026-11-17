@@ -1253,10 +1253,11 @@ async fn the_staff_console_asks_the_four_questions() {
             .0,
         StatusCode::FORBIDDEN
     );
-    assert_eq!(
-        portal.get("sub-fin1", &format!("/staff/v1/policies/{policy}?case=c")).await.0,
-        StatusCode::FORBIDDEN
-    );
+    // No role allows it: the refusal names the action, so the grant asked for is the right one
+    // (found by the scenario run, F-SCN16-6).
+    let (status, problem) = portal.get("sub-fin1", &format!("/staff/v1/policies/{policy}?case=c")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(problem["detail"].as_str().unwrap().contains("The action you need is "), "{problem}");
 
     // Administration.
     assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 51);
@@ -1365,6 +1366,12 @@ async fn staff_find_customers_and_policies_from_what_they_know() {
     let rewi = people.iter().find(|p| p["party"] == "party-77").unwrap();
     assert_eq!((rewi["name"].as_str(), rewi["policies"].clone()), (Some("Rewi Parata"), json!([])));
     assert_eq!(found["policies"], json!([]), "two words are not a policy number");
+    // A family name alone that matches nobody says what to add (F-11-8, found by the scenario run).
+    let (_, lone) = portal.get("sub-sue", &find("Nobodyhere")).await;
+    assert_eq!(
+        lone["hint"], "nobody matched the family name alone: add the given name or the date of birth",
+        "{lone}"
+    );
     // The master was asked to search with the probe the words make, as staff.
     let probe = portal.master.desks.lock().unwrap().iter().find_map(|(who, d)| match d {
         ic_channels::customers::Desk::Search(p) if who == "sue" => Some(p.clone()),
@@ -2734,6 +2741,12 @@ async fn the_claims_console() {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        // Not connected says what to do next, not only what is wrong (found by the scenario run, F-24-4).
+        if path.ends_with("disclosures") {
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let problem: Value = serde_json::from_slice(&body).unwrap();
+            assert!(problem["detail"].as_str().unwrap().contains("the platform team connects it"), "{problem}");
+        }
     }
 }
 
@@ -4826,7 +4839,8 @@ async fn compliance_works_third_party_payer_cases() {
         portal.get("sub-payview", "/staff/v1/payments/payer_case?case=c1").await.0,
         StatusCode::BAD_REQUEST
     );
-    assert_eq!(portal.get("sub-paycmp", "/staff/v1/payments/payer_case?case=c1").await.0, StatusCode::NOT_FOUND);
+    let (status, problem) = portal.get("sub-paycmp", "/staff/v1/payments/payer_case?case=c1").await;
+    assert_eq!((status, &problem["detail"]), (StatusCode::NOT_FOUND, &json!("there is no case c1")));
 
     let clear = json!({ "type": "clear_payer", "case": "c1", "relationship": "party-a1/rel-1", "note": "a parent pays a child's premium" });
     let (status, problem) = portal.write("POST", "sub-paymk", "/staff/v1/payments/commands", clear.clone()).await;
@@ -7062,4 +7076,124 @@ fn a_claims_payee_comes_from_the_payments_register() {
     payee_from_register(&mut estate, &with("kind", json!("estate"))).unwrap();
     let mut provider = fields("provider", "h1");
     payee_from_register(&mut provider, &with("kind", json!("provider"))).unwrap();
+}
+
+/// Purpose: an assessor refers a claim for possible non-disclosure from the claims console; the
+/// portal asks underwriting, as the claims module, to open its review on the life's file, and the
+/// claim's task carries the review's reference; a claim with no life, or a life underwriting has
+/// no file for, is refused with why; referring twice is the same review; and when a second senior
+/// signs the review's outcome, the claim hears it and its task closes.
+/// Why it matters: found by the scenario run (SCN-24, F-24-1 a blocker, and F-24-2). Claims had
+/// no way to refer a claim to underwriting, underwriting could not start a review on an in-force
+/// policy, and nothing carried a review's outcome back, so a claim waited on a task nobody could
+/// close.
+#[tokio::test]
+async fn a_claim_is_referred_to_underwriting_and_hears_the_outcome() {
+    use ic_underwriting::command::Command as Uw;
+    let portal = portal();
+    let claims = |who: &'static str, purpose: &'static str, command: Value| {
+        let portal = &portal;
+        async move {
+            portal
+                .write("POST", who, "/staff/v1/claims/commands", json!({ "purpose": purpose, "command": command }))
+                .await
+        }
+    };
+    let notify = |claim: &str, policy: &str, life: Option<&str>| {
+        json!({ "notify": { "claim": claim, "policy": policy, "cover": "life", "life": life, "claim_type": "death",
+            "event_date": "2027-02-20", "channel": "phone", "notifier": "beneficiary", "claimant": "party-claimant" } })
+    };
+    let refer = |claim: &str| json!({ "open_task": { "claim": claim, "task": "typed-by-the-page", "kind": "non_disclosure_review" } });
+    for (claim, policy, life) in [
+        ("c-nd", "POL-P1", Some("L1")),
+        ("c-nolife", "POL-P1", None),
+        ("c-nofile", "pol-c1", Some("life-1")),
+    ] {
+        assert_eq!(claims("sub-cllead", "", notify(claim, policy, life)).await.0, StatusCode::OK, "{claim}");
+        let assign = json!({ "assign": { "claim": claim, "to": "cl-1" } });
+        assert_eq!(claims("sub-cllead", "allocating", assign).await.0, StatusCode::OK, "{claim}");
+    }
+
+    let (status, refused) = claims("sub-cl1", "a question over the disclosure", refer("c-nolife")).await;
+    assert_eq!((status, &refused["title"]), (StatusCode::CONFLICT, &json!("no_life")), "{refused}");
+    let (status, refused) = claims("sub-cl1", "a question over the disclosure", refer("c-nofile")).await;
+    assert_eq!((status, &refused["title"]), (StatusCode::CONFLICT, &json!("underwriting_refused")), "{refused}");
+    assert_eq!(
+        claims("sub-cl1", "a question over the disclosure", refer("c-404")).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    let (status, done) = claims("sub-cl1", "a question over the disclosure", refer("c-nd")).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let review = "ndr/c-nd/L1";
+    assert!(matches!(
+        &portal.underwriting.log().last().unwrap().command,
+        Uw::OpenNonDisclosureReview { claim_ref, life, opened_by, .. } if claim_ref == "c-nd" && life.to_string() == "L1" && opened_by == "cl-1"
+    ));
+    let (_, work) = portal.get("sub-cl1", "/staff/v1/claims/work?claim=c-nd").await;
+    assert!(
+        work["view"]["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["id"] == review && t["kind"] == "non_disclosure_review"),
+        "{work}"
+    );
+    // Referred again: underwriting has the review already, and the claim has the task.
+    let (status, again) = claims("sub-cl1", "a question over the disclosure", refer("c-nd")).await;
+    assert_eq!((status, &again["title"]), (StatusCode::CONFLICT, &json!("task_exists")), "{again}");
+
+    // Underwriting decides: one senior prepares, a second signs, and the claim hears it.
+    let tell = |who: &'static str, command: Value| portal.write("POST", who, "/staff/v1/underwriting/commands", command);
+    assert_eq!(tell("sub-sam", json!({ "take_case": { "case": review } })).await.0, StatusCode::OK);
+    let outcome =
+        json!({ "record_non_disclosure_outcome": { "review": review, "outcome": "avoid", "reasons": ["RC-0980"], "varied_terms": [], "premium": "refund" } });
+    let (status, prepared) = tell("sub-sam", outcome).await;
+    assert_eq!(status, StatusCode::OK, "{prepared}");
+    let id = prepared["prepared"].as_str().unwrap().to_string();
+    let (status, sent) = portal.write("POST", "sub-cat", &format!("/staff/v1/underwriting/sign/{id}"), json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    let (_, work) = portal.get("sub-cl1", "/staff/v1/claims/work?claim=c-nd").await;
+    let task = work["view"]["tasks"].as_array().unwrap().iter().find(|t| t["id"] == review).cloned().unwrap();
+    assert!(task["completed_on"].is_string(), "{work}");
+}
+
+/// Purpose: a review's reference names the claim it was opened for, and only an outcome of a
+/// review opened for a claim is told to claims, under the underwriting caller.
+/// Why it matters: found by the scenario run (SCN-24, F-24-1). The outcome must reach the claim
+/// that asked, and nothing else may be mistaken for one.
+#[test]
+fn a_review_outcome_is_told_to_the_claim_it_was_opened_for() {
+    use ic_channels::claims::{review_claim, review_id, review_outcome};
+    assert_eq!(review_id("CLM-1", "L1"), "ndr/CLM-1/L1");
+    assert_eq!(review_claim("ndr/CLM-1/L1"), Some("CLM-1"));
+    assert_eq!(review_claim("ndr//L1"), None);
+    assert_eq!(review_claim("case-1"), None);
+    let (claim, envelope) = review_outcome(&json!({ "record_non_disclosure_outcome": { "review": "ndr/CLM-1/L1", "outcome": "vary" } })).unwrap();
+    assert_eq!((claim.as_str(), envelope.caller.as_str()), ("CLM-1", "underwriting"));
+    assert!(review_outcome(&json!({ "take_case": { "case": "x" } })).is_none());
+    assert!(review_outcome(&json!({ "record_non_disclosure_outcome": { "review": "ndr/CLM-1/L1", "outcome": "maybe" } })).is_none());
+}
+
+/// Purpose: a payments question that finds nothing names what was asked for, by the reference
+/// typed, and a question with no reference says payments has none to show; a payee picker asks
+/// payments for registered payees by text, and only someone with a payments role may ask.
+/// Why it matters: found by the scenario run (SCN-16, F-SCN16-8, and SCN-15, F-15-7). A bare
+/// "no such resource" left the approver guessing whether the run or the page was wrong, and
+/// payees were typed as references nobody can know.
+#[test]
+fn a_payments_question_that_finds_nothing_says_what() {
+    use ic_channels::payments::{nothing_found, question};
+    use std::collections::BTreeMap;
+    let fields = BTreeMap::from([("run".to_string(), " run-9 ".to_string())]);
+    assert_eq!(nothing_found("run", &fields), "there is no run run-9");
+    assert_eq!(nothing_found("readiness", &BTreeMap::new()), "payments has no readiness to show");
+    assert_eq!(nothing_found("open_runs", &fields), "payments has no open runs to show");
+    let text = BTreeMap::from([("text".to_string(), "smith".to_string())]);
+    let at = 1_800_000_000;
+    assert_eq!(
+        question("find_payees", &text, &["maker".to_string()], at).unwrap(),
+        json!({ "q": "find_payees", "text": "smith" })
+    );
+    assert!(question("find_payees", &text, &[], at).is_err());
 }

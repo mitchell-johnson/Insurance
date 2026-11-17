@@ -312,6 +312,17 @@ pub enum Command {
         cause_code: String,
         actor: Actor,
     },
+    /// The invoice on a health claim notified without one, as by phone, or
+    /// put right when it was typed wrong; before anything is decided.
+    RecordInvoice {
+        claim: String,
+        category: String,
+        invoice_minor: i64,
+        /// Pay the provider directly.
+        #[serde(default)]
+        provider: Option<String>,
+        actor: Actor,
+    },
     CoverCheck {
         claim: String,
         relied_on: Vec<String>,
@@ -646,6 +657,7 @@ impl Command {
             Command::Escalate { .. } => "escalate",
             Command::IdentifyLife { .. } => "identify_life",
             Command::RecordCause { .. } => "record_cause",
+            Command::RecordInvoice { .. } => "record_invoice",
             Command::CoverCheck { .. } => "cover_check",
             Command::RequestEvidence { .. } => "request_evidence",
             Command::ReceiveEvidence { .. } => "receive_evidence",

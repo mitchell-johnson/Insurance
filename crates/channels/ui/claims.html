@@ -35,7 +35,7 @@ const TYPES = ["death", "terminal_illness", "trauma", "total_permanent_disabilit
 const C = ["claim", "Claim", "text"];
 const ACTIONS = {
   notify: [C, ["policy", "Policy", "text"], ["cover", "Cover", "text"], ["life", "Life (optional)", "optional"], ["claim_type", "Claim type", "select", TYPES], ["event_date", "Event date", "date"],
-    ["channel", "Channel", "select", ["phone", "letter", "app", "adviser_portal", "employer_portal", "provider"]], ["notifier", "Notified by", "select", ["policyholder", "life_insured", "beneficiary", "executor", "employer", "adviser", "provider"]], ["claimant", "Claimant (optional)", "optional"]],
+    ["channel", "Channel", "select", ["phone", "letter", "app", "adviser_portal", "employer_portal", "provider"]], ["notifier", "Notified by", "select", ["policyholder", "life_insured", "beneficiary", "family_member", "executor", "employer", "adviser", "provider"]], ["claimant", "Claimant (optional)", "optional"]],
   // A health invoice or receipt, or a request to pre-approve treatment, arrives as a notification with what was billed.
   notify_a_health_invoice: [C, ["policy", "Policy", "text"], ["cover", "Cover", "text"], ["life", "Life (optional)", "optional"], ["claim_type", "Claim type", "select", ["health"]], ["event_date", "Treatment date", "date"],
     ["channel", "Channel", "select", ["provider", "app", "phone", "letter", "adviser_portal", "employer_portal"]], ["notifier", "Sent by", "select", ["provider", "policyholder", "life_insured", "employer", "adviser"]],
@@ -45,6 +45,8 @@ const ACTIONS = {
   record_contact: [C], escalate: [C], open_file: [C],
   identify_life: [C, ["party", "Life (customer reference)", "text"]],
   record_cause: [C, ["cause_code", "Cause code", "text"]],
+  // A health claim notified without its invoice (as by phone), or with one typed wrong: before anything is decided.
+  record_invoice: [C, ["category", "Benefit category on the plan", "text"], ["invoice_minor", "Invoice amount", "money"], ["provider", "Pay this provider directly (optional)", "optional"]],
   cover_check: [C, ["relied_on", "Facts relied on (comma separated)", "list"]],
   request_evidence: [C, ["evidence", "Evidence reference", "text"], ["kind", "Kind", "text"], ["from", "From", "text"]],
   receive_evidence: [C, ["evidence", "Evidence reference", "text"], ["vault_ref", "Document in the vault", "text"], ["cost_minor", "Cost to pay the provider", "money"]],
@@ -204,7 +206,7 @@ async function show(id) {
   const answer = await ask("work", { claim: id }), { partition, view: w } = answer;
   current = answer; $("c-id").value = w.claim;
   const none = (text) => h("p", { class: "muted" }, text);
-  $("claim").hidden = false; $("c-title").textContent = `${w.claim}: ${words(w.claim_type)}, ${words(w.status)}${w.in_run ? " (in a payment run)" : ""}`;
+  $("claim").hidden = false; $("c-title").textContent = `${w.claim}: ${words(w.claim_type)}, ${w.status === "paid" ? "paid: released to payments, which settles it at the bank" : words(w.status)}${w.in_run ? " (in a payment run)" : ""}`;
   put($("c-summary"), table(["Policy", "Cover", "Partition", "Queue", "Owner", "Event", "Notified", "Closed", "Reserve", "Admitted", "Payable", "Paid"],
     [[w.policy, w.cover, partition, words(w.queue), w.owner || "unassigned", w.event_date, w.notified_on, w.closed_on || "", money(w.reserve_minor), money(w.admitted_minor), money(w.payable_minor), money(w.paid_minor)]]));
   // The claims module marks claimants who deal with one named owner; any change of owner comes with a handover call.
@@ -217,7 +219,10 @@ async function show(id) {
   put($("c-tasks"), (w.tasks || []).length ? table(["Task", "Kind", "Due", "Completed", ""], w.tasks.map((t) => [t.id, words(t.kind), t.due || "", t.completed_on || "", t.overdue ? "overdue" : ""])) : none("No tasks."));
   put($("c-evidence"), (w.evidence || []).length ? table(["Evidence", "Kind", "From", "Due", "Received"], w.evidence.map(([e, kind, from, due, received]) => [e, kind, from, due || "", received || "outstanding"])) : none("No evidence requested."));
   const b = w.benefit;
-  put($("c-money"), w.payee ? h("p", {}, `Payee: ${w.payee[0]} (${words(w.payee[1])}).`) : none("No payee verified."),
+  // What is admitted but not payable was taken first: premium owed on the policy, or a debt offset against the benefit.
+  const taken = w.admitted_minor - w.payable_minor - w.paid_minor;
+  put($("c-money"), taken > 0 && !w.benefit ? h("p", { class: "muted" }, `${money(taken)} of what was admitted is not paid to the payee: it settles premium owed on the policy or a debt offset against the benefit, and the customer's statement shows it.`) : null,
+    w.payee ? h("p", {}, `Payee: ${w.payee[0]} (${words(w.payee[1])}).`) : none("No payee verified."),
     b ? h("p", {}, `Benefit ${money(b.monthly_minor)} a month, next period ${b.next_period}, ends ${b.end}. Arrears ${money(b.arrears_minor)}. Reviews ${b.reviews}${b.reviews_overdue ? `, ${b.reviews_overdue} overdue` : ""}.${b.held_for_proof_of_life ? " Held for proof of life." : ""}`) : null,
     (w.interests || []).length ? table(["Lender or assignee", "Still owed"], w.interests.map(([party, owed]) => [party, money(owed)])) : null,
     (w.payments || []).length ? table(["Payment", "Amount", "Released", "Returned"], w.payments.map(([ref, amount, on, returned]) => [ref, money(amount), on, returned ? "yes" : ""])) : none("Nothing paid."),

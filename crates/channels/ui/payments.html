@@ -255,7 +255,7 @@ const ACTIONS = {
 };
 let acts = null;
 // Runs and held items are picked from what is open, never typed.
-function showActs() { acts = portal.actions($("acts"), ACTIONS, { id: "pa", send, pickers: { run: async () => runItems(), item: async () => runHeld }, after: () => Promise.all([showRuns(), showExceptions(), showNotices(), showMisdirections()]) }); }
+function showActs() { acts = portal.actions($("acts"), ACTIONS, { id: "pa", send, pickers: { run: async () => runItems(), item: async () => runHeld, who: (text) => payeePicks(text) }, after: () => Promise.all([showRuns(), showExceptions(), showNotices(), showMisdirections()]) }); }
 async function showNotices() {
   const held = me.roles || [];
   const lists = await Promise.all(held.map((role) => ask("notices", { role }).then((n) => (n || []).map((x) => ({ role, ...(Array.isArray(x) ? { id: x[0], ...x[1] } : x) })))));
@@ -276,6 +276,10 @@ $("lk-form").addEventListener("submit", run($("lk-msg"), async () => {
 $("raw-form").addEventListener("submit", run($("raw-msg"), async () => { await send(JSON.parse($("raw-cmd").value)); return "Done."; }));
 
 // Runs, exceptions and accounts are picked from what is open, never typed from memory.
+// Registered payees by party, name or reference: nobody types a payee reference they cannot know.
+const payeePicks = async (text) => (text.trim() ? await ask("find_payees", { text }) : []).map((p) => ({ value: p.payee, label: `${p.payee}: ${p.name}`,
+  hint: [p.party, words(p.kind), `account ending ${p.ending}`, p.blocked ? `not payable yet: ${holdWords[p.blocked] || words(p.blocked)}` : "payable"].join(" · ") }));
+portal.picker($("payee-id"), payeePicks, { none: "No registered payee matches that. Search by the party, the account name or the payee reference." });
 const runItems = () => openRuns.map((r) => ({ value: r.run, hint: [words(r.run_type), r.value_date, status(r.status), `${r.items} item(s)`].join(" · ") }));
 portal.picker($("t-run"), async () => runItems(), { min: 0, empty: "No run is open. Prepare one below." });
 portal.picker($("run-id"), async () => runItems(), { min: 0, empty: "No run is open." });

@@ -304,10 +304,13 @@ fn the_working_view_shows_the_work_and_not_the_clinical_file() {
 }
 
 /// Purpose: the policy status question lists every claim on one policy, oldest first, with
-/// only its ID, status and dates, and nothing for a policy with no claims.
+/// only its ID, status and dates, and nothing for a policy with no claims; staff related to
+/// someone on a claim are not shown it.
 /// Why it matters: this is what an adviser or an employer is shown (Mitchell's decision of
 /// 13 November 2026: status, never cause). A type, reason or amount here would tell an employer
 /// about an employee's health.
+/// Found by the scenario run (SCN-12, F-12-2): an assessor saw that her related party had a
+/// claim, and its status.
 #[test]
 fn the_policy_status_shows_an_adviser_each_claim_without_its_cause() {
     use ic_claims::report::{Question, Reply};
@@ -317,7 +320,13 @@ fn the_policy_status_shows_an_adviser_each_claim_without_its_cause() {
     w.advance(2);
     w.open_claim("c-1");
     w.benefit_in_payment("ip-1");
-    let Reply::PolicyStatus(rows) = w.state.answer(&Question::PolicyStatus { policy: "pol-1".into() }, d(2027, 3, 5)) else {
+    let Reply::PolicyStatus(rows) = w.state.answer(
+        &Question::PolicyStatus {
+            policy: "pol-1".into(),
+            staff: None,
+        },
+        d(2027, 3, 5),
+    ) else {
         panic!("a policy status question gets a policy status reply");
     };
     let ids: Vec<&str> = rows.iter().map(|r| r.claim.as_str()).collect();
@@ -327,6 +336,19 @@ fn the_policy_status_shows_an_adviser_each_claim_without_its_cause() {
         assert!(!json.contains(hidden), "{hidden} leaked: {json}");
     }
     assert_eq!(w.state.policy_status("pol-none"), vec![]);
+    // Staff related to someone on the claims do not learn that they exist (found by the
+    // scenario run, SCN-12, F-12-2); anyone else asking as staff sees them.
+    let asked = |w: &World, staff: &str| match w.state.answer(
+        &Question::PolicyStatus {
+            policy: "pol-1".into(),
+            staff: Some(staff.into()),
+        },
+        d(2027, 3, 5),
+    ) {
+        Reply::PolicyStatus(rows) => rows.len(),
+        _ => usize::MAX,
+    };
+    assert_eq!((asked(&w, "rel"), asked(&w, "ana")), (0, 2));
 }
 
 /// Purpose: on income protection a company owns, the benefit is paid to the company as

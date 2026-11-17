@@ -230,7 +230,7 @@ const sees = async (page, text) => {
     await p.locator("#rows").getByText("prop-1").waitFor();
     await sees(p, "The applicant");
     // Kiri notified a claim from her own page earlier in this run: her adviser sees its status.
-    await p.locator("#claims").getByText(/^No claims\.$|^open$/).first().waitFor();
+    await p.locator("#claims").getByText(/^No claims\.$|^being assessed$/).first().waitFor();
     // The schedule is listed; the documents module decides who may download it, and it is the customer's.
     await p.locator("#invest").getByText("No units held.").waitFor();
     await p.locator("#docs").getByText("Policy schedule").waitFor();

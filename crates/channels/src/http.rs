@@ -496,7 +496,7 @@ impl AppState {
             Problem::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "underwriting_intake_unavailable",
-                "the underwriting intake is not configured here",
+                "the underwriting intake is not connected to this portal, so no disclosure can be read or made here: the platform team connects it, and until then the intake still holds every disclosure",
             )
         })
     }
@@ -1332,7 +1332,10 @@ async fn policy_claims(State(s): State<Shared>, headers: HeaderMap, method: Meth
     if !allowed {
         return Err(Problem::not_found());
     }
-    let question = ic_core::claims_module::report::Question::PolicyStatus { policy: policy.clone() };
+    let question = ic_core::claims_module::report::Question::PolicyStatus {
+        policy: policy.clone(),
+        staff: None,
+    };
     let mut rows: Vec<Value> = Vec::new();
     for (_, reply) in s.claims_everywhere(&question).await? {
         if let ic_core::claims_module::report::Reply::PolicyStatus(found) = reply {
@@ -2523,7 +2526,7 @@ async fn payments_question(
         .await
         .map_err(|e| module_problem("payments", StatusCode::BAD_REQUEST, e))?;
     if answer.is_null() {
-        return Err(Problem::not_found());
+        return Err(Problem::new(StatusCode::NOT_FOUND, "not_found", crate::payments::nothing_found(&name, &fields)));
     }
     ok(answer)
 }
@@ -2895,6 +2898,57 @@ async fn underwriting_command(State(s): State<Shared>, headers: HeaderMap, metho
     s.to_underwriting(crate::underwriting::envelope(&key, session.at, &today, command)).await
 }
 
+impl AppState {
+    /// Ask underwriting to review a claim's life for non-disclosure, as the
+    /// claims module, and give the review's reference. A review already
+    /// open for the claim and life is the same review.
+    async fn refer_to_underwriting(&self, session: &Session, claim: &str) -> Result<String, Problem> {
+        use ic_core::claims_module::report::{Question as Q, Reply as R};
+        let question = Q::Work {
+            claim: claim.to_string(),
+            staff: Some(session.party.to_string()),
+        };
+        let view = self
+            .claims_everywhere(&question)
+            .await?
+            .into_iter()
+            .find_map(|(_, reply)| match reply {
+                R::Work(Some(view)) => Some(view),
+                _ => None,
+            })
+            .ok_or_else(Problem::not_found)?;
+        let life = view.life.clone().ok_or_else(|| {
+            Problem::new(
+                StatusCode::CONFLICT,
+                "no_life",
+                "the claim names no life yet: identify the life first, so underwriting knows whose disclosure to review",
+            )
+        })?;
+        let envelope = crate::claims::refer_for_review(claim, &view.policy, &life, &session.party, session.at);
+        let output = self
+            .underwriting
+            .tell(envelope)
+            .await
+            .map_err(|e| module_problem("underwriting", StatusCode::BAD_REQUEST, e))?;
+        match output.get("Err") {
+            // Opened before, for this claim and life: the same review.
+            Some(refused) if refused["code"] == "duplicate" => {}
+            Some(refused) => {
+                return Err(Problem::new(
+                    StatusCode::CONFLICT,
+                    "underwriting_refused",
+                    format!(
+                        "underwriting could not open a review: {}",
+                        refused["message"].as_str().unwrap_or("it refused the referral")
+                    ),
+                ))
+            }
+            None => {}
+        }
+        Ok(crate::claims::review_id(claim, &life))
+    }
+}
+
 /// Sign, or take back, a remedy waiting for a second senior.
 async fn underwriting_decide(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path((verb, id)): Path<(String, String)>) -> Answer {
     use crate::countersign::CountersignCommand as C;
@@ -2936,6 +2990,16 @@ async fn underwriting_decide(State(s): State<Shared>, headers: HeaderMap, method
         // Done, or refused for good: either way it no longer waits.
         _ => {
             s.propose(fresh("settle"), actor, Command::Countersign(C::Settle { id })).await?;
+        }
+    }
+    // The claim the review was opened for hears the outcome; its task closes with it.
+    let outcome = sent.as_ref().ok().and(crate::claims::review_outcome(&pending["command"]));
+    if let Some((claim, envelope)) = outcome {
+        if let Ok((partition, _)) = s.find_claim(&claim).await {
+            let told = s.claims.propose(partition, envelope).await.map_err(claims_down)?;
+            if let Some((code, message)) = told.rejected {
+                return Err(module_refusal(&code, &format!("the remedy was sent, but the claim was not told: {message}")));
+            }
         }
     }
     sent
@@ -3013,8 +3077,8 @@ async fn claims_question(
     }
     let field = |f: &str| fields.get(f).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     let mut question = crate::claims::question(&name, field).map_err(Problem::bad_request)?;
-    // A claim this person is conflicted on is never shown to them in a queue or a working view.
-    if let Q::Queue { staff, .. } | Q::Work { staff, .. } = &mut question {
+    // A claim this person is conflicted on is never shown to them in a queue, a working view or a policy's claims.
+    if let Q::Queue { staff, .. } | Q::Work { staff, .. } | Q::PolicyStatus { staff, .. } = &mut question {
         *staff = Some(session.party.to_string());
     }
     match question {
@@ -3117,6 +3181,13 @@ async fn claims_command(State(s): State<Shared>, headers: HeaderMap, method: Met
             .await
             .map_err(|e| module_problem("payments", StatusCode::BAD_REQUEST, e))?;
         crate::claims::payee_from_register(fields, &payee).map_err(|why| Problem::new(StatusCode::CONFLICT, "payee_not_payable", why))?;
+    }
+    // A possible non-disclosure is referred to underwriting, which opens its review on the life's
+    // file; the claim's task carries the review's reference, so the outcome finds it again.
+    if request.command.get("open_task").is_some_and(|f| f["kind"] == "non_disclosure_review") {
+        let claim = request.command["open_task"]["claim"].as_str().unwrap_or_default().to_string();
+        let review = s.refer_to_underwriting(&session, &claim).await?;
+        request.command["open_task"]["task"] = json!(review);
     }
     let (_, target, command) = crate::claims::command(&session.party, &request.purpose, request.partition, request.command).map_err(Problem::bad_request)?;
     let partition = match target {
@@ -3345,16 +3416,26 @@ impl AppState {
             request.scopes.join(",")
         );
         let actor = Actor::Staff(request.staff.clone());
+        let action = request.action.clone();
         self.propose(key, actor, Command::Staff(StaffCommand::Record { request, decision })).await?;
-        match denied(&view) {
+        match denied(&view, &action) {
             Some(problem) => Err(problem),
             None => Ok(view),
         }
     }
 }
 
-fn denied(view: &Value) -> Option<Problem> {
-    (view["decision"]["allowed"] != true).then(|| Problem::new(StatusCode::FORBIDDEN, "not_authorised", view["explanation"].as_str().unwrap_or("not allowed")))
+/// The refusal a person is given. When no role allows the action, it names
+/// the action, so the grant they ask their manager for is the right one.
+fn denied(view: &Value, action: &str) -> Option<Problem> {
+    (view["decision"]["allowed"] != true).then(|| {
+        let why = view["explanation"].as_str().unwrap_or("not allowed");
+        let why = match view["decision"]["denied"].as_str() {
+            Some("what") => format!("{why} The action you need is {action}."),
+            _ => why.to_string(),
+        };
+        Problem::new(StatusCode::FORBIDDEN, "not_authorised", why)
+    })
 }
 
 #[derive(Deserialize)]
@@ -3921,7 +4002,9 @@ async fn staff_find(State(s): State<Shared>, headers: HeaderMap, method: Method,
         "people": people,
         "searched_people": wanted.probe.is_some(),
         "customer_master_unavailable": master_down || (wanted.probe.is_some() && s.master.is_none()),
-        "hint": wanted.hint,
+        // A family name alone is too little for the master to name anyone by.
+        "hint": wanted.hint.or((people.is_empty() && wanted.probe.as_ref().and_then(Value::as_object).is_some_and(|p| p.len() == 1))
+            .then_some("nobody matched the family name alone: add the given name or the date of birth")),
     }))
 }
 

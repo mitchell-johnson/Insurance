@@ -68,6 +68,9 @@ pub enum Notifier {
     Employer,
     Adviser,
     Provider,
+    /// A spouse, partner or other relative calling for the family, who
+    /// holds no role on the policy.
+    FamilyMember,
 }
 
 /// Features that change how a claim is routed and how fast it moves.

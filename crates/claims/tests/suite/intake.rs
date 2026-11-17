@@ -129,9 +129,60 @@ fn doubtful_cover_still_registers_and_a_refused_reserve_leaves_nothing() {
     assert_eq!(w.claim("c-1").status, Status::Open);
 }
 
+/// Purpose: a health claim notified without its invoice, as by phone, takes the invoice from its
+/// owner, in a category the cover pays, and a wrong amount is put right the same way; nothing
+/// changes once the claim is decided, and only the owner records it.
+/// Why it matters: found by the scenario run (SCN-11, F-11-2 and F-11-3). A phone notification
+/// had no way to take the invoice, so "admit" was refused for an amount the cover would pay, and
+/// an invoice typed wrong could only be withdrawn and notified again; "surgery" was taken for a
+/// plan whose category is "surgical".
+#[test]
+fn a_health_invoice_is_recorded_on_the_claim() {
+    let mut w = World::new();
+    w.ok(Command::Notify(Box::new(World::notification("h-phone", "pol-3", "health", ClaimType::Health))));
+    w.assign("h-phone", "sue");
+    let invoice = |category: &str, amount: i64, by: &str| Command::RecordInvoice {
+        claim: "h-phone".into(),
+        category: category.into(),
+        invoice_minor: amount,
+        provider: Some("provider-1".into()),
+        actor: actor(by),
+    };
+    assert_eq!(w.refused(invoice("dental", 700, "ana")), "not_owner");
+    assert_eq!(w.refused(invoice("dental", 0, "sue")), "invalid_invoice");
+    assert_eq!(w.refused(invoice("surgery", 700, "sue")), "unknown_category");
+    assert_eq!(
+        w.told(invoice("surgery", 700, "sue")),
+        "surgery is not a benefit category this cover pays: the categories are dental"
+    );
+    w.ok(invoice("dental", 7_850, "sue"));
+    w.ok(invoice("dental", 785, "sue"));
+    let claim = w.claim("h-phone");
+    assert_eq!(
+        (claim.claimed_minor, claim.health.as_ref().map(|h| (h.category.as_str(), h.invoice_minor))),
+        (785, Some(("dental", 785)))
+    );
+    assert_eq!(claim.health.as_ref().and_then(|h| h.provider.clone()), Some("provider-1".to_string()));
+
+    // Not a health claim; and a claim already decided keeps its invoice.
+    w.open_claim("c-1");
+    let mut other = invoice("dental", 700, "ana");
+    if let Command::RecordInvoice { claim, .. } = &mut other {
+        *claim = "c-1".into();
+    }
+    assert_eq!(w.refused(other), "not_health");
+    w.ok(Command::Notify(Box::new(dental("h-auto", 600))));
+    let mut decided = invoice("dental", 700, "sue");
+    if let Command::RecordInvoice { claim, .. } = &mut decided {
+        *claim = "h-auto".into();
+    }
+    assert_eq!(w.refused(decided), "invoice_after_decision");
+}
+
 /// Purpose: triage sends complex and large claims to the senior queue with a case conference,
 /// group claims to the group queue, and the rest by line; priority rises with vulnerability,
-/// hardship and a waiting provider.
+/// hardship and a waiting provider; a family member may be the one who notifies (found by the
+/// scenario run, SCN-12, F-12-5).
 /// Why it matters: routing by skill is what stops a contested or very large claim being decided
 /// by whoever picked it up, and priority is what gets a funeral paid for before a routine claim.
 #[test]
@@ -160,6 +211,8 @@ fn triage_routes_by_skill_and_ranks_by_urgency() {
     assert_eq!(w.core.noticed("claim_reserved").last().expect("a notice")["periodic"], "true");
 
     let mut health = dental("c-health", 100_000);
+    // A relative may ring for the family (found by the scenario run, SCN-12, F-12-5).
+    health.notifier = ic_claims::model::Notifier::FamilyMember;
     health.flags = Flags {
         vulnerable: true,
         hardship: true,
@@ -167,6 +220,7 @@ fn triage_routes_by_skill_and_ranks_by_urgency() {
         ..Flags::default()
     };
     w.ok(Command::Notify(Box::new(health)));
+    assert_eq!(w.claim("c-health").notifier, ic_claims::model::Notifier::FamilyMember);
     assert_eq!(w.claim("c-health").queue, Queue::Health);
     // Three urgency flags, and a large amount.
     assert_eq!(w.claim("c-health").priority, 90);
@@ -438,7 +492,9 @@ fn a_missed_timer_escalates_in_three_steps() {
 /// the queue is, with authority for its type and amount, trained where the claimant is
 /// vulnerable, under their work limit, and with no conflict; only a lead assigns to others.
 /// Why it matters: routing by authority and by conflict is a control. Someone who underwrote the
-/// life, or is related to the claimant, deciding the claim is exactly what it exists to stop.
+/// life, or is related to the claimant, deciding the claim is exactly what it exists to stop. A
+/// refusal for authority names the limit and who may take the claim (found by the scenario run,
+/// SCN-11, F-11-5), so the claim does not sit unassigned.
 #[test]
 fn a_claim_is_offered_only_to_someone_who_may_work_it() {
     let mut w = World::new();
@@ -492,6 +548,13 @@ fn a_claim_is_offered_only_to_someone_who_may_work_it() {
     // A health claim above the junior's limit.
     w.ok(Command::Notify(Box::new(dental("h-1", 100_000))));
     assert_eq!(w.refused(to("h-1", "jon")), "authority");
+    // The refusal names the limit and who can take the claim instead (found by the scenario
+    // run, F-11-5).
+    let told = w.told(to("h-1", "jon"));
+    assert!(
+        told.starts_with("jon may admit up to $") && told.contains("this one is $1,000.00: ") && told.contains(" can take it, given it by a queue lead"),
+        "{told}"
+    );
 
     // Work in progress limits.
     let mut book = authority();
@@ -530,6 +593,12 @@ fn the_owner_records_cause_and_cover_check() {
     };
     assert_eq!(w.refused(cause("CC-0001", "ben")), "not_owner");
     assert_eq!(w.refused(cause("a sore back", "ana")), "unknown_cause");
+    // The refusal lists the codes there are (found by the scenario run, F-11-9).
+    let told = w.told(cause("a sore back", "ana"));
+    assert!(
+        told.starts_with("a sore back is not on the controlled list of cause codes: the codes are CC-"),
+        "{told}"
+    );
     w.ok(cause("CC-0001", "ana"));
     w.ok(cause("CC-0003", "ana"));
     assert_eq!(w.claim("c-1").cause_history.len(), 2);
