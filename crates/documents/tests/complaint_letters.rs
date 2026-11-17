@@ -194,6 +194,25 @@ impl World {
         assert_eq!(applied.result, Ok(()));
     }
 
+    /// A handler declares deadlock once the date to decide by (20 days on
+    /// these timers) has passed without an outcome, as the register asks.
+    async fn declare_deadlock(&self, complaint: &str) {
+        let applied = self
+            .issuer
+            .complaints
+            .inner
+            .propose(Env {
+                key: format!("deadlock-{complaint}"),
+                caller: "complaints".into(),
+                actor: "lead".into(),
+                at: self.now + chrono::Duration::days(21),
+                command: Cmd::DeclareDeadlock { complaint: complaint.into() },
+            })
+            .await
+            .unwrap();
+        assert_eq!(applied.result, Ok(()));
+    }
+
     /// The scheduler's tick, `days` after the world's day.
     async fn tick(&self, days: i64) {
         let at = self.now + chrono::Duration::days(days);
@@ -341,7 +360,7 @@ async fn deadlock_notices_and_licence_letters_are_issued() {
         trained_for_vulnerability: true,
     };
     w.complaints("complaints", assign).await;
-    w.complaints("complaints", Cmd::DeclareDeadlock { complaint: "c1".into() }).await;
+    w.declare_deadlock("c1").await;
     let kind = ConductKind::LicenceEvent {
         licence_event: "ev-1".into(),
         party: PartyId::from("fap-1"),
@@ -415,7 +434,7 @@ async fn letters_that_cannot_be_written_are_left_for_a_person() {
         trained_for_vulnerability: true,
     };
     w.complaints("complaints", assign).await;
-    w.complaints("complaints", Cmd::DeclareDeadlock { complaint: "c2".into() }).await;
+    w.declare_deadlock("c2").await;
 
     let pass = w.issuer.pass().await;
     assert_eq!((pass.issued, pass.left), (1, 2));
