@@ -68,6 +68,19 @@ impl Refusal {
 pub trait Underwriting: Send + Sync {
     fn propose(&self, envelope: Envelope) -> impl Future<Output = Result<Result<Applied, Reject>, DriverError>> + Send;
     fn ask(&self, query: Query) -> impl Future<Output = Result<Value, DriverError>> + Send;
+
+    /// The books' business date, which every date the module sets is on:
+    /// an offer's expiry, a policy's inception. `None` until the books
+    /// open one, or where no books are connected.
+    fn business_date(&self) -> impl Future<Output = Result<Option<NaiveDate>, DriverError>> + Send {
+        async { Ok(None) }
+    }
+}
+
+/// The business day for a command made at `at`: the books' date, or the
+/// clock's while the books have none.
+pub async fn books_today<U: Underwriting>(module: &U, at: DateTime<Utc>) -> Result<NaiveDate, DriverError> {
+    Ok(module.business_date().await?.unwrap_or_else(|| at.date_naive()))
 }
 
 /// The reinsurance module.
@@ -247,20 +260,21 @@ pub struct Driver<U, R, C, S, F, P> {
 }
 
 impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels> Driver<U, R, C, S, F, P> {
-    fn today(&self) -> NaiveDate {
-        (self.clock)().date_naive()
+    async fn today(&self) -> Result<NaiveDate, DriverError> {
+        books_today(&self.underwriting, (self.clock)()).await
     }
 
     /// Bring an answer back to the module. `Ok(false)` when the module no
     /// longer wants it.
     async fn tell(&self, key: String, caller: &str, command: Command) -> Result<Result<Applied, Reject>, DriverError> {
         let at = (self.clock)();
+        let today = books_today(&self.underwriting, at).await?;
         self.underwriting
             .propose(Envelope {
                 key,
                 caller: caller.to_string(),
                 at,
-                today: at.date_naive(),
+                today,
                 command,
             })
             .await
@@ -279,7 +293,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
             .propose(ic_reinsurance::Envelope {
                 key,
                 caller: caller.to_string(),
-                on: self.today(),
+                on: self.today().await?,
                 command,
             })
             .await
@@ -386,7 +400,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
     /// sweep repeated on the same day, by this driver or another, does the
     /// day's work once.
     pub async fn sweep(&self, page: u32) -> Result<Swept, DriverError> {
-        let today = self.today();
+        let today = self.today().await?;
         let mut total = Swept::default();
         let mut after: Option<ProposalId> = None;
         loop {
@@ -450,7 +464,10 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
     }
 
     pub async fn cycle(&self, swept: &mut Option<NaiveDate>, page: u32) -> (Result<Pass, DriverError>, Option<Result<Swept, DriverError>>) {
-        let today = self.today();
+        let today = match self.today().await {
+            Ok(today) => today,
+            Err(e) => return (self.deliver().await, Some(Err(e))),
+        };
         let sweep = if *swept == Some(today) {
             None
         } else {
@@ -1034,7 +1051,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                 key: format!("uw:{key}"),
                 caller: "underwriting".to_string(),
                 actor: DRIVER.to_string(),
-                today: self.today(),
+                today: self.today().await?,
                 command: GroupCommand::RecordExcessDecision { scheme, case, decision },
             })
             .await?;

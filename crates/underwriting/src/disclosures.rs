@@ -224,13 +224,14 @@ impl<U: Underwriting, W: KeyWrapper, R: RecordStore> Intake<U, W, R> {
             Step::Interview => Command::ConfirmInterview(disclosure),
         };
         let at = (self.clock)();
+        let today = crate::driver::books_today(&self.module, at).await?;
         let applied = self
             .module
             .propose(Envelope {
                 key: format!("{}/{}/{}/{}", proposal.id, a.life, a.step.key(), prepared.hash),
                 caller: CALLER.to_string(),
                 at,
-                today: at.date_naive(),
+                today,
                 command,
             })
             .await?
@@ -247,13 +248,14 @@ impl<U: Underwriting, W: KeyWrapper, R: RecordStore> Intake<U, W, R> {
     /// read, and its hash checked against the one the module holds.
     pub async fn open(&self, r: &OpenRequest) -> Result<Vec<Opened>, IntakeError> {
         let at = (self.clock)();
+        let today = crate::driver::books_today(&self.module, at).await?;
         let applied = self
             .module
             .propose(Envelope {
                 key: format!("open:{}", r.request),
                 caller: CONSOLE.to_string(),
                 at,
-                today: at.date_naive(),
+                today,
                 command: Command::OpenDisclosures {
                     proposal: r.proposal.clone(),
                     life: r.life.clone(),

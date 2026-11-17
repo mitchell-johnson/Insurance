@@ -323,7 +323,8 @@ fn a_rate_row_without_an_upper_age_covers_every_age() {
 /// insured is outside the cover's limits, when the frequency is not offered, and when an
 /// annual premium names a cover the product does not have.
 /// Why it matters: each of these is a business refusal the caller must be able to explain
-/// to a customer or adviser. None may fall through to a zero premium.
+/// to a customer or adviser. None may fall through to a zero premium. An amount refused
+/// names the limit and the side crossed, found by the scenario run, F2-01-2.
 #[test]
 fn rating_refuses_what_it_cannot_price() {
     use ic_product::rating::{check_sum_insured, RatingError};
@@ -345,8 +346,19 @@ fn rating_refuses_what_it_cannot_price() {
 
     let cover = p.cover("life").unwrap();
     assert!(check_sum_insured(cover, 50_000_00).is_ok());
-    assert!(matches!(check_sum_insured(cover, 49_999_99), Err(RatingError::SumInsuredOutOfRange)));
-    assert!(matches!(check_sum_insured(cover, 5_000_000_01), Err(RatingError::SumInsuredOutOfRange)));
+    assert!(matches!(check_sum_insured(cover, 49_999_99), Err(RatingError::SumInsuredOutOfRange { .. })));
+    assert!(matches!(check_sum_insured(cover, 5_000_000_01), Err(RatingError::SumInsuredOutOfRange { .. })));
+    // The refusal names the limit crossed and which side, and a likely slip of dollars for cents (F2-01-2).
+    let said = |minor: i64| check_sum_insured(cover, minor).unwrap_err().to_string();
+    assert_eq!(
+        said(5_000_000_01),
+        "the sum insured, $5,000,000.01, is above the cover's maximum of $5,000,000.00"
+    );
+    assert_eq!(
+        said(400_000),
+        "the sum insured, $4,000.00, is below the cover's minimum of $50,000.00: amounts are in cents, so it may have been typed in dollars"
+    );
+    assert_eq!(said(40_000), "the sum insured, $400.00, is below the cover's minimum of $50,000.00");
 
     let mut annual = BTreeMap::new();
     annual.insert("life".to_string(), ic_money::dec("600").unwrap());

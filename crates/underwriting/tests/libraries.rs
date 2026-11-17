@@ -46,8 +46,10 @@ fn shipped_configuration_loads_and_is_consistent() {
     assert_eq!(s.question_sets[1].regime, DisclosureRegime::ReasonableCare);
     assert!(s.question_sets[0].applies_on(d(2027, 11, 14)) && !s.question_sets[0].applies_on(d(2027, 11, 15)));
     assert!(s.question_sets[1].applies_on(d(2027, 11, 15)) && !s.question_sets[1].applies_on(d(2027, 11, 14)));
-    // Under reasonable care only what is asked counts: no catch-all question.
-    assert!(s.question_sets[0].question("anything_else").is_some() && s.question_sets[1].question("anything_else").is_none());
+    // Under reasonable care the last question is the person's own words about their health, at its own version (F2-02-4).
+    assert_eq!(s.question_sets[0].question("anything_else").map(|q| q.version), Some(1));
+    assert_eq!(s.question_sets[1].question("anything_else").map(|q| q.version), Some(2));
+    assert_eq!(s.rule_sets[1].id, "individual-reasonable-care");
     assert!(s.rule_sets[0].applies_on(d(2026, 11, 11)) && !s.rule_sets[0].applies_on(d(2025, 12, 31)));
     assert_eq!(s.grades.len(), 4);
     assert_eq!(s.wordings.clause("EX-1001").unwrap().0, "Spine");

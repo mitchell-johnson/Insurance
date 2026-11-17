@@ -326,7 +326,7 @@ fn sweep_one(cfg: &Config, p: &mut Proposal, cx: &mut Cx, n: &mut Swept) -> Resu
         let mut gave_up = false;
         for e in f.evidence.iter_mut().filter(|e| e.outstanding()) {
             let chased_out = e.chasers >= cfg.settings.max_chasers;
-            if chased_out && cx.at >= e.deadline {
+            if chased_out && cx.books_now() >= e.deadline {
                 // Chased and still nothing: a person decides what to do
                 // without it. It is never treated as good or bad news.
                 e.status = EvidenceStatus::Unobtainable;

@@ -14,8 +14,10 @@ use crate::{CoverDefinition, Feature, Frequency, ProductDefinition, RateBasis, R
 pub enum RatingError {
     #[error("no rate in table {table} v{version} for the rating factors given")]
     NoRate { table: String, version: u32 },
-    #[error("sum insured outside the cover's limits")]
-    SumInsuredOutOfRange,
+    /// Outside the cover's limits: `why` names the limit crossed, which
+    /// side, and a likely slip of dollars for cents.
+    #[error("the sum insured, {}, is {why}", ic_money::dollars(*amount_minor))]
+    SumInsuredOutOfRange { amount_minor: i64, why: String },
     #[error("frequency not offered by the product")]
     FrequencyNotOffered,
     #[error("product has no billing feature")]
@@ -92,10 +94,31 @@ fn lookup(table: &RateTable, f: &RatingFactors, unmatched: &UnmatchedSexRating) 
 /// The cover's limits apply to a life's total sum insured on the cover, not
 /// to each layer: an indexation step is far smaller than the minimum.
 pub fn check_sum_insured(cover: &CoverDefinition, total_minor: i64) -> Result<(), RatingError> {
-    if total_minor < cover.min_sum_insured_minor || cover.max_sum_insured_minor.is_some_and(|m| total_minor > m) {
-        return Err(RatingError::SumInsuredOutOfRange);
+    let within = |amount: i64| amount >= cover.min_sum_insured_minor && cover.max_sum_insured_minor.is_none_or(|m| amount <= m);
+    if within(total_minor) {
+        return Ok(());
     }
-    Ok(())
+    let why = if total_minor < cover.min_sum_insured_minor {
+        let slip = total_minor.checked_mul(100).is_some_and(within);
+        format!(
+            "below the cover's minimum of {}{}",
+            ic_money::dollars(cover.min_sum_insured_minor),
+            if slip {
+                ": amounts are in cents, so it may have been typed in dollars"
+            } else {
+                ""
+            }
+        )
+    } else {
+        format!(
+            "above the cover's maximum of {}",
+            ic_money::dollars(cover.max_sum_insured_minor.unwrap_or_default())
+        )
+    };
+    Err(RatingError::SumInsuredOutOfRange {
+        amount_minor: total_minor,
+        why,
+    })
 }
 
 /// Annual premium for one layer of one cover, in major currency units, before

@@ -431,7 +431,8 @@ fn claims_reads_terms_and_opens_the_file_with_a_logged_purpose() {
             &w,
             Query::Queue {
                 queue: Queue::Medical,
-                now: w.now
+                now: w.now,
+                underwriter: None,
             }
         ),
         serde_json::json!([])
@@ -783,16 +784,18 @@ fn peer_review_samples_decisions_for_a_senior_who_never_touched_them() {
     assert_eq!(
         drawn.view,
         Some(View::Sample {
-            decisions: vec!["P1/L1/d1".into(), "P3/L1/d1".into()]
+            decisions: vec!["P1/L1/d1".into(), "P3/L1/d1".into()],
+            considered: 3,
         }),
         "terms and declines at 100%, standard at 0%, migrated never"
     );
     assert_eq!(drawn.events.len(), 2);
-    assert_eq!(
-        console(&mut w, draw("2026-11b", from, to)).unwrap().view,
-        Some(View::Sample { decisions: vec![] }),
-        "nothing is drawn twice"
-    );
+    // A window is drawn once, under its own name or another, so nobody redraws until the sample suits them.
+    for again in [draw("2026-11", to, to + chrono::Duration::days(1)), draw("2026-11b", from, to)] {
+        let refused = console(&mut w, again).unwrap_err();
+        assert_eq!(refused.code, "already_drawn", "{}", refused.message);
+        assert!(refused.message.contains("2026-11"), "{}", refused.message);
+    }
 
     let find = |decision: &str, who: &str, agrees: bool, reasons: &[&str]| Command::RecordPeerFinding {
         decision: decision.into(),
@@ -824,8 +827,14 @@ fn peer_review_samples_decisions_for_a_senior_who_never_touched_them() {
     console(&mut w, find("P3/L1/d1", "cat", true, &[])).unwrap();
     let report = w.s.report(from, to);
     assert_eq!(
-        (report.decisions, report.straight_through, report.peer_reviewed, report.peer_disagreed),
-        (3, 1, 2, 1)
+        (
+            report.decisions,
+            report.covers,
+            report.straight_through,
+            report.peer_reviewed,
+            report.peer_disagreed
+        ),
+        (3, 3, 1, 2, 1)
     );
     assert_eq!(
         (report.by_outcome["decline"], report.by_outcome["standard"], report.by_outcome["terms"]),
@@ -867,7 +876,8 @@ fn peer_review_samples_decisions_for_a_senior_who_never_touched_them() {
             },
         )
         .unwrap();
-        let Some(View::Sample { decisions }) = out.view else { panic!() };
+        let Some(View::Sample { decisions, considered }) = out.view else { panic!() };
+        assert_eq!(considered, 12);
         decisions
     };
     let first = half(7);
@@ -902,7 +912,8 @@ fn a_declared_conflict_removes_the_underwriter_from_the_case() {
             &mut w,
             Command::DeclareConflict {
                 underwriter: "nobody".into(),
-                party: PartyId::from("PTY-L1")
+                party: PartyId::from("PTY-L1"),
+                reason: None,
             }
         )
         .unwrap_err()
@@ -914,11 +925,13 @@ fn a_declared_conflict_removes_the_underwriter_from_the_case() {
         Command::DeclareConflict {
             underwriter: "amy".into(),
             party: PartyId::from("PTY-L1"),
+            reason: None,
         },
     )
     .unwrap();
     assert!(matches!(&declared.events[0], Event::CaseReleased { case, from } if case == "P1/L1/case/1" && from == "amy"));
-    assert_eq!((declared.events.len(), w.s.workload("amy")), (1, 1));
+    assert_eq!((declared.events.len(), w.s.workload("amy")), (2, 1));
+    assert!(matches!(&declared.events[1], Event::ConflictDeclared { underwriter, .. } if underwriter == "amy"));
     assert_eq!(w.p("P1").lives[&LifeId::from("L1")].open_case().unwrap().owner, None);
     assert_eq!(
         console(
@@ -990,6 +1003,7 @@ fn a_declared_conflict_removes_the_underwriter_from_the_case() {
         Command::DeclareConflict {
             underwriter: "amy".into(),
             party: PartyId::from("PTY-L8"),
+            reason: None,
         },
     )
     .unwrap();
@@ -1043,7 +1057,8 @@ fn a_peer_review_draw_reads_only_its_period_and_old_states_draw_the_same() {
     assert_eq!(
         later.view,
         Some(View::Sample {
-            decisions: vec!["P2/L1/d1".into()]
+            decisions: vec!["P2/L1/d1".into()],
+            considered: 1,
         })
     );
 
@@ -1055,7 +1070,8 @@ fn a_peer_review_draw_reads_only_its_period_and_old_states_draw_the_same() {
     assert_eq!(
         earlier.view,
         Some(View::Sample {
-            decisions: vec!["P1/L1/d1".into()]
+            decisions: vec!["P1/L1/d1".into()],
+            considered: 1,
         })
     );
     let replayed = replica.apply(w.log.len() as u64, w.log.last().unwrap().clone()).unwrap();

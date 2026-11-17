@@ -148,6 +148,10 @@ pub struct Report {
     pub decisions: u64,
     /// Decided by the rules with no person involved.
     pub straight_through: u64,
+    /// The covers those decisions gave terms for: `by_outcome` counts
+    /// covers, not decisions, so one decision on three covers is three.
+    #[serde(default)]
+    pub covers: u64,
     pub by_outcome: BTreeMap<String, u64>,
     pub evidence_cost_minor: i64,
     pub peer_reviewed: u64,
@@ -156,12 +160,22 @@ pub struct Report {
     pub turnaround_hours: i64,
 }
 
+/// Why a proposal is closed to an underwriter with a conflict.
+pub const CLOSED_TO_YOU: &str =
+    "you declared a conflict with someone on this application, or are on it yourself, so it is closed to you: another underwriter takes the case";
+
 /// A question another module or the console asks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "query", rename_all = "snake_case")]
 pub enum Query {
     Proposal {
         proposal: ProposalId,
+    },
+    /// A proposal as an underwriter reads it from the console: closed to
+    /// one who declared a conflict with anyone on it, or is on it.
+    ProposalFor {
+        proposal: ProposalId,
+        underwriter: String,
     },
     /// The rule set and question set the proposal's disclosures are made
     /// against, or null when none is in force for it.
@@ -180,6 +194,10 @@ pub enum Query {
     Queue {
         queue: Queue,
         now: DateTime<Utc>,
+        /// The underwriter reading it: a case on anyone they declared a
+        /// conflict with is left out.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        underwriter: Option<String>,
     },
     Workload {
         underwriter: String,
@@ -211,6 +229,15 @@ pub enum Query {
     EvidenceOrder {
         request: String,
     },
+    /// Whether the product takes this application on `on`: its own
+    /// conditions on who may apply for what, as a proposal is checked at
+    /// the door, so nobody quotes cover it would not take.
+    Eligibility {
+        product_code: String,
+        lives: Vec<crate::model::ProposedLife>,
+        covers: Vec<crate::model::ProposedCover>,
+        on: NaiveDate,
+    },
 }
 
 /// An evidence request, as the intake needs it to file the report.
@@ -233,12 +260,33 @@ pub fn answer(state: &UnderwritingState, query: serde_json::Value) -> Result<ser
         )),
         Query::TermsOn { policy, life, cover } => json(serde_json::to_value(state.terms_on(&policy, &life, &cover))),
         Query::UnderwritersOf { policy, life } => json(serde_json::to_value(state.underwriters_of(&policy, &life))),
-        Query::Queue { queue, now } => json(serde_json::to_value(state.queue(queue, now))),
+        Query::ProposalFor { proposal, underwriter } => match state.proposal(&proposal) {
+            Some(p) if state.conflicted(&underwriter, p) => Ok(serde_json::json!({ "closed_to_you": CLOSED_TO_YOU })),
+            found => json(serde_json::to_value(found)),
+        },
+        Query::Queue { queue, now, underwriter } => {
+            let mut items = state.queue(queue, now);
+            if let Some(underwriter) = underwriter {
+                items.retain(|i| state.proposal(&i.proposal).is_none_or(|p| !state.conflicted(&underwriter, p)));
+            }
+            json(serde_json::to_value(items))
+        }
         Query::Workload { underwriter } => json(serde_json::to_value(state.workload(&underwriter))),
         Query::Report { from, to } => json(serde_json::to_value(state.report(from, to))),
         Query::Exclusions { on } => json(serde_json::to_value(state.exclusions(on))),
         Query::Reasons { on } => json(serde_json::to_value(state.config.reasons_on(on))),
         Query::EvidenceOrder { request } => json(serde_json::to_value(state.evidence_order(&request))),
+        Query::Eligibility {
+            product_code,
+            lives,
+            covers,
+            on,
+        } => Ok(
+            match crate::eligibility::check_application(&state.config.settings.eligibility, &product_code, &lives, &covers, on) {
+                Ok(()) => serde_json::json!({ "eligible": true }),
+                Err(r) => serde_json::json!({ "eligible": false, "why": r.message }),
+            },
+        ),
         Query::Outbox { after, max } => json(serde_json::to_value(state.outbox(after, max))),
         Query::Parked => json(serde_json::to_value(state.parked())),
         Query::Progress { max } => json(serde_json::to_value(state.progress_pending(max))),
@@ -350,6 +398,7 @@ impl UnderwritingState {
                     r.turnaround_hours += d.effective_at.map_or(0, |t| (t - p.received_at).num_hours().max(0));
                     r.peer_reviewed += u64::from(d.peer_review.is_some());
                     r.peer_disagreed += u64::from(d.peer_review.as_ref().is_some_and(|f| !f.agrees));
+                    r.covers += d.terms.len() as u64;
                     for t in &d.terms {
                         *r.by_outcome.entry(t.outcome.key().to_string()).or_insert(0) += 1;
                     }
@@ -810,6 +859,16 @@ impl UnderwritingState {
         if period.is_empty() || to <= from {
             return reject("period", "a sample is drawn for a named period with a start before its end");
         }
+        if let Some((named, (f, t))) = self.samples.iter().find(|(named, (f, t))| named.as_str() == period || (*f < to && from < *t)) {
+            return reject(
+                "already_drawn",
+                format!(
+                    "the sample for {named} ({} to {}) was drawn already, and a period is drawn once: review the decisions it drew",
+                    f.date_naive(),
+                    t.date_naive()
+                ),
+            );
+        }
         if !self.effective_indexed {
             for (at, reference) in self
                 .proposals
@@ -824,6 +883,10 @@ impl UnderwritingState {
         }
         let rates = self.config.settings.sample.clone();
         let mut drawn = Vec::new();
+        // The candidate most nearly drawn, by its roll against its rate, so
+        // that a period with decisions to review never draws none.
+        let mut nearest: Option<(u64, String)> = None;
+        let mut considered = 0u32;
         let candidates: Vec<String> = self.effective.range(from..to).flat_map(|(_, refs)| refs.iter().cloned()).collect();
         for reference in candidates {
             let Some((id, life)) = self.decisions.get(&reference) else {
@@ -847,13 +910,33 @@ impl UnderwritingState {
             } else {
                 rates.non_standard_per_mille
             };
+            considered += 1;
             let digest = Sha256::digest(format!("{seed}|{}", d.reference).as_bytes());
             let roll = u64::from_be_bytes([digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7]]) % 1000;
             if roll < u64::from(rate) {
                 d.sampled_for = Some(period.to_string());
                 drawn.push(reference);
+            } else if rate > 0 {
+                let score = roll * 1000 / u64::from(rate);
+                if nearest.as_ref().is_none_or(|(best, _)| score < *best) {
+                    nearest = Some((score, reference));
+                }
             }
         }
+        if drawn.is_empty() {
+            if let Some((_, reference)) = nearest {
+                if let Some(d) = self.decisions.get(&reference).cloned().and_then(|(id, life)| {
+                    self.proposals
+                        .get_mut(&id)
+                        .and_then(|p| p.lives.get_mut(&life))
+                        .and_then(|f| f.decisions.iter_mut().find(|d| d.reference == reference))
+                }) {
+                    d.sampled_for = Some(period.to_string());
+                    drawn.push(reference);
+                }
+            }
+        }
+        self.samples.insert(period.to_string(), (from, to));
         drawn.sort();
         for decision in &drawn {
             cx.event(Event::PeerReviewSampled {
@@ -861,7 +944,7 @@ impl UnderwritingState {
                 period: period.to_string(),
             });
         }
-        cx.out.view = Some(View::Sample { decisions: drawn });
+        cx.out.view = Some(View::Sample { decisions: drawn, considered });
         Ok(())
     }
 

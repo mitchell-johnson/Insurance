@@ -74,6 +74,11 @@ pub struct UnderwritingState {
     /// the index has it built by the first draw.
     #[serde(default)]
     pub(crate) effective_indexed: bool,
+    /// The peer review samples drawn, by period, with the window each
+    /// read. A window is drawn once, so nobody redraws until the sample
+    /// suits them.
+    #[serde(default)]
+    pub(crate) samples: BTreeMap<String, (DateTime<Utc>, DateTime<Utc>)>,
     pub(crate) by_policy: BTreeMap<PolicyId, BTreeSet<ProposalId>>,
     pub(crate) by_adviser: BTreeMap<String, BTreeSet<ProposalId>>,
     /// Relationships underwriters have declared with people.
@@ -118,6 +123,12 @@ pub(crate) struct Cx {
 }
 
 impl Cx {
+    /// This moment on the books' calendar: the business date at the
+    /// clock's time of day. A deadline set and read by it falls on the
+    /// books' dates, as everything a person is shown does.
+    pub fn books_now(&self) -> DateTime<Utc> {
+        self.today.and_time(self.at.time()).and_utc()
+    }
     pub fn event(&mut self, e: Event) {
         self.out.events.push(e);
     }
@@ -434,7 +445,15 @@ impl UnderwritingState {
         if self.permits(p, life, underwriter, action, subject, already_signed)? {
             Ok(())
         } else {
-            reject("not_authorised", format!("{underwriter} is not authorised for this"))
+            let standing = Standing {
+                touched: life_ref(p, life)?.underwriters().contains(underwriter),
+                already_signed,
+                conflict: self.conflicted(underwriter, p),
+            };
+            reject(
+                "not_authorised",
+                crate::authority::refusal(self.profile(underwriter)?, action, subject, standing),
+            )
         }
     }
 
@@ -502,7 +521,7 @@ impl UnderwritingState {
             }),
             EvidenceUnobtainable { request } => self.with_evidence(&request, cx, |st, p, life, cx| crate::external::settled(st, p, life, cx, &request, None)),
 
-            DeclareConflict { underwriter, party } => self.declare_conflict(cx, underwriter, party),
+            DeclareConflict { underwriter, party, reason } => self.declare_conflict(cx, underwriter, party, reason),
             TakeCase { case, underwriter } => self.with_case(&case, cx, |st, p, life, cx| crate::casework::take(st, p, life, cx, &case, &underwriter)),
             HandOver { case, by, to } => self.with_case(&case, cx, |st, p, life, cx| crate::casework::hand_over(st, p, life, cx, &case, &by, &to)),
             MoveCase {
@@ -514,8 +533,13 @@ impl UnderwritingState {
             } => self.with_case(&case, cx, |st, p, life, cx| {
                 crate::casework::move_case(st, p, life, cx, &case, &underwriter, case_type, queue, reasons)
             }),
-            RequestEvidence { case, underwriter, kinds } => self.with_case(&case, cx, |st, p, life, cx| {
-                crate::casework::request_evidence(st, p, life, cx, &case, &underwriter, kinds)
+            RequestEvidence {
+                case,
+                underwriter,
+                kinds,
+                due_on,
+            } => self.with_case(&case, cx, |st, p, life, cx| {
+                crate::casework::request_evidence(st, p, life, cx, &case, &underwriter, kinds, due_on)
             }),
             AskOpinion { case, underwriter, of } => self.with_case(&case, cx, |st, p, life, cx| {
                 crate::casework::ask_opinion(st, p, life, cx, &case, &underwriter, &of)
@@ -706,9 +730,9 @@ impl UnderwritingState {
         self.with(&id, cx, |st, p, cx| f(st, p, &life, &cover, cx))
     }
 
-    fn declare_conflict(&mut self, cx: &mut Cx, underwriter: String, party: PartyId) -> Result<(), Reject> {
+    fn declare_conflict(&mut self, cx: &mut Cx, underwriter: String, party: PartyId, reason: Option<String>) -> Result<(), Reject> {
         self.profile(&underwriter)?;
-        self.conflicts.insert((underwriter.clone(), party));
+        self.conflicts.insert((underwriter.clone(), party.clone()));
         // Anything they hold on that person goes back to its queue.
         let held: Vec<String> = self.owners.iter().filter(|(_, o)| **o == underwriter).map(|(c, _)| c.clone()).collect();
         for case in held {
@@ -726,6 +750,7 @@ impl UnderwritingState {
             }
             self.store(p);
         }
+        cx.event(Event::ConflictDeclared { underwriter, party, reason });
         Ok(())
     }
 }

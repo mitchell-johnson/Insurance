@@ -13,6 +13,7 @@ pub const REASONS: &str = include_str!("../../../products/underwriting/reasons.s
 pub const QUESTIONS_2026: &str = include_str!("../../../products/underwriting/questions_2026.star");
 pub const QUESTIONS_2027: &str = include_str!("../../../products/underwriting/questions_2027.star");
 pub const RULES_INDIVIDUAL: &str = include_str!("../../../products/underwriting/rules_individual.star");
+pub const RULES_INDIVIDUAL_2027: &str = include_str!("../../../products/underwriting/rules_individual_2027.star");
 pub const PROFILES: &str = include_str!("../../../products/underwriting/profiles.star");
 
 #[derive(Debug, Clone)]
@@ -35,14 +36,24 @@ pub fn load() -> Result<Shipped, LoadError> {
         load_question_set("questions_2026.star", QUESTIONS_2026)?,
         load_question_set("questions_2027.star", QUESTIONS_2027)?,
     ];
-    let rule_sets = vec![load_rule_set("rules_individual.star", RULES_INDIVIDUAL)?];
-    for rules in &rule_sets {
-        for questions in question_sets.iter().filter(|q| q.id == rules.question_set) {
-            rules.check_references(questions, &exclusions, &reasons).map_err(|error| LoadError::Invalid {
-                file: "rules_individual.star".to_string(),
-                error,
-            })?;
+    // Oldest first: the set activated last wins on the dates both cover.
+    let files = [
+        ("rules_individual.star", RULES_INDIVIDUAL),
+        ("rules_individual_2027.star", RULES_INDIVIDUAL_2027),
+    ];
+    let mut rule_sets = Vec::new();
+    for (file, source) in files {
+        let rules = load_rule_set(file, source)?;
+        // Checked against each version of its question set in force while it is.
+        let overlaps = |q: &&QuestionSet| {
+            q.id == rules.question_set && q.effective_to.is_none_or(|to| rules.effective_from < to) && rules.effective_to.is_none_or(|to| q.effective_from < to)
+        };
+        for questions in question_sets.iter().filter(overlaps) {
+            rules
+                .check_references(questions, &exclusions, &reasons)
+                .map_err(|error| LoadError::Invalid { file: file.to_string(), error })?;
         }
+        rule_sets.push(rules);
     }
     Ok(Shipped {
         exclusions,

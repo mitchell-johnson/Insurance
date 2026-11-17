@@ -89,13 +89,14 @@ impl<U: Underwriting, W: KeyWrapper, R: RecordStore> Intake<U, W, R> {
 
     async fn send(&self, key: String, caller: &str, command: Command) -> Result<bool, IntakeError> {
         let at = (self.clock)();
+        let today = crate::driver::books_today(&self.module, at).await?;
         let applied = self
             .module
             .propose(Envelope {
                 key,
                 caller: caller.to_string(),
                 at,
-                today: at.date_naive(),
+                today,
                 command,
             })
             .await?

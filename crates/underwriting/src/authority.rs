@@ -217,3 +217,71 @@ impl Authority {
         Ok(self.authorizer.is_authorized(&request, &self.policies, &entities).decision() == Decision::Allow)
     }
 }
+
+/// Why the policies refused this underwriter this action, in words, with
+/// who can act instead: the first rule in `config/cedar/underwriting.cedar`
+/// that the request falls foul of. The policies decide; this only says why.
+pub fn refusal(profile: &AuthorityProfile, action: CaseAction, subject: &Subject<'_>, standing: Standing) -> String {
+    let who = &profile.underwriter;
+    if standing.conflict {
+        return format!(
+            "{who} declared a conflict with someone on this application, or is on it: it is closed to them, and another underwriter takes the case"
+        );
+    }
+    let accredited = profile.products.contains(subject.product);
+    let not_accredited = || format!("{who} is not accredited for {}: hand the case to an underwriter who is", subject.product);
+    let senior = |what: &str| format!("{what} is for a senior underwriter, and {who} is not one: hand the case to a senior underwriter");
+    match action {
+        CaseAction::Work | CaseAction::Decide | CaseAction::Countersign if !accredited => not_accredited(),
+        CaseAction::Countersign if !profile.senior => senior("the second signature"),
+        CaseAction::Countersign if standing.already_signed => {
+            format!("{who} made the first decision, so another senior underwriter gives the second signature")
+        }
+        CaseAction::Decide | CaseAction::Countersign => decide_refusal(profile, subject),
+        CaseAction::PeerReview | CaseAction::ReviewNonDisclosure if !profile.senior => senior("a review"),
+        CaseAction::PeerReview | CaseAction::ReviewNonDisclosure if standing.touched => {
+            format!("{who} worked on or decided this case, so another senior underwriter reviews it")
+        }
+        CaseAction::Reassign => format!("moving a case another underwriter holds is for a queue lead or a manager, and {who} is neither: ask one"),
+        _ => format!("{who} is not authorised for this"),
+    }
+}
+
+/// Why a decision on these terms is beyond this profile.
+fn decide_refusal(profile: &AuthorityProfile, subject: &Subject<'_>) -> String {
+    let who = &profile.underwriter;
+    let cover = subject.cover_type.replace('_', " ");
+    match profile.limits.get(subject.cover_type) {
+        None => return format!("{who} may not decide {cover} cover: hand the case to an underwriter whose profile includes it, such as a senior underwriter"),
+        Some(limit) if subject.sum_insured_minor > *limit => {
+            return format!(
+                "{cover} cover of {} is above {who}'s limit of {}: hand the case to a senior underwriter whose limit covers it",
+                ic_money::dollars(subject.sum_insured_minor),
+                ic_money::dollars(*limit)
+            )
+        }
+        Some(_) => {}
+    }
+    if subject.loading_percent > profile.max_loading_percent {
+        return if profile.max_loading_percent == 0 {
+            format!(
+                "{who} may not apply a loading ({}% was asked for): hand the case to an underwriter who may, such as a senior underwriter",
+                subject.loading_percent
+            )
+        } else {
+            format!(
+                "a {}% loading is above the most {who} may apply, {}%: hand the case to a senior underwriter",
+                subject.loading_percent, profile.max_loading_percent
+            )
+        };
+    }
+    let barred = [
+        (subject.has_exclusions && !profile.may_exclude, "apply an exclusion"),
+        (subject.outcome == "decline" && !profile.may_decline, "decline cover"),
+        (subject.outcome == "defer" && !profile.may_defer, "defer cover"),
+    ];
+    match barred.iter().find(|(barred, _)| *barred) {
+        Some((_, what)) => format!("{who} may not {what}: hand the case to an underwriter who may, such as a senior underwriter"),
+        None => format!("{who} is not authorised for this"),
+    }
+}

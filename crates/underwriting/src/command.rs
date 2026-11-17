@@ -349,6 +349,9 @@ pub enum Command {
     DeclareConflict {
         underwriter: String,
         party: PartyId,
+        /// How they are connected, for the record.
+        #[serde(default)]
+        reason: Option<String>,
     },
     TakeCase {
         case: String,
@@ -370,6 +373,10 @@ pub enum Command {
         case: String,
         underwriter: String,
         kinds: BTreeSet<EvidenceKind>,
+        /// The day the underwriter wants it by; the settings' days from
+        /// today when not given.
+        #[serde(default)]
+        due_on: Option<NaiveDate>,
     },
     AskOpinion {
         case: String,
@@ -896,6 +903,13 @@ pub enum Effect {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Event {
+    /// An underwriter declared a relationship with a person: everything
+    /// on that person is closed to them from now on.
+    ConflictDeclared {
+        underwriter: String,
+        party: PartyId,
+        reason: Option<String>,
+    },
     ConfigActivated {
         kind: String,
         id: String,
@@ -1200,6 +1214,10 @@ pub enum View {
     },
     Sample {
         decisions: Vec<String>,
+        /// The decisions that took effect in the window and could be
+        /// drawn: the size of the population the sample came from.
+        #[serde(default)]
+        considered: u32,
     },
 }
 

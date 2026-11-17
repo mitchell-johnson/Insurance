@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::command::{OpenProposal, Reject};
 use crate::config::InterimSettings;
 use crate::machine::reject;
-use crate::model::Entry;
+use crate::model::{Entry, ProposedCover, ProposedLife};
 use crate::prepare::age_on;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,9 +152,16 @@ pub(crate) fn check(checks: &[Eligibility], open: &OpenProposal, today: NaiveDat
     if open.entry != Entry::NewBusiness {
         return Ok(());
     }
-    for e in checks.iter().filter(|e| e.products.contains(&open.product_code)) {
-        for c in &open.covers {
-            let Some(life) = open.lives.iter().find(|l| l.life == c.life) else { continue };
+    check_application(checks, &open.product_code, &open.lives, &open.covers, today)
+}
+
+/// The product's checks on an application's lives and covers on `today`:
+/// at the door of a proposal, and for a quote before anyone prices cover
+/// the product would not take.
+pub fn check_application(checks: &[Eligibility], product_code: &str, lives: &[ProposedLife], covers: &[ProposedCover], today: NaiveDate) -> Result<(), Reject> {
+    for e in checks.iter().filter(|e| e.products.contains(product_code)) {
+        for c in covers {
+            let Some(life) = lives.iter().find(|l| l.life == c.life) else { continue };
             let class = life.factors.occupation_class.as_deref();
             let age = life.factors.date_of_birth.map(|dob| age_on(dob, today));
             let refuse = |why: String| reject("eligibility", format!("{} on {}: {why}", c.code, c.life));
@@ -199,7 +206,11 @@ pub(crate) fn check(checks: &[Eligibility], open: &OpenProposal, today: NaiveDat
                     to_age,
                     max_minor,
                 } if cover_types.contains(&c.cover_type) && age.is_some_and(|a| (*from_age..=*to_age).contains(&a)) && c.sum_insured_minor > *max_minor => {
-                    return refuse(format!("at most {max_minor} at ages {from_age} to {to_age}"));
+                    return refuse(format!(
+                        "{} is more than this cover takes at ages {from_age} to {to_age}, at most {}",
+                        ic_money::dollars(c.sum_insured_minor),
+                        ic_money::dollars(*max_minor)
+                    ));
                 }
                 _ => {}
             }

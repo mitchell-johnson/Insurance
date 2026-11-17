@@ -622,6 +622,7 @@ async fn a_previous_insurers_history_is_ordered_tracked_and_relied_on() {
                 case: case.clone(),
                 underwriter: "amy".into(),
                 kinds: BTreeSet::from([EvidenceKind::PreviousInsurer]),
+                due_on: None,
             },
         );
         let effect = asked.effects.iter().find(|e| matches!(e, Effect::RequestEvidence { .. })).cloned().unwrap();
