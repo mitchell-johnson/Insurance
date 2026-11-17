@@ -180,7 +180,9 @@ signIn(R).then(async () => {
   await refresh();
   // Dates start from the books: the month-end most likely meant is the last day of the month before the business date.
   const on = me.today || portal.today();
-  $("s-date").value = portal.days(-1, on.slice(0, 7) + "-01"); $("l-on").value = on;
+  // A date someone entered while the page was signing them in is theirs to keep.
+  if (!$("s-date").value) $("s-date").value = portal.days(-1, on.slice(0, 7) + "-01");
+  if (!$("l-on").value) $("l-on").value = on;
   if (!me.operate) for (const f of ["cut", "pc", "tc"]) $(f).hidden = true;
   document.querySelectorAll(".operate").forEach((e) => { e.hidden = !me.operate; });
   if (me.operate) portal.actions($("acts"), FAC, { id: "fa", send, after: () => refresh() });

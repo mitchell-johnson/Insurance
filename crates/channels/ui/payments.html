@@ -102,7 +102,12 @@ $("prep").addEventListener("submit", run($("r-msg"), async () => {
   return "Prepared. Add items, then check it.";
 }));
 
+// A run opened while the page is still signing the person in is shown once their roles are known, so the actions
+// they may take are offered.
+let signedIn;
+const ready = new Promise((resolve) => { signedIn = resolve; });
 async function showRun() {
+  await ready;
   const id = $("run-id").value.trim();
   const [r, totals] = await Promise.all([ask("run", { run: id }), ask("control_totals", { run: id })]);
   const out = $("run-msg");
@@ -288,6 +293,7 @@ portal.picker($("rec-account"), async () => [...new Set(openExceptions.map((e) =
 $("r-id").value = portal.reference("RUN"); $("r-date").value = portal.today();
 signIn(R).then(async () => {
   me = await ask("me");
+  signedIn();
   $("me").textContent = `You are ${me.staff}: ${(me.roles || []).map(words).join(", ") || "view only"}.`;
   document.querySelectorAll(".maker").forEach((e) => { e.hidden = !has("maker"); });
   $("raw").hidden = !(me.roles || []).length;
