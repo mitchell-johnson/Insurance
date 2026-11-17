@@ -108,7 +108,7 @@ pub fn ask(state: &PricingState, question: Question) -> Result<Value, String> {
             let rows: Vec<Value> = state
                 .funds
                 .iter()
-                .map(|(fund, versions)| json!({ "fund": fund, "versions": versions, "suspensions": state.suspensions.get(fund) }))
+                .map(|(fund, versions)| json!({ "fund": fund, "versions": versions, "suspensions": state.suspensions.get(fund), "next": state.next_to_price(fund) }))
                 .collect();
             Ok(json!(rows))
         }

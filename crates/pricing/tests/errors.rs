@@ -63,6 +63,15 @@ fn material_error_is_corrected_by_a_new_version() {
     assert_eq!(code(lead(&mut h, raise("E1", &[&d3], ""))), "reason_required");
     assert_eq!(lead(&mut h, raise("E1", &[&d3], "administrator mispriced a bond")), Output::Done);
     assert_eq!(code(h.approve(&d4, BTreeMap::new())), "held_by_error");
+    // The refusal names the error by when it was raised and the price it is against, not by its reference
+    // (found by the scenario run, SCN-18, F-SCN18-5).
+    match h.approve(&d4, BTreeMap::new()) {
+        Output::Refused { message, .. } => assert!(
+            message.contains(&format!("against {d3}; prepare and approve the correction of that price first")),
+            "{message}"
+        ),
+        other => panic!("{other:?}"),
+    }
     assert_eq!(
         code(lead(
             &mut h,

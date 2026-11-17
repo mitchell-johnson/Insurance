@@ -113,8 +113,54 @@ pub fn fixed(value: Dec, places: u32, mode: RoundingMode) -> Result<DecStr, Stri
     DecStr::parse(&text).map_err(|e| e.to_string())
 }
 
-fn show(d: Dec) -> String {
-    fixed(d, 6, RoundingMode::HalfEven).map_or_else(|e| e, |s| s.as_str().to_string())
+/// Digits grouped in thousands: 1234567 as 1,234,567.
+fn grouped(whole: u128) -> String {
+    let digits = whole.to_string();
+    let mut out = String::new();
+    for (n, digit) in digits.chars().enumerate() {
+        if n > 0 && (digits.len() - n).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
+/// A fraction as a percentage people read: 0.089955 as 9.00%, and a small
+/// one to as many places as it needs (up to four), so it never reads as nil.
+pub fn percent(fraction: Dec) -> String {
+    let shown = |places| fixed(fraction * dec_i128(100), places, RoundingMode::HalfEven).map_or_else(|e| e, |s| s.as_str().to_string());
+    let two = shown(2);
+    if fraction != Dec::ZERO && two.trim_start_matches('-').trim_start_matches("0.").trim_start_matches('0').is_empty() {
+        let four = shown(4);
+        return format!("{}%", four.trim_end_matches('0'));
+    }
+    format!("{two}%")
+}
+
+/// Units held, from micro-units: 1,000,005 units, or 1.25 units.
+pub fn unit_words(micro: i128) -> String {
+    let sign = if micro < 0 { "-" } else { "" };
+    let a = micro.unsigned_abs();
+    let per = MICRO_PER_UNIT as u128;
+    let part = format!("{:06}", a % per);
+    let part = part.trim_end_matches('0');
+    let fraction = if part.is_empty() { String::new() } else { format!(".{part}") };
+    let one = a == per;
+    format!("{sign}{}{fraction} unit{}", grouped(a / per), if one { "" } else { "s" })
+}
+
+/// An amount of money in dollars and cents: $1,090,545.00.
+fn dollars(amount: Dec) -> String {
+    match fixed(amount, 2, RoundingMode::HalfEven) {
+        Ok(s) => {
+            let text = s.as_str();
+            let (sign, text) = text.strip_prefix('-').map_or(("", text), |t| ("-", t));
+            let (whole, cents) = text.split_once('.').unwrap_or((text, "00"));
+            format!("{sign}${}.{cents}", grouped(whole.parse().unwrap_or(0)))
+        }
+        Err(e) => e,
+    }
 }
 
 fn within(measured: Dec, limit: &DecStr) -> bool {
@@ -178,9 +224,10 @@ pub fn strike(
             kind: CheckKind::UnitsOnIssue,
             passed: core == valuation.units_on_issue_micro,
             detail: format!(
-                "core {core} micro-units, administrator {}, difference {}",
-                valuation.units_on_issue_micro,
-                valuation.units_on_issue_micro as i128 - core as i128
+                "the administrator's units on issue, {}, against the core's, {}: a difference of {}",
+                unit_words(valuation.units_on_issue_micro as i128),
+                unit_words(core as i128),
+                unit_words(valuation.units_on_issue_micro as i128 - core as i128)
             ),
         },
     });
@@ -195,7 +242,7 @@ pub fn strike(
         Some(m) => Check {
             kind: CheckKind::PreviousMove,
             passed: within(m, &terms.previous_move),
-            detail: format!("moved {} against a tolerance of {}", show(m), terms.previous_move.as_str()),
+            detail: format!("moved {} against a tolerance of {}", percent(m), percent(terms.previous_move.get())),
         },
     });
 
@@ -217,11 +264,11 @@ pub fn strike(
                     kind: CheckKind::Benchmark,
                     passed: within(diff, gap),
                     detail: format!(
-                        "moved {} against a benchmark of {}, gap {} against a tolerance of {}",
-                        show(m),
-                        b.as_str(),
-                        show(diff),
-                        gap.as_str()
+                        "moved {} against a benchmark of {}, a gap of {} against a tolerance of {}",
+                        percent(m),
+                        percent(b.get()),
+                        percent(diff),
+                        percent(gap.get())
                     ),
                 }
             }
@@ -264,11 +311,11 @@ pub fn strike(
                 kind: CheckKind::UnexplainedMove,
                 passed: within(unexplained, &terms.unexplained_move),
                 detail: format!(
-                    "net assets {} against {} expected from the price move and flows, unexplained {} against a tolerance of {}",
-                    valuation.nav.as_str(),
-                    show(expected),
-                    show(unexplained),
-                    terms.unexplained_move.as_str()
+                    "net assets of {} against {} expected from the price move and flows, unexplained {} against a tolerance of {}",
+                    dollars(valuation.nav.get()),
+                    dollars(expected),
+                    percent(unexplained),
+                    percent(terms.unexplained_move.get())
                 ),
             }
         }
@@ -369,7 +416,10 @@ mod tests {
         let p = previous("1.9900", "1990000");
         let off = strike(&def, &terms, &v, Some(&p), Some(999_999_000_000)).unwrap();
         assert!(off.blocked());
-        assert!(check(&off, CheckKind::UnitsOnIssue).detail.contains("difference 1000000"));
+        assert_eq!(
+            check(&off, CheckKind::UnitsOnIssue).detail,
+            "the administrator's units on issue, 1,000,000 units, against the core's, 999,999 units: a difference of 1 unit"
+        );
         assert!(off.held().is_empty(), "a blocking check is not one an approver accepts");
         let missing = strike(&def, &terms, &v, Some(&p), None).unwrap();
         assert!(missing.blocked());
@@ -412,7 +462,32 @@ mod tests {
         );
         assert!(check(&s, CheckKind::StaleAssets).detail.contains("OLD"));
         assert!(!check(&s, CheckKind::StaleAssets).detail.contains("FINE"));
-        assert!(check(&s, CheckKind::PreviousMove).detail.contains("0.100000"));
+        assert_eq!(check(&s, CheckKind::PreviousMove).detail, "moved 10.00% against a tolerance of 5.00%");
+        assert!(
+            check(&s, CheckKind::UnexplainedMove)
+                .detail
+                .starts_with("net assets of $2,189,000.00 against $"),
+            "{:?}",
+            s.checks
+        );
+    }
+
+    /// Purpose: the figures behind each check are written as people read
+    /// them: units, not micro-units; percentages, not fractions; dollars.
+    /// Why it matters: found by the scenario run, SCN-18 (F-SCN18-3). The
+    /// checker read "difference 5000000" for five units and "moved 0.089955
+    /// against a tolerance of 0.05" for 9% against 5%, and had to work out
+    /// what each meant before deciding whether to accept it.
+    #[test]
+    fn check_figures_are_in_units_percent_and_dollars() {
+        assert_eq!(unit_words(1_000_005_000_000), "1,000,005 units");
+        assert_eq!(unit_words(-1_250_000), "-1.25 units");
+        assert_eq!(unit_words(0), "0 units");
+        assert_eq!(percent(d("0.089955").get()), "9.00%");
+        assert_eq!(percent(d("-0.00004").get()), "-0.004%");
+        assert_eq!(percent(Dec::ZERO), "0.00%");
+        assert_eq!(dollars(d("1090545").get()), "$1,090,545.00");
+        assert_eq!(dollars(d("-12.5").get()), "-$12.50");
     }
 
     /// Purpose: the first price of a fund passes the comparisons it has
@@ -504,7 +579,7 @@ mod tests {
     /// investors are compensated.
     #[test]
     fn error_size_is_relative_to_the_correct_price() {
-        assert_eq!(show(error_size(&d("2.0200"), &d("2.0000"))), "0.010000");
-        assert_eq!(show(error_size(&d("1.9800"), &d("2.0000"))), "0.010000");
+        assert_eq!(percent(error_size(&d("2.0200"), &d("2.0000"))), "1.00%");
+        assert_eq!(percent(error_size(&d("1.9800"), &d("2.0000"))), "1.00%");
     }
 }

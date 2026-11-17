@@ -566,6 +566,17 @@ impl PricingState {
         self.previous_active(fund, NaiveDate::MAX).map(|p| p.pricing_date)
     }
 
+    /// The next date the fund is priced for: the pricing day after its
+    /// latest price, or its first pricing day. Prices are struck in order,
+    /// so this is the only date a price can be prepared for.
+    pub fn next_to_price(&self, fund: &FundId) -> Option<NaiveDate> {
+        let def = self.definition_of(fund)?;
+        match self.latest_active_date(fund) {
+            Some(last) => def.following_pricing_day(last).ok(),
+            None => def.next_pricing_day(*self.fund_activated.get(fund)?).ok(),
+        }
+    }
+
     /// The core's units on issue at `date`'s cut-off: every partition's
     /// position once the orders of the previous active price have executed.
     fn core_units_for(&self, fund: &FundId, date: NaiveDate) -> Option<i64> {
@@ -760,9 +771,16 @@ impl PricingState {
                     return Err(refuse("stale", "the previous price has been corrected since; prepare the price again"));
                 }
                 if let Some(err) = self.errors.values().find(|x| x.open() && x.fund == p.fund && !x.corrected()) {
+                    let waiting: Vec<&str> = err.prices.iter().filter(|(_, c)| c.is_none()).map(|(wrong, _)| wrong.as_str()).collect();
                     return Err(refuse(
                         "held_by_error",
-                        format!("{} is held by price error {} until it is corrected", p.fund.0, err.id),
+                        format!(
+                            "{} is held by the price error raised on {} against {}; prepare and approve the correction of {} first, then this price",
+                            p.fund.0,
+                            err.detected_on,
+                            waiting.join(", "),
+                            if waiting.len() == 1 { "that price" } else { "each of them" }
+                        ),
                     ));
                 }
                 // Every pricing day since the last price has one, or was suspended.
