@@ -63,10 +63,11 @@ test({ id: "E2E-325", area: A, persona: "P17", story: "US-P05-1", title: "A poli
   why: "This is the first thing a customer checks. The cover must be what they bought and the amount due must be the premium, worked out a second way, to the cent." }, async (t) => {
   const { p, s } = await insured(t);
   await s.sees(`Policy ${p.number}`, "#detail-title");
+  // Each cover is named in words, on the life it insures: here the customer's own, "You".
   const covers = Object.fromEntries((await s.rows("#covers")).map((r) => [r[0], r]));
-  for (const [cover, sum] of [["life", 500_000_00], ["trauma", 100_000_00]]) {
+  for (const [cover, sum] of [["Life", 500_000_00], ["Trauma", 100_000_00]]) {
     const row = covers[cover];
-    if (!row || plain(row[2]) !== oracle.money(sum) || row[4] !== "yes") throw new Error(`the ${cover} cover reads ${JSON.stringify(row)}; expected ${oracle.money(sum)} and in force`);
+    if (!row || row[1] !== "You" || plain(row[2]) !== oracle.money(sum) || row[4] !== "yes") throw new Error(`the ${cover} cover reads ${JSON.stringify(row)}; expected ${oracle.money(sum)} on your life and in force`);
   }
   const premium = oracle.premium(p.application);
   const bill = plain(await s.$("#bills").innerText());
@@ -151,9 +152,11 @@ test({ id: "E2E-331", area: A, persona: "P17", story: "US-D01-3", title: "A chan
   const s = await t.open("/customer", who);
   await enrolBrowser(t, s, who);
   await s.tab("To approve");
-  await s.sees("decline indexation", "#waiting");
+  // The change is said in words, with who prepared it and their note.
+  await s.sees("Decline this year's indexation increase", "#waiting");
+  await s.sees('Prepared by your adviser: "asked for by phone"', "#waiting");
   await s.click(`#approve-${id}`);
-  await s.done("#wait-msg", "Approved: decline indexation.");
+  await s.done("#wait-msg", "Approved: Decline this year's indexation increase. It shows under Your requests as it is carried out.");
   await s.sees("Nothing is waiting for you.", "#waiting");
   const state = await stateOf(t, who, id);
   if (!state || state.status === "awaiting_approval") throw new Error(`after approval the request is ${JSON.stringify(state)}`);
@@ -165,10 +168,10 @@ test({ id: "E2E-332", area: A, persona: "P17", story: "US-D01-3", title: "A cust
   const { who, p } = await insured(t);
   const id = await prepared(t, who, p, "cancel_policy");
   const s = await toApprove(t, who);
-  await s.sees("cancel policy", "#waiting");
+  await s.sees("Cancel the policy", "#waiting");
   await s.click(`#decline-${id}`);
   await s.page.click("dialog[open] button.danger");
-  await s.done("#wait-msg", "Declined: cancel policy.");
+  await s.done("#wait-msg", "Declined: Cancel the policy.");
   await s.sees("Nothing is waiting for you.", "#waiting");
   const state = await stateOf(t, who, id);
   if (state && state.status === "awaiting_approval") throw new Error("the declined change is still waiting");

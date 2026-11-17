@@ -37,6 +37,7 @@ and a failing journey is a finding about the product to be read by a person.
 | `lib/cast.js` | Who signs in: each persona, what they are and the roles the insurer gave them. |
 | `lib/suite.js` | The harness: a `Journey` (the set-up a test starts from) and a `Screen` (one signed-in browser page). |
 | `lib/oracle.js` | The independent calculator (see below). |
+| `lib/payments.js` | The payments register as the payments team keeps it: a payee entered, confirmed by a second maintainer and screened. Claims pick their payees from it. |
 | `lib/group.js` | A group scheme set up as the insurer sets one up, and a membership file taken through its steps. |
 | `tests/NN-area.js` | The tests. Each carries its persona, user story, the matrix rows it bears on, its purpose and why it is worth having. |
 | `seed/` | Two small Rust tools: `ic-e2e-config` turns the shipped Starlark configuration into JSON for the seed (with an application template for each retail product, the AIA range included, and each product's version and cover types), and `ic-e2e-close` closes a business day. |

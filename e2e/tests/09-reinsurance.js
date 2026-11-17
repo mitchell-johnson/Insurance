@@ -10,9 +10,11 @@ const { cast } = require("../lib/cast");
 
 const A = "Reinsurance";
 const BASE = "/staff/v1/reinsurance/";
-/// An abandonment a member of reinsurance operations has prepared and nobody has yet signed.
-async function prepared(t, reason) {
-  const r = await t.does(cast.ri1, "POST", BASE + "commands", { abandon_notice: { seq: 1, reason } }, "prepares an abandonment");
+/// An abandonment a member of reinsurance operations has prepared and nobody has yet signed. The same command can wait
+/// for a second person only once (a second identical one is refused, naming the first), so each journey abandons a
+/// notice `seq` of its own: the journeys run side by side.
+async function prepared(t, reason, seq) {
+  const r = await t.does(cast.ri1, "POST", BASE + "commands", { abandon_notice: { seq, reason } }, "prepares an abandonment");
   if (!r.prepared) throw new Error(`the abandonment was not held for a second person: ${JSON.stringify(r)}`);
   return r.prepared;
 }
@@ -54,21 +56,21 @@ test({ id: "E2E-256", area: A, persona: "ST5", story: "US-R01-1", title: "Staff 
 test({ id: "E2E-257", area: A, persona: "Reinsurance", story: "US-R01-1", title: "An abandonment is held for a second person, and its preparer can only withdraw it", matrix: ["RI-014"],
   purpose: "Prepare the abandonment of a notice, read Waiting for a second person as its preparer, and withdraw it.",
   why: "Abandoning a notice means claims never hears of it; one person must not be able to do that alone, and must be able to take it back." }, async (t) => {
-  const id = await prepared(t, t.ref("abandon"));
+  const id = await prepared(t, t.ref("abandon"), 2);
   const s = await t.open("/reinsurance", cast.ri1);
   await s.sees(id, "#pending");
   const buttons = await s.row("#pending", id).getByRole("button").allInnerTexts();
   if (buttons.join() !== "Withdraw") throw new Error(`the preparer is offered ${JSON.stringify(buttons)}`);
   await s.stale();
   await s.row("#pending", id).getByRole("button", { name: "Withdraw" }).click();
-  await s.done("#p-msg", "Withdrawn.");
+  await s.done("#p-msg", `Withdrawn: ${id} was never sent, and nobody needs to sign it.`);
   await s.never(id, "#pending");
 });
 
 test({ id: "E2E-258", area: A, persona: "Reinsurance", story: "US-R01-1", title: "The preparer cannot sign their own abandonment", matrix: ["RI-014"],
   purpose: "As the preparer, send the signature for their own prepared abandonment.",
   why: "The second signature is the control; it is worthless if the first person can supply it." }, async (t) => {
-  const id = await prepared(t, t.ref("abandon"));
+  const id = await prepared(t, t.ref("abandon"), 3);
   const r = await t.sys.portal("POST", BASE + "sign/" + encodeURIComponent(id), cast.ri1);
   if (r.status !== 409 || !String(r.data.detail).includes("someone else signs what you prepared")) throw new Error(`the signature answered ${r.status} ${JSON.stringify(r.data)}`);
   await withdraw(t, id);
@@ -77,7 +79,7 @@ test({ id: "E2E-258", area: A, persona: "Reinsurance", story: "US-R01-1", title:
 test({ id: "E2E-259", area: A, persona: "Auditor", story: "US-R01-1", title: "Someone without the approval role cannot sign an abandonment", matrix: ["RI-014"],
   purpose: "As the auditor, send the signature for an abandonment someone else prepared.",
   why: "A second person is not enough; it must be a person the insurer has authorised to sign." }, async (t) => {
-  const id = await prepared(t, t.ref("abandon"));
+  const id = await prepared(t, t.ref("abandon"), 4);
   const r = await t.sys.portal("POST", BASE + "sign/" + encodeURIComponent(id), cast.auditor);
   if (r.status !== 403 || !String(r.data.detail).includes("reinsurance.approve")) throw new Error(`the signature answered ${r.status} ${JSON.stringify(r.data)}`);
   await withdraw(t, id);
@@ -86,7 +88,7 @@ test({ id: "E2E-259", area: A, persona: "Auditor", story: "US-R01-1", title: "So
 test({ id: "E2E-260", area: A, persona: "Reinsurance", story: "US-R01-1", title: "The lead signs a prepared abandonment and the module still checks it can be done", matrix: ["RI-014"],
   purpose: "As the lead, press Sign and send on an abandonment of a notice that was never refused.",
   why: "Two signatures authorise a command; they do not make a wrong one right. A notice that was never refused cannot be abandoned." }, async (t) => {
-  const id = await prepared(t, t.ref("abandon"));
+  const id = await prepared(t, t.ref("abandon"), 1);
   const s = await t.open("/reinsurance", cast.ri2);
   await s.sees(id, "#pending");
   await s.stale();

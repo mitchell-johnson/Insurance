@@ -7,32 +7,14 @@
 // statement read) the test reports it to the payments module exactly as that
 // service would; every decision a person makes goes through the screen.
 "use strict";
-const { test } = require("../lib/suite");
+const { test, nz } = require("../lib/suite");
 const { cast } = require("../lib/cast");
 
 const A = "Payments";
-const COMMANDS = "/staff/v1/payments/commands";
+const { COMMANDS, reports, sends, payee } = require("../lib/payments");
+const claims = require("./03-claims");
 const tomorrow = (t) => require("../lib/suite").Journey.before(t.stack.opening, -1);
 
-/// What a service reports to the payments module (the bank driver, screening, the customer master).
-async function reports(t, command, roles = ["service"]) {
-  const r = await t.sys.tell("payments", { key: t.ref("svc"), actor: { id: "bank-driver", roles }, at: `${t.stack.opening}T10:00:00`, command });
-  const inner = r.result && r.result.Ok;
-  if (!inner || inner.Err) throw new Error(`payments refused ${command.type}: ${JSON.stringify(r).slice(0, 300)}`);
-  return inner.Ok;
-}
-const sends = (t, who, command) => t.does(who, "POST", COMMANDS, command, command.type);
-
-/// An account that may be paid: entered by one maintainer, confirmed by another, screened clear.
-async function payee(t, { kind = "customer", confirm = true, screen = true, name_check = "match" } = {}) {
-  const id = t.ref("pay").toLowerCase(), party = t.ref("cust").toLowerCase();
-  // Each payee has its own account number: the duplicate check looks at the account and the amount, across runs.
-  const number = `01-0001-${String(Date.now() % 10_000_000).padStart(7, "0")}-${String(Math.floor(Math.random() * 100)).padStart(2, "0")}`;
-  await sends(t, cast.payee, { type: "register_payee", payee: id, party, kind, account: { name: "Account Holder", number }, name_check });
-  if (confirm) await sends(t, cast.payee2, { type: "confirm_payee", payee: id });
-  if (confirm && screen) await reports(t, { type: "screen_payee", payee: id, clear: true });
-  return { id, party, number };
-}
 const item = (t, to, amount_minor) => ({ item: t.ref("it").toLowerCase(), source: `invoice:${t.ref("src")}`, counterparty: { payee: to }, amount_minor });
 
 /// A run the maker has prepared, filled and (unless told otherwise) checked.
@@ -171,7 +153,7 @@ test({ id: "E2E-174", area: A, persona: "ST10", story: "US-ST10-1", title: "The 
   await s.sees(": checked. Prepared by st10.", "#run");
   await s.sees("pending", "#run");
   const sums = await totals(s);
-  if (sums.Unsent !== "1234.56" || sums.Settled !== "0.00") throw new Error(`the control totals read ${JSON.stringify(sums)}`);
+  if (sums.Unsent !== nz(1234_56) || sums.Settled !== nz(0)) throw new Error(`the control totals read ${JSON.stringify(sums)}`);
 });
 
 test({ id: "E2E-175", area: A, persona: "ST17", story: "US-ST17-1", title: "The maker is offered no Approve and the approver no Check", matrix: ["STF-007"],
@@ -207,17 +189,18 @@ test({ id: "E2E-177", area: A, persona: "ST17", story: "US-ST17-1", title: "A se
   await s.done("#run-msg", "Done: approve run.");
   await s.sees(": approved. Prepared by st10; approved by st17.", "#run");
   const sums = await totals(s);
-  if (sums.Unsent !== "0.00" || sums["At the bank"] !== "2500.00") throw new Error(`the control totals read ${JSON.stringify(sums)}`);
+  if (sums.Unsent !== nz(0) || sums["At the bank"] !== nz(2500_00)) throw new Error(`the control totals read ${JSON.stringify(sums)}`);
 });
 
 test({ id: "E2E-178", area: A, persona: "ST17", story: "US-ST17-1", title: "A run cannot be approved before its maker has checked it", matrix: ["PAY-001"],
-  purpose: "As the approver, press Approve on a run that is only prepared.",
+  purpose: "As the approver, open a run that is only prepared: no Approve is offered, and an approval sent by hand is refused.",
   why: "An approver signs what the maker has stated is complete; an unchecked run may still be changing." }, async (t) => {
   const to = await payee(t);
   const id = await run(t, [item(t, to.id, 70_00)], { check: false });
   const s = await opened(t, cast.st17, id);
-  await s.press("Approve", "#run-actions");
-  await s.stopped("#run-msg", "a run is approved after it has been checked", 409);
+  await s.never("Approve", "#run-actions");
+  await another(s, { type: "approve_run", run: id });
+  await s.stopped("#raw-msg", "the run has changed since it was checked, or was never checked: the maker checks it first", 409);
 });
 
 test({ id: "E2E-179", area: A, persona: "ST17", story: "US-ST17-1", title: "An approver who also maintains payees is refused the approval", matrix: ["STF-007"],
@@ -239,8 +222,10 @@ test({ id: "E2E-180", area: A, persona: "ST17", story: "US-ST17-1", title: "An e
   await first.press("Approve", "#run-actions");
   await first.done("#run-msg", "Done: approve run.");
   await first.sees(": checked.", "#run");
-  await first.press("Approve", "#run-actions");
-  await first.stopped("#run-msg", "each approval comes from a different person", 409);
+  // The first approver is offered no second press, and one sent by hand is refused.
+  await first.never("Approve", "#run-actions");
+  await another(first, { type: "approve_run", run: id });
+  await first.stopped("#raw-msg", "each approval comes from a different person", 409);
   const second = await opened(t, cast.st17b, id);
   await second.press("Approve", "#run-actions");
   await second.done("#run-msg", "Done: approve run.");
@@ -261,13 +246,14 @@ test({ id: "E2E-181", area: A, persona: "ST10", story: "US-ST10-1", title: "The 
 });
 
 test({ id: "E2E-182", area: A, persona: "ST10", story: "US-ST10-1", title: "A run cannot be closed before it has been approved and paid", matrix: ["PAY-001"],
-  purpose: "Press Close on a run that is only checked.",
+  purpose: "Open a run that is only checked: no Close is offered, and a close sent by hand is refused.",
   why: "Closing says the bank has done its part; a run closed early would hide money that never left." }, async (t) => {
   const to = await payee(t);
   const id = await run(t, [item(t, to.id, 95_00)]);
   const s = await opened(t, cast.st10, id);
-  await s.press("Close", "#run-actions");
-  await s.stopped("#run-msg", "a run closes after it has been approved and paid", 409);
+  await s.never("Close", "#run-actions");
+  await another(s, { type: "close_run", run: id });
+  await s.stopped("#raw-msg", "a run closes after it has been approved and paid", 409);
 });
 
 test({ id: "E2E-183", area: A, persona: "ST10", story: "US-ST10-1", title: "Once the bank settles a run its totals say so and the maker closes it", matrix: ["PAY-001"],
@@ -279,7 +265,7 @@ test({ id: "E2E-183", area: A, persona: "ST10", story: "US-ST10-1", title: "Once
   await settled(t, id);
   const s = await opened(t, cast.st10, id);
   const sums = await totals(s);
-  if (sums.Settled !== "3100.00" || sums.Unsent !== "0.00" || sums["At the bank"] !== "0.00" || sums.Rejected !== "0.00") throw new Error(`the control totals read ${JSON.stringify(sums)}`);
+  if (sums.Settled !== nz(3100_00) || sums.Unsent !== nz(0) || sums["At the bank"] !== nz(0) || sums.Rejected !== nz(0)) throw new Error(`the control totals read ${JSON.stringify(sums)}`);
   await s.sees("settled", "#run");
   await s.press("Close", "#run-actions");
   await s.done("#run-msg", "Done: close run.");
@@ -296,7 +282,7 @@ test({ id: "E2E-184", area: A, persona: "ST10", story: "US-ST10-1", title: "An i
   await settled(t, id, { rejected: { [bad.item]: "account closed" } });
   const s = await opened(t, cast.st10, id);
   const sums = await totals(s);
-  if (sums.Settled !== "410.00" || sums.Rejected !== "620.00") throw new Error(`the control totals read ${JSON.stringify(sums)}`);
+  if (sums.Settled !== nz(410_00) || sums.Rejected !== nz(620_00)) throw new Error(`the control totals read ${JSON.stringify(sums)}`);
   const cells = await s.row("#run", bad.item).locator("td").allInnerTexts();
   if (!cells.join(" ").includes("rejected")) throw new Error(`the rejected item reads ${JSON.stringify(cells)}`);
 });
@@ -312,7 +298,7 @@ test({ id: "E2E-185", area: A, persona: "ST10", story: "US-ST10-1", title: "A pa
   await reports(t, { type: "record_return", item: one.item, reason: "account_closed", returned_on: tomorrow(t) });
   const s = await opened(t, cast.st10, id);
   const sums = await totals(s);
-  if (sums.Returned !== "730.00") throw new Error(`the control totals read ${JSON.stringify(sums)}`);
+  if (sums.Returned !== nz(730_00)) throw new Error(`the control totals read ${JSON.stringify(sums)}`);
   await s.sees("returned", "#run");
 });
 
@@ -341,11 +327,13 @@ test({ id: "E2E-187", area: A, persona: "ST10", story: "US-ST17-1", title: "An i
   purpose: "Check a run that pays an account entered by one person and confirmed by no one, then try to approve it.",
   why: "An unconfirmed account is the commonest payment fraud; the run must hold the item and refuse approval while it is held." }, async (t) => {
   const to = await payee(t, { confirm: false });
-  const id = await run(t, [item(t, to.id, 100_00)]);
+  const one = item(t, to.id, 100_00);
+  const id = await run(t, [one]);
   const s = await opened(t, cast.st17, id);
-  await s.sees("held: payee not confirmed", "#run");
+  await s.sees("held: payee not confirmed: a second payee maintainer confirms it", "#run");
   await s.press("Approve", "#run-actions");
-  await s.stopped("#run-msg", "held items are released or removed before approval", 409);
+  // The refusal names each held item, its payee and amount, and who clears the hold.
+  await s.stopped("#run-msg", `held items are released or taken out before approval. ${one.item} to payee ${to.id}, $100.00: payee not confirmed (a second payee maintainer confirms the payee, then the maker checks the run again)`, 409);
 });
 
 test({ id: "E2E-188", area: A, persona: "ST10", story: "US-ST17-1", title: "An item to an account not yet screened is held", matrix: ["ADV-037"],
@@ -358,17 +346,16 @@ test({ id: "E2E-188", area: A, persona: "ST10", story: "US-ST17-1", title: "An i
 });
 
 test({ id: "E2E-189", area: A, persona: "ST17", story: "US-ST17-1", title: "The same payee and amount twice is held as a possible duplicate until the approver releases it", matrix: ["PAY-006"],
-  purpose: "Check a run with two items of the same amount to the same payee; as the approver, release both and approve.",
+  purpose: "Check a run with two items of the same amount to the same payee; as the approver, release both from their rows and approve.",
   why: "Paying twice is easier than getting the money back; the duplicate check must stop the run until a second person has looked." }, async (t) => {
   const to = await payee(t);
   const [one, two] = [item(t, to.id, 777_00), item(t, to.id, 777_00)];
   const id = await run(t, [one, two]);
   const s = await opened(t, cast.st17, id);
-  await s.sees("held: possible duplicate", "#run");
+  await s.sees("held: a possible duplicate: an approver who did not prepare the run releases it, or the maker takes it out", "#run");
   await s.press("Approve", "#run-actions");
-  await s.stopped("#run-msg", "held items are released or removed before approval", 409);
-  for (const it of [one, two]) { await another(s, { type: "release_item", run: id, item: it.item }); await s.done("#raw-msg", "Done."); }
-  await s.tab("Runs");
+  await s.stopped("#run-msg", "held items are released or taken out before approval", 409);
+  for (const it of [one, two]) { await s.press("Release the hold", s.row("#run", it.item)); await s.done("#run-msg", `Released the hold on ${it.item}.`); }
   await s.press("Approve", "#run-actions");
   await s.done("#run-msg", "Done: approve run.");
   await s.sees(": approved.", "#run");
@@ -391,7 +378,7 @@ test({ id: "E2E-191", area: A, persona: "ST10", story: "US-ST10-1", title: "An i
   const to = await payee(t);
   const id = await run(t, [item(t, to.id, 150_000_00)]);
   const s = await opened(t, cast.st10, id);
-  await s.sees("held: over item limit", "#run");
+  await s.sees("held: over the route's limit for one item: treasury releases it once funded", "#run");
 });
 
 test({ id: "E2E-192", area: A, persona: "ST10", story: "US-ST10-1", title: "The maker removes a held item and the rest of the run can be approved", matrix: ["PAY-007"],
@@ -412,19 +399,22 @@ test({ id: "E2E-192", area: A, persona: "ST10", story: "US-ST10-1", title: "The 
   await approver.done("#run-msg", "Done: approve run.");
 });
 
-test({ id: "E2E-193", area: A, persona: "ST10", story: "US-ST10-1", title: "A claim payment waiting with no bank account for its payee cannot be taken into a run", matrix: ["PAY-001"],
-  purpose: "Tick a payment that claims has released for a provider payments has no account for, and take it into a run.",
-  why: "Claims decides who is paid; payments decides which account. A payment must not enter a run until the account exists and has passed its checks." }, async (t) => {
-  const waiting = await t.does(cast.st10, "GET", "/staff/v1/payments/waiting");
-  const one = Object.values(waiting).find((w) => String(w.source).startsWith("claim:"));
-  if (!one) { t.note("no claim payment is waiting on this stack; run the claims area first"); throw new Error("no claim payment is waiting: the claims journeys that pay a provider have not run on this stack"); }
-  const id = await run(t, [], { type: "provider_payments", check: false });
-  const s = await t.open("/payments", cast.st10);
-  await s.sees(one.source, "#waiting");
-  await s.row("#waiting", one.source).locator('input[name="take"]').check();
-  await s.fill("#t-run", id);
-  await s.press("Take the ticked payments", "#take");
-  await s.stopped("#w-msg", "there is no payee for", 409);
+// Since 17 November 2026 claims pick the payee from the payments register (F-11-1), so a claim payment can no longer
+// reach payments for an account payments does not hold: the control has moved to the moment claims names the payee.
+test({ id: "E2E-193", area: A, persona: "ST4", story: "US-ST10-1", title: "A claim is paid only to an account the payments register holds, confirmed by a second person", matrix: ["PAY-001"],
+  purpose: "On an admitted claim, name as payee an account payments has never registered, then one entered by a maintainer and not yet confirmed.",
+  why: "Claims decides who is paid; payments decides which account. A claim must not be paid until the account exists and has passed its checks." }, async (t) => {
+  const c = await claims.admitted(t);
+  const unconfirmed = await payee(t, { confirm: false, party: "cust-p18", name: `cust-p18 ${t.ref("acct")}` });
+  const s = await t.open("/claims", cast.st4);
+  await s.tab("Claim");
+  await s.fill("#c-id", c.claim); await s.press("Show", "#lookup"); await s.sees(c.claim, "#c-title");
+  const never = t.ref("pay").toLowerCase();
+  await s.act("#act", "verify_payee", { "Claim": c.claim, "Payee (from the payments register)": never, "Paid as": "policyholder" }, { purpose: "payment" });
+  await s.stopped("#act-msg", `there is no payee ${never} in payments: ask a payee maintainer there to register it, and a second to confirm it`, 409);
+  await s.act("#act", "verify_payee", { "Claim": c.claim, "Payee (from the payments register)": { pick: unconfirmed.name }, "Paid as": "policyholder" }, { purpose: "payment" });
+  await s.stopped("#act-msg", `payee ${unconfirmed.id} has not been confirmed by a second payee maintainer, so a claim cannot be paid to it yet`, 409);
+  await s.sees("No payee verified.", "#c-money");
 });
 
 // --- Accounts that may be paid -----------------------------------------------------------------------------------
@@ -476,7 +466,7 @@ test({ id: "E2E-197", area: A, persona: "ST10", story: "US-ST10-1", title: "A pa
   await s.press("Show", "#party-form");
   await s.sees("No hold of their own is recorded.", "#party");
   const cells = await s.row("#party", to.id).locator("td").allInnerTexts();
-  if (!cells.includes("payee not confirmed")) throw new Error(`the payee row reads ${JSON.stringify(cells)}`);
+  if (!cells.includes("payee not confirmed: a second payee maintainer confirms it")) throw new Error(`the payee row reads ${JSON.stringify(cells)}`);
   await s.never(to.number, "#party");
 });
 
@@ -492,7 +482,7 @@ test({ id: "E2E-198", area: A, persona: "Payments", story: "US-D01-1", title: "C
   await s.press("Show", "#party-form");
   await s.sees(to.id, "#party");
   const cells = await s.row("#party", to.id).locator("td").allInnerTexts();
-  if (!cells.includes("payee not confirmed") || !/^\d{4}-\d{2}-\d{2}/.test(cells[3] || "")) throw new Error(`after the change the payee row reads ${JSON.stringify(cells)}`);
+  if (!cells.includes("payee not confirmed: a second payee maintainer confirms it") || !/^\d{4}-\d{2}-\d{2}/.test(cells[3] || "")) throw new Error(`after the change the payee row reads ${JSON.stringify(cells)}`);
 });
 
 test({ id: "E2E-199", area: A, persona: "Legal", story: "US-ST17-1", title: "An estate's account is held until legal approves it", matrix: ["CLM-038"],
@@ -501,7 +491,7 @@ test({ id: "E2E-199", area: A, persona: "Legal", story: "US-ST17-1", title: "An 
   const to = await payee(t, { kind: "estate" });
   const id = await run(t, [item(t, to.id, 900_00)]);
   const maker = await opened(t, cast.st10, id);
-  await maker.sees("held: payee needs legal approval", "#run");
+  await maker.sees("held: payee needs legal's approval", "#run");
   const s = await t.open("/payments", cast.legal);
   await s.tab("Payees and refunds");
   await s.fill("#payee-id", to.id);
@@ -583,7 +573,7 @@ test({ id: "E2E-204", area: A, persona: "ST10", story: "US-ST10-1", title: "A cr
   const row = s.row("#exceptions", m.exception);
   await row.waitFor({ timeout: 10000 });
   const cells = await row.locator("td").allInnerTexts();
-  if (!cells.includes("unexplained credit") || !cells.includes("123.45") || !cells.includes(m.reference)) throw new Error(`the exception row reads ${JSON.stringify(cells)}`);
+  if (!cells.includes("unexplained credit") || !cells.includes(nz(123_45)) || !cells.includes(m.reference)) throw new Error(`the exception row reads ${JSON.stringify(cells)}`);
 });
 
 test({ id: "E2E-205", area: A, persona: "Payments", story: "US-ST10-1", title: "The reconciler sees an account's open exceptions with Take and Resolve beside each", matrix: ["PAY-009"],

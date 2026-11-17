@@ -20,11 +20,14 @@ async function byReference(s, id) {
   await s.fill("#second-id", id);
   await s.press("Agree it", "#second");
 }
-/// Agree a change from the queue of changes waiting for a second person.
-async function fromQueue(s, id) {
+/// Agree a change from the queue of changes waiting for a second person. The queue says each change in words, on
+/// the policy's number, and why it needs a second person; the row must read `change` and `because`.
+async function fromQueue(s, number, change, because) {
   await s.tab("Second approvals");
-  await s.sees(id, "#waiting");
-  await s.row("#waiting", id).getByRole("button", { name: "Agree", exact: true }).click();
+  await s.sees(number, "#waiting");
+  const row = (await s.rows("#waiting")).find((r) => r[1] === number);
+  if (row[2] !== change || row[5] !== because) throw new Error(`the waiting change reads ${JSON.stringify(row)}, expected "${change}" needing a second person because "${because}"`);
+  await s.row("#waiting", number).getByRole("button", { name: "Agree", exact: true }).click();
 }
 const request = (t, who, policy, id, kind, payload) => t.does(who, "POST", "/staff/v1/requests", { id, policy, kind, module: "policy-servicing", payload, reason: "customer rang", case: "CASE-1" }, "enters a change");
 /// A customer whose paid health claim can have an overpayment raised on it.
@@ -32,7 +35,9 @@ async function paid(t) {
   const party = `cust-${t.ref("hb").toLowerCase()}`;
   const c = await claims.notified(t, { ...claims.HEALTH, party });
   for (const command of [{ assign: { claim: c.claim, to: "st3" } }, { record_cause: { claim: c.claim, cause_code: "CC-0204" } }, { cover_check: { claim: c.claim, relied_on: ["in_force"] } },
-    { decide: { claim: c.claim, request: { admit: { amount_minor: null } }, reasons: ["R-OK"] } }, { verify_payee: { claim: c.claim, party: "prov-pr1", kind: "provider", account_ref: "a", name_check_ref: "n", screening_ref: "s", authority_doc: null } }]) await claims.tells(t, cast.st3, command);
+    { decide: { claim: c.claim, request: { admit: { amount_minor: null } }, reasons: ["R-OK"] } }]) await claims.tells(t, cast.st3, command);
+  // The provider is paid through an account the payments register holds.
+  await claims.verified(t, cast.st3, c.claim, "prov-pr1", "provider", "provider");
   const payable = (await claims.work(t, c.claim, cast.st3)).payable_minor;
   await claims.tells(t, cast.st3, { pay: { claim: c.claim, payment_ref: "p1", amount_minor: payable } });
   return { party, claim: c.claim };
@@ -202,7 +207,7 @@ test({ id: "E2E-124", area: A, persona: "ST5", story: "US-ST17-1", title: "A tea
   const id = t.ref("REQ");
   await request(t, cast.st5b, p.id, id, "cancel_policy", { note: "cancel and refund", amount_minor: 600_00 });
   const s = await t.open("/staff", cast.st5l);
-  await fromQueue(s, id);
+  await fromQueue(s, p.number, "Cancel the policy, cancel and refund, NZ$600.00", "above their limit");
   await s.done("#second-msg", "Agreed. It now waits for the customer's approval in their app.");
   await s.page.click("details:has(#second) > summary");
   await s.fill("#second-id", id);
@@ -243,8 +248,8 @@ test({ id: "E2E-127", area: A, persona: "ST5", story: "US-ST05-1", title: "A bac
   await s.press("Send to customer's app", "#for-customer");
   const id = (await s.done("#cust-msg", "recorded")).match(/Request ([0-9a-f-]{36})/)[1];
   const lead = await t.open("/staff", cast.st5l);
-  await fromQueue(lead, id);
-  await lead.done("#second-msg", "Agreed.");
+  await fromQueue(lead, p.number, "Decline this year's indexation increase, from 2027-11-02", "dated in the past");
+  await lead.done("#second-msg", "Agreed. It now waits for the customer's approval in their app.");
 });
 
 test({ id: "E2E-128", area: A, persona: "ST3", story: "US-ST03-1", title: "A claims assessor cannot enter servicing changes for a customer",
@@ -435,7 +440,8 @@ test({ id: "E2E-141", area: A, persona: "ST10", story: "US-ST10-1", title: "A wr
   const s = await bench(t, cast.st10, party);
   await s.pick("#act", "write_off"); await s.fill("#amt", "500.00"); await s.fill("#reason", "SMALL"); await s.fill("#doc", "doc-wo-1");
   await s.press("Prepare", "#prepare");
-  await s.stopped("#bench-msg", "the amount is more than the held balance not already committed to another action", 422);
+  // The refusal says the amount asked for, what is held and committed, and so the most that can be acted on.
+  await s.stopped("#bench-msg", `the amount, $500.00 NZD, is more than the held balance not already committed to another action: ${party} has $0.00 held, $0.00 of it committed to other actions, so at most $0.00 can be acted on`, 422);
   if ((await s.rows("#pos-actions")).some((r) => r[1] === "write off")) throw new Error("a write-off is listed");
 });
 

@@ -154,9 +154,10 @@ test({ id: "E2E-215", area: A, persona: "ST8", story: "US-ST08-1", title: "The m
   await s.pick("#pfund", "cash");
   await s.fill("#pdate", v.date);
   await s.press("Prepare", "#prepare");
-  const said = await s.done("#prepare-msg", ": prepared. Someone else approves it.");
-  const price = said.match(/Prepared (\S+):/)[1];
-  if (!price.startsWith(`cash:${v.date}.`)) throw new Error(`the price prepared is ${price}`);
+  // The confirmation names the price it prepared.
+  const said = await s.done("#prepare-msg", `Prepared cash:${v.date}.`);
+  const price = (said.match(/^Prepared (\S+)\. Someone else approves it\.$/) || [])[1];
+  if (!price || !/^\d+$/.test(price.slice(`cash:${v.date}.`.length))) throw new Error(`the screen said "${said}"`);
   await s.tab("Work waiting");
   await s.sees(price, "#work");
   const cells = await s.row("#work", price).locator("td").allInnerTexts();
@@ -331,15 +332,19 @@ test({ id: "E2E-225", area: A, persona: "ST9", story: "US-P21-1", title: "The le
 });
 
 test({ id: "E2E-226", area: A, persona: "ST9", story: "US-P21-1", title: "No new date of a fund can be approved while a price error is uncorrected", matrix: ["INV-010"], ...balanced,
-  purpose: "With an error open on yesterday's price, prepare the next date and try to approve it; then correct the wrong price and try again.",
+  purpose: "With an error open on yesterday's price, prepare the next date: it is shown held by the error with no Approve, and an approval sent anyway is refused; then correct the wrong price and approve it.",
   why: "Pricing on from a wrong price compounds the error into every later trade; the fund must stop until the correction is in." }, async (t) => {
   const wrong = await priced(t, "balanced");
   await sends(t, cast.st9l, { raise_price_error: { error: t.ref("err").toLowerCase(), prices: [wrong.price], cause: "wrong accrual", detected_on: wrong.date } });
   const v = await valued(t, "balanced");
   const price = await prepared(t, v);
   const s = await t.open("/pricing", cast.st9);
-  await inRow(s, "#work", price, "Approve");
-  await s.stopped("#work-msg", "", 409);
+  await s.sees(price, "#work");
+  await s.sees(`Held by the price error raised on ${wrong.date} against ${wrong.price}: approve its correction first.`, s.row("#work", price));
+  const offered = await buttons(s, "#work", price);
+  if (offered.includes("Approve") || offered.includes("Accept checks and approve")) throw new Error(`a price held by an error offers ${JSON.stringify(offered)}`);
+  const r = await t.sys.portal("POST", COMMANDS, cast.st9, { approve_price: { price, accepted: {} } });
+  if (r.status !== 409 || !String(r.data.detail).startsWith(`balanced is held by the price error raised on ${wrong.date} against ${wrong.price}`)) throw new Error(`an approval sent anyway answered ${r.status} ${JSON.stringify(r.data)}`);
   const fix = await corrected(t, wrong);
   await sends(t, cast.st9, { approve_price: { price: fix, accepted: {} } });
   for (let n = 0; n < 50; n++) { const p = await t.does(cast.st9, "GET", `/staff/v1/unit-pricing/price?id=${encodeURIComponent(fix)}`); if (p.status === "active") break; await s.wait(200); }

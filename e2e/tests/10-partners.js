@@ -38,8 +38,12 @@ async function suspended(t) {
   }
   throw new Error("the adviser's portal never learned of the suspension");
 }
+/// The commission console has finished loading: it draws its forms again once it knows the person's roles, and says
+/// who they are last. A person waits for that before typing.
+const loaded = (s) => s.page.waitForFunction(() => document.querySelector("#me").textContent.trim() !== "");
 /// Ask the commission console a question through its Look up form, filling the fields the question shows.
 async function asks(s, question, fields = {}) {
+  await loaded(s);
   await s.tab("Look up");
   await s.pick("#q", question);
   for (const [key, value] of Object.entries(fields)) await s.fill("#q-" + key, value);
@@ -47,6 +51,7 @@ async function asks(s, question, fields = {}) {
 }
 /// Make a change through the commission console's Change something form.
 async function changes(s, action, fields, purpose) {
+  await loaded(s);
   await s.tab("Change something");
   await s.pick("#a", action);
   for (const [key, value] of Object.entries(fields)) {
@@ -57,6 +62,7 @@ async function changes(s, action, fields, purpose) {
 }
 /// Send the commission console one command in the module's own JSON, for the few with no form.
 async function sends(s, command, purpose) {
+  await loaded(s);
   await s.tab("Another command");
   await s.fill("#cmd", typeof command === "string" ? command : JSON.stringify(command));
   await s.fill("#purpose", purpose);
@@ -142,10 +148,11 @@ test({ id: "E2E-268", area: ADV, persona: "D1", story: "US-D01-3", title: "A cha
   await s.fill("#note", "Asked for by phone on " + t.stack.opening);
   await s.press("Send to customer");
   await s.done("#change-msg", "The customer has been asked to approve it");
-  // The request names the policy by the number the adviser knows it by, and the change in words.
+  // The request names the policy by the number the adviser knows it by, the change in words and where it stands,
+  // and the adviser may still withdraw it.
   await s.sees(p.number, "#requests");
-  const row = await s.row("#requests", p.number).innerText();
-  if (!row.includes("decline indexation") || !row.includes("awaiting approval")) throw new Error(`the request row reads "${row}"`);
+  const cells = await s.row("#requests", p.number).locator("td").allInnerTexts();
+  if (cells[2] !== "Decline this year's indexation increase" || cells[3] !== "Waiting for the customer to approve" || cells[4] !== "Withdraw") throw new Error(`the request row reads ${JSON.stringify(cells)}`);
 });
 
 test({ id: "E2E-269", area: ADV, persona: "D6", story: "US-D06-1", title: "An advice provider sees the advisers engaged with it and the policies they look after", matrix: ["ADV-035"],
@@ -179,7 +186,7 @@ test({ id: "E2E-271", area: ADV, persona: "D1", story: "US-D01-3", title: "Askin
   await s.tab("Commission");
   await s.fill("#st-number", 999);
   await s.press("Show", "#st-form");
-  await s.stopped("#st-msg", "Nothing was found with that reference", 404);
+  await s.stopped("#st-msg", "you have no statement number 999: your statements are numbered from 1, the latest on your Commission tab", 404);
 });
 
 test({ id: "E2E-272", area: ADV, persona: "D9", story: "US-D09-1", title: "When a provider's licence is suspended its adviser's portal becomes read-only and says why", matrix: ["ADV-019"], lock: "licence:d9",
@@ -187,9 +194,9 @@ test({ id: "E2E-272", area: ADV, persona: "D9", story: "US-D09-1", title: "When 
   why: "Decision 4 of the addendum: an adviser whose provider loses its licence may see their book and may not transact. The page must tell them which licence and since when." }, async (t) => {
   await suspended(t);
   const s = await t.open("/adviser", cast.d9a);
-  await s.sees("Your access is read-only.", "#readonly");
+  await s.sees(`Your access is read-only. The licence of ${cast.d9.party} has been suspended since ${t.stack.opening}. You can see your book. Nothing can be quoted, submitted or changed until that licence is restored or you move to another provider.`, "#readonly");
   await s.tab("Engagements");
-  await s.sees(`Read-only since ${t.stack.opening}: licence of ${cast.d9.party} is suspended`, "#engagements");
+  await s.sees(`Read-only since ${t.stack.opening}: the licence of ${cast.d9.party} is suspended`, "#engagements");
 });
 
 test({ id: "E2E-273", area: ADV, persona: "D9", story: "US-D09-1", title: "The suspended provider sees its adviser as read-only, and the suspension opens a conduct case", matrix: ["ADV-019"], lock: "licence:d9",
@@ -303,7 +310,7 @@ test({ id: "E2E-283", area: COM, persona: "Distribution", story: "US-D10-1", tit
   const party = t.ref("adv");
   const s = await t.open("/commission", cast.dist);
   await changes(s, "add_party", { party, kind: "adviser" }, "a new adviser joins");
-  await s.done("#do-msg", "Done.");
+  await s.done("#do-msg", `Done: add an adviser, company or other party for ${party} (kind adviser).`);
   await changes(s, "add_party", { party, kind: "adviser" }, "entered again by mistake");
   await s.stopped("#do-msg", "already in the structure", 409);
 });
@@ -331,7 +338,7 @@ test({ id: "E2E-285", area: COM, persona: "ST13", story: "US-D09-1", title: "Com
   const s = await t.open("/commission", cast.st13);
   await s.sees("st13: compliance", "#me");
   await changes(s, "record_licence", event, "the regulator's notice");
-  await s.done("#do-msg", "Done.");
+  await s.done("#do-msg", `Done: record a licence state for ${party} (state revoked, effective ${t.stack.opening}, source ref FMA-2027-204).`);
   await asks(s, "conduct_cases");
   await s.sees(party, "#answer");
   await s.sees("FMA-2027-204", "#answer");

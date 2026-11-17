@@ -47,6 +47,15 @@ class Screen {
     if (n) throw new Error(`"${text}" is on screen and must not be`);
   }
   async fill(selector, value) { await this.$(selector).fill(String(value)); }
+  /// Pick from a field's list as a person does: type what they know, then press the entry that reads `label`.
+  async choose(selector, text, label = text) {
+    const input = this.$(selector);
+    await input.fill(String(text));
+    const entry = input.locator("xpath=..").locator("ul.picks li").filter({ hasText: label }).first();
+    try { await entry.waitFor({ state: "visible", timeout: 10000 }); }
+    catch { const note = await input.locator("xpath=..").locator(".pick-note").innerText().catch(() => ""); throw new Error(`"${text}" offered no "${label}" to pick${note ? `; the field said "${note}"` : ""}`); }
+    await entry.click();
+  }
   async pick(selector, value) { await this.$(selector).selectOption(value); }
   /// Banners already on screen are old news once the person acts again: `outcome` waits for a new one.
   async stale() { await this.page.evaluate(() => { for (const b of document.querySelectorAll(".banner")) b.dataset.seen = "1"; }); }
@@ -90,7 +99,8 @@ class Screen {
   }
   /// The row of a table that mentions `text`.
   row(selector, text) { return this.$(selector).locator("tbody tr").filter({ hasText: text }).first(); }
-  /// Fill the generic action form the consoles share: pick the action, then each field by its label.
+  /// Fill the generic action form the consoles share: pick the action, then each field by its label
+  /// (a value `{ pick, label }` is picked from the field's list, see `choose`).
   async act(form, action, fields = {}, { purpose } = {}) {
     const f = this.$(form);
     if (purpose !== undefined) await f.locator("#a-purpose").fill(purpose);
@@ -100,6 +110,8 @@ class Screen {
       const id = await f.locator("label").evaluateAll((labels, words) => { const l = labels.find((x) => x.textContent.trim() === words); return l ? l.getAttribute("for") : null; }, label);
       if (!id) throw new Error(`the form for "${action}" has no field labelled "${label}"`);
       const input = f.locator("#" + id);
+      // `{ pick: "what is typed", label: "the entry pressed" }` picks from the field's list as a person does.
+      if (value && typeof value === "object") { await this.choose(input, value.pick, value.label); continue; }
       const tag = await input.evaluate((el) => el.tagName);
       if (tag === "SELECT") await input.selectOption(String(value)); else await input.fill(String(value));
     }
@@ -216,4 +228,9 @@ class Journey {
   }
 }
 
-module.exports = { test, tests, Journey, Screen };
+/// Money as the consoles show it, in the browser's currency format for New Zealand dollars: NZ$1,234.56.
+const nz = (minor) => (minor < 0 ? "-" : "") + "NZ$" + (Math.abs(minor) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/// An amount read off a console, as a person types it back into a form: 1234.56.
+const typed = (shown) => shown.replace(/NZ\$/, "").replace(/,/g, "");
+
+module.exports = { test, tests, Journey, Screen, nz, typed };

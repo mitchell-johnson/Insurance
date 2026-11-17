@@ -4,6 +4,7 @@
 "use strict";
 const { test } = require("../lib/suite");
 const { cast } = require("../lib/cast");
+const { customer } = require("../lib/customer");
 
 const A = "Complaints and conduct";
 // The complaints module dates what happens by the calendar in Auckland, so the tests do too:
@@ -32,16 +33,29 @@ async function upheld(t) {
   await tells(t, cast.st14, "complaints", { decide: { complaint: id, outcome: "upheld", reason_codes: ["R-DELAY"], document: `out-${id}` } });
   return id;
 }
-async function workbench(t, who) { const s = await t.open("/complaints", who); await s.tab("Queue"); return s; }
+/// The workbench, once it has finished signing the person in: it reads their seats and the complaints settings, then in
+/// one step writes the on-the-spot goodwill limit, fills the Act form and opens the complaints team on the Queue. A
+/// person waits for that before choosing a view (a view chosen earlier is left unloaded, or switched back to the Queue).
+async function desk(t, who) {
+  const s = await t.open("/complaints", who);
+  await s.page.waitForFunction(() => document.querySelector("#i-limit").textContent.includes("Goodwill paid on the spot is at most"));
+  return s;
+}
+async function workbench(t, who) { const s = await desk(t, who); await s.tab("Queue"); return s; }
 async function file(s, id) { await s.fill("#o-id", id); await s.press("Open", "#open"); }
 
 test({ id: "E2E-029", area: A, persona: "Frontline", story: "US-ST14-1", title: "Frontline staff record a complaint the moment they hear it", matrix: ["CMP-001"],
-  purpose: "Sign in as frontline staff, fill the intake form for a complaint heard on a call, and record it.",
-  why: "The conduct regime starts its clock when the insurer first hears a complaint; it must be recordable by whoever hears it, in one form, and say it was recorded." }, async (t) => {
-  const s = await t.open("/complaints", cast.front);
+  purpose: "Sign in as frontline staff, fill the intake form for a complaint heard on a call, finding the complainant in the customer master by name, and record it.",
+  why: "The conduct regime starts its clock when the insurer first hears a complaint; it must be recordable by whoever hears it, in one form, about a person the insurer knows, and say it was recorded." }, async (t) => {
+  const who = await customer(t, { phone: false });
+  const s = await desk(t, cast.front);
   await s.sees("intake", "#seats");
   const id = t.ref("CMP");
-  await s.fill("#i-id", id); await s.pick("#i-channel", "call"); await s.fill("#i-who", "cust-p18"); await s.pick("#i-process", "billing"); await s.fill("#i-doc", `doc-${id}`);
+  // A complainant is picked from the customer master; a typed reference nobody picked is refused.
+  await s.fill("#i-id", id); await s.pick("#i-channel", "call"); await s.fill("#i-who", who.party); await s.pick("#i-process", "billing"); await s.fill("#i-doc", `doc-${id}`);
+  await s.press("Record", "#intake");
+  await s.stopped("#intake-msg", "Find the complainant and pick them from the list. Someone the search does not find is added under Customer records first.");
+  await s.choose("#i-who", `${who.given} ${who.family}`);
   await s.press("Record", "#intake");
   await s.done("#intake-msg", `Recorded ${id}. The complaints team will acknowledge it.`);
   // The form is ready for the next complaint: a fresh reference, and nothing of the last one's.
@@ -70,8 +84,9 @@ test({ id: "E2E-031", area: A, persona: "Frontline", story: "US-ST14-1", title: 
   purpose: "Record a complaint, then record another under the same reference.",
   why: "Two complaints under one reference would merge two people's files and one of them would lose their timers." }, async (t) => {
   const id = await heard(t, t.ref("CMP"));
-  const s = await t.open("/complaints", cast.front);
-  await s.fill("#i-id", id); await s.fill("#i-who", "cust-p18"); await s.fill("#i-doc", "doc-other");
+  const who = await customer(t, { phone: false });
+  const s = await desk(t, cast.front);
+  await s.fill("#i-id", id); await s.choose("#i-who", `${who.given} ${who.family}`); await s.fill("#i-doc", "doc-other");
   await s.press("Record", "#intake");
   await s.stopped("#intake-msg", "a complaint with that id is already recorded", 409);
 });
@@ -79,7 +94,7 @@ test({ id: "E2E-031", area: A, persona: "Frontline", story: "US-ST14-1", title: 
 test({ id: "E2E-032", area: A, persona: "Frontline", story: "US-ST14-1", title: "A complaint is not recorded without the complainant's own words",
   purpose: "Try to record a complaint with no summary document.",
   why: "The summary in the complainant's words is what the reviewer and any external scheme judge the handling against." }, async (t) => {
-  const s = await t.open("/complaints", cast.front);
+  const s = await desk(t, cast.front);
   const id = t.ref("CMP");
   await s.fill("#i-id", id); await s.fill("#i-who", "cust-p1");
   await s.press("Record", "#intake");
@@ -93,11 +108,11 @@ test({ id: "E2E-032", area: A, persona: "Frontline", story: "US-ST14-1", title: 
 test({ id: "E2E-033", area: A, persona: "ST14", story: "US-ST14-1", title: "The reviewer sees their seats, authority and training at the top of the workbench",
   purpose: "Sign in as the complaints reviewer and read the standing shown beside the page title.",
   why: "What a handler may decide and whether they may take vulnerable complainants comes from staff records; they must be able to see what the system believes." }, async (t) => {
-  const s = await t.open("/complaints", cast.st14);
-  await s.sees("intake, complaints. Authority level 3, trained to work with vulnerable customers.", "#seats");
-  const junior = await t.open("/complaints", cast.st14j);
+  const s = await desk(t, cast.st14);
+  await s.sees("intake, complaints. Authority level 3. Trained to work with vulnerable customers.", "#seats");
+  const junior = await desk(t, cast.st14j);
   await junior.sees("Authority level 1.", "#seats");
-  await junior.never("trained to work with vulnerable customers", "#seats");
+  await junior.never("Trained to work with vulnerable customers", "#seats");
 });
 
 test({ id: "E2E-034", area: A, persona: "ST14", story: "US-ST14-1", title: "A vulnerable complainant is at the top of the queue with the adjustments they need", matrix: [],
@@ -110,7 +125,7 @@ test({ id: "E2E-034", area: A, persona: "ST14", story: "US-ST14-1", title: "A vu
   const rows = await s.rows("#queue");
   const at = (id) => rows.findIndex((r) => r[0] === id);
   const row = rows[at(frail)];
-  if (row[1] !== "unassigned" || row[3] !== "large_print, call_after_10am" || row[4] !== "yes") throw new Error(`the vulnerable complaint's row reads ${JSON.stringify(row)}`);
+  if (row[1] !== "unassigned" || row[3] !== "large print, call after 10am" || row[4] !== "yes") throw new Error(`the vulnerable complaint's row reads ${JSON.stringify(row)}`);
   if (!row[6].startsWith("acknowledge by ")) throw new Error(`next due reads "${row[6]}"`);
   if (at(plain) >= 0 && at(plain) < at(frail)) throw new Error("an ordinary complaint is listed before a vulnerable complainant's");
   if (rows.slice(0, at(frail)).some((r) => r[4] !== "yes")) throw new Error("a complaint that needs no trained handler is above a vulnerable complainant's");
@@ -121,7 +136,7 @@ test({ id: "E2E-035", area: A, persona: "ST14", story: "US-ST14-1", title: "The 
   why: "Acknowledge, update, decide and deadlock dates are regulatory deadlines; the handler must see all four the moment the file is theirs." }, async (t) => {
   const id = await heard(t, t.ref("CMP"));
   const s = await workbench(t, cast.st14);
-  await s.act("#act", "assign", { "Complaint": id, "Handler (staff reference)": "st14" });
+  await s.act("#act", "assign", { "Complaint": id, "Handler": "st14" });
   await s.done("#act-msg", "Done: assign.");
   await file(s, id);
   await s.sees(`${id}: open`, "#file-title");
@@ -162,9 +177,9 @@ test({ id: "E2E-038", area: A, persona: "ST14", story: "US-ST06-1", title: "A vu
   why: "The training requirement is read from staff records, not typed; an untrained handler on a vulnerable complainant's file is a conduct breach." }, async (t) => {
   const id = await heard(t, t.ref("CMP"), { vulnerable: true, adjustments: ["speak_slowly"] });
   const s = await workbench(t, cast.st14);
-  await s.act("#act", "assign", { "Complaint": id, "Handler (staff reference)": "st14j" });
+  await s.act("#act", "assign", { "Complaint": id, "Handler": "st14j" });
   await s.stopped("#act-msg", "a complaint with a vulnerability marker goes to trained staff", 409);
-  await s.act("#act", "assign", { "Complaint": id, "Handler (staff reference)": "st14" });
+  await s.act("#act", "assign", { "Complaint": id, "Handler": "st14" });
   await s.done("#act-msg", "Done: assign.");
   await s.sees("st14", s.row("#queue", id));
 });
@@ -174,7 +189,7 @@ test({ id: "E2E-039", area: A, persona: "ST14", story: "US-ST14-1", title: "A co
   why: "Assignment grants access to the file; it must go only to people the staff records seat in the complaints team." }, async (t) => {
   const id = await heard(t, t.ref("CMP"));
   const s = await workbench(t, cast.st14);
-  await s.act("#act", "assign", { "Complaint": id, "Handler (staff reference)": "st10" });
+  await s.act("#act", "assign", { "Complaint": id, "Handler": "st10" });
   await s.stopped("#act-msg", "st10 does not work complaints", 403);
   await s.sees("unassigned", s.row("#queue", id));
 });
@@ -216,23 +231,30 @@ test({ id: "E2E-043", area: A, persona: "ST14", story: "US-ST14-1", title: "A co
   why: "Closing on an undelivered letter leaves a complainant who never heard the answer and a register that says they did." }, async (t) => {
   const id = await upheld(t);
   const s = await workbench(t, cast.st14);
-  await s.act("#act", "close", { "Complaint": id, "Cause code": "delay" });
+  await s.act("#act", "close", { "Complaint": id, "Cause": "delay" });
   await s.stopped("#act-msg", "the outcome letter has no proof of delivery", 409);
   await s.act("#act", "record_outcome_delivered", { "Complaint": id, "Delivered on": today() });
   await s.done("#act-msg", "Done: record outcome delivered.");
-  await s.act("#act", "close", { "Complaint": id, "Cause code": "delay" });
+  await s.act("#act", "close", { "Complaint": id, "Cause": "delay" });
   await s.done("#act-msg", "Done: close.");
   await s.never(id, "#queue");
 });
 
 test({ id: "E2E-044", area: A, persona: "ST14", story: "US-ST14-1", title: "A complaint is closed only with a cause code from the controlled list", matrix: ["CMP-006"],
-  purpose: "Close a complaint with a cause code that is not on the list.",
+  purpose: "Open the close form and read the causes it offers against the complaints settings, then send a close with a cause that is not on the list by the form's own route.",
   why: "Root cause reporting to the board and the regulator is built from these codes; free text makes the report meaningless." }, async (t) => {
   const id = await upheld(t);
   await tells(t, cast.st14, "complaints", { record_outcome_delivered: { complaint: id, on: today() } });
   const s = await workbench(t, cast.st14);
-  await s.act("#act", "close", { "Complaint": id, "Cause code": "bad-luck" });
-  await s.stopped("#act-msg", "`bad-luck` is not a cause code", 409);
+  // The form offers only the controlled list: a cause is chosen, never typed.
+  const { cause_codes: list } = await t.does(cast.st14, "GET", "/staff/v1/complaints/settings");
+  await s.pick("#a-command", "close");
+  const field = await s.page.locator("#act label", { hasText: /^Cause$/ }).getAttribute("for");
+  const offered = await s.page.locator("#" + field + " option").evaluateAll((os) => os.map((o) => o.value));
+  if (JSON.stringify(offered) !== JSON.stringify(list)) throw new Error(`the close form offers the causes ${JSON.stringify(offered)}, the settings list ${JSON.stringify(list)}`);
+  // Sent around the form, a cause off the list is still refused by the module.
+  const r = await t.sys.portal("POST", COMMANDS, cast.st14, { as: "complaints", command: { close: { complaint: id, detail: { cause: "bad-luck", product_version: null, rule_version: null, template_version: null } } } });
+  if (r.status !== 409 || !JSON.stringify(r.data).includes("`bad-luck` is not a cause code")) throw new Error(`a close with the cause bad-luck answered ${r.status} ${JSON.stringify(r.data)}`);
   await s.sees(id, "#queue");
 });
 
@@ -253,11 +275,11 @@ test({ id: "E2E-046", area: A, persona: "ST14", story: "US-ST14-1", title: "A go
   const s = await workbench(t, cast.st14);
   await s.act("#act", "record_remediation", { "Complaint": id, "Kind": "ex_gratia", "Reference in the owning module": `pay-${id}`, "Amount": "250.00" });
   await s.done("#act-msg", "Done: record remediation.");
-  await s.act("#act", "close", { "Complaint": id, "Cause code": "delay" });
+  await s.act("#act", "close", { "Complaint": id, "Cause": "delay" });
   await s.stopped("#act-msg", "remediation is still outstanding", 409);
   await s.act("#act", "complete_remediation", { "Complaint": id, "Reference": `pay-${id}` });
   await s.done("#act-msg", "Done: complete remediation.");
-  await s.act("#act", "close", { "Complaint": id, "Cause code": "delay" });
+  await s.act("#act", "close", { "Complaint": id, "Cause": "delay" });
   await s.done("#act-msg", "Done: close.");
 });
 
@@ -268,9 +290,9 @@ test({ id: "E2E-047", area: A, persona: "ST14", story: "US-ST14-1", title: "A go
   const s = await workbench(t, cast.st14);
   await s.act("#act", "record_remediation", { "Complaint": id, "Kind": "ex_gratia", "Reference in the owning module": `pay-${id}`, "Amount": "6000.00" });
   await s.stopped("#act-msg", "the goodwill payment is above the authoriser's limit", 409);
-  await s.act("#act", "record_remediation", { "Complaint": id, "Kind": "ex_gratia", "Reference in the owning module": `pay-${id}`, "Amount": "600.00", "Authorised by (staff reference; blank for you)": "st14j" });
+  await s.act("#act", "record_remediation", { "Complaint": id, "Kind": "ex_gratia", "Reference in the owning module": `pay-${id}`, "Amount": "600.00", "Authorised by (blank for you)": "st14j" });
   await s.stopped("#act-msg", "the goodwill payment is above the authoriser's limit", 409);
-  await s.act("#act", "record_remediation", { "Complaint": id, "Kind": "ex_gratia", "Reference in the owning module": `pay-${id}`, "Amount": "450.00", "Authorised by (staff reference; blank for you)": "st14j" });
+  await s.act("#act", "record_remediation", { "Complaint": id, "Kind": "ex_gratia", "Reference in the owning module": `pay-${id}`, "Amount": "450.00", "Authorised by (blank for you)": "st14j" });
   await s.done("#act-msg", "Done: record remediation.");
 });
 
@@ -296,7 +318,7 @@ test({ id: "E2E-049", area: A, persona: "ST14", story: "US-ST14-1", title: "A de
   await s.done("#act-msg", "Done: declare deadlock.");
   await s.act("#act", "declare_deadlock", { "Complaint": id });
   await s.stopped("#act-msg", "this complaint cannot be deadlocked: it is already deadlocked", 409);
-  await s.act("#act", "close", { "Complaint": id, "Cause code": "delay" });
+  await s.act("#act", "close", { "Complaint": id, "Cause": "delay" });
   await s.stopped("#act-msg", "the deadlock notice has not been sent", 409);
   await s.act("#act", "record_deadlock_notice", { "Complaint": id, "Deadlock notice document": `dl-${id}` });
   await s.done("#act-msg", "Done: record deadlock notice.");
@@ -317,7 +339,7 @@ test({ id: "E2E-050", area: A, persona: "ST14", story: "US-ST14-1", title: "Dead
 });
 
 test({ id: "E2E-051", area: A, persona: "ST14", story: "US-ST14-1", title: "The complaints team refers a complaint to the external scheme but not to court", matrix: ["CMP-007"],
-  purpose: "Refer a complaint to court as the complaints team, which is refused, then to the dispute scheme.",
+  purpose: "Refer a complaint to court as the complaints team, which is refused, then to the dispute scheme; the referred file offers no second referral, and one sent anyway is refused.",
   why: "Court proceedings and privacy complaints are legal's to record; the scheme referral is the team's daily work and starts the forum's deadlines." }, async (t) => {
   const id = await owned(t);
   const s = await workbench(t, cast.st14);
@@ -327,8 +349,11 @@ test({ id: "E2E-051", area: A, persona: "ST14", story: "US-ST14-1", title: "The 
   await s.done("#act-msg", "Done: refer.");
   await file(s, id);
   await s.sees(`IFSO-${id}`, "#file-raw");
-  await s.act("#act", "refer", { "Complaint": id, "Forum": "scheme", "Forum's reference": "IFSO-again", "Response due": plus(20) });
-  await s.stopped("#act-msg", "the complaint is already with an external forum", 409);
+  // A referred file is not offered Refer again; a second referral sent anyway is refused.
+  const offered = await s.page.locator("#a-command option").evaluateAll((os) => os.map((o) => o.value));
+  if (offered.includes("refer") || !offered.includes("record_forum_decision")) throw new Error(`the referred file offers ${JSON.stringify(offered)}`);
+  const again = await t.sys.portal("POST", COMMANDS, cast.st14, { as: "complaints", command: { refer: { complaint: id, forum: "scheme", reference: "IFSO-again", response_due: plus(20), documents_due: null } } });
+  if (again.status !== 409 || !JSON.stringify(again.data).includes("the complaint is already with an external forum")) throw new Error(`a second referral answered ${again.status} ${JSON.stringify(again.data)}`);
 });
 
 test({ id: "E2E-052", area: A, persona: "Legal", story: "US-ST14-1", title: "Legal records court proceedings against a complaint", matrix: ["CMP-007"],
@@ -351,9 +376,9 @@ test({ id: "E2E-053", area: A, persona: "Legal", story: "US-R02-1", title: "A bu
   const id = await owned(t);
   await tells(t, cast.st14, "complaints", { refer: { complaint: id, forum: "scheme", reference: `IFSO-${id}`, response_due: plus(20), documents_due: null } });
   const s = await workbench(t, cast.legal);
-  await s.act("#act", "release_bundle", { "Complaint": id, "Bundle": `b-${id}`, "Documents (comma separated)": `doc-${id}, ack-${id}`, "Reviewed by (someone else)": "legal" });
+  await s.act("#act", "release_bundle", { "Complaint": id, "Bundle": `b-${id}`, "Documents (comma separated)": `doc-${id}, ack-${id}`, "Reviewed by (a colleague, not you)": "legal" });
   await s.stopped("#act-msg", "a bundle is reviewed by someone other than the person releasing it", 409);
-  await s.act("#act", "release_bundle", { "Complaint": id, "Bundle": `b-${id}`, "Documents (comma separated)": `doc-${id}, ack-${id}`, "Reviewed by (someone else)": "st14" });
+  await s.act("#act", "release_bundle", { "Complaint": id, "Bundle": `b-${id}`, "Documents (comma separated)": `doc-${id}, ack-${id}`, "Reviewed by (a colleague, not you)": "st14" });
   await s.done("#act-msg", "Done: release bundle.");
 });
 
@@ -363,11 +388,11 @@ test({ id: "E2E-054", area: A, persona: "ST14", story: "US-ST14-1", title: "A bi
   const id = await owned(t);
   await tells(t, cast.st14, "complaints", { refer: { complaint: id, forum: "scheme", reference: `IFSO-${id}`, response_due: plus(20), documents_due: null } });
   const s = await workbench(t, cast.st14);
-  await s.act("#act", "close", { "Complaint": id, "Cause code": "wrong_decision" });
+  await s.act("#act", "close", { "Complaint": id, "Cause": "wrong_decision" });
   await s.stopped("#act-msg", "the external forum has not decided", 409);
   await s.act("#act", "record_forum_decision", { "Complaint": id, "Outcome": "upheld", "Binding": "true", "Remediation due (optional)": plus(14) });
   await s.done("#act-msg", "Done: record forum decision.");
-  await s.act("#act", "close", { "Complaint": id, "Cause code": "wrong_decision" });
+  await s.act("#act", "close", { "Complaint": id, "Cause": "wrong_decision" });
   await s.stopped("#act-msg", "the forum's decision has not been implemented", 409);
   await s.act("#act", "complete_forum_remediation", { "Complaint": id });
   await s.stopped("#act-msg", "the remediation is not recorded as done", 409);
@@ -377,7 +402,7 @@ test({ id: "E2E-054", area: A, persona: "ST14", story: "US-ST14-1", title: "A bi
   await s.done("#act-msg", "Done: complete remediation.");
   await s.act("#act", "complete_forum_remediation", { "Complaint": id });
   await s.done("#act-msg", "Done: complete forum remediation.");
-  await s.act("#act", "close", { "Complaint": id, "Cause code": "wrong_decision" });
+  await s.act("#act", "close", { "Complaint": id, "Cause": "wrong_decision" });
   await s.done("#act-msg", "Done: close.");
 });
 
@@ -388,7 +413,7 @@ test({ id: "E2E-055", area: A, persona: "ST14", story: "US-ST14-1", title: "The 
   await tells(t, cast.st14, "complaints", { record_acknowledgement: { complaint: id, document: `ack-${id}` } });
   await tells(t, cast.st14, "complaints", { record_outcome_delivered: { complaint: id, on: today() } });
   await tells(t, cast.st14, "complaints", { close: { complaint: id, detail: { cause: "poor_explanation", product_version: null, rule_version: null, template_version: null } } });
-  const s = await t.open("/complaints", cast.st14);
+  const s = await desk(t, cast.st14);
   await s.tab("Register and report");
   await s.fill("#p-from", today()); await s.fill("#p-to", today());
   await s.press("Show", "#period");
@@ -405,7 +430,7 @@ test({ id: "E2E-055", area: A, persona: "ST14", story: "US-ST14-1", title: "The 
 test({ id: "E2E-056", area: A, persona: "ST14", story: "US-ST14-1", title: "The register refuses a period it cannot read",
   purpose: "Ask for the register with the dates the wrong way round.",
   why: "A regulator's request names a period; a period that silently returns nothing looks like a clean month." }, async (t) => {
-  const s = await t.open("/complaints", cast.st14);
+  const s = await desk(t, cast.st14);
   await s.tab("Register and report");
   await s.fill("#p-from", plus(1)); await s.fill("#p-to", plus(-30));
   await s.press("Show", "#period");
@@ -420,7 +445,7 @@ test({ id: "E2E-057", area: A, persona: "ST14", story: "US-ST14-1", title: "Ever
   why: "A repeat complainant is a signal of harm; the handler must see the history before they call." }, async (t) => {
   const who = `cust-${t.ref("rep")}`;
   const a = await heard(t, t.ref("CMP"), { complainant: who }), b = await heard(t, t.ref("CMP"), { complainant: who, channel: "email" });
-  const s = await t.open("/complaints", cast.st14);
+  const s = await desk(t, cast.st14);
   await s.tab("Register and report");
   await s.fill("#of-party", who);
   await s.press("Find", "#of");
@@ -449,15 +474,15 @@ test({ id: "E2E-059", area: A, persona: "ST14", story: "US-ST13-1", title: "Acce
   why: "Every extra reader of a complaint file is a privacy decision; it must be made by the owner, recorded with its purpose, and reversible." }, async (t) => {
   const id = await owned(t);
   const s = await workbench(t, cast.st14);
-  await s.act("#act", "grant_access", { "Complaint": id, "To (staff reference)": "st14", "Data classes (personal, financial, insurance_sensitive, clinical)": "personal", "Purpose": "curiosity" });
+  await s.act("#act", "grant_access", { "Complaint": id, "Colleague": "st14", "Data classes (personal, financial, insurance_sensitive, clinical)": "personal", "Purpose": "curiosity" });
   await s.stopped("#act-msg", "nobody grants themselves access", 409);
-  await s.act("#act", "grant_access", { "Complaint": id, "To (staff reference)": "st14j", "Data classes (personal, financial, insurance_sensitive, clinical)": "personal", "Purpose": "covering leave" });
+  await s.act("#act", "grant_access", { "Complaint": id, "Colleague": "st14j", "Data classes (personal, financial, insurance_sensitive, clinical)": "personal", "Purpose": "covering leave" });
   await s.done("#act-msg", "Done: grant access.");
   const junior = await workbench(t, cast.st14j);
   await file(junior, id);
   await junior.sees(`${id}: open`, "#file-title");
   await junior.sees("covering leave", "#file-raw");
-  await s.act("#act", "revoke_access", { "Complaint": id, "From (staff reference)": "st14j" });
+  await s.act("#act", "revoke_access", { "Complaint": id, "Colleague": "st14j" });
   await s.done("#act-msg", "Done: revoke access.");
   await file(junior, id);
   await junior.stopped("#open-msg", "the case has not given this person access", 403);
@@ -500,7 +525,7 @@ test({ id: "E2E-062", area: A, persona: "ST14", story: "US-ST06-1", title: "A vu
   await s.act("#act", "set_vulnerability", { "Complaint": id, "Vulnerable": "true", "Adjustments (comma separated)": "written_only" });
   await s.done("#act-msg", "Done: set vulnerability.");
   const row = (await s.rows("#queue")).find((r) => r[0] === id);
-  if (row[3] !== "written_only" || row[4] !== "yes") throw new Error(`the queue row reads ${JSON.stringify(row)}`);
+  if (row[3] !== "written only" || row[4] !== "yes") throw new Error(`the queue row reads ${JSON.stringify(row)}`);
 });
 
 test({ id: "E2E-063", area: A, persona: "ST14", story: "US-ST14-1", title: "A month's root cause review is recorded once", matrix: ["CMP-006"],
@@ -523,7 +548,7 @@ test({ id: "E2E-064", area: A, persona: "Conduct", story: "US-ST13-1", title: "T
   const id = t.ref("CON");
   const s = await workbench(t, cast.conduct);
   await s.sees("conduct", "#seats");
-  await s.act("#act", "open_conduct_case", { "Conduct case": id, "Kind": "breach", "Owner (staff reference)": "conduct", "Regulator to be notified": "true" });
+  await s.act("#act", "open_conduct_case", { "Conduct case": id, "Kind": "breach", "Owner": "conduct", "Regulator to be notified": "true" });
   await s.done("#act-msg", "Done: open conduct case.");
   await s.tab("Conduct cases");
   await s.row("#cases", id).getByRole("button", { name: "Open" }).click();
@@ -536,7 +561,7 @@ test({ id: "E2E-065", area: A, persona: "ST14", story: "US-ST13-1", title: "The 
   purpose: "As the complaints reviewer, open the Conduct cases view and try to open a breach case from the complaints seat.",
   why: "Conduct cases can concern colleagues and advisers under investigation; the complaints team raises systemic findings but must not see or create breach cases." }, async (t) => {
   const s = await workbench(t, cast.st14);
-  await s.act("#act", "open_conduct_case", { "Conduct case": t.ref("CON"), "Kind": "breach", "Owner (staff reference)": "st14", "Regulator to be notified": "false" });
+  await s.act("#act", "open_conduct_case", { "Conduct case": t.ref("CON"), "Kind": "breach", "Owner": "st14", "Regulator to be notified": "false" });
   await s.stopped("#act-msg", "a breach or incident is recorded by the conduct function", 409);
   await s.tab("Conduct cases");
   await s.sees("Conduct cases are open to the conduct function and legal only.", "#case-msg");

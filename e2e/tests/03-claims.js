@@ -1,9 +1,10 @@
 // Claims: an assessor notifies, takes, assesses, decides and pays a claim as
 // themselves, within the authority the claims authority book gives them.
 "use strict";
-const { test, Journey } = require("../lib/suite");
+const { test, Journey, nz, typed } = require("../lib/suite");
 const { cast } = require("../lib/cast");
 const oracle = require("../lib/oracle");
+const { payee } = require("../lib/payments");
 
 const A = "Claims";
 const COMMANDS = "/staff/v1/claims/commands";
@@ -15,7 +16,15 @@ const event = (t) => Journey.before(t.stack.opening, 14);  // eleven days after 
 const early = (t) => Journey.before(t.stack.opening, 23);  // two days after the cover began
 const tells = (t, who, command, purpose = "working the claim") => t.does(who, "POST", COMMANDS, { purpose, command }, Object.keys(command)[0]);
 const work = async (t, id, who = cast.st4) => (await t.does(who, "GET", `/staff/v1/claims/work?claim=${id}`)).view;
-const dollars = (minor) => (minor / 100).toFixed(2);
+/// The payee a claim is paid to, as the payments team keeps it: registered, confirmed by a second maintainer and
+/// screened clear. Claims pick it from the payments register; it pays `party` and is found by its account name.
+const account = (t, party, kind = "customer") => payee(t, { party, kind, name: `${party} ${t.ref("acct")}` });
+/// The payee verified on a claim through the claims route, as an assessor picks it.
+async function verified(t, who, claim, party = "cust-p18", paidAs = "policyholder", kind = "customer") {
+  const to = await account(t, party, kind);
+  await tells(t, who, { verify_payee: { claim, account_ref: to.id, kind: paidAs, authority_doc: null } });
+  return to;
+}
 
 /// A policy and a claim notified on it by phone.
 async function notified(t, { kind = "term_life", party = "cust-p18", cover = "trauma", type = "trauma", on, life = null, who = cast.st4, notifier = "policyholder", claimant = null, invoice } = {}) {
@@ -45,8 +54,9 @@ async function admitted(t, options = {}) {
   await tells(t, cast.st4, { decide: { claim: c.claim, request: { admit: { amount_minor: null } }, reasons: ["R-OK"] } });
   return c;
 }
-// A provider run takes every provider payment due on its partition, whichever test raised it: the tests that pay a
-// provider and the test that expects nothing to be due carry the lock "claims:provider-run" and never overlap.
+// A provider run takes every admitted provider payment on its partition, whatever its date and whichever journey left
+// it unpaid (a health claim admitted and never paid stays payable). The test that expects nothing to be due therefore
+// prepares a benefit run, which takes only what falls due by its benefit date.
 const HEALTH = { kind: "health_family", party: "cust-p1", cover: "hospital", type: "health", life: "life-1", who: cast.st3, notifier: "provider", invoice: 1_700_00 };
 async function healthClaim(t, invoice = HEALTH.invoice) {
   const c = await notified(t, { ...HEALTH, invoice });
@@ -81,7 +91,7 @@ test({ id: "E2E-071", area: A, persona: "ST4", story: "US-ST03-1", title: "A tra
   await s.sees(`${claim}: trauma, open`, "#c-title");
   const row = await summary(s);
   if (row.Policy !== policy.id || row.Cover !== "trauma" || row.Queue !== "lump sum" || row.Owner !== "unassigned" || row.Event !== event(t) || row.Notified !== t.stack.opening) throw new Error(`the claim reads ${JSON.stringify(row)}`);
-  if (row.Reserve !== "100000.00" || row.Admitted !== "0.00" || row.Paid !== "0.00") throw new Error(`the money reads ${JSON.stringify(row)}`);
+  if (row.Reserve !== nz(100_000_00) || row.Admitted !== nz(0) || row.Paid !== nz(0)) throw new Error(`the money reads ${JSON.stringify(row)}`);
   await s.sees("acknowledgement", "#c-timers");
   await s.sees("No payee verified.", "#c-money");
 });
@@ -137,7 +147,7 @@ test({ id: "E2E-076", area: A, persona: "ST4", story: "US-ST03-1", title: "A cau
   const c = await owned(t);
   const s = await desk(t, cast.st4, c.claim);
   await s.act("#act", "record_cause", { "Claim": c.claim, "Cause code": "CC-9999" }, { purpose: "assessment" });
-  await s.stopped("#act-msg", "that cause code is not on the controlled list", 409);
+  await s.stopped("#act-msg", "CC-9999 is not on the controlled list of cause codes: the codes are CC-0003, CC-0101, CC-0204, CC-0900", 409);
   await s.act("#act", "record_cause", { "Claim": c.claim, "Cause code": "CC-0003" }, { purpose: "assessment" });
   await s.done("#act-msg", "Done: record cause.");
 });
@@ -164,10 +174,10 @@ test({ id: "E2E-078", area: A, persona: "ST4", story: "US-ST03-1", title: "An ad
   await s.done("#act-msg", "Done: decide admit.");
   await s.sees(`${c.claim}: trauma, admitted`, "#c-title");
   const row = await summary(s);
-  if (row.Admitted !== "100000.00" || row.Reserve !== "0.00") throw new Error(`after admission the claim reads ${JSON.stringify(row)}`);
+  if (row.Admitted !== nz(100_000_00) || row.Reserve !== nz(0)) throw new Error(`after admission the claim reads ${JSON.stringify(row)}`);
   // The policy's first premium is unpaid: what is payable is the sum insured less that premium, worked out independently.
   const unpaid = oracle.premium(c.policy.application).total;
-  const worked = oracle.money(100_000_00 - unpaid);
+  const worked = nz(100_000_00 - unpaid);
   if (row.Payable !== worked) throw new Error(`payable is ${row.Payable}; the sum insured less the unpaid premium of ${oracle.money(unpaid)} is ${worked}`);
   await s.sees("payment", "#c-timers");
 });
@@ -179,14 +189,14 @@ test({ id: "E2E-079", area: A, persona: "ST4", story: "US-ST17-1", title: "Nothi
   const s = await desk(t, cast.st4, c.claim);
   await s.act("#act", "pay", { "Claim": c.claim, "Payment reference": `pay-${c.claim}`, "Amount": "1000.00" }, { purpose: "payment" });
   await s.stopped("#act-msg", "verify the payee before the first payment", 409);
-  if ((await summary(s)).Paid !== "0.00") throw new Error("money shows as paid");
+  if ((await summary(s)).Paid !== nz(0)) throw new Error("money shows as paid");
 });
 
 test({ id: "E2E-080", area: A, persona: "ST4", story: "US-ST17-1", title: "A payment cannot exceed what is admitted and unpaid",
   purpose: "With a verified payee, try to pay the full sum insured when unpaid premium has reduced what is payable.",
   why: "The payable figure is the control total for a claim; a payment above it is money the insurer does not owe." }, async (t) => {
   const c = await admitted(t);
-  await tells(t, cast.st4, { verify_payee: { claim: c.claim, party: "cust-p18", kind: "policyholder", account_ref: "acct-p18", name_check_ref: "nc-1", screening_ref: "sc-1", authority_doc: null } });
+  await verified(t, cast.st4, c.claim);
   const s = await desk(t, cast.st4, c.claim);
   await s.sees("Payee: cust-p18 (policyholder).", "#c-money");
   await s.act("#act", "pay", { "Claim": c.claim, "Payment reference": `pay-${c.claim}`, "Amount": "100000.00" }, { purpose: "payment" });
@@ -197,14 +207,17 @@ test({ id: "E2E-081", area: A, persona: "ST4", story: "US-ST04-1", title: "A ver
   purpose: "Verify the policyholder as payee on screen, pay the payable amount, and read the payments and totals.",
   why: "This is the moment the insurer keeps its promise; the payment must be recorded once, for the right amount, to the verified person." }, async (t) => {
   const c = await admitted(t);
+  const to = await account(t, "cust-p18");
   const s = await desk(t, cast.st4, c.claim);
-  await s.act("#act", "verify_payee", { "Claim": c.claim, "Payee (customer reference)": "cust-p18", "Kind": "policyholder", "Account reference": "acct-p18", "Name check reference": "nc-77", "Screening reference": "sc-77" }, { purpose: "payment" });
+  // The payee is picked from the payments register by its account name; who it is, its name check and screening come from there.
+  await s.act("#act", "verify_payee", { "Claim": c.claim, "Payee (from the payments register)": { pick: to.name }, "Paid as": "policyholder" }, { purpose: "payment" });
   await s.done("#act-msg", "Done: verify payee.");
+  await s.sees("Payee: cust-p18 (policyholder).", "#c-money");
   const payable = (await summary(s)).Payable;
-  await s.act("#act", "pay", { "Claim": c.claim, "Payment reference": `pay-${c.claim}`, "Amount": payable }, { purpose: "payment" });
+  await s.act("#act", "pay", { "Claim": c.claim, "Payment reference": `pay-${c.claim}`, "Amount": typed(payable) }, { purpose: "payment" });
   await s.done("#act-msg", "Done: pay.");
   const row = await summary(s);
-  if (row.Paid !== payable || row.Payable !== "0.00") throw new Error(`after payment the claim reads ${JSON.stringify(row)}`);
+  if (row.Paid !== payable || row.Payable !== nz(0)) throw new Error(`after payment the claim reads ${JSON.stringify(row)}`);
   const paid = await s.rows("#c-money");
   if (!paid.some((r) => r[0] === `pay-${c.claim}` && r[1] === payable && r[2] === t.stack.opening)) throw new Error(`the payments read ${JSON.stringify(paid)}`);
   await s.act("#act", "pay", { "Claim": c.claim, "Payment reference": `pay2-${c.claim}`, "Amount": "10.00" }, { purpose: "payment" });
@@ -215,13 +228,13 @@ test({ id: "E2E-082", area: A, persona: "ST4", story: "US-BK1-1", title: "A paym
   purpose: "Pay part of a claim, then send a second payment under the same reference.",
   why: "A repeated reference is how a double payment starts; the second must be refused, not paid again." }, async (t) => {
   const c = await admitted(t);
-  await tells(t, cast.st4, { verify_payee: { claim: c.claim, party: "cust-p18", kind: "policyholder", account_ref: "acct-p18", name_check_ref: "nc-1", screening_ref: "sc-1", authority_doc: null } });
+  await verified(t, cast.st4, c.claim);
   const s = await desk(t, cast.st4, c.claim);
   await s.act("#act", "pay", { "Claim": c.claim, "Payment reference": "part-1", "Amount": "40000.00" }, { purpose: "part payment" });
   await s.done("#act-msg", "Done: pay.");
   await s.act("#act", "pay", { "Claim": c.claim, "Payment reference": "part-1", "Amount": "20000.00" }, { purpose: "part payment" });
   await s.stopped("#act-msg", "that payment reference has been used on this claim", 409);
-  if ((await summary(s)).Paid !== "40000.00") throw new Error("the paid total moved on a refused payment");
+  if ((await summary(s)).Paid !== nz(40_000_00)) throw new Error("the paid total moved on a refused payment");
 });
 
 test({ id: "E2E-083", area: A, persona: "ST4", story: "US-ST02-1", title: "A large death claim waits for a second signature and shows who proposed it", matrix: ["CLM-008"],
@@ -234,7 +247,7 @@ test({ id: "E2E-083", area: A, persona: "ST4", story: "US-ST02-1", title: "A lar
   await s.sees("Waiting for a signature: admit proposed by st4", "#c-waiting");
   await s.sees("Still needed: 1.", "#c-waiting");
   await s.sees(`${c.claim}: death, open`, "#c-title");
-  if ((await summary(s)).Admitted !== "0.00") throw new Error("the claim shows as admitted on one signature");
+  if ((await summary(s)).Admitted !== nz(0)) throw new Error("the claim shows as admitted on one signature");
 });
 
 test({ id: "E2E-084", area: A, persona: "ST4", story: "US-ST02-1", title: "The proposer of a decision cannot give its second signature", matrix: ["CLM-008"],
@@ -258,7 +271,7 @@ test({ id: "E2E-085", area: A, persona: "ST4", story: "US-ST02-1", title: "A sec
   await s.act("#act", "approve", { "Claim": c.claim }, { purpose: "second signature with the file read" });
   await s.done("#act-msg", "Done: approve.");
   await s.sees(`${c.claim}: death, admitted`, "#c-title");
-  if ((await summary(s)).Admitted !== "500000.00") throw new Error("the admitted amount is not the sum insured");
+  if ((await summary(s)).Admitted !== nz(500_000_00)) throw new Error("the admitted amount is not the sum insured");
   await s.never("Waiting for a signature", "#c-waiting");
 });
 
@@ -296,7 +309,7 @@ test({ id: "E2E-087", area: A, persona: "ST3", story: "US-ST03-1", title: "The h
   await s.done("#act-msg", "Done: decide admit.");
   await s.sees(`${c.claim}: health, admitted`, "#c-title");
   // The invoice was $1,700 and the plan's excess is $500.
-  if ((await summary(s)).Admitted !== "1200.00") throw new Error("the admitted amount is not the invoice less the excess");
+  if ((await summary(s)).Admitted !== nz(1_200_00)) throw new Error("the admitted amount is not the invoice less the excess");
 });
 
 test({ id: "E2E-088", area: A, persona: "ST3", story: "US-ST01-1", title: "A claim above the health assessor's authority is not theirs to take", matrix: ["CLM-003"],
@@ -305,7 +318,8 @@ test({ id: "E2E-088", area: A, persona: "ST3", story: "US-ST01-1", title: "A cla
   const big = await notified(t, { ...HEALTH, invoice: 9_000_00 });
   const s = await desk(t, cast.st3, big.claim);
   await s.act("#act", "assign", { "Claim": big.claim, "To (staff reference)": "st3" }, { purpose: "taking it" });
-  await s.stopped("#act-msg", "st3 has no authority for a claim of this type and amount", 403);
+  // The refusal says the limit, the claim's amount, and who can take it instead.
+  await s.stopped("#act-msg", "st3 may admit up to $5,000.00 for a claim of this type, and this one is $9,000.00: n7 or st13 or st4 or st4b can take it, given it by a queue lead", 403);
   if ((await summary(s)).Owner !== "unassigned") throw new Error("the over-limit claim changed owner");
   const small = await healthClaim(t);
   await s.fill("#c-id", small.claim); await s.press("Show", "#lookup"); await s.sees(small.claim, "#c-title");
@@ -321,7 +335,7 @@ test({ id: "E2E-089", area: A, persona: "ST3", story: "US-ST01-1", title: "A res
   await s.act("#act", "decide_reserve", { "Claim": c.claim, "Reserve": "20000.00", "Reason codes (comma separated)": "R-EVID" }, { purpose: "reserve review" });
   await s.done("#act-msg", "Done: decide reserve.");
   await s.sees("Waiting for a signature: reserve proposed by st3", "#c-waiting");
-  if ((await summary(s)).Reserve === "20000.00") throw new Error("the reserve stands on the health assessor's word");
+  if ((await summary(s)).Reserve === nz(20_000_00)) throw new Error("the reserve stands on the health assessor's word");
 });
 
 test({ id: "E2E-090", area: A, persona: "ST3", story: "US-ST01-1", title: "The health assessor cannot decline a claim",
@@ -364,7 +378,7 @@ test({ id: "E2E-092", area: A, persona: "ST4", story: "US-ST02-1", title: "A dec
   await s.done("#act-msg", "Done: approve.");
   await s.sees(`${c.claim}: trauma, declined`, "#c-title");
   const row = await summary(s);
-  if (row.Reserve !== "0.00" || row.Admitted !== "0.00" || !row.Closed) throw new Error(`the declined claim reads ${JSON.stringify(row)}`);
+  if (row.Reserve !== nz(0) || row.Admitted !== nz(0) || !row.Closed) throw new Error(`the declined claim reads ${JSON.stringify(row)}`);
 });
 
 test({ id: "E2E-093", area: A, persona: "ST4", story: "US-ST03-1", title: "A decision's reason code must belong to that kind of decision",
@@ -380,7 +394,7 @@ test({ id: "E2E-094", area: A, persona: "ST13", story: "US-ST13-1", title: "A cl
   purpose: "Admit and try to pay a claim whose event was two days after the cover began, as its assessor; look for any sign of an investigation.",
   why: "An early claim is quietly referred; payment must stop, and the assessor and through them the claimant must see no trace of the referral." }, async (t) => {
   const c = await admitted(t, { on: early(t) });
-  await tells(t, cast.st4, { verify_payee: { claim: c.claim, party: "cust-p18", kind: "policyholder", account_ref: "acct-p18", name_check_ref: "nc-1", screening_ref: "sc-1", authority_doc: null } });
+  await verified(t, cast.st4, c.claim);
   const s = await desk(t, cast.st4, c.claim);
   await s.act("#act", "pay", { "Claim": c.claim, "Payment reference": `pay-${c.claim}`, "Amount": "500.00" }, { purpose: "payment" });
   await s.stopped("#act-msg", "payment on this claim is held; ask a claims manager", 409);
@@ -401,7 +415,7 @@ test({ id: "E2E-095", area: A, persona: "ST13", story: "US-ST13-1", title: "The 
   await s.press("Show my cases");
   await s.sees(`investigation/${c.claim}`, "#inv");
   const row = (await s.rows("#inv")).find((r) => r[0] === `investigation/${c.claim}`);
-  if (row[1] !== "early claim" || row[2] !== t.stack.opening || row[3] !== "claims" || !row[4].includes(`${c.claim} (open, 100000.00`) || row[5] !== "none") throw new Error(`the case reads ${JSON.stringify(row)}`);
+  if (row[1] !== "early claim" || row[2] !== t.stack.opening || row[3] !== "claims" || !row[4].includes(`${c.claim} (open, ${nz(100_000_00)}`) || row[5] !== "none") throw new Error(`the case reads ${JSON.stringify(row)}`);
 });
 
 test({ id: "E2E-096", area: A, persona: "N7", story: "US-N07-1", title: "An assessor is never given the claim of someone they are related to", matrix: ["STF-006"],
@@ -476,7 +490,7 @@ test({ id: "E2E-100", area: A, persona: "ST4", story: "US-ST04-1", title: "A cla
   await s.done("#act-msg", "Done: decide withdraw.");
   await s.sees(`${c.claim}: trauma, withdrawn`, "#c-title");
   const row = await summary(s);
-  if (row.Reserve !== "0.00" || row.Closed !== t.stack.opening) throw new Error(`the withdrawn claim reads ${JSON.stringify(row)}`);
+  if (row.Reserve !== nz(0) || row.Closed !== t.stack.opening) throw new Error(`the withdrawn claim reads ${JSON.stringify(row)}`);
 });
 
 test({ id: "E2E-101", area: A, persona: "ST4", story: "US-ST14-1", title: "A closed claim is reopened on new evidence; an open one cannot be", matrix: ["CLM-015"],
@@ -490,7 +504,7 @@ test({ id: "E2E-101", area: A, persona: "ST4", story: "US-ST14-1", title: "A clo
   await s.act("#act", "reopen", { "Claim": c.claim, "Basis": "new_evidence", "Reserve": "50000.00" }, { purpose: "new report" });
   await s.done("#act-msg", "Done: reopen.");
   await s.sees(`${c.claim}: trauma, open`, "#c-title");
-  if ((await summary(s)).Reserve !== "50000.00") throw new Error("the reopened claim has no reserve");
+  if ((await summary(s)).Reserve !== nz(50_000_00)) throw new Error("the reopened claim has no reserve");
 });
 
 test({ id: "E2E-102", area: A, persona: "ST4", story: "US-ST03-1", title: "A claim cannot be notified for an event that has not happened",
@@ -548,23 +562,25 @@ test({ id: "E2E-106", area: A, persona: "ST4", story: "US-ST04-1", title: "Premi
   await s.stopped("#act-msg", "premiums are waived beside a benefit in payment", 409);
 });
 
-test({ id: "E2E-107", area: A, persona: "ST3", story: "US-PR1-1", title: "A provider is verified and paid a health claim in two payments", matrix: [], lock: "claims:provider-run",
+test({ id: "E2E-107", area: A, persona: "ST3", story: "US-PR1-1", title: "A provider is verified and paid a health claim in two payments", matrix: [],
   purpose: "On an admitted hospital claim, verify the provider as payee and pay the admitted amount in two parts.",
   why: "Providers are paid directly so patients are not out of pocket; part payments must add up to the admitted amount and no further." }, async (t) => {
   const c = await healthClaim(t);
   await tells(t, cast.st3, { decide: { claim: c.claim, request: { admit: { amount_minor: null } }, reasons: ["R-OK"] } });
+  const to = await account(t, "prov-pr1", "provider");
   const s = await desk(t, cast.st3, c.claim);
-  await s.act("#act", "verify_payee", { "Claim": c.claim, "Payee (customer reference)": "prov-pr1", "Kind": "provider", "Account reference": "acct-pr1", "Name check reference": "nc-pr1", "Screening reference": "sc-pr1" }, { purpose: "payment" });
+  // Picking a provider's account from the register sets it to be paid as the provider: "Paid as" is left as the form sets it.
+  await s.act("#act", "verify_payee", { "Claim": c.claim, "Payee (from the payments register)": { pick: to.name } }, { purpose: "payment" });
   await s.done("#act-msg", "Done: verify payee.");
   await s.sees("Payee: prov-pr1 (provider).", "#c-money");
-  const payable = Number((await summary(s)).Payable);
+  const payable = Number(typed((await summary(s)).Payable));
   const first = (payable / 2).toFixed(2), rest = (payable - Number(first)).toFixed(2);
   await s.act("#act", "pay", { "Claim": c.claim, "Payment reference": "prov-1", "Amount": first }, { purpose: "payment" });
   await s.done("#act-msg", "Done: pay.");
   await s.act("#act", "pay", { "Claim": c.claim, "Payment reference": "prov-2", "Amount": rest }, { purpose: "payment" });
   await s.done("#act-msg", "Done: pay.");
   const row = await summary(s);
-  if (Number(row.Paid) !== payable || row.Payable !== "0.00") throw new Error(`after both payments the claim reads ${JSON.stringify(row)}`);
+  if (Number(typed(row.Paid)) !== payable || row.Payable !== nz(0)) throw new Error(`after both payments the claim reads ${JSON.stringify(row)}`);
 });
 
 test({ id: "E2E-108", area: A, persona: "ST3", story: "US-PR2-1", title: "An overpayment to a provider is raised and its repayment tracked", matrix: ["CLM-030"],
@@ -572,7 +588,7 @@ test({ id: "E2E-108", area: A, persona: "ST3", story: "US-PR2-1", title: "An ove
   why: "Overpayments are recovered, not forgotten; the claim must carry what is still owed until it is repaid or written off." }, async (t) => {
   const c = await healthClaim(t);
   await tells(t, cast.st3, { decide: { claim: c.claim, request: { admit: { amount_minor: null } }, reasons: ["R-OK"] } });
-  await tells(t, cast.st3, { verify_payee: { claim: c.claim, party: "prov-pr2", kind: "provider", account_ref: "acct-pr2", name_check_ref: "nc", screening_ref: "sc", authority_doc: null } });
+  await verified(t, cast.st3, c.claim, "prov-pr2", "provider", "provider");
   const payable = (await work(t, c.claim, cast.st3)).payable_minor;
   await tells(t, cast.st3, { pay: { claim: c.claim, payment_ref: "prov-1", amount_minor: payable } });
   const s = await desk(t, cast.st3, c.claim);
@@ -580,20 +596,20 @@ test({ id: "E2E-108", area: A, persona: "ST3", story: "US-PR2-1", title: "An ove
   await s.act("#act", "raise_overpayment", { "Claim": c.claim, "Overpayment reference": "op-1", "Amount": "100.00", "Cause": "provider_billing", "Received in good faith": "true" }, { purpose: "audit finding" });
   await s.done("#act-msg", "Done: raise overpayment.");
   let row = (await s.rows("#c-over")).find((r) => r[0] === "op-1");
-  if (row[1] !== "100.00") throw new Error(`the overpayment reads ${JSON.stringify(row)}`);
+  if (row[1] !== nz(100_00)) throw new Error(`the overpayment reads ${JSON.stringify(row)}`);
   await s.act("#act", "record_repayment", { "Claim": c.claim, "Overpayment reference": "op-1", "Amount repaid": "40.00" }, { purpose: "provider repaid" });
   await s.done("#act-msg", "Done: record repayment.");
   row = (await s.rows("#c-over")).find((r) => r[0] === "op-1");
-  if (row[1] !== "60.00") throw new Error(`after repayment the overpayment reads ${JSON.stringify(row)}`);
+  if (row[1] !== nz(60_00)) throw new Error(`after repayment the overpayment reads ${JSON.stringify(row)}`);
   await s.act("#act", "raise_overpayment", { "Claim": c.claim, "Overpayment reference": "op-2", "Amount": "999999.00", "Cause": "insurer_error", "Received in good faith": "true" }, { purpose: "audit finding" });
   await s.stopped("#act-msg", "an overpayment is new, positive and no more than was paid on the claim", 409);
 });
 
-test({ id: "E2E-109", area: A, persona: "ST4", story: "US-ST10-1", title: "A payment run with nothing due is not prepared", lock: "claims:provider-run",
+test({ id: "E2E-109", area: A, persona: "ST4", story: "US-ST10-1", title: "A payment run with nothing due is not prepared",
   purpose: "Prepare a benefit run on a partition for a date on which no benefit is due.",
   why: "An empty run sent for approval wastes an approver's attention and hides the run that matters." }, async (t) => {
   const s = await desk(t, cast.st4);
-  await s.act("#act", "prepare_run", { "Partition": "3", "Run reference": t.ref("RUN"), "Kind": "provider", "Benefit date": Journey.before(t.stack.opening, 400) }, { purpose: "monthly run" });
+  await s.act("#act", "prepare_run", { "Partition": "3", "Run reference": t.ref("RUN"), "Kind": "benefit", "Benefit date": Journey.before(t.stack.opening, 400) }, { purpose: "monthly run" });
   await s.stopped("#act-msg", "no payment is due for this run", 409);
   await s.act("#act", "approve_run", { "Partition": "3", "Run reference": "run-never" }, { purpose: "monthly run" });
   await s.stopped("#act-msg", "there is no run run-never", 409);
@@ -652,4 +668,4 @@ test({ id: "E2E-113", area: A, persona: "ST4", story: "US-ST04-1", title: "An ac
   if (o.kind !== "bad") throw new Error("an action with no stated purpose was accepted");
 });
 
-module.exports = { notified, owned, assessed, admitted, healthClaim, tells, work, event, early, HEALTH };
+module.exports = { notified, owned, assessed, admitted, healthClaim, tells, work, event, early, HEALTH, verified };

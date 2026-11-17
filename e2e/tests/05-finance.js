@@ -12,12 +12,20 @@ const { cast } = require("../lib/cast");
 
 const A = "Finance";
 const PERIOD = (t) => t.stack.opening.slice(0, 7);
-async function close(t, who) {
+// The first quarter end at or after the opening month: a period the appointed actuary signs off as well as the lead.
+const QUARTER = (t) => { const [y, m] = PERIOD(t).split("-").map(Number), q = Math.ceil(m / 3) * 3; return `${y}-${String(q).padStart(2, "0")}`; };
+async function close(t, who, period = PERIOD(t)) {
   const s = await t.open("/finance", who);
-  await s.fill("#p-id", PERIOD(t));
+  await s.fill("#p-id", period);
   await s.press("Show", "#period");
-  await s.sees(PERIOD(t), "#dash-title");
+  await s.sees(period, "#dash-title");
   return s;
+}
+/// Show another period on a console already open.
+async function show(s, period) {
+  await s.fill("#p-id", period);
+  await s.press("Show", "#period");
+  await s.sees(period, "#dash-title");
 }
 const steps = async (s) => Object.fromEntries((await s.rows("#dash-steps")).map((r) => [r[0], { name: r[1], owner: r[2], due: r[3], blocking: r[4], status: r[5], detail: r[6] }]));
 
@@ -74,25 +82,29 @@ test({ id: "E2E-148", area: A, persona: "ST11", story: "US-ST11-1", title: "A pe
   await s.sees("Stopping the close:", "#dash-summary");
 });
 
-test({ id: "E2E-149", area: A, persona: "ST10", story: "US-ST17-1", title: "The operator is not offered the lead's or the actuary's buttons",
-  purpose: "As the finance operator, look at the sign-off and close buttons; as the finance lead and the actuary, look again.",
-  why: "Each signature belongs to one office; the console shows a person only the buttons their role can press." }, async (t) => {
+test({ id: "E2E-149", area: A, persona: "ST10", story: "US-ST17-1", title: "The operator is not offered the lead's or the actuary's buttons, and the actuary's only on a quarter end",
+  purpose: "As the finance operator, look at the sign-off and close buttons; as the finance lead and the actuary, look again, on this month and on the quarter end.",
+  why: "Each signature belongs to one office, and the actuary signs only quarter ends; the console shows a person only the buttons their role can press on the period shown." }, async (t) => {
   const off = async (s, id) => s.page.locator(id).isDisabled();
   const operator = await close(t, cast.st10);
   for (const id of ["#sign-lead", "#sign-actuary", "#close-period"]) if (!(await off(operator, id))) throw new Error(`${id} is offered to the finance operator`);
   const lead = await close(t, cast.st11);
   if ((await off(lead, "#sign-lead")) || (await off(lead, "#close-period")) || !(await off(lead, "#sign-actuary"))) throw new Error("the finance lead's buttons are wrong");
+  // November is not a quarter end: nothing there is the actuary's to sign.
   const actuary = await close(t, cast.st12);
-  if ((await off(actuary, "#sign-actuary")) || !(await off(actuary, "#sign-lead")) || !(await off(actuary, "#close-period"))) throw new Error("the actuary's buttons are wrong");
+  if (!(await off(actuary, "#sign-actuary")) || !(await off(actuary, "#sign-lead")) || !(await off(actuary, "#close-period"))) throw new Error("the actuary is offered a button on a month that needs no actuary's sign-off");
   await actuary.sees("appointed actuary", "#roles");
+  await show(actuary, QUARTER(t));
+  await actuary.sees("Still needed: finance lead, appointed actuary.", "#dash-signed");
+  if ((await off(actuary, "#sign-actuary")) || !(await off(actuary, "#sign-lead")) || !(await off(actuary, "#close-period"))) throw new Error("the actuary's buttons on the quarter end are wrong");
 });
 
 test({ id: "E2E-150", area: A, persona: "ST12", story: "US-ST12-1", title: "The appointed actuary cannot sign off a period early",
-  purpose: "As the appointed actuary, press Sign off as appointed actuary on a period that has not started.",
+  purpose: "As the appointed actuary, press Sign off as appointed actuary on a quarter end that has not started.",
   why: "The actuary's signature covers the valuation for the period; it is refused until the period's books exist." }, async (t) => {
-  const s = await close(t, cast.st12);
+  const s = await close(t, cast.st12, QUARTER(t));
   await s.press("Sign off as appointed actuary");
-  await s.stopped("#close-msg", `${PERIOD(t)} has not started`, 409);
+  await s.stopped("#close-msg", `${QUARTER(t)} has not started`, 409);
 });
 
 test({ id: "E2E-151", area: A, persona: "ST11", story: "US-ST11-1", title: "A waiver needs its reason, owner and remediation date before it is sent", matrix: ["FIN-004"],
