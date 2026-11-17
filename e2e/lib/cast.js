@@ -64,6 +64,8 @@ const templates = [
   ["payments-connectivity", ["payments.connectivity", "payments.view"], [F]],
   ["payments-conflicted", ["payments.approver", "payments.payees"], [F]],
   ["payments-legal", ["payments.legal"], [F]],
+  // Legal settles a customer's capacity (an attorney, a court order) on their record (`customers.settle_capacity`).
+  ["customers-legal", ["customers.find", "customers.view", "customers.settle_capacity"], [O, P]],
   ["payments-reader", ["payments.view"], [F]],
   ["payments-compliance", ["payments.compliance", "payments.view"], [F]],
   ["payments-reconciler", ["payments.reconciler", "payments.view"], [F]],
@@ -115,7 +117,7 @@ const staff = [
   ["st17", "ST17", "Treasury and payment run approver", ["payments-approver"]],
   ["st17b", "ST17", "Treasury and payment run approver (second)", ["payments-approver"]],
   ["front", "Frontline", "Frontline staff", ["frontline"]],
-  ["legal", "Legal", "Legal counsel", ["complaints-legal", "held-balance-legal", "payments-legal", "documents-legal"]],
+  ["legal", "Legal", "Legal counsel", ["complaints-legal", "held-balance-legal", "payments-legal", "documents-legal", "customers-legal"]],
   ["conduct", "Conduct", "Conduct officer", ["conduct-officer"]],
   ["auditor", "Auditor", "Internal auditor (read only)", ["ledger-reader", "payments-reader", "ri-reader", "commission-reader"]],
   ["records", "Records", "Records officer", ["records", "documents-records"]],

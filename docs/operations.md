@@ -59,7 +59,7 @@ What these steps create, with every resource's size and what is needed beyond th
    deploy/entra/apps.sh grant api://<name>-customers portal <portal identity principal id>
    ```
 
-   The portal also does staff and operations work in the customer master for people who passed its own checks (docs/channels.md, "Staff work in other services"), so its identity holds `staff`, `privacy` and `operations` there too: repeat the grant with each of those role names.
+   The portal also does staff and operations work in the customer master for people who passed its own checks (docs/channels.md, "Staff work in other services"), so its identity holds `staff`, `privacy`, `legal` (capacity) and `operations` there too: repeat the grant with each of those role names.
 
    Each reinsurer that reads its statements by API sends a certificate and gets its own application: `deploy/entra/apps.sh reinsurer <name> <reinsurer id> <certificate.pem>` prints the entry for `IC_REINSURANCE_API_CLIENTS`.
 

@@ -42,8 +42,8 @@ const NODES = ports.nodes.map(local).join(",");
 const AUD = { group: "api://ic-group", customers: "api://ic-customers", documents: "api://ic-documents", intake: "api://ic-underwriting-intake" };
 const roles = {
   // The portal's roles on the customer master are those `docs/operations.md` assigns it: the customer page, staff
-  // work, the privacy officer's, and operations' (the search index and the record chain check).
-  "ic-portal": { [AUD.group]: ["employer-portal", "group-admin", "member-portal"], [AUD.customers]: ["portal", "staff", "privacy", "operations"], [AUD.documents]: ["portal", "staff"], [AUD.intake]: ["new-business", "underwriting-console"] },
+  // work, the privacy officer's, legal's (capacity), and operations' (the search index and the record chain check).
+  "ic-portal": { [AUD.group]: ["employer-portal", "group-admin", "member-portal"], [AUD.customers]: ["portal", "staff", "privacy", "operations", "legal"], [AUD.documents]: ["portal", "staff"], [AUD.intake]: ["new-business", "underwriting-console"] },
   "ic-group": { [AUD.customers]: ["group-admin"] },
   "ic-documents": { [AUD.customers]: ["documents"] },
   "ic-payments": { [AUD.customers]: ["payments"] },
