@@ -94,6 +94,13 @@ pub enum ExceptionKind {
     /// each pass; staff put the authority right or take it off the terms.
     /// The subject is the request's key.
     DelegatedAuthorityRefused,
+    /// A joiner in a file has the same name and date of birth as a current
+    /// member or another joiner, so they were not added on a guess. Staff
+    /// ask the employer whether it is the same person; the employer sends
+    /// the row again with the member's previous ID, or as a different
+    /// person once it is clear. The subject is the file. Cleared by the
+    /// scheme's next file, or when this one is withdrawn.
+    JoinerHeldForReview,
 }
 
 /// A leaver's underwritten cover as underwriting's `group_continuation`

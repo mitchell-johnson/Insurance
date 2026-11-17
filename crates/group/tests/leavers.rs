@@ -49,7 +49,8 @@ fn offer_for(h: &Harness, id: &str) -> Option<u64> {
 /// Why it matters: the continuation option is a contractual right with a deadline, and it
 /// exists so that someone who has become uninsurable while employed is not left without
 /// cover. A gap of one day between the two policies, or a policy in the wrong name,
-/// defeats it.
+/// defeats it. Staff see the offer on the member's record, which the scenario run found
+/// missing (SCN-09, F-SCN09-5).
 #[test]
 fn a_leaver_can_continue_their_cover_as_an_individual_policy() {
     let mut h = Harness::new(terms());
@@ -90,6 +91,12 @@ fn a_leaver_can_continue_their_cover_as_an_individual_policy() {
     let offer = offer_for(&h, "E002").unwrap();
     let o = &h.scheme().offers[&offer];
     assert_eq!((o.left, o.expires, o.max_sum_insured_minor), (left, left + Days::new(60), 120_000_00));
+    // Staff see the leaver's offer on the member (found by the scenario run, SCN-09, F-SCN09-5).
+    let member = ic_group::answer(&h.g, serde_json::json!({ "ask": "member", "scheme": SCHEME, "employee": "E002" })).unwrap();
+    assert_eq!(
+        (&member["continuation"][0]["offer"], &member["continuation"][0]["status"]),
+        (&serde_json::json!(offer), &serde_json::json!("open"))
+    );
     assert!(h.saw(|e| matches!(e, GroupEvent::ContinuationOffered { .. })));
     // E003 was never identified: the possible match is closed with the membership, and
     // there is nobody to issue a policy to.

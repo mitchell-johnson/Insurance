@@ -175,16 +175,19 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
             })
         }
         Question::File { scheme: id, file } => {
-            let f = scheme(&id)?
-                .files
-                .get(&file)
-                .ok_or_else(|| format!("file {file} is not known for scheme {id}"))?;
+            let s = scheme(&id)?;
+            let f = s.files.get(&file).ok_or_else(|| format!("file {file} is not known for scheme {id}"))?;
             json!({
                 "file": f.id,
                 "content_hash": f.content_hash,
                 "status": f.status,
                 "received": f.received,
+                "kind": f.kind,
+                "uploaded_by": f.uploaded_by,
+                "approved_by": f.approved_by,
+                "second_approver": f.second_approver || s.terms.second_approver,
                 "summary": f.summary,
+                "changes": listed(&f.changes),
                 "rejected": f.rejected,
                 "ambiguities": f.ambiguities,
                 "applied": f.applied,
@@ -193,7 +196,21 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
                 "code": f.code,
             })
         }
-        Question::Invoices { scheme: id } => json!({ "invoices": scheme(&id)?.invoices }),
+        // Each invoice with its totals worked out, so nobody adds up the lines to see what is asked.
+        Question::Invoices { scheme: id } => {
+            let invoices: Vec<Value> = scheme(&id)?
+                .invoices
+                .iter()
+                .map(|i| {
+                    let mut v = json!(i);
+                    v["members"] = json!(i.members());
+                    v["total_minor"] = json!(i.total_minor());
+                    v["amount_due_minor"] = json!(i.amount_due_minor());
+                    v
+                })
+                .collect();
+            json!({ "invoices": invoices })
+        }
         Question::FilesToRead => {
             let files: Vec<FileToRead> = state
                 .schemes
@@ -225,7 +242,7 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
             }
             let today = state.today();
             let compared = compare(s, today, kind, today, &rows, rejected);
-            json!({ "summary": compared.summary, "rejected": compared.rejected, "ambiguities": compared.ambiguities, "would_be_held": compared.held })
+            json!({ "summary": compared.summary, "changes": listed(&compared.changes), "rejected": compared.rejected, "ambiguities": compared.ambiguities, "would_be_held": compared.held })
         }
         Question::MemberClaim {
             scheme: id,
@@ -257,7 +274,7 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
                 .map(|(s, o)| {
                     let mut covers: Vec<String> = s.product.covers.iter().map(|c| c.cover_type.trim_start_matches("group_").to_string()).collect();
                     covers.dedup();
-                    json!({ "scheme": s.id, "offer": o.id, "left": o.left, "expires": o.expires, "max_sum_insured_minor": o.max_sum_insured_minor,
+                    json!({ "scheme": s.id, "policy": s.policy, "offer": o.id, "left": o.left, "expires": o.expires, "max_sum_insured_minor": o.max_sum_insured_minor,
                         "products": s.terms.continuation.products, "covers": covers })
                 })
                 .collect();
@@ -286,8 +303,9 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
                 .possible
                 .get(&employee)
                 .ok_or_else(|| format!("{employee} has no possible match waiting on scheme {id}"))?;
-            let life = s.membership.members.get(&employee).map(|m| m.life.clone());
-            json!({ "scheme": s.id, "employee": employee, "life": life, "candidates": candidates })
+            let member = s.membership.members.get(&employee);
+            json!({ "scheme": s.id, "employee": employee, "life": member.map(|m| m.life.clone()),
+                "date_of_birth": member.and_then(|m| m.attrs.date_of_birth), "joined": member.map(|m| m.joined), "candidates": candidates })
         }
         Question::SchemeOf { policy } => {
             let schemes: Vec<&String> = state.by_policy.get(&policy).into_iter().collect();
@@ -350,6 +368,11 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
                     "automatic_minor": c.automatic_minor,
                 })).collect::<Vec<_>>(),
                 "above_automatic": above,
+                // For staff: the leaver's continuation offers and where each
+                // stands. The employer portal does not pass this on.
+                "continuation": s.offers.values().filter(|o| o.life == m.life).map(|o| json!({
+                    "offer": o.id, "left": o.left, "expires": o.expires, "max_sum_insured_minor": o.max_sum_insured_minor, "status": json!(o.status)["status"],
+                })).collect::<Vec<_>>(),
             })
         }
         Question::Exceptions { scheme: only } => {
@@ -362,6 +385,23 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
             json!({ "exceptions": open })
         }
     })
+}
+
+/// What each change in a file does, for the person approving it: the
+/// member, what happens and from when, and the names of the fields that
+/// change. Never the values, so nothing about health or identity shows.
+fn listed(changes: &[crate::model::Proposed]) -> Vec<Value> {
+    changes
+        .iter()
+        .map(|c| {
+            let from = if let crate::model::ChangeKind::Rekey { from } = &c.kind {
+                Some(from.as_str())
+            } else {
+                None
+            };
+            json!({ "row": c.row, "employee": c.employee_id, "change": c.kind.code(), "effective": c.effective, "fields": c.fields, "previously": from })
+        })
+        .collect()
 }
 
 /// Active members per billing group.

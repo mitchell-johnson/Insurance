@@ -386,10 +386,18 @@ where
         Ok(service) => service,
         Err(answer) => return answer,
     };
-    let request: Request = match serde_json::from_slice(&body) {
+    let mut request: Request = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => return refused(StatusCode::BAD_REQUEST, "invalid_command", &e.to_string()),
     };
+    // A mapping is sealed here, as a trial seals it: a person sets the
+    // layout they tried, and never works out its content hash.
+    if let GroupCommand::SetMapping { mapping, .. } = &mut request.command {
+        match mapping.as_ref().clone().seal() {
+            Ok(sealed) => **mapping = sealed,
+            Err(e) => return refused(StatusCode::UNPROCESSABLE_ENTITY, "invalid_mapping", &e.to_string()),
+        }
+    }
     if request.key.is_empty() || request.actor.is_empty() || !OUTSIDE_CALLERS.contains(&request.caller.as_str()) {
         return refused(
             StatusCode::FORBIDDEN,

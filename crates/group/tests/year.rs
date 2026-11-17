@@ -206,9 +206,14 @@ fn staff_end_a_scheme_from_a_date() {
 
 /// Purpose: a pool scheme takes declarations of headcount and total salary in place of
 /// files, each replaces the last from its date, a first declaration that is late is raised
-/// to staff, a malformed one is refused, and none is taken once the scheme is ending.
+/// to staff, a malformed one is refused, and none is taken once the scheme is ending. Only
+/// group administration adds a pool; a total salary averaging over $1,000,000 a head is
+/// refused in dollars; and a pool declared by mistake is ended with a headcount of nought,
+/// keeping the scheme's last pool.
 /// Why it matters: a pool is billed on what was declared. A declaration that was lost, or
-/// that silently did not replace the one before, misprices every month until the next.
+/// that silently did not replace the one before, misprices every month until the next. Found
+/// by the scenario run, SCN-07 (F-SCN07-3, F-SCN07-4): a salary entered a hundred times too
+/// large was billed, and a mistyped pool name became a new insured pool that could not be ended.
 #[test]
 fn a_pool_scheme_is_run_on_declarations() {
     let mut t = terms();
@@ -231,7 +236,20 @@ fn a_pool_scheme_is_run_on_declarations() {
     };
     assert_eq!(code(h.employer(receive)), "pool_scheme");
     let start = h.today();
-    assert_eq!(code(declare(&mut h, "", "staff", start, 10, 1)), "unknown_value");
+    assert_eq!(
+        code(declare(&mut h, "", "staff", start, 10, 1)),
+        "unknown_pool",
+        "a pool that is not the scheme's"
+    );
+    let unnamed = GroupCommand::DeclarePool {
+        scheme: SCHEME.into(),
+        pool: String::new(),
+        category: "staff".into(),
+        effective: start,
+        headcount: 10,
+        total_salary_minor: 1,
+    };
+    assert_eq!(code(h.staff(unnamed)), "unknown_value", "staff add pools, each with a name");
     assert_eq!(code(declare(&mut h, "seed", "pilots", start, 10, 1)), "unknown_value");
     assert_eq!(code(declare(&mut h, "seed", "staff", start, 0, 1)), "invalid_amount");
     assert_eq!(code(declare(&mut h, "seed", "staff", start, 10, 0)), "invalid_amount");
@@ -253,13 +271,44 @@ fn a_pool_scheme_is_run_on_declarations() {
     };
     assert_eq!(pool(&h, "pool:seed"), Some((40, 2_400_000_00)));
 
-    // A second pool joins the policy, and the first is restated.
+    // A second pool joins the policy, added by group administration, and the first is restated.
     let today = h.today();
-    declare(&mut h, "drivers", "staff", today, 12, 700_000_00).unwrap();
+    let drivers = GroupCommand::DeclarePool {
+        scheme: SCHEME.into(),
+        pool: "drivers".into(),
+        category: "staff".into(),
+        effective: today,
+        headcount: 12,
+        total_salary_minor: 700_000_00,
+    };
+    let (why, words) = h.employer(drivers.clone()).map_err(|r| (r.code, r.message)).unwrap_err();
+    assert_eq!(why, "unknown_pool", "a pool the scheme does not have is not the employer's to add");
+    assert!(words.contains("drivers is not one of this scheme's pools (seed)"), "{words}");
+    h.staff(drivers).unwrap();
     declare(&mut h, "seed", "staff", today, 42, 2_500_000_00).unwrap();
     assert_eq!(pool(&h, "pool:drivers"), Some((12, 700_000_00)));
     assert_eq!(pool(&h, "pool:seed"), Some((42, 2_500_000_00)));
     assert_eq!(h.scheme().pools.len(), 2);
+
+    // A salary typed a hundred times too large is refused, in dollars, before it is billed.
+    let (why, words) = declare(&mut h, "seed", "staff", today, 140, 78_400_000_000_00)
+        .map_err(|r| (r.code, r.message))
+        .unwrap_err();
+    assert_eq!(why, "implausible_salary");
+    assert!(
+        words.starts_with("a total salary of $78,400,000,000.00 for 140 people is more than $1,000,000.00 a head"),
+        "{words}"
+    );
+    assert_eq!(pool(&h, "pool:seed"), Some((42, 2_500_000_00)));
+
+    // A pool declared by mistake is ended with a headcount and salary of nought; the last one is kept.
+    declare(&mut h, "drivers", "staff", today, 0, 0).unwrap();
+    assert_eq!(h.scheme().pools.keys().collect::<Vec<_>>(), vec!["seed"]);
+    let drivers_life = &h.c.state(h.p).policies[&h.policy].lives[&life("pool:drivers")];
+    assert!(drivers_life.left.is_some(), "the core ended the mistaken pool");
+    assert!(h.saw(|e| matches!(e, GroupEvent::PoolDeclared { headcount: 0, .. })));
+    assert_eq!(code(declare(&mut h, "seed", "staff", today, 0, 0)), "last_pool");
+    assert_eq!(code(declare(&mut h, "seed", "staff", today, 0, 5)), "invalid_amount");
 
     // A named scheme has nothing to declare.
     let mut named = Harness::new(terms());
