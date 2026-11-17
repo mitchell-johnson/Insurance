@@ -24,16 +24,18 @@ const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
 const send = (body) => api(R, "POST", BASE + "commands", body);
 const list = (text) => String(text || "").split(",").map((s) => s.trim()).filter(Boolean);
-const money = (minor) => minor == null ? "" : (Number(minor) / 100).toFixed(2);
+const money = (minor) => minor == null ? "" : portal.money(minor);
+// An amount to put in a number field.
+const plain = (minor) => (Number(minor) / 100).toFixed(2);
 
 const QUEUES = ["health", "lump_sum", "income_protection_new", "income_protection_ongoing", "group", "complex_large", "medical_officer", "rehabilitation", "recoveries", "quality_review"];
-const TASKS = ["claimant_conversation", "case_conference", "medical_opinion", "membership_evidence", "rehabilitation", "medical_review", "income_declaration", "return_to_work", "senior_review", "quality_review", "repayment_arrangement", "proof_of_life"];
+const TASKS = ["non_disclosure_review", "claimant_conversation", "case_conference", "medical_opinion", "membership_evidence", "rehabilitation", "medical_review", "income_declaration", "return_to_work", "senior_review", "quality_review", "repayment_arrangement", "proof_of_life"];
 const TYPES = ["death", "terminal_illness", "trauma", "total_permanent_disability", "income_protection", "health", "premium_waiver"];
 // Every action a person takes. A field is [key, label, kind, options]; a dotted key nests. "partition" goes beside the command.
 const C = ["claim", "Claim", "text"];
 const ACTIONS = {
   notify: [C, ["policy", "Policy", "text"], ["cover", "Cover", "text"], ["life", "Life (optional)", "optional"], ["claim_type", "Claim type", "select", TYPES], ["event_date", "Event date", "date"],
-    ["channel", "Channel", "select", ["phone", "letter", "app", "adviser_portal", "employer_portal", "provider"]], ["notifier", "Notified by", "select", ["policyholder", "life_insured", "beneficiary", "executor", "employer", "adviser", "provider"]], ["claimant", "Claimant (optional)", "optional"]],
+    ["channel", "Channel", "select", ["phone", "letter", "app", "adviser_portal", "employer_portal", "provider"]], ["notifier", "Notified by", "select", ["policyholder", "life_insured", "beneficiary", "family_member", "executor", "employer", "adviser", "provider"]], ["claimant", "Claimant (optional)", "optional"]],
   // A health invoice or receipt, or a request to pre-approve treatment, arrives as a notification with what was billed.
   notify_a_health_invoice: [C, ["policy", "Policy", "text"], ["cover", "Cover", "text"], ["life", "Life (optional)", "optional"], ["claim_type", "Claim type", "select", ["health"]], ["event_date", "Treatment date", "date"],
     ["channel", "Channel", "select", ["provider", "app", "phone", "letter", "adviser_portal", "employer_portal"]], ["notifier", "Sent by", "select", ["provider", "policyholder", "life_insured", "employer", "adviser"]],
@@ -43,6 +45,8 @@ const ACTIONS = {
   record_contact: [C], escalate: [C], open_file: [C],
   identify_life: [C, ["party", "Life (customer reference)", "text"]],
   record_cause: [C, ["cause_code", "Cause code", "text"]],
+  // A health claim notified without its invoice (as by phone), or with one typed wrong: before anything is decided.
+  record_invoice: [C, ["category", "Benefit category on the plan", "text"], ["invoice_minor", "Invoice amount", "money"], ["provider", "Pay this provider directly (optional)", "optional"]],
   cover_check: [C, ["relied_on", "Facts relied on (comma separated)", "list"]],
   request_evidence: [C, ["evidence", "Evidence reference", "text"], ["kind", "Kind", "text"], ["from", "From", "text"]],
   receive_evidence: [C, ["evidence", "Evidence reference", "text"], ["vault_ref", "Document in the vault", "text"], ["cost_minor", "Cost to pay the provider", "money"]],
@@ -76,7 +80,8 @@ const ACTIONS = {
   decline_late_interest: [C, ["vault_ref", "The payee's signed decline in the vault", "text"]],
   ask_repayment: [C, ["overpayment", "Overpayment", "text"]],
   reopen: [C, ["basis", "Basis", "select", ["internal_review", "dispute_scheme", "recurrence", "new_evidence"]], ["reserve_minor", "Reserve", "money"]],
-  verify_payee: [C, ["party", "Payee (customer reference)", "text"], ["kind", "Kind", "select", ["policyholder", "beneficiary", "estate", "trust", "assignee", "provider"]], ["account_ref", "Account reference", "text"], ["name_check_ref", "Name check reference", "text"], ["screening_ref", "Screening reference", "text"], ["authority_doc", "Authority document (optional)", "optional"]],
+  // The payee is picked from the payments register; who it is, its name check and its screening come from there.
+  verify_payee: [C, ["account_ref", "Payee (from the payments register)", "text"], ["kind", "Paid as", "select", ["policyholder", "beneficiary", "estate", "trust", "assignee", "provider"]], ["authority_doc", "Authority document (optional)", "optional"]],
   pay: [C, ["payment_ref", "Payment reference", "text"], ["amount_minor", "Amount", "money"]],
   pay_cost: [C, ["payment_ref", "Payment reference", "text"], ["item", "Evidence or task", "text"], ["provider", "Provider", "text"]],
   pay_interest: [C, ["payment_ref", "Payment reference", "text"], ["party", "Lender or assignee", "text"]],
@@ -117,7 +122,8 @@ function helpers(action, key, input) {
   if (key === "to" || key === "attendees") portal.picker(input, () => portal.colleagues("claims.work"), { min: 0 });
   else if (PEOPLE.has(key)) portal.picker(input, portal.people);
   else if (key === "policy") portal.picker(input, portal.policies, { onPick: async (item) => { covers = await coversOf(item.value).catch(() => []); } });
-  else if (key === "cover") portal.picker(input, () => Promise.resolve(covers).then((list) => list).then((list) => list.map((c) => ({ value: c.cover, label: c.cover, hint: [c.type, c.sum_insured_minor != null ? portal.money(c.sum_insured_minor) : "", c.in_force === false ? "not in force" : ""].filter(Boolean).join(" · ") }))), { min: 0, empty: "Pick the policy from its list to see its covers." });
+  else if (key === "cover") portal.picker(input, () => Promise.resolve(covers).then((list) => list).then((list) => list.map((c) => ({ value: c.cover, label: c.cover, type: c.type, hint: [c.type, c.life, c.sum_insured_minor != null ? portal.money(c.sum_insured_minor) : "", c.in_force === false ? "not in force" : ""].filter(Boolean).join(" · ") }))), { min: 0, empty: "Pick the policy from its list to see its covers.",
+    onPick: (item) => { const type = [...$("a-fields").querySelectorAll("select")].find((sel) => [...sel.options].some((o) => o.value === "health")); const want = { hospital: "health", health: "health", income: "income_protection", income_protection: "income_protection", trauma: "trauma", tpd: "total_permanent_disability", life: "death" }[item.type]; if (type && want && [...type.options].some((o) => o.value === want)) type.value = want; } });
   else if (key === "life") portal.picker(input, async () => [...new Set(covers.map((c) => c.life).filter(Boolean))].map((l) => ({ value: l, label: l })), { min: 0 });
   else if (key === "task" && action === "complete_task") portal.picker(input, () => Promise.resolve(((w && w.tasks) || []).filter((t) => !t.completed_on).map((t) => ({ value: t.id, label: t.id, hint: [words(t.kind), t.due ? "due " + t.due : "", t.overdue ? "overdue" : ""].filter(Boolean).join(" · ") }))), { min: 0, empty: "This claim has no open tasks." });
   else if (key === "evidence" && action === "receive_evidence") portal.picker(input, () => Promise.resolve(((w && w.evidence) || []).filter((e) => !e[4]).map(([e, kind, from, due]) => ({ value: e, label: e, hint: [kind, from, due ? "due " + due : ""].filter(Boolean).join(" · ") }))), { min: 0, empty: "Nothing is outstanding on this claim." });
@@ -125,6 +131,9 @@ function helpers(action, key, input) {
   else if (/(^|\.)evidence(_ref)?$/.test(key) && action !== "request_evidence") portal.picker(input, () => Promise.resolve(((w && w.evidence) || []).map(([e, kind, , , received]) => ({ value: e, label: e, hint: [kind, received ? "received " + received : "outstanding"].join(" · ") }))), { min: 0 });
   else if (/overpayment$/.test(key) && action !== "raise_overpayment") portal.picker(input, () => Promise.resolve(((w && w.overpayments) || []).map(([o, out, status]) => ({ value: o, label: o, hint: `${money(out)} outstanding · ${words(status)}` }))), { min: 0, empty: "This claim has no overpayments." });
   else if (key === "item" && action === "pay_cost") portal.picker(input, () => Promise.resolve([...((w && w.evidence) || []).map(([e, kind]) => ({ value: e, label: e, hint: "evidence · " + kind })), ...((w && w.tasks) || []).map((t) => ({ value: t.id, label: t.id, hint: "task · " + words(t.kind) }))]), { min: 0 });
+  else if (key === "account_ref" && action === "verify_payee") portal.picker(input, async (text) => (await ask("payees", { text })).rows.map((p) => ({ value: p.payee, label: p.name, kind: p.kind,
+    hint: [words(p.kind), `account ending ${p.ending}`, p.blocked ? `not payable yet: ${words(p.blocked)}` : "confirmed and screened"].join(" · ") })),
+    { none: "No payee in payments matches that. A payee maintainer registers it there, and a second confirms it.", onPick: (item) => { const kind = $("a-fields").querySelector("select"); if (kind && ["estate", "provider"].includes(item.kind)) kind.value = item.kind; } });
   else if (key === "party" && action === "pay_interest") portal.picker(input, () => Promise.resolve(((w && w.interests) || []).map(([party, owed]) => ({ value: party, label: party, hint: money(owed) + " still owed" }))), { min: 0 });
 }
 function fields() {
@@ -163,7 +172,7 @@ $("act").addEventListener("submit", run($("act-msg"), async () => {
   if (action === "close_investigation") { const { decline, recover } = inner; inner.outcome = inner.outcome === "cleared" ? "cleared" : { confirmed: { decline, recover: recover.map(recovery) } }; delete inner.decline; delete inner.recover; }
   body.command = { [name]: inner };
   const done = await send(body);
-  if (inner.claim && (inner.claim === $("c-id").value || action === "notify")) { $("c-id").value = inner.claim; await show(inner.claim); }
+  if (inner.claim && (inner.claim === $("c-id").value || name === "notify")) { $("c-id").value = inner.claim; await show(inner.claim); }
   return `Done: ${words(action)}${done.duplicate ? " (already done)" : ""}.`;
 }));
 
@@ -183,12 +192,13 @@ function nextSteps(w) {
   for (const t of (w.tasks || []).filter((t) => !t.completed_on)) out.push(step(`Complete ${words(t.kind)}${t.overdue ? " (overdue)" : ""}`, "complete_task", { task: t.id }));
   for (const [e, kind] of (w.evidence || []).filter((e) => !e[4])) out.push(step(`Record ${kind} received`, "receive_evidence", { evidence: e }));
   if (open && w.admitted_minor === 0 && !w.waiting) out.push(step("Decide: admit", "decide_admit"), step("Decide: decline", "decide_decline"));
-  if (open && w.payable_minor > w.paid_minor && w.payee) out.push(step(`Pay ${money(w.payable_minor - w.paid_minor)}`, "pay", { amount_minor: money(w.payable_minor - w.paid_minor) }));
+  if (open && w.payable_minor > w.paid_minor && w.payee) out.push(step(`Pay ${money(w.payable_minor - w.paid_minor)}`, "pay", { amount_minor: plain(w.payable_minor - w.paid_minor) }));
   if (open && w.payable_minor > 0 && !w.payee) out.push(step("Verify the payee", "verify_payee"));
-  for (const [o, owed] of (w.overpayments || []).filter((o) => o[1] > 0)) out.push(step(`Record a repayment on ${o}`, "record_repayment", { overpayment: o, amount_minor: money(owed) }), step(`Ask for ${o} to be repaid`, "ask_repayment", { overpayment: o }), step(`Set how ${o} is recovered`, "decide_recovery_status", { "request.recovery_status.overpayment": o }));
+  for (const [o, owed] of (w.overpayments || []).filter((o) => o[1] > 0)) out.push(step(`Record a repayment on ${o}`, "record_repayment", { overpayment: o, amount_minor: plain(owed) }), step(`Ask for ${o} to be repaid`, "ask_repayment", { overpayment: o }), step(`Set how ${o} is recovered`, "decide_recovery_status", { "request.recovery_status.overpayment": o }));
   if (open && w.benefit) out.push(step("Suspend the benefit", "decide_suspend_benefit"), step("Resume the benefit", "decide_resume_benefit"));
   if (open && w.payee) out.push(step("Record the payee's tax rate", "set_withholding_rate"));
   if (w.closed_on) out.push(step("Reopen it", "reopen"));
+  if (open && !(w.tasks || []).some((t) => t.kind === "non_disclosure_review" && !t.completed_on)) out.push(step("Refer to underwriting: possible non-disclosure", "open_task", { kind: "non_disclosure_review" }));
   out.push(step("Ask for evidence", "request_evidence"), step("Open a task", "open_task"), step("Record a contact", "record_contact"));
   return out;
 }
@@ -196,7 +206,7 @@ async function show(id) {
   const answer = await ask("work", { claim: id }), { partition, view: w } = answer;
   current = answer; $("c-id").value = w.claim;
   const none = (text) => h("p", { class: "muted" }, text);
-  $("claim").hidden = false; $("c-title").textContent = `${w.claim}: ${words(w.claim_type)}, ${words(w.status)}${w.in_run ? " (in a payment run)" : ""}`;
+  $("claim").hidden = false; $("c-title").textContent = `${w.claim}: ${words(w.claim_type)}, ${w.status === "paid" ? "paid: released to payments, which settles it at the bank" : words(w.status)}${w.in_run ? " (in a payment run)" : ""}`;
   put($("c-summary"), table(["Policy", "Cover", "Partition", "Queue", "Owner", "Event", "Notified", "Closed", "Reserve", "Admitted", "Payable", "Paid"],
     [[w.policy, w.cover, partition, words(w.queue), w.owner || "unassigned", w.event_date, w.notified_on, w.closed_on || "", money(w.reserve_minor), money(w.admitted_minor), money(w.payable_minor), money(w.paid_minor)]]));
   // The claims module marks claimants who deal with one named owner; any change of owner comes with a handover call.
@@ -205,11 +215,14 @@ async function show(id) {
   put($("c-cover"), w.cover_now_and_then ? [h("div", { class: "banner warn" }, "The cover on the event date reads differently now than when it was checked, because of something recorded later."),
     table(["Cover on the event date", "Standing", "Life on the policy", "Sum insured"], [["As known now", ...cover(w.cover_now_and_then[0])], ["As known when checked", ...cover(w.cover_now_and_then[1])]])] : null);
   put($("c-support"), w.communication_support ? h("div", { class: "banner warn" }, `Communication support: the claimant deals only with ${w.owner || "their owner, once one is assigned"}. Hand over with a note and a call if the owner changes.`) : null);
-  put($("c-waiting"), w.waiting ? h("div", { class: "banner warn" }, `Waiting for a signature: ${words(w.waiting.kind)} proposed by ${w.waiting.proposer} on ${w.waiting.proposed_on}. Signed: ${(w.waiting.signed || []).join(", ") || "nobody yet"}. Still needed: ${typeof w.waiting.still_needed === "object" ? JSON.stringify(w.waiting.still_needed) : w.waiting.still_needed}.`) : null);
+  put($("c-waiting"), w.waiting ? h("div", { class: "banner warn" }, `Waiting for a signature: ${words(w.waiting.kind)} proposed by ${w.waiting.proposer} on ${w.waiting.proposed_on}. Signed by ${[w.waiting.proposer, ...(w.waiting.signed || []).filter((x) => x !== w.waiting.proposer)].join(", ")}. Still needed: ${typeof w.waiting.still_needed === "object" ? JSON.stringify(w.waiting.still_needed) : w.waiting.still_needed}.`) : null);
   put($("c-tasks"), (w.tasks || []).length ? table(["Task", "Kind", "Due", "Completed", ""], w.tasks.map((t) => [t.id, words(t.kind), t.due || "", t.completed_on || "", t.overdue ? "overdue" : ""])) : none("No tasks."));
   put($("c-evidence"), (w.evidence || []).length ? table(["Evidence", "Kind", "From", "Due", "Received"], w.evidence.map(([e, kind, from, due, received]) => [e, kind, from, due || "", received || "outstanding"])) : none("No evidence requested."));
   const b = w.benefit;
-  put($("c-money"), w.payee ? h("p", {}, `Payee: ${w.payee[0]} (${words(w.payee[1])}).`) : none("No payee verified."),
+  // What is admitted but not payable was taken first: premium owed on the policy, or a debt offset against the benefit.
+  const taken = w.admitted_minor - w.payable_minor - w.paid_minor;
+  put($("c-money"), taken > 0 && !w.benefit ? h("p", { class: "muted" }, `${money(taken)} of what was admitted is not paid to the payee: it settles premium owed on the policy or a debt offset against the benefit, and the customer's statement shows it.`) : null,
+    w.payee ? h("p", {}, `Payee: ${w.payee[0]} (${words(w.payee[1])}).`) : none("No payee verified."),
     b ? h("p", {}, `Benefit ${money(b.monthly_minor)} a month, next period ${b.next_period}, ends ${b.end}. Arrears ${money(b.arrears_minor)}. Reviews ${b.reviews}${b.reviews_overdue ? `, ${b.reviews_overdue} overdue` : ""}.${b.held_for_proof_of_life ? " Held for proof of life." : ""}`) : null,
     (w.interests || []).length ? table(["Lender or assignee", "Still owed"], w.interests.map(([party, owed]) => [party, money(owed)])) : null,
     (w.payments || []).length ? table(["Payment", "Amount", "Released", "Returned"], w.payments.map(([ref, amount, on, returned]) => [ref, money(amount), on, returned ? "yes" : ""])) : none("Nothing paid."),

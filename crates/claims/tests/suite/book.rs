@@ -57,6 +57,9 @@ fn a_payee_is_verified_before_anything_is_paid() {
     let mut w = World::new();
     admitted(&mut w, "c-1", 200_000);
     assert_eq!(w.refused(pay("c-1", "ana", "p-1", 1_000, None)), "payee_not_verified");
+    assert!(w
+        .told(pay("c-1", "ana", "p-1", 1_000, None))
+        .contains("a payee the payments team has registered, confirmed and screened"));
     let verify = |kind: PayeeKind, account: &str, doc: Option<&str>, who: &str| Command::VerifyPayee {
         claim: "c-1".into(),
         party: "party-estate".into(),
@@ -1896,6 +1899,10 @@ fn a_funeral_advance_is_paid_early_and_counted_against_the_benefit() {
     w.assign("c-1", "ana");
     let advance = |amount_minor| Request::FuneralAdvance { amount_minor };
     assert_eq!(w.undecided("c-1", "ana", advance(20_000), "R-OK"), "advance_limit");
+    assert_eq!(
+        w.told(World::decide_command("c-1", "ana", advance(20_000), "R-OK")),
+        "an advance before a decision is at most $150.00 in all, and $150.00 of it is left on this claim"
+    );
     w.open_claim("t-1");
     assert_eq!(w.undecided("t-1", "ana", advance(1_000), "R-OK"), "not_open");
 
@@ -1921,6 +1928,9 @@ fn a_funeral_advance_is_paid_early_and_counted_against_the_benefit() {
     assert!(matches!(w.core.instructions.last(), Some(Instruction::Pay { close: false, .. })));
     assert_eq!(w.claim("c-1").status, Status::Open, "the claim is still to be decided");
     assert_eq!(w.undecided("c-1", "ana", advance(6_000), "R-OK"), "advance_limit");
+    assert!(w
+        .told(World::decide_command("c-1", "ana", advance(6_000), "R-OK"))
+        .ends_with("and $50.00 of it is left on this claim"));
 
     w.assess("c-1", "CC-0001");
     assert_eq!(w.undecided("c-1", "ana", World::admit_lump(Some(10_000)), "R-OK"), "below_advance");

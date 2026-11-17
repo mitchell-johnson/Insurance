@@ -731,3 +731,59 @@ fn a_pool_cover_claim_is_admitted_on_the_employers_evidence_kept_with_it() {
     w.decided("p-1", "ana", World::admit_lump(Some(1_000)), "R-OK");
     assert_eq!(w.claim("p-1").status, Status::Admitted);
 }
+
+/// Purpose: a reason code that does not fit the decision is refused with the
+/// codes that do; where the rules in force have none for that kind of
+/// decision, the refusal says so and who adds one.
+/// Why it matters: found by the scenario run (SCN-12, F-12-1). The assessor
+/// tried R-OK and R-EVID for a funeral advance and was told only "is not a
+/// reason code for this decision", with no list and no way forward, because
+/// the rules held no code for an advance.
+#[test]
+fn a_wrong_reason_code_is_answered_with_the_codes_that_fit() {
+    let mut w = World::new();
+    w.open_claim("c-1");
+    assert_eq!(
+        w.told(World::decide_command("c-1", "ana", Request::Decline, "R-REV")),
+        "R-REV is not a reason code for this decision; a decline takes R-NO"
+    );
+    let mut r = rules();
+    r.version = 2;
+    r.reason_codes.retain(|code, _| code == "R-NO");
+    w.ok(Command::ActivateRules { rules: Box::new(r) });
+    assert_eq!(
+        w.told(World::decide_command("c-1", "ana", Request::FuneralAdvance { amount_minor: 100 }, "R-NO")),
+        "R-NO is not a reason code for this decision, and the claims rules in force have none for a funeral advance: the claims rules owner adds one"
+    );
+}
+
+/// Purpose: a claim is not declined while a non-disclosure review is open, and a decline giving
+/// a reason the rules name as non-disclosure stands only once underwriting's review has avoided
+/// the policy; a review that varied the terms, or found nothing, does not support it.
+/// Why it matters: found by the scenario run (SCN-24, F-24-3). A claim was declined for
+/// non-disclosure with the policy's terms unchanged and no underwriting remedy in place, so the
+/// claimant lost the claim while the insurer kept the cover on its books.
+#[test]
+fn a_non_disclosure_decline_stands_on_underwritings_remedy() {
+    let mut w = World::new();
+    let mut r = rules();
+    r.version = 2;
+    r.reason_codes.insert("R-NDISC".to_string(), [DecisionKind::Decline].into());
+    r.non_disclosure_reasons = ["R-NDISC".to_string()].into();
+    w.ok(Command::ActivateRules { rules: Box::new(r) });
+    w.open_claim("c-1");
+    w.conversation("c-1", "talk-1");
+    assert_eq!(w.undecided("c-1", "ana", Request::Decline, "R-NDISC"), "no_non_disclosure_remedy");
+    w.task("c-1", "ndr-1", TaskKind::NonDisclosureReview, "ana");
+    assert_eq!(w.undecided("c-1", "ana", Request::Decline, "R-NO"), "awaiting_non_disclosure_review");
+    let outcome = |review: &str, outcome| Command::NonDisclosureOutcome {
+        claim: "c-1".into(),
+        review_ref: review.into(),
+        outcome,
+    };
+    w.ok(outcome("ndr-1", NonDisclosureOutcome::Vary));
+    assert_eq!(w.undecided("c-1", "ana", Request::Decline, "R-NDISC"), "no_non_disclosure_remedy");
+    w.task("c-1", "ndr-2", TaskKind::NonDisclosureReview, "ana");
+    w.ok(outcome("ndr-2", NonDisclosureOutcome::Avoid));
+    w.decided("c-1", "ana", Request::Decline, "R-NDISC");
+}

@@ -327,6 +327,13 @@ impl ClaimsState {
             Command::Escalate { claim, actor } => self.escalate(cx, &claim, &actor),
             Command::IdentifyLife { claim, party, actor } => self.identify_life(cx, &claim, &party, &actor),
             Command::RecordCause { claim, cause_code, actor } => self.record_cause(cx, &claim, &cause_code, &actor),
+            Command::RecordInvoice {
+                claim,
+                category,
+                invoice_minor,
+                provider,
+                actor,
+            } => self.record_invoice(cx, &claim, &category, invoice_minor, provider, &actor),
             Command::CoverCheck { claim, relied_on, actor } => self.cover_check(cx, &claim, relied_on, &actor),
             Command::RequestEvidence {
                 claim,

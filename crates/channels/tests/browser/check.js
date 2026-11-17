@@ -230,7 +230,7 @@ const sees = async (page, text) => {
     await p.locator("#rows").getByText("prop-1").waitFor();
     await sees(p, "The applicant");
     // Kiri notified a claim from her own page earlier in this run: her adviser sees its status.
-    await p.locator("#claims").getByText(/^No claims\.$|^open$/).first().waitFor();
+    await p.locator("#claims").getByText(/^No claims\.$|^being assessed$/).first().waitFor();
     // The schedule is listed; the documents module decides who may download it, and it is the customer's.
     await p.locator("#invest").getByText("No units held.").waitFor();
     await p.locator("#docs").getByText("Policy schedule").waitFor();
@@ -663,12 +663,13 @@ const sees = async (page, text) => {
     await say(p, "Treasury reconciles the bank account, then approves the run");
     await tab(p, "Reconciliation");
     await p.fill("#rec-account", "anz-sf1-claims"); await p.locator("#rec-form button").click();
-    await sees(p, "closing 10000000.00");
+    await sees(p, "closing NZ$10,000,000.00");
     await tab(p, "Runs");
     await p.locator("#runs").getByText("rb1").waitFor();
     await p.locator("#runs").getByRole("button", { name: "Open" }).first().click();
     await p.getByRole("button", { name: "Approve" }).click();
     await p.locator("#run-msg").getByText("Done: approve run.").waitFor();
+    if (await p.locator("#run-actions").getByRole("button", { name: "Approve" }).count()) throw new Error("an approved run still offers approval");
     await tab(p, "Payees and refunds");
     await p.fill("#party-id", "party-p1"); await p.locator("#party-form button").click();
     await p.locator("#party").getByText("p1").first().waitFor();

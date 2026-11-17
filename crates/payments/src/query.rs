@@ -152,6 +152,7 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "expected_payment" => Ok(state.expected_payment(text(&question, "payment")?)),
         "open_exceptions" => Ok(state.open_exceptions(question["account"].as_str())),
         "party" => Ok(state.party_summary(text(&question, "party")?)),
+        "find_payees" => Ok(state.find_payees(text(&question, "text")?)),
         "refund" => found(state.refunds.get(text(&question, "refund")?)),
         "messages_read" => found(Some(&state.messages_read)),
         "awaiting_conversation" => found(Some(&state.awaiting_conversation)),

@@ -222,7 +222,10 @@ pub fn question(name: &str, field: impl Fn(&str) -> Option<String>) -> Result<Qu
             claim: needs("claim")?,
             staff: None,
         },
-        "policy" => Question::PolicyStatus { policy: needs("policy")? },
+        "policy" => Question::PolicyStatus {
+            policy: needs("policy")?,
+            staff: None,
+        },
         // Who is asking is filled in from the session, never from the page.
         "cases" => Question::Cases { staff: String::new() },
         "book" => Question::Book,
@@ -275,6 +278,109 @@ pub fn command(staff: &PartyId, purpose: &str, partition: Option<PartitionId>, m
     // The core checks the caller again: a command not open to `claims` is refused there.
     let typed: ClaimsCommand = serde_json::from_value(command).map_err(|e| format!("not a claims command: {e}"))?;
     Ok((name, target, Command::Claims(Box::new(typed))))
+}
+
+/// A claim's payee is a payee the payments module holds, never references
+/// an assessor types: `fields` are a `verify_payee` command's, whose
+/// `account_ref` names the payee there, and `payee` is that module's answer
+/// for it (null when there is none). The payee must have passed the bank's
+/// name check, been confirmed by a second payee maintainer and screened
+/// clear; who it is paid to, and the name check and screening relied on,
+/// are filled in from that record. An estate is paid only to an estate's
+/// account and a provider only to a provider's. Legal's approval of an
+/// estate's account and the cooling-off on new details are payments' to
+/// hold, and they hold the payment, not the verification.
+pub fn payee_from_register(fields: &mut serde_json::Map<String, Value>, payee: &Value) -> Result<(), String> {
+    let id = fields.get("account_ref").and_then(Value::as_str).map(str::trim).unwrap_or_default().to_string();
+    if id.is_empty() {
+        return Err("pick the payee from the payments register: the payments team registers a payee, and a second person confirms it".to_string());
+    }
+    let tell = |why: &str| format!("payee {id} {why}, so a claim cannot be paid to it yet");
+    if payee.is_null() {
+        return Err(format!(
+            "there is no payee {id} in payments: ask a payee maintainer there to register it, and a second to confirm it"
+        ));
+    }
+    if payee["closed"] == true {
+        return Err(tell("is closed"));
+    }
+    if payee["name_check"] == "no_match" {
+        return Err(tell("failed the bank's name check"));
+    }
+    if payee["confirmed_by"].as_str().is_none() {
+        return Err(tell("has not been confirmed by a second payee maintainer"));
+    }
+    if payee["screened_clear"] != true {
+        return Err(tell("has not been screened clear"));
+    }
+    let theirs = payee["kind"].as_str().unwrap_or_default();
+    let ours = fields.get("kind").and_then(Value::as_str).unwrap_or_default();
+    let fits = match (ours, theirs) {
+        ("estate", t) => t == "estate",
+        ("provider", t) => t == "provider",
+        (_, t) => t == "customer" || t == "beneficiary",
+    };
+    if !fits {
+        return Err(format!(
+            "payee {id} is held in payments as a {} account, which does not pay a claim's {ours}",
+            theirs.replace('_', " ")
+        ));
+    }
+    let party = payee["party"].as_str().unwrap_or_default();
+    let check = payee["name_check"].as_str().unwrap_or_default();
+    let confirmed = payee["confirmed_by"].as_str().unwrap_or_default();
+    fields.insert("account_ref".to_string(), json!(id));
+    fields.insert("party".to_string(), json!(party));
+    fields.insert(
+        "name_check_ref".to_string(),
+        json!(format!("payments:{id}:name_check:{check}:confirmed_by:{confirmed}")),
+    );
+    fields.insert("screening_ref".to_string(), json!(format!("payments:{id}:screened_clear")));
+    Ok(())
+}
+
+/// The non-disclosure review underwriting opens for a claim's life, under
+/// the same reference the claim's task carries, so its outcome finds the
+/// task again.
+pub fn review_id(claim: &str, life: &str) -> String {
+    format!("ndr/{claim}/{life}")
+}
+
+/// The claim a review was opened for, from its reference.
+pub fn review_claim(review: &str) -> Option<&str> {
+    review.strip_prefix("ndr/")?.rsplit_once('/').map(|(claim, _)| claim).filter(|c| !c.is_empty())
+}
+
+/// The command that refers a claim's life to underwriting for a
+/// non-disclosure review, as the claims module would send it.
+pub fn refer_for_review(claim: &str, policy: &str, life: &str, opened_by: &PartyId, at: crate::staff::At) -> Value {
+    let when = chrono::DateTime::from_timestamp(at, 0).unwrap_or_default();
+    json!({
+        "key": format!("claims:refer:{}", review_id(claim, life)),
+        "caller": CALLER,
+        "at": when.to_rfc3339(),
+        "today": crate::payments::nz(at).date().to_string(),
+        "command": { "open_non_disclosure_review": { "claim_ref": claim, "policy": policy, "life": life, "opened_by": opened_by } },
+    })
+}
+
+/// Underwriting's outcome of a review, told to the claim it was opened for
+/// as underwriting tells it. `None` when the command is not an outcome or
+/// the review was not opened for a claim.
+pub fn review_outcome(command: &Value) -> Option<(String, Envelope)> {
+    let fields = command.get("record_non_disclosure_outcome")?;
+    let review = fields.get("review")?.as_str()?;
+    let claim = review_claim(review)?.to_string();
+    let told = json!({ "non_disclosure_outcome": { "claim": claim, "review_ref": review, "outcome": fields.get("outcome")? } });
+    let typed: ClaimsCommand = serde_json::from_value(told).ok()?;
+    let envelope = Envelope {
+        key: format!("underwriting:outcome:{review}"),
+        caller: "underwriting".to_string(),
+        salt: fresh_salt(),
+        traceparent: None,
+        command: Command::Claims(Box::new(typed)),
+    };
+    Some((claim, envelope))
 }
 
 /// The envelope for one person's command. The key is theirs, so a retry

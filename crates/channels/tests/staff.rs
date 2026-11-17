@@ -1538,3 +1538,68 @@ fn a_policy_change_needs_a_security_approver() {
         "a change that widens access needs its reason recorded"
     );
 }
+
+/// Purpose: a one-off grant never gives a payments approver the maker's action, nor a maker
+/// the approver's, nor an approver the payee maintainer's; the refusal names the duty held. A
+/// grant still waiting is withdrawn with decline_grant, and revoking it says so.
+/// Why it matters: found by the scenario run (SCN-16, F-SCN16-7). An approver could ask for a
+/// one-off payments.maker grant for herself and wait for an administrator to approve it, which
+/// would join the duties a payment run keeps apart; and "no such active grant" did not tell her
+/// how to withdraw her own request.
+#[test]
+fn a_grant_never_joins_duties_kept_apart() {
+    let mut s = StaffState::new();
+    let approver = template(
+        "payments-approver",
+        &["payments.view", "payments.approver"],
+        &[DataClass::Ordinary],
+        "none",
+        &[],
+    );
+    let admin = template(
+        "administrator",
+        &[actions::MANAGE_STAFF, actions::APPROVE_GRANT],
+        &[DataClass::Ordinary],
+        "none",
+        &[],
+    );
+    let none = Profile {
+        id: "none".into(),
+        version: 1,
+        limits: BTreeMap::new(),
+    };
+    let boot = StaffCommand::Bootstrap {
+        templates: vec![approver, admin],
+        profiles: vec![none],
+        admin: p("alice"),
+        admin_templates: vec!["administrator".into()],
+    };
+    s.apply(&p("module:entitlements"), T0, boot).unwrap();
+    let employ = StaffCommand::Employ {
+        party: p("pia"),
+        team: "payments".into(),
+        manager: None,
+        templates: vec!["payments-approver".into()],
+    };
+    s.apply(&p("alice"), T0, employ).unwrap();
+    let ask = |id: &str, action: &str| StaffCommand::RequestGrant {
+        id: id.into(),
+        holder: p("pia"),
+        kind: GrantKind::OneOff {
+            action: action.into(),
+            record: "run-9".into(),
+        },
+        reason: "the maker is away".into(),
+        from: T0,
+        to: T0 + 3600,
+    };
+    for action in ["payments.maker", "payments.payees"] {
+        let refused = s.apply(&p("pia"), T0, ask("g-sod", action)).unwrap_err();
+        assert_eq!(refused.code, "separation_of_duties", "{action}");
+        assert!(refused.message.contains("holds payments.approver"), "{}", refused.message);
+    }
+    s.apply(&p("pia"), T0, ask("g-view", "payments.view")).unwrap();
+    let refused = s.apply(&p("pia"), T0, StaffCommand::RevokeGrant { id: "g-view".into() }).unwrap_err();
+    assert!(refused.message.contains("decline_grant"), "{}", refused.message);
+    s.apply(&p("pia"), T0, StaffCommand::DeclineGrant { id: "g-view".into() }).unwrap();
+}

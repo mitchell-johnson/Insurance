@@ -59,13 +59,19 @@ impl PaymentsState {
     /// What is expected to leave between `from` and `to`: runs not yet
     /// settled, by value date, run type and fund; payments released and
     /// waiting for a run; and claims admitted and not yet released, with
-    /// those at or above the pre-advice threshold listed.
+    /// those at or above the pre-advice threshold listed. Each account the
+    /// runs pay from is shown with what it will hold and what the runs need
+    /// from it, so treasury can see whether the money is there.
     pub fn funding_forecast(&self, from: NaiveDate, to: NaiveDate) -> Value {
         let mut runs: BTreeMap<(NaiveDate, String, String), i64> = BTreeMap::new();
+        let mut needs: BTreeMap<String, (String, i64)> = BTreeMap::new();
         for run in self.runs.values() {
             let open = matches!(run.status, RunStatus::Prepared | RunStatus::Checked | RunStatus::Approved);
             if !open || run.run_type.inbound() || run.value_date < from || run.value_date > to {
                 continue;
+            }
+            if let Ok((_, account)) = self.route_of(run.run_type, run.urgent, &run.fund, run.currency) {
+                needs.entry(account).or_insert_with(|| (run.fund.clone(), 0)).1 += run.live_total();
             }
             let key = (
                 run.value_date,
@@ -80,6 +86,21 @@ impl PaymentsState {
             .into_iter()
             .map(|((value_date, run_type, fund), total)| json!({"value_date": value_date, "run_type": run_type, "fund": fund, "total_minor": total}))
             .collect();
+        // An account no statement has been read for has no balance to show:
+        // a run from it is refused until one is.
+        let accounts: Vec<Value> = needs
+            .into_iter()
+            .map(|(account, (fund, needed))| {
+                let available = self.available(&account);
+                json!({
+                    "account": account,
+                    "fund": fund,
+                    "needed_minor": needed,
+                    "available_minor": available,
+                    "short_minor": available.map(|a| (needed - a).max(0)),
+                })
+            })
+            .collect();
         let threshold = self.config.as_ref().map_or(i64::MAX, |c| c.rules.pre_advice_threshold_minor);
         let large: Vec<Value> = self
             .admitted
@@ -91,6 +112,7 @@ impl PaymentsState {
             "from": from,
             "to": to,
             "runs": runs,
+            "accounts": accounts,
             "waiting_minor": self.waiting.values().map(|w| w.amount_minor).sum::<i64>(),
             "admitted_minor": self.admitted.values().map(|a| a.amount_minor).sum::<i64>(),
             "large_claims": large,

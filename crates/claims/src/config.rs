@@ -239,6 +239,12 @@ pub struct Rules {
     /// The controlled list of reason codes and the decisions each may explain.
     #[serde(default)]
     pub reason_codes: BTreeMap<String, BTreeSet<DecisionKind>>,
+    /// The reason codes that say a claim is declined for non-disclosure. A
+    /// decline giving one stands only on underwriting's remedy: a
+    /// non-disclosure review on the claim that ended in the policy being
+    /// avoided. A varied policy is assessed again on its varied terms.
+    #[serde(default)]
+    pub non_disclosure_reasons: BTreeSet<String>,
     /// Cause codes and the cause tags each maps to.
     #[serde(default)]
     pub cause_codes: BTreeMap<String, Vec<String>>,
@@ -470,7 +476,26 @@ impl Rules {
             return Err(Reject::new("reason_required", "a decision needs at least one reason code"));
         }
         match reasons.iter().find(|r| !self.reason_codes.get(*r).is_some_and(|uses| uses.contains(&kind))) {
-            Some(bad) => Err(Reject::new("unknown_reason", format!("{bad} is not a reason code for this decision"))),
+            Some(bad) => {
+                let allowed: Vec<&str> = self
+                    .reason_codes
+                    .iter()
+                    .filter(|(_, uses)| uses.contains(&kind))
+                    .map(|(code, _)| code.as_str())
+                    .collect();
+                let kind = serde_json::to_value(kind)
+                    .ok()
+                    .and_then(|k| k.as_str().map(|k| k.replace('_', " ")))
+                    .unwrap_or_default();
+                let message = if allowed.is_empty() {
+                    format!(
+                        "{bad} is not a reason code for this decision, and the claims rules in force have none for a {kind}: the claims rules owner adds one"
+                    )
+                } else {
+                    format!("{bad} is not a reason code for this decision; a {kind} takes {}", allowed.join(", "))
+                };
+                Err(Reject::new("unknown_reason", message))
+            }
             None => Ok(()),
         }
     }

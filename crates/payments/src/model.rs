@@ -351,6 +351,26 @@ pub struct Item {
     /// An approver looked at a possible duplicate and let it through.
     #[serde(default)]
     pub released: bool,
+    /// Treasury let an amount above the route's item limit through, having
+    /// funded it: who did. The run is still approved as any other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit_released_by: Option<String>,
+    /// Every reason the item is held, the first of them its status, so a
+    /// person sees them all at once rather than one per check.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holds: Vec<String>,
+}
+
+impl Item {
+    /// Every reason the item is held now; an item checked before the
+    /// reasons were all kept has only its status's one.
+    pub fn holds_now(&self) -> Vec<String> {
+        match &self.status {
+            ItemStatus::Held(first) if self.holds.is_empty() => vec![first.clone()],
+            ItemStatus::Held(_) => self.holds.clone(),
+            _ => Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -167,6 +167,10 @@ pub enum Question {
     /// checks that the person asking serves or administers the policy.
     PolicyStatus {
         policy: String,
+        /// A member of staff asking: a claim they are related to, or
+        /// underwrote the life of, is not shown, not even that it exists.
+        #[serde(default)]
+        staff: Option<StaffId>,
     },
     /// The restricted cases, for an investigator. The caller puts the
     /// signed-in person here; anyone without the role is answered with none.
@@ -200,6 +204,9 @@ pub struct WorkView {
     pub claim: ClaimId,
     pub policy: String,
     pub cover: String,
+    /// The life claimed on, when the policy has more than one.
+    #[serde(default)]
+    pub life: Option<String>,
     pub claim_type: ClaimType,
     pub status: Status,
     pub queue: Queue,
@@ -328,7 +335,15 @@ impl ClaimsState {
             Question::Report => Reply::Report(Box::new(self.report())),
             Question::Remittance { run } => Reply::Remittance(self.remittance(run)),
             Question::Work { claim, staff } => Reply::Work(self.work_view(claim).filter(|_| self.may_see(staff.as_deref(), claim)).map(Box::new)),
-            Question::PolicyStatus { policy } => Reply::PolicyStatus(self.policy_status(policy)),
+            Question::PolicyStatus { policy, staff } => Reply::PolicyStatus(
+                self.policy_status(policy)
+                    .into_iter()
+                    .filter(|row| match (staff, self.claims.get(&row.claim)) {
+                        (Some(staff), Some(claim)) => !self.conflicted(staff, claim),
+                        _ => true,
+                    })
+                    .collect(),
+            ),
             Question::Cases { staff } => Reply::Cases(self.cases(staff)),
             Question::RepaymentLetters => Reply::RepaymentLetters(self.repayment_letters()),
         }
@@ -357,6 +372,7 @@ impl ClaimsState {
             claim: c.id.clone(),
             policy: c.policy.clone(),
             cover: c.cover.clone(),
+            life: c.life.clone(),
             claim_type: c.claim_type,
             status: c.status,
             queue: c.queue,

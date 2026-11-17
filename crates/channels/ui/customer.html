@@ -138,7 +138,11 @@ async function open(p) {
   put($("bills"), owed && owed.outstanding_minor > 0 ? h("div", { class: "banner warn", role: "status" }, `${money(owed.outstanding_minor)} is due, the oldest from ${owed.oldest_unpaid_due}.`) : h("p", { class: "muted" }, "Nothing is overdue."),
     table(["From", "To", "Amount"], bills.filter((b) => b.period_start).map((b) => [b.period_start, b.period_end, money(b.total_minor)])));
   const claims = await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(p.policy) + "/claims");
-  put($("claims"), claims.rows.length ? table(["Claim", "Status", "Told us", "Closed"], claims.rows.map((c) => [c.claim, words(c.status), c.notified_on, c.closed_on || ""])) : h("p", { class: "muted" }, "No claims."));
+  // A claim's status in the customer's words, with what they can do next. Never why.
+  const CLAIM_WORDS = { paid: "paid: the money has been sent to your bank, and can take a few working days to arrive",
+    declined: "declined: we have written to you with the reasons. If you disagree, ask the claims team for a review, or make a complaint and we will look at it again",
+    in_payment: "being paid", admitted: "accepted: payment is on its way", open: "being assessed" };
+  put($("claims"), claims.rows.length ? table(["Claim", "Status", "Told us", "Closed"], claims.rows.map((c) => [c.claim, CLAIM_WORDS[c.status] || words(c.status), c.notified_on, c.closed_on || ""])) : h("p", { class: "muted" }, "No claims."));
   put($("docs"), portal.documents(R, view.rows, $("docs-msg")));
   const advisers = rows("adviser");
   put($("advisers"), advisers.length ? table(["Adviser", "State", ""], advisers.map((a) => [a.adviser, a.state === "available" ? "Available" : "Not available: contact us",

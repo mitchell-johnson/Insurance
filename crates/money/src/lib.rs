@@ -162,6 +162,23 @@ impl fmt::Display for Money {
     }
 }
 
+/// Minor units as people read them: dollars and cents with a sign, thousands
+/// separators and no currency code, such as `$1,234.56` or `-$0.05`. Refusals
+/// and screens show amounts this way; nothing here rounds.
+pub fn dollars(minor: i64) -> String {
+    let sign = if minor < 0 { "-" } else { "" };
+    let abs = minor.unsigned_abs();
+    let whole = (abs / 100).to_string();
+    let mut grouped = String::new();
+    for (i, c) in whole.chars().enumerate() {
+        if i > 0 && (whole.len() - i).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(c);
+    }
+    format!("{sign}${grouped}.{:02}", abs % 100)
+}
+
 /// Millionths of a minor unit. Used by accrual and earning accounts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AccrualAmount {
@@ -343,6 +360,18 @@ mod tests {
     fn display() {
         assert_eq!(Money::new(-12345, Currency::NZD).to_string(), "-123.45 NZD");
         assert_eq!(Money::new(5, Currency::NZD).to_string(), "0.05 NZD");
+    }
+
+    /// Purpose: an amount in minor units reads as dollars and cents with a sign and thousands
+    /// separators.
+    /// Why it matters: refusals said "1200000" where a person needed "$12,000.00"; the scenario
+    /// run (SCN-15, SCN-16, F-SCN16-1) found people misreading cents as dollars.
+    #[test]
+    fn dollars_read_as_people_write_them() {
+        assert_eq!(dollars(499_883_13), "$499,883.13");
+        assert_eq!(dollars(5), "$0.05");
+        assert_eq!(dollars(-1_000_000_00), "-$1,000,000.00");
+        assert_eq!(dollars(99_900), "$999.00");
     }
 
     /// Purpose: the same decimal rounds to cents differently under half-up, half-even and down,

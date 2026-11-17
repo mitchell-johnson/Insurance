@@ -134,6 +134,10 @@ impl PaymentsState {
         if self.payees.contains_key(&waiting.payee) {
             return Ok(waiting.payee.clone());
         }
+        // Claims verified the payee it picked from this register: that one.
+        if self.payees.get(&waiting.account_ref).is_some_and(|p| p.party == waiting.payee) {
+            return Ok(waiting.account_ref.clone());
+        }
         let mut theirs = self.payees.iter().filter(|(_, p)| p.party == waiting.payee).map(|(id, _)| id);
         match (theirs.next(), theirs.next()) {
             (Some(only), None) => Ok(only.clone()),
