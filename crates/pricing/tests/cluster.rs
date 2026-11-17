@@ -182,6 +182,7 @@ async fn a_valuation_becomes_a_price_an_order_and_an_extract() {
         actor: actor.into(),
         roles: roles.iter().map(|r| r.to_string()).collect(),
         at,
+        today: None,
         command,
     };
     let out = module

@@ -99,6 +99,7 @@ fn entered(id: &str, policy: &PolicyId, payload: serde_json::Value, reason: &str
             case: "case-1".to_string(),
             backdated: false,
             above_limit: false,
+            cover_given_up_minor: None,
             second: None,
         }),
     }
@@ -1518,8 +1519,8 @@ fn every_joint_owner_signs_and_ownership_passes_to_the_buyer() {
         w.dir(party(owner), grant).unwrap();
     }
 
-    // The transfer waits for both owners' signatures.
-    let mut transfer = submit("r-sell", Some(&pol), "transfer_ownership", "policy-servicing");
+    // A change to the policy waits for both owners' signatures.
+    let mut transfer = submit("r-sell", Some(&pol), "cancel_policy", "policy-servicing");
     if let Command::SubmitRequest { signed, .. } = &mut transfer {
         *signed = true;
     }

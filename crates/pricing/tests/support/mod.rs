@@ -72,6 +72,8 @@ pub struct Harness {
     pub state: PricingState,
     pub n: u64,
     pub at: DateTime<Utc>,
+    /// The books' business date the console would send, when a test sets one.
+    pub today: Option<NaiveDate>,
 }
 
 impl Harness {
@@ -81,6 +83,7 @@ impl Harness {
             state: PricingState::new(),
             n: 0,
             at: Utc.with_ymd_and_hms(2026, 11, 2, 4, 0, 0).unwrap(),
+            today: None,
         };
         h.ok(CALLER_CONFIG, "config", &[], Command::ActivateFund(Box::new(fund("growth"))));
         h.ok(CALLER_INTAKE, "driver", &[], Command::RecordPartitions { count: 2 });
@@ -95,6 +98,7 @@ impl Harness {
             actor: actor.to_string(),
             roles: roles.iter().map(|r| r.to_string()).collect(),
             at: self.at,
+            today: self.today,
             command,
         };
         self.state.apply_envelope(e)

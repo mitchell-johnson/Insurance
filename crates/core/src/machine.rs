@@ -1110,6 +1110,14 @@ impl CoreState {
                 let id = order.policy.clone();
                 self.with_policy(&id, true, |s, p| {
                     invest::offered(&invest::menu(&s.catalog, p), &order)?;
+                    // A withdrawal takes money out, so the owner's own hold stops it when it
+                    // is asked for, not only when its payout is raised (F2-05-2). A switch
+                    // moves nothing out and goes ahead; a repeat of an order placed before
+                    // the hold is the same order.
+                    let new = s.investment.order(&order.order_id).is_none();
+                    if new && matches!(order.kind, invest::OrderKind::Withdrawal | invest::OrderKind::RegularWithdrawal) {
+                        crate::owner_hold::permit(p)?;
+                    }
                     if order.direction == invest::Direction::Buy || order.switch_to.is_some() {
                         invest::open_to_money(p)?;
                     }

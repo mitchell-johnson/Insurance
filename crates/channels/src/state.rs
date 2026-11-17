@@ -93,7 +93,7 @@ pub const MONEY_KINDS: &[&str] = &["make_payment", "change_payment_method", "cha
 /// on their enrolled device, so a stolen session or an assistant acting on a
 /// sign-in alone cannot end someone's cover or change their debits. Declining
 /// an indexation is not among them: it is taken back as easily as it is made.
-pub const CONTRACT_KINDS: &[&str] = &["cancel_policy", "change_frequency", "reduce_cover"];
+pub const CONTRACT_KINDS: &[&str] = &["cancel_policy", "change_frequency", "reduce_cover", "switch_funds"];
 
 /// Whether a person's own request of this kind needs their device's signature.
 pub fn needs_signature(kind: &str) -> bool {
@@ -107,6 +107,9 @@ pub mod assisted {
     pub const APPROVE: &str = "service.approve_change";
     /// The authority profile limit on the amount a change moves.
     pub const LIMIT: &str = "assisted_change";
+    /// The authority profile limit on the cover a reduction gives up. A
+    /// profile without it sends every reduction to a second person.
+    pub const COVER_LIMIT: &str = "assisted_cover_reduction";
 }
 
 /// What a change staff entered for a customer carries: why, the case it
@@ -118,9 +121,13 @@ pub struct Assisted {
     /// The payload's `effective` date was before today.
     #[serde(default)]
     pub backdated: bool,
-    /// The payload's `amount_minor` was above the enterer's limit.
+    /// The payload's `amount_minor`, or the cover a reduction gives up, was
+    /// above the enterer's limit.
     #[serde(default)]
     pub above_limit: bool,
+    /// For a reduction: the cover given up, which the limit was judged on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover_given_up_minor: Option<i64>,
     #[serde(default)]
     pub second: Option<PartyId>,
 }
@@ -179,6 +186,10 @@ pub struct Request {
     /// customer declined a change prepared for them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub declined_by: Option<PartyId>,
+    /// The books' business date it was asked on, which is the date people
+    /// are shown; `submitted` is the clock's moment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<NaiveDate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -608,6 +619,12 @@ impl ChannelState {
                     },
                     "approved_by": r.approved_by,
                     "declined": r.declined_by.is_some(),
+                    // Who asked, who has signed and who declined, so each owner reads where it stands (F2-04-4, F2-04-5).
+                    "asked_by": r.party,
+                    "signed_by": r.signed_by,
+                    "declined_by": r.declined_by,
+                    "on": r.on,
+                    "context": self.change_context(r),
                 }),
             );
         }
@@ -845,6 +862,33 @@ impl ChannelState {
         Some(policy.clone())
     }
 
+    /// The cover a life holds now under a cover code: its layers in force, added up.
+    pub fn cover_now(&self, policy: &PolicyId, cover: &str, life: &str) -> Option<i64> {
+        let layers: Vec<i64> = self
+            .data
+            .view
+            .layers_on_policy(policy)
+            .into_iter()
+            .filter(|r| r.in_force && r.cover == cover && r.life.0 == life)
+            .map(|r| r.sum_insured_minor)
+            .collect();
+        (!layers.is_empty()).then(|| layers.iter().sum())
+    }
+
+    /// What a change is about, for the people who approve it to read: for a
+    /// reduction, the cover the life holds now and whose life it is (F2-04-1,
+    /// F2-04-3, F2-04-7). Nothing for other kinds.
+    pub fn change_context(&self, r: &Request) -> Value {
+        let (Some(policy), "reduce_cover") = (&r.policy, r.kind.as_str()) else {
+            return Value::Null;
+        };
+        let (cover, life) = (r.payload["cover"].as_str().unwrap_or_default(), r.payload["life"].as_str().unwrap_or_default());
+        serde_json::json!({
+            "from_minor": self.cover_now(policy, cover, life),
+            "life_party": self.data.view.party_of(policy, &ic_core::LifeId::from(life)),
+        })
+    }
+
     /// Check a change staff entered for a customer: it says why and names
     /// the case, the enterer may enter changes and, where it moves money,
     /// the amount is within their limit; and say whether a second member of
@@ -856,7 +900,7 @@ impl ChannelState {
             .filter(|a| !a.reason.trim().is_empty() && !a.case.trim().is_empty())
             .ok_or_else(|| reject("bad_request", "a change entered for a customer says why and names the case"))?;
         let amount = request.payload["amount_minor"].as_i64();
-        let check = |amount: Option<i64>| {
+        let check = |limit: &str, amount: Option<i64>| {
             self.data.staff.authorise(
                 &self.staff_policy,
                 &crate::staff::AccessRequest {
@@ -866,7 +910,7 @@ impl ChannelState {
                     scopes: vec![],
                     record: request.policy.as_ref().map(|p| format!("policy:{p}")),
                     amount: amount.map(|value| crate::staff::Amount {
-                        limit: assisted::LIMIT.to_string(),
+                        limit: limit.to_string(),
                         value,
                     }),
                     purpose: Some(crate::staff::Purpose {
@@ -881,12 +925,36 @@ impl ChannelState {
                 },
             )
         };
-        let plain = check(None);
+        let plain = check(assisted::LIMIT, None);
         if !plain.allowed {
             let why = plain.denied.map_or("refused", crate::staff::Denial::explain);
             return Err(reject("forbidden", why));
         }
-        a.above_limit = amount.is_some_and(|_| check(amount).denied == Some(crate::staff::Denial::HowMuch));
+        let above = |limit: &str, value: i64| check(limit, Some(value)).denied == Some(crate::staff::Denial::HowMuch);
+        let mut above_limit = amount.is_some_and(|value| above(assisted::LIMIT, value));
+        // A reduction is measured by the cover given up, against its own limit:
+        // a $300,000 cut is not a $0 change because no money moves (F2-04-6).
+        let mut given_up = None;
+        if request.kind == "reduce_cover" {
+            let (cover, life) = (
+                request.payload["cover"].as_str().unwrap_or_default(),
+                request.payload["life"].as_str().unwrap_or_default(),
+            );
+            let now = request.policy.as_ref().and_then(|policy| self.cover_now(policy, cover, life)).ok_or_else(|| {
+                reject(
+                    "bad_request",
+                    format!("the policy has no {cover} cover in force on {life}; pick the cover to reduce"),
+                )
+            })?;
+            let kept = request.payload["sum_insured_minor"].as_i64().unwrap_or(now);
+            if kept >= now {
+                return Err(reject("bad_request", "a reduction keeps less cover than the life holds now"));
+            }
+            given_up = Some(now - kept);
+            above_limit |= above(assisted::COVER_LIMIT, now - kept);
+        }
+        a.above_limit = above_limit;
+        a.cover_given_up_minor = given_up;
         a.backdated = request.payload["effective"]
             .as_str()
             .and_then(|d| d.parse::<NaiveDate>().ok())
@@ -966,6 +1034,11 @@ impl ChannelState {
                 }
             }
         };
+        // A change of a kind nobody carries out is refused now, once the asker may ask at all, naming the kinds
+        // there are, rather than accepted and failed later (F2-05-1).
+        if request.module == crate::servicing::MODULE && !crate::servicing::KINDS.iter().any(|(k, _)| *k == request.kind) {
+            return Err(reject("unknown_kind", crate::servicing::unknown_kind(&request.kind)));
+        }
         // Someone who prepares a change for the customer to approve (an adviser,
         // a support person) is not the one whose circumstances decide how it is
         // handled: the customer's routing is taken when they approve it.
@@ -1165,6 +1238,7 @@ impl ChannelState {
                         route_to_person,
                         assisted,
                         declined_by: None,
+                        on: Some(on),
                     },
                 )?;
                 if request.status == RequestStatus::Pending {
@@ -1266,6 +1340,13 @@ impl ChannelState {
                 }
                 if !matches!(request.status, RequestStatus::AwaitingApproval { .. } | RequestStatus::Pending) {
                     return Err(reject("already_resolved", "that request has already been resolved"));
+                }
+                // Staff take back a change they entered by mistake only until an owner has signed it (F2-04-2).
+                if matches!(actor, Actor::Staff(_)) && (request.status == RequestStatus::Pending || !request.signed_by.is_empty()) {
+                    return Err(reject(
+                        "already_signed",
+                        "the customer has signed it, so it is theirs now: they can decline it in the app, or ask for it to be undone",
+                    ));
                 }
                 let policy = request.policy.clone();
                 if let Some(r) = self.data.requests.get_mut(&id) {

@@ -1001,11 +1001,13 @@ async fn staff_document(
 /// Change your contact details or consents, from an enrolled device.
 async fn profile_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
     let session = s.customer(&headers, &method, &uri, &body).await?;
-    if session.device.is_none() {
+    let command: Value = parse(&body)?;
+    // A hold that only protects the person (placing it, keeping it on) is quick
+    // to put on from a sign-in alone; lifting it needs an identity check (F2-05-3).
+    if session.device.is_none() && !crate::customers::PROTECTIVE.contains(&command["command"].as_str().unwrap_or_default()) {
         return Err(device_required("changing your details"));
     }
     let key = key(&headers, &session.party.0)?;
-    let command: Value = parse(&body)?;
     crate::customers::check(&command).map_err(Problem::forbidden)?;
     let version = header(&headers, "if-match");
     mastered(s.master()?.command(&session.party, version, key, command).await)
@@ -2359,7 +2361,9 @@ impl AppState {
             })
             .await?;
         if standing["view"] != true {
-            return Err(Problem::forbidden("your roles do not include unit pricing"));
+            return Err(Problem::forbidden(
+                "your roles do not include unit pricing: the console needs the action unit_pricing.view, or one to prepare, approve or lead; ask your manager to request it",
+            ));
         }
         Ok((session, standing))
     }
@@ -3826,9 +3830,14 @@ async fn pricing_question(
     Path(name): Path<String>,
     Query(fields): Query<std::collections::BTreeMap<String, String>>,
 ) -> Answer {
-    let (_, standing) = s.pricing_standing(&headers, &method, &uri, b"").await?;
+    let (session, standing) = s.pricing_standing(&headers, &method, &uri, b"").await?;
     if name == "me" {
         return ok(standing);
+    }
+    let mut fields = fields;
+    // Late as at the books' date unless another is asked for (F2-06-6).
+    if name == "late" && fields.get("as_at").is_none_or(|d| d.trim().is_empty()) {
+        fields.insert("as_at".into(), s.books_today(session.at).await);
     }
     let question = crate::pricing::question(&name, &fields).map_err(Problem::bad_request)?;
     let answer = s.pricing.ask(question).await.map_err(pricing_down)?;
@@ -3852,7 +3861,9 @@ async fn pricing_command(State(s): State<Shared>, headers: HeaderMap, method: Me
         return Err(Problem::forbidden(format!("{name} needs the role {role}")));
     }
     let key = key(&headers, &session.party.0)?;
-    let envelope = crate::pricing::envelope(&key, &session.party, &standing["roles"], session.at, command);
+    // The books' date goes with it: no price is struck for a day that has not come (F2-06-4).
+    let today = s.books_today(session.at).await;
+    let envelope = crate::pricing::envelope(&key, &session.party, &standing["roles"], session.at, &today, command);
     let output = s.pricing.tell(envelope).await.map_err(pricing_down)?;
     if let Some(refused) = output.get("refused") {
         return Err(module_refusal(
@@ -3920,7 +3931,7 @@ async fn staff_policy(State(s): State<Shared>, headers: HeaderMap, method: Metho
     let session = s.staff(&headers, &method, &uri, b"").await?;
     let view = s
         .ask(Question::StaffPolicy {
-            staff: session.party,
+            staff: session.party.clone(),
             policy: PolicyId::from(policy.as_str()),
             scopes: why
                 .scope
@@ -3951,6 +3962,29 @@ async fn staff_policy(State(s): State<Shared>, headers: HeaderMap, method: Metho
         .map(PartyId::from)
         .collect();
     if let Some(master) = &s.master {
+        // The people on the policy by name, so a cover is picked by whose life it is, not by its code (F2-04-1).
+        let mut people: Vec<PartyId> = holders.clone();
+        for row in view["rows"].as_array().into_iter().flatten() {
+            if let Some(party) = row["subject"].as_str().map(PartyId::from).filter(|p| !people.contains(p)) {
+                people.push(party);
+            }
+        }
+        let mut names = serde_json::Map::new();
+        for party in people {
+            let read = master
+                .desk(
+                    &session.party,
+                    crate::customers::Desk::Read {
+                        party: party.clone(),
+                        query: String::new(),
+                    },
+                )
+                .await;
+            if let Ok((200, record)) = read {
+                names.insert(party.0.clone(), crate::find::person(&party, &record)["name"].clone());
+            }
+        }
+        view["names"] = Value::Object(names);
         for holder in holders {
             if let Some(approach) = approach(master.routing(&holder).await, may_see_kind) {
                 view["approach"] = approach;
@@ -4114,10 +4148,21 @@ async fn staff_request(State(s): State<Shared>, headers: HeaderMap, method: Meth
             case: new.case,
             backdated: false,
             above_limit: false,
+            cover_given_up_minor: None,
             second: None,
         }),
     };
     accepted(s.propose(key(&headers, &session.party.0)?, Actor::Staff(session.party), command).await?)
+}
+
+/// The member of staff who entered a change for a customer takes it back,
+/// entered by mistake, until an owner has signed it.
+async fn staff_withdraw_request(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(id): Path<String>) -> Answer {
+    let session = s.staff(&headers, &method, &uri, b"").await?;
+    ok(
+        s.propose(key(&headers, &session.party.0)?, Actor::Staff(session.party), Command::CancelRequest { id })
+            .await?,
+    )
 }
 
 /// A second member of staff agrees a change another entered for a customer;
@@ -5173,6 +5218,7 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/requests", post(staff_request).get(staff_second_waiting))
         .route("/staff/v1/find", get(staff_find))
         .route("/staff/v1/colleagues", get(staff_colleagues))
+        .route("/staff/v1/requests/{id}", delete(staff_withdraw_request))
         .route("/staff/v1/requests/{id}/second-approval", post(staff_second_approval))
         .route("/staff/v1/care/reviews", get(care_reviews))
         .route("/staff/v1/care/reviews/{review}", post(care_decide))

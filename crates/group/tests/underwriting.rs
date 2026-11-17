@@ -89,6 +89,9 @@ fn accepted_excess_goes_from_request_to_layer_and_back() {
 
     let disclosed = w.disclose(&key, "E004", &uw::clean());
     w.automatic(&disclosed);
+    // Judged under the shipped group rule set, not the individual one (F2-22-3).
+    let decided = &w.p(&key).lives[&request.life].decisions[0];
+    assert_eq!(decided.versions.rule_set.as_ref().map(|r| r.id.as_str()), Some("group"));
     assert_eq!(carry_answers(&w, &mut h), 1);
     assert_eq!(h.scheme().cases[&request.case].status, CaseStatus::Accepted);
     assert_eq!(h.excess_layers("E004"), vec![(request.excess_minor, None)]);

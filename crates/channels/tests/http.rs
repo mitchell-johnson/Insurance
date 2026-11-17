@@ -78,7 +78,11 @@ fn template(id: &str, actions: &[&str], classes: &[DataClass]) -> Template {
         actions: actions.iter().map(|a| a.to_string()).collect(),
         classes: classes.iter().copied().collect(),
         default_profile: "p".into(),
-        ceilings: [(workbench::LIMIT.to_string(), 1_000_000_00)].into(),
+        ceilings: [
+            (workbench::LIMIT.to_string(), 1_000_000_00),
+            (ic_channels::state::assisted::COVER_LIMIT.to_string(), 1_000_000_00),
+        ]
+        .into(),
         break_glass: false,
     }
 }
@@ -394,6 +398,7 @@ fn portal_signed_in_by(
                         (workbench::LIMIT.to_string(), 100_000_00),
                         (ic_channels::complaints::AUTHORITY.to_string(), 3),
                         (ic_channels::state::assisted::LIMIT.to_string(), 500_00),
+                        (ic_channels::state::assisted::COVER_LIMIT.to_string(), 100_000_00),
                     ]
                     .into(),
                 },
@@ -1311,8 +1316,8 @@ async fn the_staff_console_asks_the_four_questions() {
         (&json!("awaiting_approval"), &json!("customer"), &json!("case-8"))
     );
     // Above her limit it waits for a second member of staff first, who is not her.
-    let large = json!({ "id": "r2", "policy": policy, "kind": "change_sum_insured", "module": "policy-servicing",
-        "payload": { "amount_minor": 900_00 }, "reason": "customer rang", "case": "case-8" });
+    let large = json!({ "id": "r2", "policy": policy, "kind": "switch_funds", "module": "policy-servicing",
+        "payload": { "from_fund": "balanced", "to_fund": "cash", "amount_minor": 900_00 }, "reason": "customer rang", "case": "case-8" });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/requests", large).await.0, StatusCode::ACCEPTED);
     assert_eq!(
         portal.local.with(|s| serde_json::to_value(&s.data.requests["r2"]).unwrap())["from"],
@@ -1876,6 +1881,8 @@ async fn the_unit_pricing_console() {
     let day = common::pricing::first_day();
 
     // Who gets in.
+    // The refusal names the permission to ask for (F2-06-7).
+    assert!(ask("sub-sue", "work").await.1["detail"].as_str().unwrap().contains("unit_pricing.view"));
     for outsider in ["sub-kiri", "sub-sue", "sub-fin1"] {
         assert_eq!(ask(outsider, "work").await.0, StatusCode::FORBIDDEN, "{outsider}");
         assert_eq!(
@@ -1902,9 +1909,16 @@ async fn the_unit_pricing_console() {
     assert_eq!(valuation.0, StatusCode::OK, "{valuation:?}");
     assert_eq!(ask("sub-up1", "status").await.1["partitions"], 2);
     // Only the console's questions, each with its fields; something not there is not found.
-    for bad in ["outbox?limit=5", "events?after=0&limit=5", "price", "prices?fund=growth", "late?as_at="] {
+    for bad in ["outbox?limit=5", "events?after=0&limit=5", "price", "prices?fund=growth"] {
         assert_eq!(ask("sub-up1", bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
     }
+    // Late prices are as at the books' date unless another is asked for, one row per fund (F2-06-6).
+    let (status, late) = ask("sub-up1", "late?as_at=").await;
+    assert_eq!(status, StatusCode::OK, "{late}");
+    assert!(
+        late.as_array().unwrap().iter().all(|row| row["fund"].is_string() && row["days"].is_u64()),
+        "{late}"
+    );
     assert_eq!(ask("sub-up1", "price?id=nope").await.0, StatusCode::NOT_FOUND);
     // A question that module cannot read is its refusal, not an outage.
     let (status, problem) = ask("sub-up1", "valuations?fund=growth&pricing_date=never").await;
@@ -1932,6 +1946,10 @@ async fn the_unit_pricing_console() {
     assert_eq!(unkeyed.await.0, StatusCode::BAD_REQUEST);
     // A command that module cannot read is its refusal to take it, not a success.
     assert_eq!(tell("sub-up1", json!({ "prepare_price": { "fund": 7 } })).await.0, StatusCode::BAD_REQUEST);
+    // The console sends the books' date: a price for a day that has not come is refused before anything is prepared (F2-06-4).
+    let (status, problem) = tell("sub-up1", json!({ "prepare_price": { "fund": "growth", "pricing_date": d(2030, 1, 7) } })).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("not_yet")), "{problem}");
+    assert!(problem["detail"].as_str().unwrap().contains("the business date is"), "{problem}");
 
     // Prepare, with the same key twice: one price.
     let keyed = [("x-dev-subject", "sub-up1".to_string()), ("idempotency-key", "prep-1".to_string())];
@@ -3261,6 +3279,20 @@ async fn a_person_keeps_their_own_customer_record() {
 
     // A hold on your own money going out: on at once, off only after a fresh identity check and the cooling-off period.
     assert_eq!(portal.get("sub-kiri", "/app/v1/profile/spending-hold").await.1["held"], false);
+    // Putting a hold on only protects the person, so a sign-in alone does it (F2-05-3); asking for it to end does not.
+    let (status, _) = portal
+        .write("POST", "sub-kiri", "/app/v1/profile/commands", json!({ "command": "place_spending_hold" }))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, problem) = portal
+        .write(
+            "POST",
+            "sub-kiri",
+            "/app/v1/profile/commands",
+            json!({ "command": "request_hold_removal", "verification": "idv-2" }),
+        )
+        .await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("device_required")));
     let ((status, _), _) = send(json!({ "command": "place_spending_hold" }), None).await;
     assert_eq!(status, StatusCode::OK);
     let hold = portal.get("sub-kiri", "/app/v1/profile/spending-hold").await.1;
@@ -7838,6 +7870,7 @@ async fn an_advisers_cancellation_is_attributed_to_their_engagement() {
         route_to_person: false,
         assisted: None,
         declined_by: None,
+        on: None,
     };
     portal.local.with(|state| {
         state.data.directory.authorities.entry(policy.clone()).or_default().insert(
@@ -7921,14 +7954,32 @@ async fn customers_changes_are_carried_to_the_core() {
             file("s-2", "decline_indexation", json!({ "declined": false })),
         )
         .await;
+    // A switch between funds is carried as a switch-out order under the request's ID, priced on the books' date (F2-05-1).
+    portal
+        .write(
+            "POST",
+            "sub-kiri",
+            "/app/v1/requests",
+            portal
+                .signed(file("s-7", "switch_funds", json!({ "from_fund": "balanced", "to_fund": "cash", "all": true })))
+                .await,
+        )
+        .await;
     let sent = portal.claims.servicing(0);
+    assert!(
+        matches!(&sent[3].1, Core::Investment(i) if matches!(i.as_ref(), ic_core::invest::InvestCommand::PlaceOrder(o)
+            if o.order_id == "s-7" && o.fund.0 == "balanced" && o.switch_to.as_ref().is_some_and(|f| f.0 == "cash")
+                && o.kind == ic_core::invest::OrderKind::SwitchOut && o.amount == ic_core::invest::OrderAmount::AllUnits)),
+        "{:?}",
+        sent[3].1
+    );
     assert!(sent.iter().all(|(caller, _)| caller == "policy-servicing"));
     assert!(matches!(&sent[0].1, Core::CancelPolicy { .. }));
     assert!(matches!(&sent[1].1, Core::ChangeBilling(c) if c.frequency == Some(ic_product::Frequency::Yearly) && c.reference == "s-1"));
     assert!(matches!(&sent[2].1, Core::DeclineIndexation { declined: false, .. }));
     // Carrying again sends nothing new.
     assert_eq!(portal.state.carry_servicing_requests().await, Ok(0));
-    assert_eq!(portal.claims.servicing(0).len(), 3);
+    assert_eq!(portal.claims.servicing(0).len(), 4);
 
     // The core's refusal closes the request with its code; a payload the core could not read is refused before it is sent.
     portal.claims.refuse_servicing(0, "indexation_compulsory");
@@ -7951,16 +8002,31 @@ async fn customers_changes_are_carried_to_the_core() {
         .await;
     assert_eq!(mine("s-4").await["code"], "bad_frequency");
 
-    // A kind the portal cannot carry out waits for a person, who may decline it.
+    // A kind the portal cannot carry out is refused when asked for, naming the changes there are and who can help
+    // (F2-05-1); it never waits on a list where nobody can act on it.
+    let (status, unknown) = portal
+        .write("POST", "sub-kiri", "/app/v1/requests", file("s-x", "change_sum_insured", json!({ "to": 1 })))
+        .await;
+    assert_eq!(
+        (status, &unknown["title"]),
+        (StatusCode::UNPROCESSABLE_ENTITY, &json!("unknown_kind")),
+        "{unknown}"
+    );
+    let words = unknown["detail"].as_str().unwrap();
+    assert!(words.contains("switch_funds") && words.contains("ask your adviser"), "{words}");
+    assert!(portal.local.with(|s| !s.data.requests.contains_key("s-x")));
+
+    // A customer the master says needs a person has their request wait for one, who may decline it.
+    portal.master.vulnerable.lock().unwrap().push(KIRI.to_string());
     portal
-        .write("POST", "sub-kiri", "/app/v1/requests", file("s-5", "change_sum_insured", json!({ "to": 1 })))
+        .write("POST", "sub-kiri", "/app/v1/requests", file("s-5", "decline_indexation", json!({})))
         .await;
     assert_eq!(mine("s-5").await["status"], "pending");
     assert_eq!(portal.get("sub-sue", "/staff/v1/servicing/waiting").await.0, StatusCode::FORBIDDEN);
     let (status, waiting) = portal.get("sub-svc", "/staff/v1/servicing/waiting").await;
     assert_eq!(
         (status, &waiting["rows"][0]["id"], &waiting["rows"][0]["kind"]),
-        (StatusCode::OK, &json!("s-5"), &json!("change_sum_insured")),
+        (StatusCode::OK, &json!("s-5"), &json!("decline_indexation")),
         "{waiting}"
     );
     let (status, _) = portal
@@ -7989,19 +8055,130 @@ async fn customers_changes_are_carried_to_the_core() {
 
     // A carried-out request goes as the sweep would send it; one the core refuses comes back with the core's words.
     portal
-        .write("POST", "sub-kiri", "/app/v1/requests", file("s-6", "change_sum_insured", json!({})))
+        .write(
+            "POST",
+            "sub-kiri",
+            "/app/v1/requests",
+            portal.signed(file("s-6", "change_frequency", json!({ "frequency": "daily" }))).await,
+        )
         .await;
     let (status, carried) = portal
         .write("POST", "sub-svc", "/staff/v1/servicing/s-6/carry-out", json!({ "conversation": "call-9" }))
         .await;
     assert_eq!(
         (status, &carried["applied"], &carried["code"]),
-        (StatusCode::OK, &json!(false), &json!("not_carried")),
+        (StatusCode::OK, &json!(false), &json!("bad_frequency")),
         "{carried}"
     );
     assert_eq!(
         portal.write("POST", "sub-sue", "/staff/v1/servicing/s-6/carry-out", json!({})).await.0,
         StatusCode::FORBIDDEN
+    );
+}
+
+/// Purpose: a change staff enter for a customer names whose life and how much cover it is about, by name and in amounts the
+/// approvers can read; a reduction is measured by the cover it gives up, against its own limit, so a large cut goes to a second
+/// person; a cover the life does not hold, or a "reduction" that keeps as much, is refused; the person who entered it may take it
+/// back until the customer has signed, and not after; and the customer's list carries what the change is about and who signed.
+/// Why it matters: found by the scenario run (F2-04-1, F2-04-2, F2-04-3, F2-04-6, F2-04-7). A $300,000 cut of cover passed as a
+/// $0 change with no second person, staff picked "life on life-1" with no name, a mistaken entry could not be taken back, and the
+/// approver saw a request ID and the wall clock instead of the change.
+#[tokio::test]
+async fn a_change_entered_for_a_customer_names_the_cover_and_can_be_taken_back() {
+    let portal = portal();
+    let policy = portal.retail.clone();
+    portal
+        .master
+        .add(KIRI, json!({ "given_name": "Kiri", "family_name": "Parata", "date_of_birth": "1988-04-12" }));
+    let view = portal.get("sub-sue", &format!("/staff/v1/policies/{policy}?case=case-1&scope=")).await.1;
+    assert_eq!(view["names"][KIRI], "Kiri Parata", "{view}");
+
+    let reduce = |id: &str, cover: &str, kept: i64| {
+        json!({ "id": id, "policy": policy, "kind": "reduce_cover", "module": "policy-servicing", "reason": "customer rang",
+            "case": "case-8", "payload": { "cover": cover, "life": "life-1", "sum_insured_minor": kept } })
+    };
+    let refused = |answer: (StatusCode, Value)| (answer.0, answer.1["detail"].as_str().unwrap_or_default().to_string());
+    let (status, words) = refused(portal.write("POST", "sub-sue", "/staff/v1/requests", reduce("x1", "trauma", 1)).await);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(words.contains("no trauma cover in force on life-1"), "{words}");
+    let (status, words) = refused(portal.write("POST", "sub-sue", "/staff/v1/requests", reduce("x2", "life", 500_000_00)).await);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(words.contains("keeps less cover"), "{words}");
+
+    // Within her cover limit it goes straight to the customer, and records what is given up.
+    assert_eq!(
+        portal.write("POST", "sub-sue", "/staff/v1/requests", reduce("c1", "life", 450_000_00)).await.0,
+        StatusCode::ACCEPTED
+    );
+    let c1 = portal.local.with(|s| serde_json::to_value(&s.data.requests["c1"]).unwrap());
+    assert_eq!(
+        (&c1["from"], &c1["assisted"]["cover_given_up_minor"]),
+        (&json!("customer"), &json!(50_000_00)),
+        "{c1}"
+    );
+    // A $300,000 cut is above it, though no money moves, and waits for a second person who reads the change.
+    assert_eq!(
+        portal.write("POST", "sub-sue", "/staff/v1/requests", reduce("c2", "life", 200_000_00)).await.0,
+        StatusCode::ACCEPTED
+    );
+    let queue = portal.get("sub-alice", "/staff/v1/requests").await.1;
+    let row = &queue["rows"][0];
+    assert_eq!(
+        (
+            &row["id"],
+            &row["above_limit"],
+            &row["cover_given_up_minor"],
+            &row["context"]["from_minor"],
+            &row["context"]["life_party"]
+        ),
+        (&json!("c2"), &json!(true), &json!(300_000_00), &json!(500_000_00), &json!(KIRI)),
+        "{queue}"
+    );
+    assert!(row["on"].is_string(), "the business date it was entered on: {row}");
+
+    // The customer's list says what the change is about.
+    let mine = portal.get("sub-kiri", "/app/v1/requests").await.1;
+    let c1 = mine.as_array().unwrap().iter().find(|r| r["id"] == "c1").unwrap();
+    assert_eq!(
+        (&c1["context"]["from_minor"], &c1["signed_by"]),
+        (&json!(500_000_00), &Value::Null),
+        "nobody has signed: {c1}"
+    );
+
+    // The person who entered it takes a mistaken entry back while nobody has signed it; nobody else can.
+    assert_eq!(
+        portal.write("DELETE", "sub-alice", "/staff/v1/requests/c2", json!({})).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(portal.write("DELETE", "sub-sue", "/staff/v1/requests/c2", json!({})).await.0, StatusCode::OK);
+    assert_eq!(
+        portal.local.with(|s| serde_json::to_value(&s.data.requests["c2"]).unwrap())["status"],
+        "cancelled"
+    );
+    assert_eq!(portal.get("sub-alice", "/staff/v1/requests").await.1["rows"], json!([]));
+    // Once the customer has signed it, it is theirs.
+    let ask = json!({ "action": approval_action("c1") }).to_string();
+    let headers = portal.proof(&portal.phone, "POST", "/app/v1/challenges", &ask);
+    let challenge = portal
+        .send("POST", "/app/v1/challenges", &headers, Some(serde_json::from_str(&ask).unwrap()))
+        .await
+        .1;
+    let message = format!(
+        "{}\n{}\n{}",
+        challenge["challenge"].as_str().unwrap(),
+        challenge["nonce"].as_str().unwrap(),
+        challenge["action_hash"].as_str().unwrap()
+    );
+    let signed = json!({ "signed": { "challenge": challenge["challenge"], "signature": portal.phone.sign(message.as_bytes()) } });
+    assert_eq!(
+        portal.write("POST", "sub-kiri", "/app/v1/requests/c1/approve", signed).await.0,
+        StatusCode::ACCEPTED
+    );
+    let (status, problem) = portal.write("DELETE", "sub-sue", "/staff/v1/requests/c1", json!({})).await;
+    assert_eq!(
+        (status, &problem["title"]),
+        (StatusCode::UNPROCESSABLE_ENTITY, &json!("already_signed")),
+        "{problem}"
     );
 }
 
@@ -8057,6 +8234,42 @@ fn servicing_requests_become_the_core_commands_they_name() {
     cared["route_to_person"] = json!(true);
     assert!(!carried_by_sweep(&cared));
     assert!(!carried_by_sweep(&request("surrender", json!({}))));
+    // A switch names both funds, different, and how much; it is placed for its pricing date (F2-05-1).
+    let mut switch = request("switch_funds", json!({ "from_fund": " growth ", "to_fund": "cash", "amount_minor": 1_000_00 }));
+    assert_eq!(code(switch.clone()), "no_pricing_date");
+    switch["pricing_date"] = json!("2026-11-20");
+    assert!(matches!(
+        command(&switch),
+        Ok(Core::Investment(i)) if matches!(i.as_ref(), ic_core::invest::InvestCommand::PlaceOrder(o)
+            if o.fund.0 == "growth" && o.amount == ic_core::invest::OrderAmount::Cash { minor: 1_000_00 }
+                && o.pricing_date == chrono::NaiveDate::from_ymd_opt(2026, 11, 20).unwrap())
+    ));
+    assert_eq!(code(request("switch_funds", json!({ "to_fund": "cash", "all": true }))), "nothing_to_switch");
+    assert_eq!(code(request("switch_funds", json!({ "from_fund": "cash", "all": true }))), "nothing_to_switch");
+    assert_eq!(
+        code(request("switch_funds", json!({ "from_fund": "cash", "to_fund": "cash", "all": true }))),
+        "nothing_to_switch"
+    );
+    assert_eq!(
+        code(request("switch_funds", json!({ "from_fund": "growth", "to_fund": "cash", "amount_minor": 0 }))),
+        "bad_amount"
+    );
+    assert!(command(&request("surrender", json!({}))).unwrap_err().1.contains("switch_funds"));
+}
+
+/// Purpose: a switch placed now is priced on the books' date, or on the day after the fund's latest struck price when that is
+/// today or later, never on a Saturday or Sunday.
+/// Why it matters: found by the scenario run (F2-05-1): a switch placed for a day already priced, or for a weekend, is refused
+/// by the core, and the customer would see their switch fail for a reason they cannot act on.
+#[test]
+fn a_switch_is_priced_on_the_next_day_a_price_can_be_struck() {
+    use ic_channels::servicing::switch_pricing_date;
+    let d = |day: u32| chrono::NaiveDate::from_ymd_opt(2026, 11, day).unwrap();
+    // Friday 20 November 2026.
+    assert_eq!(switch_pricing_date(d(20), None), d(20));
+    assert_eq!(switch_pricing_date(d(20), Some(d(19))), d(20));
+    assert_eq!(switch_pricing_date(d(20), Some(d(20))), d(23), "struck today: the next weekday");
+    assert_eq!(switch_pricing_date(d(21), None), d(23), "a Saturday moves to Monday");
 }
 
 /// Purpose: a claim's payee is accepted only as a payee the payments register

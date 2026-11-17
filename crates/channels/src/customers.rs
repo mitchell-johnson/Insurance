@@ -24,6 +24,12 @@ use serde_json::Value;
 /// person's own spending hold").
 pub const COMMANDS: [&str; 5] = ["record", "set_consent", "place_spending_hold", "request_hold_removal", "cancel_hold_removal"];
 
+/// The commands that only protect the person: a hold on, or a removal taken
+/// back. They need no enrolled device, so a person who fears for their money
+/// can stop it leaving from any sign-in; asking for the hold to end needs a
+/// fresh identity check whatever the device.
+pub const PROTECTIVE: [&str; 2] = ["place_spending_hold", "cancel_hold_removal"];
+
 /// What the master answered: its HTTP status and body.
 pub type Answered = (u16, Value);
 

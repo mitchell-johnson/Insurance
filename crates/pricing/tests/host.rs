@@ -40,7 +40,11 @@ fn answers_each_question() {
         1
     );
     assert_eq!(ask(&h, json!({"q": "work"}))["prices"][0]["id"], d3);
-    assert_eq!(ask(&h, json!({"q": "late", "as_at": "2026-11-05"}))[0][1], "2026-11-03");
+    // Overdue prices come one row per fund, with how many days and the first and last (F2-06-6).
+    assert_eq!(
+        ask(&h, json!({"q": "late", "as_at": "2026-11-05"})),
+        json!([{ "fund": "growth", "days": 1, "first": "2026-11-03", "last": "2026-11-03" }])
+    );
     assert_eq!(ask(&h, json!({"q": "outbox", "limit": 5})), json!([]));
     assert_eq!(ask(&h, json!({"q": "events", "after": 0, "limit": 5})).as_array().map(Vec::len), Some(1));
     assert_eq!(ask(&h, json!({"q": "holding", "fund": "growth", "policy": "P1"}))["units_micro"], 0);

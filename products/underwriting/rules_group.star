@@ -1,0 +1,67 @@
+# Underwriting rules for a group scheme member's cover above the scheme's
+# automatic acceptance limit (the group module's `group_excess` proposal), and
+# for that cover continued when the member leaves (`group_continuation`).
+#
+# A member answers the same personal statement as an individual applicant
+# (questions_2026.star; from 15 November 2027 the reasonable care set in
+# questions_2027.star, judged by rules_group_2027.star). What differs from the
+# individual rules:
+#
+# - Only rules that can apply to group cover are here. Every group cover is
+#   of type `group_life` (death, TPD, trauma and income alike), so the rules
+#   for living covers (back or neck exclusion, family history on trauma) and
+#   the financial statement for individual life and trauma above $1.5m are
+#   left out: a member's cover is a multiple of salary the employer reports,
+#   so the amount is justified by the payroll file, not by the member.
+# - Accumulation still matters: above $3m on the life is referred to
+#   financial underwriting, and a member of 60 or more asking for more than
+#   $500,000 above the limit has a medical examination.
+#
+# A rule set of its own, so group terms can change without touching the
+# individual rules, and the reverse (decided 17 Nov 2026, docs/decisions.md).
+# Thresholds are placeholders for the chief underwriter and the reinsurer's
+# group manual to settle before go-live.
+
+def _rules():
+    return [
+        # Build and habits.
+        rule("UR-0001", any_of(answered_yes("smoked_last_12_months"), smoker()), loading(50), ["RC-0103"], about = "Smoked in the last year, or rated as a smoker: loading"),
+        rule("UR-0002", at_least("alcohol_units_per_week", 35), refer("medical"), ["RC-0104", "RC-0201"], about = "Alcohol at 35 units a week or more: refer to medical"),
+        rule("UR-0003", all_of(at_least("alcohol_units_per_week", 22), at_most("alcohol_units_per_week", 34)), loading(25), ["RC-0104"], about = "Alcohol at 22 to 34 units a week: loading"),
+        rule("UR-0004", at_least("weight_kg", 130), evidence("medical_exam"), ["RC-0102", "RC-0302"], about = "Weight of 130 kg or more: medical examination"),
+
+        # Medical history.
+        rule("UR-0005", answered_yes("heart_condition"), evidence("gp_report"), ["RC-0101", "RC-0301"], about = "Heart condition: GP report"),
+        rule("UR-0006", answered_yes("heart_condition"), refer("medical"), ["RC-0101", "RC-0201"], about = "Heart condition: refer to medical"),
+        rule("UR-0007", answered_yes("cancer_history"), evidence("specialist_report"), ["RC-0101", "RC-0301"], about = "Cancer history: specialist report"),
+        rule("UR-0008", answered_yes("cancer_history"), refer("medical"), ["RC-0101", "RC-0201"], about = "Cancer history: refer to medical"),
+        rule("UR-0009", answered_yes("diabetes"), evidence("blood_test"), ["RC-0101", "RC-0302"], about = "Diabetes: blood test"),
+        rule("UR-0010", answered_yes("mental_health_last_5_years"), tele_interview(), ["RC-0106", "RC-0202"], about = "Mental health in the last five years: tele-interview"),
+        rule("UR-0012", answered_yes("awaiting_tests_or_results"), defer(6), ["RC-0108"], about = "Awaiting tests or results: defer six months"),
+        rule("UR-0014", answered_yes("lived_overseas_last_5_years"), evidence("alternative_medical_history"), ["RC-0305"], about = "Lived overseas in the last five years: alternative medical history"),
+
+        # Pursuits, occupation and travel.
+        rule("UR-0015", chose("pursuit_kind", "aviation"), exclude("EX-4001"), ["RC-0121"], about = "Aviation: exclusion"),
+        rule("UR-0016", chose("pursuit_kind", "motorsport"), exclude("EX-4002"), ["RC-0121"], about = "Motorsport: exclusion"),
+        rule("UR-0017", chose("pursuit_kind", "diving"), exclude("EX-4003"), ["RC-0121"], about = "Diving: exclusion"),
+        rule("UR-0018", chose("pursuit_kind", "climbing"), exclude("EX-4004"), ["RC-0121"], about = "Climbing: exclusion"),
+        rule("UR-0019", all_of(answered_yes("hazardous_pursuits"), any_of(chose("pursuit_kind", "other"), unanswered("pursuit_kind"))),
+             refer("occupational"), ["RC-0121", "RC-0201"], about = "Another hazardous pursuit, or none named: refer to occupational"),
+        rule("UR-0020", answered_yes("hazardous_occupation"), refer("occupational"), ["RC-0120", "RC-0201"], about = "Hazardous occupation: refer to occupational"),
+        rule("UR-0021", answered_yes("travel_high_risk_12_months"), refer("occupational"), ["RC-0122", "RC-0201"], about = "High-risk travel in the last year: refer to occupational"),
+
+        # History with insurers, and amounts.
+        rule("UR-0022", answered_yes("previous_decline_or_terms"), evidence("previous_insurer"), ["RC-0304"], about = "Declined or given terms before: previous insurer's file"),
+        rule("UR-0024", total_on_life_above(dollars(3000000)), refer("financial"), ["RC-0131", "RC-0203"], about = "Above $3m on the life: refer to financial"),
+        rule("UR-0025", all_of(age_at_least(60), sum_insured_above(dollars(500000))), evidence("medical_exam"), ["RC-0140", "RC-0302"], about = "Aged 60 or more for over $500,000: medical examination"),
+        rule("UR-0026", age_at_least(75), decline(), ["RC-0140"], about = "Aged 75 or more: decline"),
+    ]
+
+RULES = rule_set(
+    id = "group",
+    version = 1,
+    effective_from = "2026-01-01",
+    question_set = "personal-statement",
+    products = ["group-life", "group-benefits", "aia-corporate"],
+    rules = _rules(),
+)

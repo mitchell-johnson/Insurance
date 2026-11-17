@@ -804,3 +804,33 @@ fn claims_and_underwriting_match_exclusions_identically() {
     // The spread reaches every outcome, so agreement is not agreement on one answer.
     assert_eq!(seen.len(), 3, "{seen:?}");
 }
+
+/// Purpose: a group scheme member's cover above the automatic limit is judged under the
+/// shipped group rule set (`group`, and `group-reasonable-care` from 15 November 2027) on
+/// every group product, and the individual sets name no group product, so neither stands
+/// in for the other whichever is activated last.
+/// Why it matters: found by the scenario run, F2-22-3: on the stack every executive's excess
+/// was raised as `underwriting_not_reached`, and group excess had no rule set of its own
+/// for the chief underwriter to govern apart from individual business.
+#[test]
+fn group_excess_is_judged_under_the_shipped_group_rule_set() {
+    let s = shipped::load().unwrap();
+    let config = ic_underwriting::config::Config {
+        rule_sets: s.rule_sets.clone(),
+        ..Default::default()
+    };
+    for product in ["group-life", "group-benefits", "aia-corporate"] {
+        assert_eq!(config.rule_set_on(product, d(2027, 6, 1)).map(|r| r.id.as_str()), Some("group"), "{product}");
+        assert_eq!(
+            config.rule_set_on(product, d(2027, 11, 15)).map(|r| r.id.as_str()),
+            Some("group-reasonable-care"),
+            "{product}"
+        );
+    }
+    assert_eq!(config.rule_set_on("term-life", d(2027, 6, 1)).map(|r| r.id.as_str()), Some("individual"));
+    let group = s.rule_sets.iter().find(|r| r.id == "group-reasonable-care").unwrap();
+    let individual = s.rule_sets.iter().find(|r| r.id == "individual-reasonable-care").unwrap();
+    assert!(individual.products.iter().all(|p| !group.products.contains(p)));
+    // Salary, not the member, justifies the amount: no financial statement as for individual cover.
+    assert!(group.rules.iter().all(|r| r.id != "UR-0023") && group.rules.iter().any(|r| r.id == "UR-0024"));
+}

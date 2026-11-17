@@ -72,7 +72,7 @@ pub(crate) fn permit(policy: &Policy) -> Result<(), Reject> {
         Some(hold) => Err(Reject::new(
             "customer_hold",
             format!(
-                "the owner set a hold on money going out on {}; it ends only through the customer master",
+                "the owner put a hold on money going out on {}; nothing is paid out while it stands. They lift it themselves in the app under Your details, and it ends a week after they ask; only a court order or legal direction ends it sooner",
                 hold.since
             ),
         )),

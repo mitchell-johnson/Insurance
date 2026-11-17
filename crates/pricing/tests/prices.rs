@@ -93,6 +93,7 @@ fn callers_roles_and_repeats() {
         actor: "maker".into(),
         roles: vec![ROLE_PREPARER.into()],
         at: h.at,
+        today: None,
         command: cmd,
     };
     let first = h.state.apply_envelope(e.clone());
@@ -204,9 +205,11 @@ fn date_order_and_suspension() {
     h.ok(c, a, &r, cmd);
     let (c, a, r, cmd) = lead(suspend(day(5), "again"));
     assert_eq!(h.refused(c, a, &r, cmd), "suspended");
-    // Still suspended on the 4th.
-    assert!(matches!(h.approve(&d4, BTreeMap::new()), Output::Refused { ref code, .. } if code == "suspended"));
-    let (c, a, r, cmd) = lead(resume(day(3), "too early"));
+    // The draft for the 4th left the work list when the suspension covered it, and the
+    // 4th cannot be prepared again while suspended.
+    assert!(matches!(h.approve(&d4, BTreeMap::new()), Output::Refused { ref code, .. } if code == "wrong_status"));
+    assert!(matches!(h.prepare(day(4)), Output::Refused { ref code, .. } if code == "suspended"));
+    let (c, a, r, cmd) = lead(resume(day(2), "too early"));
     assert_eq!(h.refused(c, a, &r, cmd), "invalid");
     let (c, a, r, cmd) = lead(resume(day(4), ""));
     assert_eq!(h.refused(c, a, &r, cmd), "reason_required");
@@ -222,14 +225,18 @@ fn date_order_and_suspension() {
         reason: "x".into(),
     });
     assert_eq!(h.refused(c, a, &r, cmd), "unknown_fund");
+    let d4 = h.prepared_id(day(4));
     assert_eq!(h.approve(&d4, BTreeMap::new()), Output::Done);
     let kinds: Vec<&Event> = h.state.events.iter().map(|e| &e.event).collect();
     assert!(matches!(kinds[1], Event::FundSuspended { .. }));
     assert!(matches!(kinds[2], Event::FundResumed { .. }));
-    // An earlier date cannot be priced once a later one is.
+    // A suspended day is not priced afterwards, and an earlier date cannot be priced once a later one is.
     h.deliver_all();
     h.receive("F3", valuation(day(3), "2000000", UNITS, "0"));
-    assert!(matches!(h.prepare(day(3)), Output::Refused { ref code, .. } if code == "out_of_order"));
+    assert!(matches!(h.prepare(day(3)), Output::Refused { ref code, .. } if code == "suspended"));
+    let before = chrono::NaiveDate::from_ymd_opt(2026, 10, 30).unwrap();
+    h.receive("F0", valuation(before, "2000000", UNITS, "0"));
+    assert!(matches!(h.prepare(before), Output::Refused { ref code, .. } if code == "out_of_order"));
 }
 
 /// Purpose: preparing refuses an unknown fund, a non-pricing day, a date with
@@ -375,4 +382,108 @@ fn a_fund_follows_its_own_calendar() {
     h.core_units(Some(day(2)), UNITS / 2);
     let d4 = h.prepared_id(day(4));
     assert_eq!(h.approve(&d4, BTreeMap::new()), Output::Done, "no gap over the closed day");
+}
+
+fn refusal(out: Output) -> (String, String) {
+    match out {
+        Output::Refused { code, message } => (code, message),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+/// Purpose: a suspension placed by mistake is withdrawn by resuming from its own first day,
+/// and then covers no day; resuming earlier says which day to use. A suspended day cannot
+/// be prepared, saying who suspended it and who can resume it, and a draft already
+/// prepared for it leaves the work list. The fund's next date skips a suspended day. A
+/// mistyped fund is answered with the funds there are.
+/// Why it matters: found by the scenario run, F2-06-1, F2-06-2, F2-06-3 and F2-06-5: a lead's
+/// slip left growth with a one-day suspension for ever, a cash price was prepared for a
+/// suspended day and sat on the work list with an Approve button nobody could use, the
+/// next date still named the suspended day, and "cash fund is not suspended" hid a typo.
+#[test]
+fn a_mistaken_suspension_is_withdrawn_and_a_suspended_day_is_not_prepared() {
+    let mut h = Harness::new();
+    h.price_day(day(2), "2000000", "0", None);
+    let lead = |h: &mut Harness, c: Command| h.send(CALLER_CONSOLE, "st9l", &[ROLE_LEAD], c);
+    let growth = fund_id("growth");
+    let suspend = |from, reason: &str| Command::SuspendFund {
+        fund: fund_id("growth"),
+        from,
+        reason: reason.into(),
+    };
+    let resume = |from| Command::ResumeFund {
+        fund: fund_id("growth"),
+        from,
+        reason: "suspended the wrong fund".into(),
+    };
+    // A draft for the 3rd, then the suspension from the 3rd: the draft is rejected, saying why.
+    h.receive("F3", valuation(day(3), "2000000", UNITS, "0"));
+    h.core_units(Some(day(2)), UNITS / 2);
+    let d3 = h.prepared_id(day(3));
+    assert_eq!(lead(&mut h, suspend(day(3), "custodian cannot value it")), Output::Done);
+    assert_eq!(h.state.prices[&d3].status, PriceStatus::Rejected);
+    assert!(h.state.prices[&d3].rejected.as_deref().is_some_and(|r| r.contains("suspended from 2026-11-03")));
+    assert!(h.state.work().is_empty());
+    let (code, message) = refusal(h.prepare(day(3)));
+    assert_eq!(code, "suspended");
+    assert!(
+        message.contains("by st9l") && message.contains("a unit pricing lead can resume it"),
+        "{message}"
+    );
+    assert_eq!(h.state.next_to_price(&growth), None, "an open suspension has no next date");
+    // Resuming before the day it was suspended from says which day to use.
+    let (code, message) = refusal(lead(&mut h, resume(day(2))));
+    assert_eq!(code, "invalid");
+    assert!(message.contains("resume from that day to withdraw the suspension"), "{message}");
+    // Resumed from its own first day, it is withdrawn and covers no day.
+    assert_eq!(lead(&mut h, resume(day(3))), Output::Done);
+    assert!(h.state.suspended_on(&growth, day(3)).is_none());
+    assert!(h.state.suspensions[&growth][0].reason.contains("withdrawn by st9l"));
+    assert_eq!(h.state.next_to_price(&growth), Some(day(3)));
+    let d3 = h.prepared_id(day(3));
+    assert_eq!(h.approve(&d3, BTreeMap::new()), Output::Done);
+    h.deliver_all();
+    // A withdrawn suspension is no obstacle to suspending again from an earlier day.
+    assert_eq!(lead(&mut h, suspend(day(4), "really this time")), Output::Done);
+    assert_eq!(lead(&mut h, resume(day(5))), Output::Done);
+    // The next date passes over the suspended 4th.
+    assert_eq!(h.state.next_to_price(&growth), Some(day(5)));
+    // A fund nobody defined is named as such, with the funds there are.
+    let (code, message) = refusal(lead(
+        &mut h,
+        Command::ResumeFund {
+            fund: fund_id("growth fund"),
+            from: day(5),
+            reason: "x".into(),
+        },
+    ));
+    assert_eq!(code, "unknown_fund");
+    assert_eq!(message, "there is no fund 'growth fund'; the funds are growth");
+}
+
+/// Purpose: with the books' business date on the command, a price for a later day is
+/// neither prepared nor approved, and the refusal names the business date; the same day is.
+/// Why it matters: found by the scenario run, F2-06-4: a price for the day after the business
+/// date was prepared and approved ("on its way to every partition"), then refused by every
+/// partition out of sight, and sat "activating" with Approve still offered.
+#[test]
+fn a_price_for_a_day_that_has_not_come_is_not_prepared() {
+    let mut h = Harness::new();
+    h.price_day(day(2), "2000000", "0", None);
+    h.receive("F3", valuation(day(3), "2000000", UNITS, "0"));
+    h.core_units(Some(day(2)), UNITS / 2);
+    // Prepared before the business date was known, then approved on the 2nd: refused.
+    let early = h.prepared_id(day(3));
+    h.today = Some(day(2));
+    let (code, message) = refusal(h.approve(&early, BTreeMap::new()));
+    assert_eq!(code, "not_yet");
+    assert_eq!(
+        message,
+        "growth cannot be priced for 2026-11-03 before that day: the business date is 2026-11-02"
+    );
+    assert_eq!(refusal(h.prepare(day(3))).0, "not_yet");
+    // On the day itself it goes ahead.
+    h.today = Some(day(3));
+    let d3 = h.prepared_id(day(3));
+    assert_eq!(h.approve(&d3, BTreeMap::new()), Output::Done);
 }

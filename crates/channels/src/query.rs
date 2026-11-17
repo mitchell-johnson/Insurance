@@ -602,19 +602,43 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 "held": d.workbench.own_held(&adviser),
             })
         }
-        // Their own, and the changes others prepared that they approved or declined, so the outcome stays in view.
+        // Their own, the changes others prepared that they signed, approved or declined, and every change on a policy they
+        // own that waits for its owners or that an owner signed or declined, so each owner sees what the other signed or
+        // declined (F2-04-4, F2-04-5). One withdrawn before any owner saw it is not theirs to see.
         Question::Requests { party } => json!(d
             .requests
             .values()
-            .filter(|r| r.party == party || r.approved_by.as_ref() == Some(&party) || r.declined_by.as_ref() == Some(&party))
+            .filter(|r| {
+                r.party == party
+                    || r.approved_by.as_ref() == Some(&party)
+                    || r.declined_by.as_ref() == Some(&party)
+                    || r.signed_by.contains(&party)
+                    || (r.policy.as_ref().is_some_and(|p| r.module == crate::servicing::MODULE && d.directory.owns(p, &party))
+                        && (!r.signed_by.is_empty()
+                            || r.declined_by.is_some()
+                            || r.status == crate::state::RequestStatus::AwaitingApproval { from: crate::state::Approver::Customer }))
+            })
             .map(|r| {
                 // The policy's number, which the person knows it by, even after it has left their view.
                 let mut row = json!(r);
                 row["number"] = json!(r.policy.as_ref().and_then(|p| d.view.policy(p)).map(|e| e.number.clone()));
+                row["context"] = state.change_context(r);
                 row
             })
             .collect::<Vec<_>>()),
-        Question::Pending { module } => json!(state.pending_for(&module)),
+        // A switch takes the pricing date it is placed for: the books' date, or the day after the fund's latest price.
+        Question::Pending { module } => json!(state
+            .pending_for(&module)
+            .into_iter()
+            .map(|r| {
+                let mut row = json!(r);
+                if r.kind == "switch_funds" {
+                    let struck = r.payload["from_fund"].as_str().and_then(|f| d.prices.get(f)).map(|p| p.pricing_date);
+                    row["pricing_date"] = json!(crate::servicing::switch_pricing_date(d.today.unwrap_or_default(), struck));
+                }
+                row
+            })
+            .collect::<Vec<_>>()),
         Question::AdviserEngagement { policy, adviser } => {
             json!(d.directory.authorities.get(&policy).and_then(|a| a.get(&adviser)).map(|a| a.engagement.clone()))
         }
@@ -1015,6 +1039,7 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                     let why = r.assisted.as_ref();
                     let number = r.policy.as_ref().and_then(|p| d.view.policy(p)).map(|e| e.number.clone());
                     json!({ "id": r.id, "policy": r.policy, "number": number, "kind": r.kind, "payload": r.payload, "entered_by": r.party, "entered_at": r.submitted,
+                        "on": r.on, "context": state.change_context(r), "cover_given_up_minor": why.and_then(|a| a.cover_given_up_minor),
                         "reason": why.map(|a| a.reason.clone()), "case": why.map(|a| a.case.clone()),
                         "backdated": why.is_some_and(|a| a.backdated), "above_limit": why.is_some_and(|a| a.above_limit) })
                 })

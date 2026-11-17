@@ -89,26 +89,30 @@ const portal = (() => {
   }
   // A change asked for on a policy, in words: what it does, never its code.
   const FREQUENCY = { weekly: "weekly", fortnightly: "fortnightly", monthly: "monthly", quarterly: "quarterly", half_yearly: "half-yearly", yearly: "yearly" };
-  function change(kind, payload) {
-    const p = payload || {};
+  // `context` is what the portal knows about it: for a reduction, the cover held now and whose life it is; `whose` names that life.
+  function change(kind, payload, context, whose) {
+    const p = payload || {}, c = context || {};
     switch (kind) {
       case "change_frequency": return `Pay ${FREQUENCY[p.frequency] || String(p.frequency || "at a new frequency").replace(/_/g, " ")}${p.billing_day ? `, on day ${p.billing_day} of the month` : ""}`;
       case "decline_indexation": return p.declined === false ? "Take this year's indexation increase" : "Decline this year's indexation increase";
       case "cancel_policy": return "Cancel the policy";
-      case "reduce_cover": return `Reduce ${String(p.cover || "the cover").replace(/_/g, " ")} to ${p.sum_insured_minor != null ? money(p.sum_insured_minor) : "a lower amount"}`;
+      case "reduce_cover": return `Reduce ${String(p.cover || "the").replace(/_/g, " ")} cover${whose ? ` on ${whose}` : ""}${c.from_minor != null ? ` from ${money(c.from_minor)}` : ""} to ${p.sum_insured_minor != null ? money(p.sum_insured_minor) : "a lower amount"}`;
+      case "switch_funds": return `Move ${p.all ? "everything" : p.amount_minor != null ? money(p.amount_minor) : "money"} from the ${String(p.from_fund || "").replace(/_/g, " ")} fund to the ${String(p.to_fund || "").replace(/_/g, " ")} fund`;
       case "notify_claim": return "Tell us about a claim";
       default: return String(kind).replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
     }
   }
-  // Where a request stands, in words. `asker` is true for the person who asked for it.
-  function requestState(r, asker) {
+  // Where a request stands, in words. `asker` is true for the person who asked for it; `me` is the reader, so that one of
+  // several owners reads what they and the others did.
+  function requestState(r, asker, me) {
     const s = r.state || r;
+    const signed = (r.signed_by || []).includes(me);
     switch (s.status) {
-      case "awaiting_approval": return s.from === "customer" ? (asker ? "Waiting for the customer to approve" : "Waiting for you to approve") : s.from === "second_staff" ? "Waiting for a second member of staff" : "Waiting for a second administrator";
+      case "awaiting_approval": return s.from === "customer" ? (asker ? "Waiting for the customer to approve" : signed ? "You signed it; waiting for the other owner" : (r.signed_by || []).length ? "Another owner signed it; waiting for you to approve" : "Waiting for you to approve") : s.from === "second_staff" ? "Waiting for a second member of staff" : "Waiting for a second administrator";
       case "pending": return r.approved_by && asker ? "Approved by the customer; being carried out" : "Being carried out";
       case "applied": return r.approved_by && asker ? "Approved by the customer and done" : "Done";
       case "rejected": return `Not done: ${s.message || String(s.code || "refused").replace(/_/g, " ")}`;
-      case "cancelled": return r.declined_by || r.declined ? (asker ? "Declined by the customer" : "You declined it") : (asker ? "Withdrawn by you" : "Withdrawn");
+      case "cancelled": return r.declined_by || r.declined ? (asker ? "Declined by the customer" : me && r.declined_by && r.declined_by !== me ? "Declined by another owner" : "You declined it") : (asker ? "Withdrawn by you" : "Withdrawn");
       default: return String(s.status || "").replace(/_/g, " ");
     }
   }

@@ -140,7 +140,19 @@ pub fn ask(state: &PricingState, question: Question) -> Result<Value, String> {
             "prices": state.work().into_iter().take(MAX_ANSWER).collect::<Vec<_>>(),
             "refused_files": state.refused_files,
         })),
-        Question::Late { as_at } => value(state.late(as_at)),
+        // One row per fund, not per day: a fund months behind is one thing
+        // to put right, with how many days and the first and last (F2-06-6).
+        Question::Late { as_at } => {
+            let mut by_fund: std::collections::BTreeMap<FundId, Vec<NaiveDate>> = std::collections::BTreeMap::new();
+            for (fund, date) in state.late(as_at) {
+                by_fund.entry(fund).or_default().push(date);
+            }
+            let rows: Vec<Value> = by_fund
+                .into_iter()
+                .map(|(fund, dates)| json!({ "fund": fund, "days": dates.len(), "first": dates.first(), "last": dates.last() }))
+                .collect();
+            Ok(json!(rows))
+        }
         Question::Errors => value(state.errors.values().take(MAX_ANSWER).collect::<Vec<_>>()),
         Question::Error { id } => value(state.errors.get(&id)),
         Question::Outbox { limit } => value(state.outbox(limit.min(MAX_ANSWER))),
@@ -286,6 +298,7 @@ pub fn react(record: &EventRecord) -> Vec<Envelope> {
         actor: CALLER_EVENTS.to_string(),
         roles: Vec::new(),
         at,
+        today: None,
         command: Command::RecordMovement(Box::new(movement)),
     }]
 }
@@ -346,6 +359,7 @@ fn outbox_outcome(posting: &CorePosting, outcome: &CoreOutcome) -> Value {
         actor: CALLER_OUTBOX.to_string(),
         roles: Vec::new(),
         at: Utc::now(),
+        today: None,
         command: Command::RecordDelivery {
             publication: posting.id.clone(),
             delivery,

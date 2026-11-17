@@ -485,6 +485,27 @@ fn an_owners_own_hold_stops_value_leaving_until_the_master_ends_it() {
     assert_eq!(code(payout(&mut c, &invested, "wd-1", PayoutReason::Withdrawal)), "customer_hold");
     assert_eq!(code(surrender(&mut c)), "customer_hold");
     assert_eq!(code(refund(&mut c, None)), "customer_hold");
+    // A withdrawal order is refused when it is asked for, saying how the owner lifts the
+    // hold, before any unit is sold (found by the scenario run, F2-05-2).
+    let withdrawal = ic_core::invest::NewOrder {
+        order_id: "wd-order-1".to_string(),
+        policy: invested.clone(),
+        fund: ic_money::FundId("growth".to_string()),
+        direction: ic_core::invest::Direction::Sell,
+        amount: ic_core::invest::OrderAmount::Cash { minor: 100_00 },
+        kind: ic_core::invest::OrderKind::Withdrawal,
+        pricing_date: start(),
+        switch_to: None,
+    };
+    let refused = c
+        .submit(
+            0,
+            "policy-servicing",
+            Command::Investment(Box::new(InvestCommand::PlaceOrder(Box::new(withdrawal)))),
+        )
+        .unwrap_err();
+    assert_eq!(refused.code, "customer_hold");
+    assert!(refused.message.contains("in the app under Your details"), "{}", refused.message);
     assert_eq!(code(hold(&mut c, "policy-servicing", false, "hold-1-lifted")), "caller_not_allowed");
     // What is not the owner taking value out carries on.
     payout(&mut c, &invested, "fix-1", PayoutReason::PriceRemediation).unwrap();

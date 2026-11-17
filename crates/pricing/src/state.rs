@@ -410,10 +410,22 @@ impl PricingState {
 
     /// The fund's definitions, newest last.
     fn definition(&self, fund: &FundId) -> Result<&FundDefinition, Output> {
-        self.funds
-            .get(fund)
-            .and_then(|v| v.last())
-            .ok_or_else(|| refuse("unknown_fund", format!("no definition of {} is active", fund.0)))
+        self.funds.get(fund).and_then(|v| v.last()).ok_or_else(|| self.no_such_fund(fund))
+    }
+
+    /// A fund nobody defined, with the funds there are, so a mistyped name
+    /// is not answered as if the fund existed (F2-06-5).
+    fn no_such_fund(&self, fund: &FundId) -> Output {
+        let known: Vec<&str> = self.funds.keys().map(|f| f.0.as_str()).collect();
+        refuse("unknown_fund", format!("there is no fund '{}'; the funds are {}", fund.0, known.join(", ")))
+    }
+
+    /// A suspension in words: from when, why, who placed it, and who can lift it.
+    fn suspension_words(fund: &FundId, s: &Suspension) -> String {
+        format!(
+            "{} is suspended from {} by {}: {}; a unit pricing lead can resume it",
+            fund.0, s.from, s.by, s.reason
+        )
     }
 
     /// The definition in force: a fund's latest version.
@@ -478,8 +490,17 @@ impl PricingState {
         if list.iter().any(|s| s.to.is_none()) {
             return Err(refuse("suspended", format!("{} is already suspended", fund.0)));
         }
-        if list.iter().any(|s| s.to.is_some_and(|to| from < to)) {
+        // A withdrawn suspension covers no day, so it is no obstacle.
+        if list.iter().any(|s| s.to.is_some_and(|to| s.from < to && from < to)) {
             return Err(refuse("overlap", "a suspension cannot start inside an earlier one"));
+        }
+        // A price prepared for a day the suspension covers can never be
+        // approved: it leaves the work list, saying why (F2-06-2).
+        for p in self.prices.values_mut() {
+            if p.fund == *fund && p.pricing_date >= from && matches!(p.status, PriceStatus::Prepared | PriceStatus::Held | PriceStatus::Blocked) {
+                p.status = PriceStatus::Rejected;
+                p.rejected = Some(format!("{}: the fund was suspended from {from}: {reason}", e.actor));
+            }
         }
         self.suspensions.entry(fund.clone()).or_default().push(Suspension {
             from,
@@ -499,6 +520,7 @@ impl PricingState {
     }
 
     fn resume(&mut self, e: &Envelope, fund: &FundId, from: NaiveDate, reason: &str) -> Step {
+        self.definition(fund)?;
         if reason.trim().is_empty() {
             return Err(refuse("reason_required", "resuming needs a reason"));
         }
@@ -507,11 +529,20 @@ impl PricingState {
             .get_mut(fund)
             .and_then(|l| l.iter_mut().find(|s| s.to.is_none()))
             .ok_or_else(|| refuse("not_suspended", format!("{} is not suspended", fund.0)))?;
-        if from <= open.from {
-            return Err(refuse("invalid", "a fund resumes after the date it was suspended from"));
+        if from < open.from {
+            return Err(refuse(
+                "invalid",
+                format!(
+                    "{} was suspended from {}: resume from that day to withdraw the suspension, or from a later day",
+                    fund.0, open.from
+                ),
+            ));
         }
+        // Resumed from the day it was suspended from, the suspension is
+        // withdrawn: it covers no day, and stays on record with why (F2-06-1).
         open.to = Some(from);
-        open.reason = format!("{}; resumed by {}: {reason}", open.reason, e.actor);
+        let how = if from == open.from { "withdrawn" } else { "resumed" };
+        open.reason = format!("{}; {how} by {}: {reason}", open.reason, e.actor);
         self.publish(e.at, Event::FundResumed { fund: fund.clone(), from });
         Ok(Output::Done)
     }
@@ -571,10 +602,19 @@ impl PricingState {
     /// so this is the only date a price can be prepared for.
     pub fn next_to_price(&self, fund: &FundId) -> Option<NaiveDate> {
         let def = self.definition_of(fund)?;
-        match self.latest_active_date(fund) {
+        let mut next = match self.latest_active_date(fund) {
             Some(last) => def.following_pricing_day(last).ok(),
             None => def.next_pricing_day(*self.fund_activated.get(fund)?).ok(),
+        }?;
+        // A day a suspension covers is never priced, so it is not next (F2-06-3).
+        // An open suspension covers every day from its start: none is next.
+        while self.suspended_on(fund, next).is_some() {
+            if self.suspensions.get(fund)?.iter().any(|s| s.to.is_none() && s.from <= next) {
+                return None;
+            }
+            next = def.following_pricing_day(next).ok()?;
         }
+        Some(next)
     }
 
     /// The core's units on issue at `date`'s cut-off: every partition's
@@ -599,6 +639,19 @@ impl PricingState {
         self.errors.values().find(|e| e.open() && e.prices.contains_key(price))
     }
 
+    /// The core strikes no price for a day after the books' business date,
+    /// so none is prepared or approved for one: it would be refused by every
+    /// partition after approval, out of sight (F2-06-4).
+    fn not_before_its_day(e: &Envelope, fund: &FundId, date: NaiveDate) -> Result<(), Output> {
+        match e.today {
+            Some(today) if date > today => Err(refuse(
+                "not_yet",
+                format!("{} cannot be priced for {date} before that day: the business date is {today}", fund.0),
+            )),
+            _ => Ok(()),
+        }
+    }
+
     fn prepare(&mut self, e: &Envelope, fund: &FundId, date: NaiveDate) -> Step {
         let def = self
             .definition_of(fund)
@@ -607,6 +660,11 @@ impl PricingState {
         let terms = def.terms().map_err(|m| refuse("invalid_definition", m))?;
         if !def.prices_on(date) {
             return Err(refuse("not_a_pricing_day", format!("{} does not price on {date}", fund.0)));
+        }
+        Self::not_before_its_day(e, fund, date)?;
+        // Said before a missing valuation, which no valuation would cure.
+        if let Some(s) = self.suspended_on(fund, date) {
+            return Err(refuse("suspended", Self::suspension_words(fund, s)));
         }
         let key = slot(fund, date);
         let record = self
@@ -729,9 +787,9 @@ impl PricingState {
         if self.valuations.get(&key).map_or(0, |v| v.len() as u32) != p.valuation_revision {
             return Err(refuse("stale", "a newer valuation has arrived; prepare the price again"));
         }
-        if let Some(s) = self.suspended_on(&p.fund, p.pricing_date) {
-            return Err(refuse("suspended", format!("{} is suspended from {}: {}", p.fund.0, s.from, s.reason)));
-        }
+        // No draft is open for a suspended day: none is prepared for one, and a
+        // suspension rejects the drafts it covers.
+        Self::not_before_its_day(e, &p.fund, p.pricing_date)?;
         let def = self.definition_of(&p.fund).ok_or_else(|| refuse("unknown_fund", p.fund.0.clone()))?.clone();
         let terms: PricingTerms = def.terms().map_err(|m| refuse("invalid_definition", m))?;
         let in_force = self.active.get(&key).and_then(|v| v.last()).cloned();
