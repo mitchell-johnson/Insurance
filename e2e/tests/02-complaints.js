@@ -284,16 +284,20 @@ test({ id: "E2E-048", area: A, persona: "ST14", story: "US-ST14-1", title: "Reme
 });
 
 test({ id: "E2E-049", area: A, persona: "ST14", story: "US-ST14-1", title: "A deadlocked complaint cannot be closed quietly and carries its notice", matrix: ["CMP-005"],
-  purpose: "Declare deadlock on an undecided complaint, try to close it, record the deadlock notice with the scheme's details, and read the file.",
-  why: "Deadlock is the complainant's gateway to the external scheme; the file must stay open and show the notice that tells them how to use it." }, async (t) => {
-  const id = await owned(t);
+  purpose: "Try to deadlock a complaint before its time, then deadlock one whose written outcome the complainant has received, try to close it, record the deadlock notice with the scheme's details, and read the file.",
+  why: "Deadlock is the complainant's gateway to the external scheme, given once the insurer's final answer has been received or its time has run out; the file must stay open and show the notice that tells them how to use it." }, async (t) => {
+  const early = await owned(t);
+  const id = await upheld(t);
+  await tells(t, cast.st14, "complaints", { record_outcome_delivered: { complaint: id, on: today() } });
   const s = await workbench(t, cast.st14);
+  await s.act("#act", "declare_deadlock", { "Complaint": early });
+  await s.stopped("#act-msg", "is deadlocked only once the date to decide it by", 409);
   await s.act("#act", "declare_deadlock", { "Complaint": id });
   await s.done("#act-msg", "Done: declare deadlock.");
   await s.act("#act", "declare_deadlock", { "Complaint": id });
-  await s.stopped("#act-msg", "only a complaint without an outcome can be deadlocked", 409);
+  await s.stopped("#act-msg", "this complaint cannot be deadlocked: it is already deadlocked", 409);
   await s.act("#act", "close", { "Complaint": id, "Cause code": "delay" });
-  await s.stopped("#act-msg", "a complaint is closed with an outcome", 409);
+  await s.stopped("#act-msg", "the deadlock notice has not been sent", 409);
   await s.act("#act", "record_deadlock_notice", { "Complaint": id, "Deadlock notice document": `dl-${id}` });
   await s.done("#act-msg", "Done: record deadlock notice.");
   await s.act("#act", "record_deadlock_notice", { "Complaint": id, "Deadlock notice document": `dl2-${id}` });
@@ -303,13 +307,13 @@ test({ id: "E2E-049", area: A, persona: "ST14", story: "US-ST14-1", title: "A de
   await s.sees(`dl-${id}`, "#file-raw");
 });
 
-test({ id: "E2E-050", area: A, persona: "ST14", story: "US-ST14-1", title: "Deadlock cannot be declared on a complaint that already has its outcome",
-  purpose: "Declare deadlock on a decided complaint.",
-  why: "Deadlock means the insurer could not decide in time; declaring it after an outcome would misstate the register the regulator reads." }, async (t) => {
+test({ id: "E2E-050", area: A, persona: "ST14", story: "US-ST14-1", title: "Deadlock waits until the complainant has received the written outcome",
+  purpose: "Declare deadlock on a complaint decided in writing whose outcome has not yet been delivered.",
+  why: "The scheme's deadlock letter follows the insurer's final answer; sent before the complainant has it, it would cut short the internal process and misstate the register the regulator reads." }, async (t) => {
   const id = await upheld(t);
   const s = await workbench(t, cast.st14);
   await s.act("#act", "declare_deadlock", { "Complaint": id });
-  await s.stopped("#act-msg", "only a complaint without an outcome can be deadlocked", 409);
+  await s.stopped("#act-msg", "deadlock follows a written outcome the complainant has received and rejected; record the outcome's delivery first", 409);
 });
 
 test({ id: "E2E-051", area: A, persona: "ST14", story: "US-ST14-1", title: "The complaints team refers a complaint to the external scheme but not to court", matrix: ["CMP-007"],

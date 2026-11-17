@@ -7,17 +7,19 @@ const oracle = require("../lib/oracle");
 
 const A = "Claims";
 const COMMANDS = "/staff/v1/claims/commands";
-// The day the cover began: fourteen days before opening, so a trauma claim has served the
-// cover's 14-day survival period and may be decided on the opening day.
-const event = (t) => Journey.before(t.stack.opening, 14);
-const early = (t) => Journey.before(t.stack.opening, 12);  // two days after the cover began
+// Policies claimed on began 25 days before opening. A claim's event eleven days after the cover began is past the
+// 7-day early-claim window, has served a trauma cover's 14-day survival period by the opening day, and falls while
+// the first premium is in grace, so that premium is taken from what is payable.
+const began = (t) => Journey.before(t.stack.opening, 25);
+const event = (t) => Journey.before(t.stack.opening, 14);  // eleven days after the cover began
+const early = (t) => Journey.before(t.stack.opening, 23);  // two days after the cover began
 const tells = (t, who, command, purpose = "working the claim") => t.does(who, "POST", COMMANDS, { purpose, command }, Object.keys(command)[0]);
 const work = async (t, id, who = cast.st4) => (await t.does(who, "GET", `/staff/v1/claims/work?claim=${id}`)).view;
 const dollars = (minor) => (minor / 100).toFixed(2);
 
 /// A policy and a claim notified on it by phone.
 async function notified(t, { kind = "term_life", party = "cust-p18", cover = "trauma", type = "trauma", on, life = null, who = cast.st4, notifier = "policyholder", claimant = null, invoice } = {}) {
-  const policy = await t.policy(kind, party);
+  const policy = await t.policy(kind, party, { inception: began(t) });
   const claim = t.ref("CLM");
   // A provider's invoice arrives with a health claim: the category it is paid under, the amount, and the service billed.
   const health = invoice ? { category: "surgical", invoice_minor: invoice, provider: "prov-pr1", service_code: `SURG-${claim}`, service_date: on || event(t) } : undefined;
@@ -71,7 +73,7 @@ test({ id: "E2E-070", area: A, persona: "ST4", story: "US-ST04-1", title: "The a
 test({ id: "E2E-071", area: A, persona: "ST4", story: "US-ST03-1", title: "A trauma claim is notified by phone and opens with its reserve and timers", matrix: ["CLM-001"],
   purpose: "Notify a trauma claim on an in-force policy from the Act form and read the claim that opens.",
   why: "Notification is the start of every claim; it must land in the right queue with the sum insured reserved and the acknowledgement timer running." }, async (t) => {
-  const policy = await t.policy("term_life", "cust-p18");
+  const policy = await t.policy("term_life", "cust-p18", { inception: began(t) });
   const claim = t.ref("CLM");
   const s = await desk(t, cast.st4);
   await s.act("#act", "notify", { "Claim": claim, "Policy": policy.id, "Cover": "trauma", "Claim type": "trauma", "Event date": event(t), "Channel": "phone", "Notified by": "policyholder" }, { purpose: "claimant rang" });
@@ -494,7 +496,7 @@ test({ id: "E2E-101", area: A, persona: "ST4", story: "US-ST14-1", title: "A clo
 test({ id: "E2E-102", area: A, persona: "ST4", story: "US-ST03-1", title: "A claim cannot be notified for an event that has not happened",
   purpose: "Notify a claim with an event date after today.",
   why: "A future event date is a typing error that would otherwise pass the cover check and reserve money for nothing." }, async (t) => {
-  const policy = await t.policy("term_life", "cust-p18");
+  const policy = await t.policy("term_life", "cust-p18", { inception: began(t) });
   const s = await desk(t, cast.st4);
   await s.act("#act", "notify", { "Claim": t.ref("CLM"), "Policy": policy.id, "Cover": "trauma", "Claim type": "trauma", "Event date": Journey.before(t.stack.opening, -20), "Channel": "phone", "Notified by": "policyholder" }, { purpose: "claimant rang" });
   await s.stopped("#act-msg", "the event date is after today", 409);

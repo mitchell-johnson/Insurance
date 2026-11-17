@@ -49,6 +49,9 @@ async function seed(stack) {
     const r = await sys.portal("POST", "/staff/v1/access", cast.admin, { employ: { party: person.party, team: "operations", manager: null, templates: person.templates } }, `seed-employ-${person.key}`);
     if (!r.ok && r.data.title !== "already_staff") throw new Error(`employ ${person.key}: ${r.status} ${JSON.stringify(r.data)}`);
   }
+  // Leilani (N7) is related to the customer cust-p60 and has said so, as staff do from the staff console.
+  const declared = await sys.portal("POST", "/staff/v1/access", cast.n7, { declare_connection: { party: "cust-p60" } }, "seed-n7-connection");
+  if (!declared.ok) throw new Error(`n7 declares her connection: ${declared.status} ${JSON.stringify(declared.data)}`);
   log(`${staff.length} staff employed, ${partners.length} partners and customers bound`);
 
   // --- The insurer's own configuration, as one set-up file sent by the operator's tool, `ic-admin apply`
@@ -80,7 +83,7 @@ async function seed(stack) {
     sharp_reserve_move_pct: 50, reason_codes: { "R-OK": ordinary, "R-EVID": ordinary, "R-EXCL": ["decline"], "R-NDISC": ["decline", "reverse_admission"], "R-WDRAW": ["withdraw"], "R-RECOV": ["end_benefit"] },
     cause_codes: { "CC-0003": ["cancer.skin"], "CC-0101": ["cardiovascular.heart_attack"], "CC-0204": ["musculoskeletal.back"], "CC-0900": ["injury.accident"] },
     medical_review_months: 6, income_declaration_months: 3, review_grace_days: 14, max_offset_pct: 25, partitions: stack.partitions, late_death_days: 30, early_claim_days: 7,
-    funeral_advance_max_minor: 15_000_00, late_interest: { annual_rate_bps: 500, free_days: 30 }, estate_simplified_max_minor: 15_000_00, pre_approval_days: 90, recurrence_days: 180,
+    non_disclosure_reasons: ["R-NDISC"], funeral_advance_max_minor: 15_000_00, late_interest: { annual_rate_bps: 500, free_days: 30 }, estate_simplified_max_minor: 15_000_00, pre_approval_days: 90, recurrence_days: 180,
     health_benefits: { surgical: { per_event_minor: 50_000_00, per_year_minor: 200_000_00, lifetime_minor: 2_000_000_00, copay_pct: 0, excess_minor: 500_00 } },
     prepared_by: "config-author", approved_by: ["config-approver", "config-second"],
   };
